@@ -1445,9 +1445,9 @@ function PilotDashboard() {
             <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}>
               <div style={{flex:1}}>
                 <div style={{fontSize:11,fontWeight:700,color:"#9CA3AF",textTransform:"uppercase",letterSpacing:1.5}}>{editingId!==null?"עריכת יום":"הזנת יום חדש"}</div>
-                <h2 style={{...S.formTitle,margin:0}}>💵 שלב 1 — הכנסות</h2>
+                <h2 style={{...S.formTitle,margin:0}}>💵 הזנת יום</h2>
               </div>
-              {suppliers.length>0&&<div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:20,padding:"3px 12px",fontSize:11,color:"#2563EB",fontWeight:700}}>1 מתוך 2</div>}
+              
             </div>
 
             <label style={S.lbl}>תאריך</label>
@@ -1495,10 +1495,7 @@ function PilotDashboard() {
             })()}
 
             <div style={{display:"flex",gap:10,marginTop:12}}>
-              {suppliers.length>0
-                ? <button style={S.saveBtn} onClick={saveRevenueStep}>המשך לספקים ←</button>
-                : <button style={S.saveBtn} onClick={()=>saveEntry()}>✅ שמור</button>
-              }
+              <button style={S.saveBtn} onClick={()=>saveEntry()}>✅ שמור</button>
               <button style={S.cancelBtn} onClick={()=>{setForm({...EMPTY_ENTRY});setEditingId(null);setEntryStep('idle');setScreen("dashboard");}}>ביטול</button>
             </div>
           </div>
