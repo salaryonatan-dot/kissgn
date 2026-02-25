@@ -1956,37 +1956,12 @@ function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[
 
   if(!smLoaded) return <div style={{...SS.wrap,textAlign:"center",color:"#9CA3AF",paddingTop:40}}>טוען...</div>;
 
-  // ── HOME — בחירת משמרת ──
-  if(subScreen==="home") return (
-    <div style={SS.wrap}>
-      <div style={SS.center}>
-        <div style={{textAlign:"center",padding:"28px 0 24px"}}>
-          <div style={{fontSize:48,marginBottom:10}}>⚡</div>
-          <h2 style={{margin:0,fontSize:22,fontWeight:900,color:"#111827"}}>התחלת משמרת</h2>
-          <p style={{color:"#9CA3AF",fontSize:14,margin:"6px 0 0"}}>יום {DOW_NAMES[TODAY_DOW]} · {TODAY_STR}</p>
-        </div>
-        {activeLog ? (
-          <>
-            <div style={{background:"#FFFFFF",border:"1px solid #22C55E25",borderRadius:14,padding:"14px 16px",marginBottom:16,textAlign:"center"}}>
-              <div style={{fontSize:12,color:"#6B7280",marginBottom:4}}>משמרת פעילה</div>
-              <div style={{fontWeight:800,color:"#111827",fontSize:18}}>{activeLog.shiftType}</div>
-              <div style={{fontSize:12,color:"#9CA3AF",marginTop:2}}>נפתחה {activeLog.openedAt}</div>
-            </div>
-            <button style={SS.saveBtn2} onClick={()=>setSubScreen("shift")}>המשך משמרת ←</button>
-          </>
-        ) : (
-          <>
-            <button style={SS.bigBtn} onClick={()=>openShift("בוקר")}>☀️ פתח משמרת בוקר</button>
-            <button style={{...SS.bigBtn,background:"#F1F5F9",color:"#111827",border:"1px solid #D1D5DB"}} onClick={()=>openShift("ערב")}>🌙 פתח משמרת ערב</button>
-          </>
-        )}
-        <div style={{textAlign:"center",marginTop:32}}>
-          <button style={{background:"none",border:"none",color:"#2A2A2A",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}
-            onClick={()=>setSubScreen("ownerLogin")}>כניסת בעלים</button>
-        </div>
-      </div>
-    </div>
-  );
+  // ── HOME — עובר ישירות לצ'קליסט ──
+  if(subScreen==="home") {
+    if(!activeLog) { openShift("יום"); return null; }
+    setTimeout(()=>setSubScreen("shift"),0);
+    return null;
+  }
 
   // ── OWNER LOGIN ──
   if(subScreen==="ownerLogin") return (
