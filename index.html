@@ -166,10 +166,15 @@ const TARGETS = {
 const EMPTY_ENTRY = {
   date: YESTERDAY_STR, sales: "", deliveries: "", other_income: "",
   supplier_payments: {}, payroll: "", other_expense: "", notes: "",
+  includeVat: false,
 };
+const VAT_RATE = 1.18;
+const vatNet = (v, includeVat) => includeVat ? Math.round(Number(v) / VAT_RATE) : Number(v);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-const fmt = n => new Intl.NumberFormat("he-IL", { style:"currency", currency:"ILS", maximumFractionDigits:0 }).format(n||0);
+const fmt = n => new Intl.NumberFormat("he-IL", { style:"currency", currency:"ILS", maximumFractionDigits:0 })
+const VAT = 1.18;
+const exVAT = n => Math.round(n / VAT);.format(n||0);
 const fmtPct = n => `${Number(n).toFixed(1)}%`;
 const getDateDOW = dateStr => { const [y,m,d]=dateStr.split("-").map(Number); return new Date(y,m-1,d).getDay(); };
 const suppliersOnDay = (dow, sups=[]) => sups.filter(s => s.days.includes(dow));
@@ -178,14 +183,14 @@ const fcColor = (v, t) => v > t+3 ? "#EF4444" : v > t ? "#F59E0B" : "#22C55E";
 function calcMetrics(entries, fixedList, cfg={}) {
   const rentPct    = cfg.rentPct    ?? RENT_PCT;
   const royaltyPct = cfg.royaltyPct ?? ROYALTY_PCT;
-  const totalSales = entries.reduce((a,e)=>a+(Number(e.sales)||0)+(Number(e.deliveries)||0)+(Number(e.other_income)||0),0);
+  const totalSales = entries.reduce((a,e)=>a+exVAT(Number(e.sales)||0)+exVAT(Number(e.deliveries)||0)+exVAT(Number(e.other_income)||0),0);
   const totalPayroll = entries.reduce((a,e)=>a+(Number(e.payroll)||0),0);
   const totalOtherExpense = entries.reduce((a,e)=>a+(Number(e.other_expense)||0),0);
   const supplierTotals = {};
   (cfg.suppliers||[]).forEach(s => { supplierTotals[s.id]=0; });
   entries.forEach(e => {
     if (e.supplier_payments) Object.entries(e.supplier_payments).forEach(([sid,amt])=>{
-      supplierTotals[sid]=(supplierTotals[sid]||0)+(Number(amt)||0);
+      supplierTotals[sid]=(supplierTotals[sid]||0)+Math.round(Number(amt)||0);
     });
   });
   const totalFood = Object.values(supplierTotals).reduce((a,b)=>a+b,0);
@@ -213,8 +218,8 @@ function buildChart(entries) {
   entries.forEach(e=>{
     const d=parseInt(e.date.split("-")[2]);
     if(!byDay[d]) byDay[d]={income:0,expense:0};
-    byDay[d].income+=(Number(e.sales)||0)+(Number(e.deliveries)||0)+(Number(e.other_income)||0);
-    const s=e.supplier_payments?Object.values(e.supplier_payments).reduce((a,b)=>a+(Number(b)||0),0):0;
+    byDay[d].income+=exVAT(Number(e.sales)||0)+exVAT(Number(e.deliveries)||0)+exVAT(Number(e.other_income)||0);
+    const s=e.supplier_payments?Object.values(e.supplier_payments).reduce((a,b)=>a+Math.round(Number(b)||0),0):0;
     byDay[d].expense+=s+(Number(e.payroll)||0)+(Number(e.other_expense)||0);
   });
   let running=0;
@@ -904,9 +909,16 @@ function PilotDashboard() {
   };
 
   const saveEntry = (skipSuppliers=false) => {
+    const netForm = form.includeVat ? {
+      ...form,
+      sales:        Math.round((Number(form.sales)||0)        / VAT_RATE),
+      deliveries:   Math.round((Number(form.deliveries)||0)   / VAT_RATE),
+      other_income: Math.round((Number(form.other_income)||0) / VAT_RATE),
+      includeVat: false,
+    } : form;
     let updated = editingId!==null
-      ? entries.map((e,i)=>i===editingId?{...form}:e)
-      : [...entries,{...form}];
+      ? entries.map((e,i)=>i===editingId?{...netForm}:e)
+      : [...entries,{...netForm}];
     updated.sort((a,b)=>a.date.localeCompare(b.date));
     setEntries(updated); persist(updated,null);
     setForm({...EMPTY_ENTRY}); setEditingId(null); setSaved(true);
@@ -1086,11 +1098,14 @@ function PilotDashboard() {
       </header>
 
       {/* Nav — שורה ראשונה: 4 טאבים ראשיים | שורה שניה: היסטוריה, קבועות, משימות */}
+      {/* staff רואה רק משמרות */}
+      {loggedInUser?.role==="staff" && screen!=="shifts" && (() => { setTimeout(()=>setScreen("shifts"),0); return null; })()}
       <nav style={{borderBottom:"1px solid #E5E7EB",position:"relative",zIndex:1}}>
         {/* שורה 1 */}
         <div style={{display:"flex",padding:"14px 20px 0",gap:2}}>
           <button style={{...S.navBtn,flex:1,textAlign:"center",...(screen==="shifts"?S.navShift:{})}} onClick={()=>setScreen("shifts")}>⚡ משמרות</button>
           {[["dashboard","📊 סקירה"],["forecast","🔮 תחזית"],["foodcost","🥗 פוד קוסט"]].map(([s,l])=>{
+            if(loggedInUser?.role==="staff") return null;
             const allowed = !currentUser || (currentUser.permissions||[]).includes(s);
             if(!allowed) return null;
             return <button key={s} style={{...S.navBtn,flex:1,textAlign:"center",...(screen===s?S.navActive:{})}} onClick={()=>setScreen(s)}>{l}</button>;
@@ -1373,7 +1388,21 @@ function PilotDashboard() {
             <input style={S.inp} type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))}/>
 
             <div style={S.sec}>מכירות</div>
-            <label style={S.lbl}>קופה (₪)</label>
+
+            {/* VAT Toggle */}
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,padding:"10px 14px",background:form.includeVat?"#FFF7ED":"#F0FDF4",border:`1px solid ${form.includeVat?"#FED7AA":"#BBF7D0"}`,borderRadius:12}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:13,fontWeight:700,color:"#111827"}}>סכומים {form.includeVat?"כוללים":"אינם כוללים"} מע"מ</div>
+                <div style={{fontSize:11,color:"#9CA3AF",marginTop:2}}>{form.includeVat?"המערכת תחשב נטו אוטומטית (÷1.18)":"הכנס סכומים נטו ללא מע״מ"}</div>
+              </div>
+              <button onClick={()=>setForm(f=>({...f,includeVat:!f.includeVat}))}
+                style={{padding:"7px 16px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:13,
+                  background:form.includeVat?"#F97316":"#22C55E",color:"#fff",minWidth:70}}>
+                {form.includeVat?"עם מע"מ":"ללא מע"מ"}
+              </button>
+            </div>
+
+            <label style={S.lbl}>קופה (₪){form.includeVat?" — ברוטו עם מע״מ":""}</label>
             <input style={{...S.inp,fontSize:20,fontWeight:700}} type="number" inputMode="numeric" placeholder="0" value={form.sales} onChange={e=>setForm(f=>({...f,sales:e.target.value}))} autoFocus/>
             <label style={S.lbl}>משלוחים / Wolt / Ten Bis (₪)</label>
             <input style={S.inp} type="number" inputMode="numeric" placeholder="0" value={form.deliveries} onChange={e=>setForm(f=>({...f,deliveries:e.target.value}))}/>
@@ -1389,11 +1418,12 @@ function PilotDashboard() {
             <textarea style={{...S.inp,minHeight:52,resize:"vertical"}} placeholder="חריגות, אירועים..." value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))}/>
 
             {(()=>{
-              const inc=(Number(form.sales)||0)+(Number(form.deliveries)||0)+(Number(form.other_income)||0);
-              if(!inc) return null;
+              const rawInc=(Number(form.sales)||0)+(Number(form.deliveries)||0)+(Number(form.other_income)||0);
+              const netInc = form.includeVat ? Math.round(rawInc/VAT_RATE) : rawInc;
+              if(!rawInc) return null;
               return (
                 <div style={{...S.preview,background:"#F0FDF4",border:"1px solid #BBF7D0",marginBottom:4}}>
-                  <div style={S.pr}><span style={{fontWeight:600}}>סה״כ הכנסות</span><span style={{color:"#22C55E",fontWeight:800,fontSize:16}}>{fmt(inc)}</span></div>
+                  <div style={S.pr}><span style={{fontWeight:600}}>סה״כ הכנסות{form.includeVat?" (נטו)":""}</span><span style={{color:"#22C55E",fontWeight:800,fontSize:16}}>{fmt(inc)}</span></div>
                 </div>
               );
             })()}
@@ -1933,7 +1963,7 @@ function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[
         <div style={{textAlign:"center",padding:"28px 0 24px"}}>
           <div style={{fontSize:48,marginBottom:10}}>⚡</div>
           <h2 style={{margin:0,fontSize:22,fontWeight:900,color:"#111827"}}>התחלת משמרת</h2>
-          <p style={{color:"#9CA3AF",fontSize:14,margin:"6px 0 0"}}>יום {DOW_NOW} · {TODAY_S}</p>
+          <p style={{color:"#9CA3AF",fontSize:14,margin:"6px 0 0"}}>יום {DOW_NAMES[TODAY_DOW]} · {TODAY_S}</p>
         </div>
         {activeLog ? (
           <>
@@ -2201,7 +2231,7 @@ function ForecastScreen({ metrics, lastYear, saveLastYear, currentMonth, entries
       .slice(0, 6);
     if (!matches.length) return null;
     const sum = matches.reduce((a,e) => {
-      if (field === 'sales')  return a + (Number(e.sales)||0)+(Number(e.deliveries)||0)+(Number(e.other_income)||0);
+      if (field === 'sales')  return a + exVAT(Number(e.sales)||0)+exVAT(Number(e.deliveries)||0)+exVAT(Number(e.other_income)||0);
       if (field === 'food')   return a + (e.supplier_payments?Object.values(e.supplier_payments).filter(v=>v!=='skip').reduce((x,y)=>x+(Number(y)||0),0):0);
       if (field === 'labor')  return a + (Number(e.payroll)||0);
       return 0;
