@@ -1423,7 +1423,7 @@ function PilotDashboard() {
               if(!rawInc) return null;
               return (
                 <div style={{...S.preview,background:"#F0FDF4",border:"1px solid #BBF7D0",marginBottom:4}}>
-                  <div style={S.pr}><span style={{fontWeight:600}}>סה״כ הכנסות{form.includeVat?" (נטו)":""}</span><span style={{color:"#22C55E",fontWeight:800,fontSize:16}}>{fmt(inc)}</span></div>
+                  <div style={S.pr}><span style={{fontWeight:600}}>סה״כ הכנסות{form.includeVat?" (נטו)":""}</span><span style={{color:"#22C55E",fontWeight:800,fontSize:16}}>{fmt(netInc)}</span></div>
                 </div>
               );
             })()}
@@ -1847,7 +1847,7 @@ function MasterTasksScreen({ tasks, saveTasks }) {
 // ─── Shift Manager (Inline Tab) ───────────────────────────────────────────────
 const SM_SHIFTS    = ["בוקר","ערב"];
 const SM_CATS      = ["פתיחה","שוטף","סגירה"];
-const SM_CAT_COLOR = {"פתיחה":"#22C55E","שוטף":"#F5F5F5","סגירה":"#EF4444"};
+const SM_CAT_COLOR = {"פתיחה":"#22C55E","שוטף":"#6B7280","סגירה":"#EF4444"};
 const SM_CAT_BG    = {"פתיחה":"#22C55E12","שוטף":"#F5F5F508","סגירה":"#EF444412"};
 
 // PERMISSIONS — מה כל תפקיד יכול לגשת
@@ -1994,7 +1994,7 @@ function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[
             <div style={{fontSize:13,color:"#22C55E",fontWeight:700,marginBottom:2}}>{log.shiftType} · נפתחה {log.openedAt}</div>
             <div style={{fontSize:11,color:"#9CA3AF"}}>{done}/{myTasks.length} משימות</div>
           </div>
-          <div style={{fontSize:32,fontWeight:900,color:pct===100?"#22C55E":"#F5F5F5",lineHeight:1}}>{pct}%</div>
+          <div style={{fontSize:32,fontWeight:900,color:pct===100?"#22C55E":"#374151",lineHeight:1}}>{pct}%</div>
         </div>
         <div style={{height:6,background:"#F1F5F9",borderRadius:4,marginBottom:18,overflow:"hidden"}}>
           <div style={{height:"100%",width:`${pct}%`,background:pct===100?"#22C55E":pct>60?"#F59E0B":"#EF4444",borderRadius:4,transition:"width 0.5s"}}/>
@@ -2021,13 +2021,13 @@ function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[
                         {isDone?"✓":isPhoto?"📸":""}
                       </div>
                       <div style={{flex:1}}>
-                        <div style={{fontSize:15,color:isDone?"#525252":"#F5F5F5",textDecoration:isDone?"line-through":"none",fontWeight:500}}>{task.title}</div>
+                        <div style={{fontSize:15,color:isDone?"#9CA3AF":"#111827",textDecoration:isDone?"none":"none",fontWeight:600}}>{task.title}</div>
                         {task.note&&<div style={{fontSize:12,color:"#9CA3AF",marginTop:3}}>{task.note}</div>}
                       </div>
                       {isPhoto&&!isDone&&(
                         <label style={{flexShrink:0,padding:"8px 14px",background:"#F1F5F9",border:"1px solid #D1D5DB",borderRadius:10,color:"#6B7280",fontSize:13,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
                           📸 צלם
-                          <input type="file" accept="image/*" capture="environment" style={{display:"none"}}
+                          <input type="file" accept="image/*" capture="camera" style={{display:"none"}}
                             onChange={e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>completeWithPhoto(task.id,ev.target.result);r.readAsDataURL(f);e.target.value="";}}/>
                         </label>
                       )}
