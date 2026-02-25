@@ -31,31 +31,36 @@
     import { getDatabase, ref, get, set, remove, onValue } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
     const firebaseConfig = {
-      apiKey: "AIzaSyBk639SScb733I2Y6pinYH__acwnKSDgZQ",
-      authDomain: "marjin-af50c.firebaseapp.com",
-      databaseURL: "https://marjin-af50c-default-rtdb.firebaseio.com",
-      projectId: "marjin-af50c",
-      storageBucket: "marjin-af50c.firebasestorage.app",
-      messagingSenderId: "1086831742632",
-      appId: "1:1086831742632:web:b92aab17004654f4433c9d"
+      apiKey: "AIzaSyC47J_753j1kVCz3b1H8V0tTqP2nFZBenk",
+      authDomain: "kissgn-1227b.firebaseapp.com",
+      databaseURL: "https://kissgn-1227b-default-rtdb.firebaseio.com",
+      projectId: "kissgn-1227b",
+      storageBucket: "kissgn-1227b.firebasestorage.app",
+      messagingSenderId: "661756164887",
+      appId: "1:661756164887:web:748047e841cd440b761552"
     };
 
     const app = initializeApp(firebaseConfig);
     const db  = getDatabase(app);
 
+    // Firebase converts arrays to objects — so we store as {v: jsonString}
+    const fkey = k => "marjin/" + k.replace(/[.#$\[\]]/g, "_");
     window.storage = {
       get: async (key) => {
-        const snap = await get(ref(db, "marjin/" + key.replace(/[.#$\[\]]/g, "_")));
+        const snap = await get(ref(db, fkey(key)));
         if (!snap.exists()) throw new Error("not found");
-        return { key, value: JSON.stringify(snap.val()), shared: true };
-      },
-      set: async (key, value) => {
-        const data = typeof value === "string" ? JSON.parse(value) : value;
-        await set(ref(db, "marjin/" + key.replace(/[.#$\[\]]/g, "_")), data);
+        const raw = snap.val();
+        // Support both old format (raw object) and new format ({v: string})
+        const value = (raw && typeof raw === "object" && "_v" in raw) ? raw._v : JSON.stringify(raw);
         return { key, value, shared: true };
       },
+      set: async (key, value) => {
+        const str = typeof value === "string" ? value : JSON.stringify(value);
+        await set(ref(db, fkey(key)), { _v: str });
+        return { key, value: str, shared: true };
+      },
       delete: async (key) => {
-        await remove(ref(db, "marjin/" + key.replace(/[.#$\[\]]/g, "_")));
+        await remove(ref(db, fkey(key)));
         return { key, deleted: true };
       },
       list: async (prefix) => {
@@ -69,9 +74,13 @@
 
     // Live listener — calls callback whenever any key changes
     window.storage.subscribe = (key, callback) => {
-      const r = ref(db, "marjin/" + key.replace(/[.#$\[\]]/g, "_"));
+      const r = ref(db, fkey(key));
       return onValue(r, (snap) => {
-        if (snap.exists()) callback({ key, value: JSON.stringify(snap.val()) });
+        if (snap.exists()) {
+          const raw = snap.val();
+          const value = (raw && typeof raw === "object" && "_v" in raw) ? raw._v : JSON.stringify(raw);
+          callback({ key, value });
+        }
       });
     };
 
@@ -575,11 +584,6 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
                 <div style={{flex:1}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
                     <div style={{fontSize:14,color:"#111827",fontWeight:600}}>{sup.name}</div>
-                    {supplierMissingDays[sup.id]>0 && (
-                      <span style={{background:"#FEF2F2",border:"1px solid #FECACA",color:"#EF4444",fontSize:10,fontWeight:700,padding:"1px 7px",borderRadius:20}}>
-                        ⚠️ {supplierMissingDays[sup.id]} ימים חסרים
-                      </span>
-                    )}
                   </div>
                   <div style={{fontSize:11,color:"#9CA3AF",marginTop:1}}>
                     {sup.category} · {sup.days.length>0 ? sup.days.map(d=>DOW_LABELS[d]).join(" ") : "ללא ימים קבועים"}
@@ -1546,6 +1550,7 @@ function PilotDashboard() {
           onNavigate={s=>setScreen(s)}
           appUsers={appUsers}
           saveAppUsers={saveAppUsers}
+          bizId={currentBizId||""}
         />
       )}
 
@@ -1835,7 +1840,7 @@ function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[
   const saveAppUsersRef = saveAppUsers || (()=>{});
 
   useEffect(()=>{
-    (async()=>{
+    const initSM = async () => {
       try {
         const sg2 = async k => { try{return await window.storage.get(k);}catch(_){return null;} };
         const r1=await sg2(`biz:${bizId}:tasks`);      if(r1) setTasks(JSON.parse(r1.value));
@@ -1844,7 +1849,9 @@ function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[
         const r5=await sg2(`biz:${bizId}:active-log`); if(r5) setActiveLog(JSON.parse(r5.value));
       } catch(_){}
       setSmLoaded(true);
-    })();
+    };
+    if(window._firebaseReady) { initSM(); }
+    else { window.addEventListener("firebase-ready", initSM, {once:true}); }
   },[]);
 
   const saveTasks  = async t => { setTasks(t);    try{await window.storage.set(`biz:${bizId}:tasks`,JSON.stringify(t), true);}catch(_){} };
