@@ -1889,7 +1889,7 @@ function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[
   const saveActive = async l => { setActiveLog(l);try{await window.storage.set(`biz:${bizId}:active-log`,JSON.stringify(l), true);}catch(_){} };
 
   const openShift = async (shiftType) => {
-    const log = { id:Date.now(), date:TODAY_S, shiftType, managerName:"", completedTasks:[], incidents:[], proofs:{},
+    const log = { id:Date.now(), date:TODAY_STR, shiftType, managerName:"", completedTasks:[], incidents:[], proofs:{},
       openedAt:new Date().toLocaleTimeString("he-IL",{hour:"2-digit",minute:"2-digit"}), closedAt:null };
     await saveActive(log);
     setSubScreen("shift");
@@ -1963,7 +1963,7 @@ function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[
         <div style={{textAlign:"center",padding:"28px 0 24px"}}>
           <div style={{fontSize:48,marginBottom:10}}>⚡</div>
           <h2 style={{margin:0,fontSize:22,fontWeight:900,color:"#111827"}}>התחלת משמרת</h2>
-          <p style={{color:"#9CA3AF",fontSize:14,margin:"6px 0 0"}}>יום {DOW_NAMES[TODAY_DOW]} · {TODAY_S}</p>
+          <p style={{color:"#9CA3AF",fontSize:14,margin:"6px 0 0"}}>יום {DOW_NAMES[TODAY_DOW]} · {TODAY_STR}</p>
         </div>
         {activeLog ? (
           <>
