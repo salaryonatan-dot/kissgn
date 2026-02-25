@@ -28,7 +28,7 @@
   <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-    import { getDatabase, ref, get, set, remove, child } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+    import { getDatabase, ref, get, set, remove, onValue } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
     const firebaseConfig = {
       apiKey: "AIzaSyBk639SScb733I2Y6pinYH__acwnKSDgZQ",
@@ -65,6 +65,14 @@
         const keys = Object.keys(snap.val()).filter(k => k.startsWith(pfx));
         return { keys };
       },
+    };
+
+    // Live listener — calls callback whenever any key changes
+    window.storage.subscribe = (key, callback) => {
+      const r = ref(db, "marjin/" + key.replace(/[.#$\[\]]/g, "_"));
+      return onValue(r, (snap) => {
+        if (snap.exists()) callback({ key, value: JSON.stringify(snap.val()) });
+      });
     };
 
     window._firebaseReady = true;
@@ -226,7 +234,8 @@ function LoginScreen({ onLogin, users }) {
   const [showPass, setShowPass] = useState(false);
 
   const tryLogin = () => {
-    const u = users.find(u => u.username===username.trim() && u.password===password);
+    console.log("Login attempt:", username.trim(), "| users count:", users.length, "| users:", users.map(u=>u.username));
+    const u = users.find(u => u.username.toLowerCase()===username.trim().toLowerCase() && u.password===password.trim());
     if(u){ setErr(false); onLogin(u); }
     else { setErr(true); setPassword(""); }
   };
@@ -271,7 +280,7 @@ function LoginScreen({ onLogin, users }) {
         </div>
         {err && <div style={L.err}>שם משתמש או סיסמה שגויים</div>}
         <button style={L.btn} onClick={tryLogin}>כניסה</button>
-        <div style={L.foot}>גרסת פיילוט · כל הזכויות שמורות</div>
+        <div style={L.foot}>גרסת פיילוט · {users.length} משתמשים רשומים</div>
       </div>
     </div>
   );
@@ -777,9 +786,17 @@ function PilotDashboard() {
     else { window.addEventListener("firebase-ready", init, {once:true}); }
   },[]);
 
-  // useEffect 2: business-specific data (reloads when business changes)
+  // useEffect 2: business-specific data — live listeners
   useEffect(()=>{
     if(!currentBizId) return;
+    const unsubs = [];
+    const sub = (key, setter) => {
+      if(!window.storage.subscribe) return;
+      unsubs.push(window.storage.subscribe(key, r => {
+        try { setter(JSON.parse(r.value)); } catch(_){}
+      }));
+    };
+    // Initial load
     (async()=>{
       const r   = await sg(`biz:${currentBizId}:entries`);
       if(r)  setEntries(JSON.parse(r.value));
@@ -787,15 +804,23 @@ function PilotDashboard() {
       if(rf) setFixedList(JSON.parse(rf.value));
       const rly = await sg(`biz:${currentBizId}:lastyear`);
       if(rly) setLastYear(JSON.parse(rly.value));
-      const rt  = await sg(`biz:${currentBizId}:tasks`);
-      if(rt)  setMasterTasks(JSON.parse(rt.value));
-      const rbc = await sg(`biz:${currentBizId}:config`);
-      if(rbc){ setBusinessConfig(JSON.parse(rbc.value)); setSetupDone(true); }
-      const rsp = await sg(`biz:${currentBizId}:suppliers`);
-      if(rsp) setSuppliers(JSON.parse(rsp.value));
-      const rpc = await sg(`biz:${currentBizId}:credits`);
-      if(rpc) setPendingCredits(JSON.parse(rpc.value));
+      const rc  = await sg(`biz:${currentBizId}:config`);
+      if(rc) setBusinessConfig(JSON.parse(rc.value));
+      const rs  = await sg(`biz:${currentBizId}:suppliers`);
+      if(rs) setSuppliers(JSON.parse(rs.value));
+      const rk  = await sg(`biz:${currentBizId}:credits`);
+      if(rk) setPendingCredits(JSON.parse(rk.value));
+      setSetupDone(true);
     })();
+    // Live listeners
+    sub(`biz:${currentBizId}:entries`,   setEntries);
+    sub(`biz:${currentBizId}:fixed`,     setFixedList);
+    sub(`biz:${currentBizId}:suppliers`, setSuppliers);
+    sub(`biz:${currentBizId}:config`,    setBusinessConfig);
+    sub(`biz:${currentBizId}:credits`,   setPendingCredits);
+    // Also live-update users
+    sub("app-users", u => { setAppUsers(u); });
+    return () => unsubs.forEach(u => typeof u==="function" && u());
   },[currentBizId]);
 
   const persist = async (e, f) => {
@@ -923,7 +948,7 @@ function PilotDashboard() {
   const todayExpected = suppliersOnDay(TODAY_DOW, suppliers);
   const todayMissing = todayExpected.filter(s=>!Number(todayEntry?.supplier_payments?.[s.id]||0));
 
-  if(!loaded) return <div style={S.root}><div style={{padding:40,color:"#6B7280"}}>טוען...</div></div>;
+  if(!loaded) return <div style={{minHeight:"100vh",background:"#F1F5F9",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12}}><div style={{fontSize:40}}>📊</div><div style={{fontSize:15,color:"#6B7280",fontWeight:600}}>מתחבר למערכת...</div></div>;
 
   // First time ever — no businesses, no users → setup
   if(loaded && businesses.length === 0 && appUsers.length === 0) {
