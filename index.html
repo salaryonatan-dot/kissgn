@@ -746,6 +746,8 @@ function PilotDashboard() {
   const [saved, setSaved] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [fcTab, setFcTab] = useState("summary");
+  const [expandedSup, setExpandedSup] = useState(null);
+  const [supMonth, setSupMonth] = useState(`${YEAR}-${MONTH_STR}`);
   // ── הרשאות: null = בעלים, { name, role:"manager", permissions:[] } = אחמש מחובר
   const [currentUser, setCurrentUser] = useState(null);
   const [masterTasks, setMasterTasks] = useState([]);
