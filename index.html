@@ -69,6 +69,8 @@ const DAYS_IN_MONTH = new Date(YEAR, MONTH + 1, 0).getDate();
 const DAY_OF_MONTH = TODAY.getDate();
 const MONTH_STR = String(MONTH + 1).padStart(2, "0");
 const TODAY_STR = `${YEAR}-${MONTH_STR}-${String(DAY_OF_MONTH).padStart(2, "0")}`;
+const YESTERDAY = new Date(TODAY); YESTERDAY.setDate(TODAY.getDate() - 1);
+const YESTERDAY_STR = `${YESTERDAY.getFullYear()}-${String(YESTERDAY.getMonth()+1).padStart(2,"0")}-${String(YESTERDAY.getDate()).padStart(2,"0")}`;
 const TODAY_DOW = TODAY.getDay(); // 0=ראשון ... 6=שבת
 
 const RENT_PCT = 6.8;
@@ -124,7 +126,7 @@ const TARGETS = {
   laborCostPct:   27,
 };
 const EMPTY_ENTRY = {
-  date: TODAY_STR, sales: "", deliveries: "", other_income: "",
+  date: YESTERDAY_STR, sales: "", deliveries: "", other_income: "",
   supplier_payments: {}, payroll: "", other_expense: "", notes: "",
 };
 
@@ -518,9 +520,10 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
                     <div style={{fontSize:11,color:"#9CA3AF",marginTop:2}}>{sub}</div>
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
-                    <button style={{...W.dayBtn,width:32,height:32,fontSize:16}} onClick={()=>set(v=>Math.max(0,Number(v)-1))}>−</button>
-                    <span style={{fontSize:20,fontWeight:900,color,minWidth:42,textAlign:"center"}}>{val}%</span>
-                    <button style={{...W.dayBtn,width:32,height:32,fontSize:16}} onClick={()=>set(v=>Number(v)+1)}>+</button>
+                    <button style={{...W.dayBtn,width:32,height:32,fontSize:16}} onClick={()=>set(v=>Math.max(0,Math.round((Number(v)-0.5)*10)/10))}>−</button>
+                    <input type="number" inputMode="decimal" step="0.5" min="0" max="100" value={val} onChange={e=>set(e.target.value)} style={{width:58,textAlign:"center",fontSize:16,fontWeight:900,color,border:"1px solid #E5E7EB",borderRadius:8,padding:"3px 4px",background:"#F9FAFB",fontFamily:"inherit"}}/>
+                    <span style={{fontSize:14,color,fontWeight:700,marginLeft:-4}}>%</span>
+                    <button style={{...W.dayBtn,width:32,height:32,fontSize:16}} onClick={()=>set(v=>Math.round((Number(v)+0.5)*10)/10)}>+</button>
                   </div>
                 </div>
               </div>
@@ -959,7 +962,8 @@ function PilotDashboard() {
   );
 
   // Add new business (no currentBizId but user is logged in)
-  if(loaded && loggedInUser && !currentBizId && showSetup) return (
+  // Add new business — show setup whenever showSetup=true and logged in
+  if(loaded && loggedInUser && showSetup) return (
     <SetupWizard
       initial={{businessName:"",rentPct:0,royaltyPct:0,hasRoyalty:false,targets:{salesGrowthPct:5,foodCostPct:33,laborCostPct:27}}}
       initialSuppliers={[]} initialFixed={FIXED_EXPENSES_DEFAULT}
@@ -1013,7 +1017,7 @@ function PilotDashboard() {
         <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-end"}}>
           {!currentUser && (<>
             <button style={{...S.addBtn,background:"transparent",border:"1px solid #D1D5DB",color:"#6B7280",padding:"9px 14px",fontSize:18}} onClick={()=>setShowSetup(true)} title="הגדרות">⚙️</button>
-            <button style={S.addBtn} onClick={()=>{setForm({...EMPTY_ENTRY,date:TODAY_STR});setEditingId(null);setEntryStep('revenue');setScreen("entry");}}>
+            <button style={S.addBtn} onClick={()=>{setForm({...EMPTY_ENTRY,date:YESTERDAY_STR});setEditingId(null);setEntryStep('revenue');setScreen("entry");}}>
               <span style={{fontSize:18}}>+</span> הזנת יום
             </button>
           </>)}
@@ -1052,7 +1056,7 @@ function PilotDashboard() {
         {/* שורה 2 — היסטוריה, קבועות, משימות */}
         {(!currentUser && loggedInUser?.role!=="staff") && (
           <div style={{display:"flex",padding:"0 20px",gap:2,borderTop:"1px solid #E5E7EB"}}>
-            {[["history","📋 היסטוריה"],["fixed","🔒 קבועות"]].map(([s,l])=>(
+            {[["history","📋 היסטוריה"],["fixed","🔒 קבועות"],["users","👥 משתמשים"]].map(([s,l])=>(
               <button key={s} style={{...S.navBtn,flex:1,textAlign:"center",fontSize:12,...(screen===s?S.navActive:{})}} onClick={()=>setScreen(s)}>{l}</button>
             ))}
             {(loggedInUser?.role==="super_owner"||loggedInUser?.role==="owner") && (
@@ -1459,7 +1463,7 @@ function PilotDashboard() {
       {screen==="history" && (
         <div style={S.content}>
           {entries.length===0
-            ? <div style={S.empty}><div style={{fontSize:44,marginBottom:10}}>📋</div><p style={{color:"#9CA3AF"}}>אין רשומות עדיין</p><button style={S.saveBtn} onClick={()=>{setForm({...EMPTY_ENTRY,date:TODAY_STR});setEditingId(null);setEntryStep('revenue');setScreen("entry");}}>הזן יום ראשון</button></div>
+            ? <div style={S.empty}><div style={{fontSize:44,marginBottom:10}}>📋</div><p style={{color:"#9CA3AF"}}>אין רשומות עדיין</p><button style={S.saveBtn} onClick={()=>{setForm({...EMPTY_ENTRY,date:YESTERDAY_STR});setEditingId(null);setEntryStep('revenue');setScreen("entry");}}>הזן יום ראשון</button></div>
             : [...entries].reverse().map((e,ri)=>{
                 const i=entries.length-1-ri;
                 const inc=(Number(e.sales)||0)+(Number(e.deliveries)||0)+(Number(e.other_income)||0);
@@ -1513,6 +1517,16 @@ function PilotDashboard() {
             tasks={masterTasks}
             saveTasks={saveMasterTasks}
           />
+        </div>
+      )}
+
+      {/* ═══ USERS ═══ */}
+      {screen==="users" && !currentUser && (
+        <div style={S.content}>
+          <div style={S.card}>
+            <h2 style={{...S.ct,fontSize:15,color:"#111827",marginBottom:16}}>👥 ניהול משתמשים</h2>
+            <UserManagement users={appUsers} saveUsers={saveAppUsers}/>
+          </div>
         </div>
       )}
 
