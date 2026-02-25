@@ -1277,7 +1277,7 @@ function PilotDashboard() {
             const smLabel = new Date(smY, smM-1, 1).toLocaleDateString("he-IL",{month:"long",year:"numeric"});
             const prevMonth = () => { const d=new Date(smY,smM-2,1); setSupMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); setExpandedSup(null); };
             const nextMonth = () => { const d=new Date(smY,smM,1); setSupMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); setExpandedSup(null); };
-            const canNext = smY < YEAR || (smY===YEAR && smM < MONTH);
+            const canNext = smY < YEAR || (smY===YEAR && smM <= MONTH);
             const getSupPay = (supId, date) => {
               const e = entries.find(x=>x.date===date);
               return e?.supplier_payments?.[supId] || "";
