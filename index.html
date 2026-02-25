@@ -472,9 +472,11 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
   const TOTAL_STEPS = isFirstSetup ? 5 : 4;
 
   const finish = () => {
-    if(!ownerName.trim()||!ownerUsername.trim()||!ownerPassword) return setOwnerErr("יש למלא את כל השדות");
-    if(ownerPassword!==ownerPass2) return setOwnerErr("הסיסמאות אינן תואמות");
-    setOwnerErr("");
+    if(isFirstSetup) {
+      if(!ownerName.trim()||!ownerUsername.trim()||!ownerPassword) return setOwnerErr("יש למלא את כל השדות");
+      if(ownerPassword!==ownerPass2) return setOwnerErr("הסיסמאות אינן תואמות");
+      setOwnerErr("");
+    }
     const cfg = {
       businessName: bizName.trim() || "המסעדה שלי",
       rentType,
