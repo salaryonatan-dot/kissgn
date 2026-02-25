@@ -26,32 +26,53 @@
   <script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getDatabase, ref, get, set, remove, child } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBk639SScb733I2Y6pinYH__acwnKSDgZQ",
+      authDomain: "marjin-af50c.firebaseapp.com",
+      databaseURL: "https://marjin-af50c-default-rtdb.firebaseio.com",
+      projectId: "marjin-af50c",
+      storageBucket: "marjin-af50c.firebasestorage.app",
+      messagingSenderId: "1086831742632",
+      appId: "1:1086831742632:web:b92aab17004654f4433c9d"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db  = getDatabase(app);
+
+    window.storage = {
+      get: async (key) => {
+        const snap = await get(ref(db, "marjin/" + key.replace(/[.#$\[\]]/g, "_")));
+        if (!snap.exists()) throw new Error("not found");
+        return { key, value: JSON.stringify(snap.val()), shared: true };
+      },
+      set: async (key, value) => {
+        const data = typeof value === "string" ? JSON.parse(value) : value;
+        await set(ref(db, "marjin/" + key.replace(/[.#$\[\]]/g, "_")), data);
+        return { key, value, shared: true };
+      },
+      delete: async (key) => {
+        await remove(ref(db, "marjin/" + key.replace(/[.#$\[\]]/g, "_")));
+        return { key, deleted: true };
+      },
+      list: async (prefix) => {
+        const snap = await get(ref(db, "marjin"));
+        if (!snap.exists()) return { keys: [] };
+        const pfx = (prefix || "").replace(/[.#$\[\]]/g, "_");
+        const keys = Object.keys(snap.val()).filter(k => k.startsWith(pfx));
+        return { keys };
+      },
+    };
+
+    window._firebaseReady = true;
+    window.dispatchEvent(new Event("firebase-ready"));
+  </script>
   <script type="text/babel" data-presets="react">
 
-window.storage = {
-  get: async (key, shared) => {
-    const k = (shared ? "shared:" : "user:") + key;
-    const val = localStorage.getItem(k);
-    if (val === null) throw new Error("not found");
-    return { key, value: val, shared: !!shared };
-  },
-  set: async (key, value, shared) => {
-    const k = (shared ? "shared:" : "user:") + key;
-    localStorage.setItem(k, typeof value === "string" ? value : JSON.stringify(value));
-    return { key, value, shared: !!shared };
-  },
-  delete: async (key, shared) => {
-    localStorage.removeItem((shared ? "shared:" : "user:") + key);
-    return { key, deleted: true, shared: !!shared };
-  },
-  list: async (prefix, shared) => {
-    const pfx = (shared ? "shared:" : "user:") + (prefix || "");
-    const keys = Object.keys(localStorage)
-      .filter(k => k.startsWith(pfx))
-      .map(k => k.replace(/^(shared:|user:)/, ""));
-    return { keys, prefix, shared: !!shared };
-  },
-};
+// storage handled by Firebase above
 
 const { useState, useEffect, useRef } = React;
 const { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } = Recharts;
@@ -730,7 +751,7 @@ function PilotDashboard() {
 
   // useEffect 1: global data (users, businesses)
   useEffect(()=>{
-    (async()=>{
+    const init = async () => {
       const rau = await sg("app-users");
       if(rau) {
         const users = JSON.parse(rau.value);
@@ -751,7 +772,9 @@ function PilotDashboard() {
         if(bizList.length === 1) setCurrentBizId(bizList[0].id);
       }
       setLoaded(true);
-    })();
+    };
+    if(window._firebaseReady) { init(); }
+    else { window.addEventListener("firebase-ready", init, {once:true}); }
   },[]);
 
   // useEffect 2: business-specific data (reloads when business changes)
@@ -778,24 +801,24 @@ function PilotDashboard() {
   const persist = async (e, f) => {
     if(!currentBizId) return;
     try {
-      await window.storage.set(`biz:${currentBizId}:entries`, JSON.stringify(e, true));
-      if(f) await window.storage.set(`biz:${currentBizId}:fixed`, JSON.stringify(f, true));
+      await window.storage.set(`biz:${currentBizId}:entries`, JSON.stringify(e), true);
+      if(f) await window.storage.set(`biz:${currentBizId}:fixed`, JSON.stringify(f), true);
     } catch(_){}
   };
   const saveLastYear = async (ly) => {
     setLastYear(ly);
     if(!currentBizId) return;
-    try { await window.storage.set(`biz:${currentBizId}:lastyear`, JSON.stringify(ly, true)); } catch(_){}
+    try { await window.storage.set(`biz:${currentBizId}:lastyear`, JSON.stringify(ly), true); } catch(_){}
   };
   const saveBusinessConfig = async (cfg) => {
     setBusinessConfig(cfg);
     if(!currentBizId) return;
-    try { await window.storage.set(`biz:${currentBizId}:config`, JSON.stringify(cfg, true)); } catch(_){}
+    try { await window.storage.set(`biz:${currentBizId}:config`, JSON.stringify(cfg), true); } catch(_){}
   };
   const saveSuppliers = async (sups) => {
     setSuppliers(sups);
     if(!currentBizId) return;
-    try { await window.storage.set(`biz:${currentBizId}:suppliers`, JSON.stringify(sups, true)); } catch(_){}
+    try { await window.storage.set(`biz:${currentBizId}:suppliers`, JSON.stringify(sups), true); } catch(_){}
   };
   const completeSetup = async (cfg, sups, fixed, firstOwner) => {
     const bizId = currentBizId || `biz_${Date.now()}`;
@@ -803,17 +826,17 @@ function PilotDashboard() {
     const bizName = cfg.businessName || "מסעדה חדשה";
     const updatedBizList = [...businesses.filter(b=>b.id!==bizId), {id:bizId, name:bizName}];
     setBusinesses(updatedBizList);
-    try { await window.storage.set("app-businesses", JSON.stringify(updatedBizList, true)); } catch(_){}
+    try { await window.storage.set("app-businesses", JSON.stringify(updatedBizList), true); } catch(_){}
     // Save biz-specific data
-    try { await window.storage.set(`biz:${bizId}:config`, JSON.stringify(cfg, true)); } catch(_){}
+    try { await window.storage.set(`biz:${bizId}:config`, JSON.stringify(cfg), true); } catch(_){}
     setBusinessConfig(cfg);
-    try { await window.storage.set(`biz:${bizId}:suppliers`, JSON.stringify(sups, true)); } catch(_){}
+    try { await window.storage.set(`biz:${bizId}:suppliers`, JSON.stringify(sups), true); } catch(_){}
     setSuppliers(sups);
-    if(fixed) { setFixedList(fixed); try { await window.storage.set(`biz:${bizId}:fixed`, JSON.stringify(fixed, true)); } catch(_){} }
+    if(fixed) { setFixedList(fixed); try { await window.storage.set(`biz:${bizId}:fixed`, JSON.stringify(fixed), true); } catch(_){} }
     if(firstOwner) {
       const users = [{id:Date.now(), ...firstOwner, role:"super_owner"}];
       setAppUsers(users);
-      try { await window.storage.set("app-users", JSON.stringify(users, true)); } catch(_){}
+      try { await window.storage.set("app-users", JSON.stringify(users), true); } catch(_){}
       setLoggedInUser(users[0]);
     }
     if(!currentBizId) setCurrentBizId(bizId);
@@ -823,14 +846,14 @@ function PilotDashboard() {
   };
   const saveAppUsers = async (users) => {
     setAppUsers(users);
-    try { await window.storage.set("app-users", JSON.stringify(users, true)); } catch(_){}
+    try { await window.storage.set("app-users", JSON.stringify(users), true); } catch(_){}
   };
 
 
   const saveMasterTasks = async (t) => {
     setMasterTasks(t);
     if(!currentBizId) return;
-    try { await window.storage.set(`biz:${currentBizId}:tasks`, JSON.stringify(t, true)); } catch(_){}
+    try { await window.storage.set(`biz:${currentBizId}:tasks`, JSON.stringify(t), true); } catch(_){}
   };
 
   const setSupPay = (sid, val) => setForm(f=>({...f, supplier_payments:{...f.supplier_payments,[sid]:val}}));
@@ -1799,9 +1822,9 @@ function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[
     })();
   },[]);
 
-  const saveTasks  = async t => { setTasks(t);    try{await window.storage.set(`biz:${bizId}:tasks`,JSON.stringify(t, true));}catch(_){} };
-  const saveLogs   = async l => { setLogs(l);     try{await window.storage.set(`biz:${bizId}:logs`,JSON.stringify(l, true));}catch(_){} };
-  const saveActive = async l => { setActiveLog(l);try{await window.storage.set(`biz:${bizId}:active-log`,JSON.stringify(l, true));}catch(_){} };
+  const saveTasks  = async t => { setTasks(t);    try{await window.storage.set(`biz:${bizId}:tasks`,JSON.stringify(t), true);}catch(_){} };
+  const saveLogs   = async l => { setLogs(l);     try{await window.storage.set(`biz:${bizId}:logs`,JSON.stringify(l), true);}catch(_){} };
+  const saveActive = async l => { setActiveLog(l);try{await window.storage.set(`biz:${bizId}:active-log`,JSON.stringify(l), true);}catch(_){} };
 
   const openShift = async (shiftType) => {
     const log = { id:Date.now(), date:TODAY_S, shiftType, managerName:"", completedTasks:[], incidents:[], proofs:{},
