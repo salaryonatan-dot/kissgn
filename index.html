@@ -183,7 +183,7 @@ const fcColor = (v, t) => v > t+3 ? "#EF4444" : v > t ? "#F59E0B" : "#22C55E";
 function calcMetrics(entries, fixedList, cfg={}) {
   const rentPct    = cfg.rentPct    ?? RENT_PCT;
   const royaltyPct = cfg.royaltyPct ?? ROYALTY_PCT;
-  const totalSales = entries.reduce((a,e)=>a+exVAT(Number(e.sales)||0)+exVAT(Number(e.deliveries)||0)+exVAT(Number(e.other_income)||0),0);
+  const totalSales = entries.reduce((a,e)=>a+(Number(e.sales)||0)+(Number(e.deliveries)||0)+(Number(e.other_income)||0),0);
   const totalPayroll = entries.reduce((a,e)=>a+(Number(e.payroll)||0),0);
   const totalOtherExpense = entries.reduce((a,e)=>a+(Number(e.other_expense)||0),0);
   const supplierTotals = {};
@@ -218,7 +218,7 @@ function buildChart(entries) {
   entries.forEach(e=>{
     const d=parseInt(e.date.split("-")[2]);
     if(!byDay[d]) byDay[d]={income:0,expense:0};
-    byDay[d].income+=exVAT(Number(e.sales)||0)+exVAT(Number(e.deliveries)||0)+exVAT(Number(e.other_income)||0);
+    byDay[d].income+=(Number(e.sales)||0)+(Number(e.deliveries)||0)+(Number(e.other_income)||0);
     const s=e.supplier_payments?Object.values(e.supplier_payments).reduce((a,b)=>a+Math.round(Number(b)||0),0):0;
     byDay[d].expense+=s+(Number(e.payroll)||0)+(Number(e.other_expense)||0);
   });
@@ -2178,7 +2178,7 @@ function ForecastScreen({ metrics, lastYear, saveLastYear, currentMonth, entries
       .slice(0, 6);
     if (!matches.length) return null;
     const sum = matches.reduce((a,e) => {
-      if (field === 'sales')  return a + exVAT(Number(e.sales)||0)+exVAT(Number(e.deliveries)||0)+exVAT(Number(e.other_income)||0);
+      if (field === 'sales')  return a + (Number(e.sales)||0)+(Number(e.deliveries)||0)+(Number(e.other_income)||0);
       if (field === 'food')   return a + (e.supplier_payments?Object.values(e.supplier_payments).filter(v=>v!=='skip').reduce((x,y)=>x+(Number(y)||0),0):0);
       if (field === 'labor')  return a + (Number(e.payroll)||0);
       return 0;
