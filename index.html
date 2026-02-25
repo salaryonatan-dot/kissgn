@@ -165,7 +165,7 @@ const TARGETS = {
 };
 const EMPTY_ENTRY = {
   date: YESTERDAY_STR, sales: "", deliveries: "", other_income: "",
-  supplier_payments: {}, payroll: "", other_expense: "", notes: "",
+  supplier_payments: {}, payroll: "", hourly_payroll: {}, other_expense: "", notes: "",
   includeVat: false,
 };
 const VAT_RATE = 1.18;
@@ -184,7 +184,11 @@ function calcMetrics(entries, fixedList, cfg={}) {
   const rentPct    = cfg.rentPct    ?? RENT_PCT;
   const royaltyPct = cfg.royaltyPct ?? ROYALTY_PCT;
   const totalSales = entries.reduce((a,e)=>a+(Number(e.sales)||0)+(Number(e.deliveries)||0)+(Number(e.other_income)||0),0);
-  const totalPayroll = entries.reduce((a,e)=>a+(Number(e.payroll)||0),0);
+  const totalPayroll = entries.reduce((a,e)=>{
+    const globalPay = Number(e.payroll)||0;
+    const hourlyPay = e.hourly_payroll ? Object.values(e.hourly_payroll).reduce((s,v)=>s+(Number(v)||0),0) : 0;
+    return a + globalPay + hourlyPay;
+  },0);
   const totalOtherExpense = entries.reduce((a,e)=>a+(Number(e.other_expense)||0),0);
   const supplierTotals = {};
   (cfg.suppliers||[]).forEach(s => { supplierTotals[s.id]=0; });
@@ -900,13 +904,17 @@ function PilotDashboard() {
   };
 
   const saveEntry = (skipSuppliers=false) => {
-    const netForm = form.includeVat ? {
-      ...form,
-      sales:        Math.round((Number(form.sales)||0)        / VAT_RATE),
-      deliveries:   Math.round((Number(form.deliveries)||0)   / VAT_RATE),
-      other_income: Math.round((Number(form.other_income)||0) / VAT_RATE),
+    // Auto-calculate global payroll
+    const globalEmps = (businessConfig.employees||[]).filter(e=>e.type==="global" && Number(e.monthlySalary)>0);
+    const globalDaily = globalEmps.reduce((a,e)=>a+Math.round(Number(e.monthlySalary)/DAYS_IN_MONTH),0);
+    const formWithPayroll = {...form, payroll: globalDaily || form.payroll};
+    const netForm = formWithPayroll.includeVat ? {
+      ...formWithPayroll,
+      sales:        Math.round((Number(formWithPayroll.sales)||0)        / VAT_RATE),
+      deliveries:   Math.round((Number(formWithPayroll.deliveries)||0)   / VAT_RATE),
+      other_income: Math.round((Number(formWithPayroll.other_income)||0) / VAT_RATE),
       includeVat: false,
-    } : form;
+    } : formWithPayroll;
     let updated = editingId!==null
       ? entries.map((e,i)=>i===editingId?{...netForm}:e)
       : [...entries,{...netForm}];
@@ -1105,7 +1113,7 @@ function PilotDashboard() {
         {/* שורה 2 — היסטוריה, קבועות, משימות */}
         {(!currentUser && loggedInUser?.role!=="staff") && (
           <div style={{display:"flex",padding:"0 20px",gap:2,borderTop:"1px solid #E5E7EB"}}>
-            {[["history","📋 היסטוריה"],["fixed","🔒 קבועות"],["users","👥 משתמשים"]].map(([s,l])=>(
+            {[["history","📋 היסטוריה"],["fixed","🔒 קבועות"],["employees","👤 עובדים"],["users","👥 משתמשים"]].map(([s,l])=>(
               <button key={s} style={{...S.navBtn,flex:1,textAlign:"center",fontSize:12,...(screen===s?S.navActive:{})}} onClick={()=>setScreen(s)}>{l}</button>
             ))}
             {(loggedInUser?.role==="super_owner"||loggedInUser?.role==="owner") && (
@@ -1477,9 +1485,67 @@ function PilotDashboard() {
             <label style={S.lbl}>הכנסה אחרת (₪)</label>
             <input style={S.inp} type="number" inputMode="numeric" placeholder="0" value={form.other_income} onChange={e=>setForm(f=>({...f,other_income:e.target.value}))}/>
 
-            <div style={S.sec}>הוצאות נוספות</div>
-            <label style={S.lbl}>עלות שכר (₪)</label>
-            <input style={S.inp} type="number" inputMode="numeric" placeholder="0" value={form.payroll} onChange={e=>setForm(f=>({...f,payroll:e.target.value}))}/>
+            <div style={S.sec}>עלות שכר</div>
+            {(()=>{
+              const globalEmps = (businessConfig.employees||[]).filter(e=>e.type==="global" && Number(e.monthlySalary)>0);
+              const hourlyEmps = (businessConfig.employees||[]).filter(e=>e.type==="hourly");
+              const globalDaily = globalEmps.reduce((a,e)=>a+Math.round(Number(e.monthlySalary)/DAYS_IN_MONTH),0);
+
+              if(globalEmps.length===0 && hourlyEmps.length===0) {
+                // No employees defined — simple field
+                return (
+                  <>
+                    <label style={S.lbl}>עלות שכר (₪)</label>
+                    <input style={S.inp} type="number" inputMode="numeric" placeholder="0" value={form.payroll} onChange={e=>setForm(f=>({...f,payroll:e.target.value}))}/>
+                  </>
+                );
+              }
+
+              return (
+                <>
+                  {globalEmps.length>0 && (
+                    <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:12,padding:"12px 14px",marginBottom:10}}>
+                      <div style={{fontSize:12,color:"#16A34A",fontWeight:700,marginBottom:8}}>🔒 גלובלי — נכנס אוטומטית</div>
+                      {globalEmps.map(emp=>(
+                        <div key={emp.id} style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}>
+                          <span style={{color:"#374151"}}>{emp.name} · {emp.role}</span>
+                          <span style={{fontWeight:700,color:"#16A34A"}}>{Math.round(Number(emp.monthlySalary)/DAYS_IN_MONTH).toLocaleString()} ₪</span>
+                        </div>
+                      ))}
+                      <div style={{borderTop:"1px solid #BBF7D0",marginTop:6,paddingTop:6,display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:800}}>
+                        <span style={{color:"#15803D"}}>סה״כ גלובלי היום</span>
+                        <span style={{color:"#15803D"}}>{globalDaily.toLocaleString()} ₪</span>
+                      </div>
+                    </div>
+                  )}
+                  {hourlyEmps.length>0 && (
+                    <>
+                      <div style={{fontSize:12,color:"#6B7280",fontWeight:700,marginBottom:8}}>⏱ שעתיים — הזן עלות יומית</div>
+                      {hourlyEmps.map(emp=>(
+                        <div key={emp.id} style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+                          <span style={{flex:1,fontSize:13,color:"#374151",fontWeight:600}}>{emp.name} <span style={{color:"#9CA3AF",fontWeight:400}}>{emp.role}</span></span>
+                          <input type="number" inputMode="numeric" placeholder="₪"
+                            value={(form.hourly_payroll||{})[emp.id]||""}
+                            onChange={e=>setForm(f=>({...f,hourly_payroll:{...(f.hourly_payroll||{}),[emp.id]:e.target.value}}))}
+                            style={{width:100,border:"1px solid #D1D5DB",borderRadius:10,padding:"9px 12px",fontSize:14,fontFamily:"inherit",color:"#111827",textAlign:"left"}}/>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                  {(()=>{
+                    const hourlyTotal = Object.values(form.hourly_payroll||{}).reduce((a,v)=>a+(Number(v)||0),0);
+                    const total = globalDaily + hourlyTotal;
+                    if(!total) return null;
+                    return (
+                      <div style={{background:"#F8FAFC",borderRadius:10,padding:"10px 14px",display:"flex",justifyContent:"space-between",fontSize:14,fontWeight:800,border:"1px solid #E5E7EB",marginTop:4}}>
+                        <span style={{color:"#374151"}}>סה״כ שכר היום</span>
+                        <span style={{color:"#111827"}}>{total.toLocaleString()} ₪</span>
+                      </div>
+                    );
+                  })()}
+                </>
+              );
+            })()}
             <label style={S.lbl}>הוצאה אחרת (₪)</label>
             <input style={S.inp} type="number" inputMode="numeric" placeholder="0" value={form.other_expense} onChange={e=>setForm(f=>({...f,other_expense:e.target.value}))}/>
             <label style={S.lbl}>הערות</label>
@@ -1513,7 +1579,8 @@ function PilotDashboard() {
                 const i=entries.length-1-ri;
                 const inc=(Number(e.sales)||0)+(Number(e.deliveries)||0)+(Number(e.other_income)||0);
                 const supp=e.supplier_payments?Object.values(e.supplier_payments).reduce((a,b)=>a+(Number(b)||0),0):0;
-                const exp=supp+(Number(e.payroll)||0)+(Number(e.other_expense)||0);
+                const hourlyPay=e.hourly_payroll?Object.values(e.hourly_payroll).reduce((a,b)=>a+(Number(b)||0),0):0;
+                const exp=supp+(Number(e.payroll)||0)+hourlyPay+(Number(e.other_expense)||0);
                 return (
                   <div key={i} style={S.histRow}>
                     <div style={{flex:1}}>
@@ -1615,10 +1682,139 @@ function PilotDashboard() {
         </div>
       )}
 
+      {/* ═══ EMPLOYEES ═══ */}
+      {screen==="employees" && (
+        <div style={S.content}>
+          <EmployeesScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig}/>
+        </div>
+      )}
+
     </div>
   );
 }
 
+
+// ─── Employees Screen ─────────────────────────────────────────────────────────
+function EmployeesScreen({ businessConfig, saveBusinessConfig }) {
+  const employees = businessConfig.employees || [];
+  const ROLES_EMP = ["מנהל משמרת","טבח","עוזר טבח","מלצר","ברמן","קופאי","כלים","ניקיון","אחר"];
+  const EMP_TYPES = [{v:"global",l:"🔒 גלובלי (חודשי קבוע)"},{v:"hourly",l:"⏱ שעתי (הזנה יומית)"}];
+  const [adding, setAdding] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [form, setForm] = useState({name:"",role:"מלצר",type:"global",monthlySalary:"",hourlyRate:"",hoursPerMonth:""});
+
+  const totalMonthly = employees.reduce((a,e)=>{
+    if(e.monthlySalary) return a + (Number(e.monthlySalary)||0);
+    if(e.hourlyRate && e.hoursPerMonth) return a + Math.round((Number(e.hourlyRate)||0)*(Number(e.hoursPerMonth)||0));
+    return a;
+  },0);
+
+  const saveEmp = () => {
+    if(!form.name.trim()) return;
+    let updated;
+    if(editId !== null) {
+      updated = employees.map(e=>e.id===editId?{...e,...form}:e);
+    } else {
+      updated = [...employees, {...form, id:Date.now()}];
+    }
+    saveBusinessConfig({...businessConfig, employees:updated});
+    setAdding(false); setEditId(null); setForm({name:"",role:"מלצר",type:"global",monthlySalary:"",hourlyRate:"",hoursPerMonth:""});
+  };
+
+  const removeEmp = id => saveBusinessConfig({...businessConfig, employees:employees.filter(e=>e.id!==id)});
+
+  const startEdit = emp => {
+    setForm({name:emp.name,role:emp.role,type:emp.type||"global",monthlySalary:emp.monthlySalary||"",hourlyRate:emp.hourlyRate||"",hoursPerMonth:emp.hoursPerMonth||""});
+    setEditId(emp.id); setAdding(true);
+  };
+
+  const fmtEmpSalary = emp => {
+    if(emp.type==="hourly") return "⏱ הזנה יומית";
+    if(emp.monthlySalary) return `${Number(emp.monthlySalary).toLocaleString()} ₪/חודש`;
+    return "—";
+  };
+
+  const inp = {width:"100%",border:"1px solid #D1D5DB",borderRadius:10,padding:"10px 12px",fontSize:14,fontFamily:"inherit",color:"#111827",background:"#FFFFFF",marginBottom:10,boxSizing:"border-box"};
+  const sel = {...inp};
+
+  return (
+    <div style={{maxWidth:500,margin:"0 auto"}}>
+      <div style={{background:"#FFFFFF",borderRadius:16,border:"1px solid #E5E7EB",padding:"18px 16px",marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <div>
+            <h2 style={{margin:0,fontSize:16,fontWeight:800,color:"#111827"}}>👤 עובדים</h2>
+            <div style={{fontSize:12,color:"#9CA3AF",marginTop:2}}>{employees.length} עובדים · סה״כ: {totalMonthly.toLocaleString()} ₪/חודש</div>
+          </div>
+          <button onClick={()=>{setAdding(true);setEditId(null);setForm({name:"",role:"מלצר",type:"global",monthlySalary:"",hourlyRate:"",hoursPerMonth:""}); }}
+            style={{background:"#2563EB",border:"none",borderRadius:10,color:"#fff",padding:"8px 16px",fontWeight:700,cursor:"pointer",fontFamily:"inherit",fontSize:13}}>+ הוסף</button>
+        </div>
+
+        {employees.length===0 && !adding && (
+          <div style={{textAlign:"center",padding:"24px 0",color:"#9CA3AF",fontSize:14}}>אין עובדים מוגדרים עדיין</div>
+        )}
+
+        {employees.map(emp=>(
+          <div key={emp.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 14px",background:"#F8FAFC",borderRadius:12,marginBottom:8,border:"1px solid #E5E7EB"}}>
+            <div>
+              <div style={{fontWeight:700,color:"#111827",fontSize:14}}>{emp.name}</div>
+              <div style={{fontSize:12,color:"#6B7280",marginTop:2}}>{emp.role} · {fmtEmpSalary(emp)}</div>
+            </div>
+            <div style={{display:"flex",gap:6}}>
+              <button onClick={()=>startEdit(emp)} style={{background:"#F1F5F9",border:"1px solid #E5E7EB",borderRadius:8,padding:"5px 10px",cursor:"pointer",fontFamily:"inherit",fontSize:12,color:"#374151"}}>✏️</button>
+              <button onClick={()=>removeEmp(emp.id)} style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:8,padding:"5px 10px",cursor:"pointer",fontFamily:"inherit",fontSize:12,color:"#EF4444"}}>✕</button>
+            </div>
+          </div>
+        ))}
+
+        {adding && (
+          <div style={{background:"#EFF6FF",borderRadius:14,padding:"16px",border:"1px solid #BFDBFE",marginTop:8}}>
+            <div style={{fontWeight:700,color:"#1D4ED8",fontSize:14,marginBottom:12}}>{editId!==null?"עריכת עובד":"עובד חדש"}</div>
+            <input style={inp} placeholder="שם עובד" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} autoFocus/>
+            <select style={sel} value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value}))}>
+              {ROLES_EMP.map(r=><option key={r} value={r}>{r}</option>)}
+            </select>
+            <div style={{display:"flex",gap:6,marginBottom:12}}>
+              {EMP_TYPES.map(t=>(
+                <button key={t.v} onClick={()=>setForm(f=>({...f,type:t.v}))}
+                  style={{flex:1,padding:"9px 8px",borderRadius:10,border:`2px solid ${form.type===t.v?"#2563EB":"#E5E7EB"}`,background:form.type===t.v?"#EFF6FF":"#FFFFFF",color:form.type===t.v?"#1D4ED8":"#6B7280",fontWeight:700,cursor:"pointer",fontFamily:"inherit",fontSize:12}}>
+                  {t.l}
+                </button>
+              ))}
+            </div>
+            {form.type==="global" && (
+              <>
+                <div style={{fontSize:11,color:"#9CA3AF",marginBottom:4}}>משכורת חודשית ברוטו (₪)</div>
+                <input style={{...inp}} type="number" inputMode="numeric" placeholder="0"
+                  value={form.monthlySalary} onChange={e=>setForm(f=>({...f,monthlySalary:e.target.value}))}/>
+                {form.monthlySalary && (
+                  <div style={{background:"#DBEAFE",borderRadius:8,padding:"8px 12px",fontSize:13,color:"#1D4ED8",fontWeight:600,marginBottom:10}}>
+                    עלות יומית: ≈ {Math.round(Number(form.monthlySalary)/DAYS_IN_MONTH).toLocaleString()} ₪/יום (÷{DAYS_IN_MONTH})
+                  </div>
+                )}
+              </>
+            )}
+            {form.type==="hourly" && (
+              <div style={{background:"#F0FDF4",borderRadius:10,padding:"10px 12px",fontSize:13,color:"#16A34A",marginBottom:10}}>
+                עלות יומית תוזן ידנית בכל יום בטופס ההזנה
+              </div>
+            )}
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={saveEmp} style={{flex:1,background:"#2563EB",border:"none",borderRadius:10,color:"#fff",padding:"11px",fontWeight:700,cursor:"pointer",fontFamily:"inherit",fontSize:14}}>שמור</button>
+              <button onClick={()=>{setAdding(false);setEditId(null);}} style={{flex:1,background:"#F1F5F9",border:"1px solid #E5E7EB",borderRadius:10,color:"#6B7280",padding:"11px",fontWeight:600,cursor:"pointer",fontFamily:"inherit",fontSize:14}}>ביטול</button>
+            </div>
+          </div>
+        )}
+
+        {totalMonthly > 0 && (
+          <div style={{borderTop:"1px solid #E5E7EB",marginTop:14,paddingTop:12,display:"flex",justifyContent:"space-between"}}>
+            <span style={{color:"#6B7280",fontWeight:600}}>סה״כ עלות שכר חודשית</span>
+            <span style={{color:"#111827",fontWeight:800,fontSize:16}}>{totalMonthly.toLocaleString()} ₪</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ─── Master Tasks Screen (בעלים ישיר) ────────────────────────────────────────
 function MasterTasksScreen({ tasks, saveTasks }) {
@@ -2180,7 +2376,7 @@ function ForecastScreen({ metrics, lastYear, saveLastYear, currentMonth, entries
     const sum = matches.reduce((a,e) => {
       if (field === 'sales')  return a + (Number(e.sales)||0)+(Number(e.deliveries)||0)+(Number(e.other_income)||0);
       if (field === 'food')   return a + (e.supplier_payments?Object.values(e.supplier_payments).filter(v=>v!=='skip').reduce((x,y)=>x+(Number(y)||0),0):0);
-      if (field === 'labor')  return a + (Number(e.payroll)||0);
+      if (field === 'labor')  return a + (Number(e.payroll)||0) + (e.hourly_payroll?Object.values(e.hourly_payroll).reduce((s,v)=>s+(Number(v)||0),0):0);
       return 0;
     }, 0);
     return sum / matches.length;
