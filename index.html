@@ -212,9 +212,13 @@ function calcMetrics(entries, fixedList, cfg={}) {
   const lc = totalSales-totalExpenses;
   const fc = totalSales-totalFood-totalPayroll-totalOtherExpense-TOTAL_FIXED;
   const foodCostPct = totalSales>0?(totalFood/totalSales)*100:0;
-  const dailyAvg = DAY_OF_MONTH>0?lc/DAY_OF_MONTH:0;
-  const forecast = lc+(dailyAvg*(DAYS_IN_MONTH-DAY_OF_MONTH))-(TOTAL_FIXED-fixedSoFar);
-  return { totalSales, totalPayroll, totalOtherExpense, totalFood, fixedSoFar, totalExpenses, lc, fc, foodCostPct, forecast, dailyAvg, resolvedFixed, TOTAL_FIXED, supplierTotals };
+  const financingPct = cfg.financingPct ?? 0.132; // 60% × 22%
+  const totalFinancing = Math.round(totalSales * financingPct);
+  const lcAfterFinancing = lc - totalFinancing;
+  const fcAfterFinancing = fc - totalFinancing;
+  const dailyAvg = DAY_OF_MONTH>0?lcAfterFinancing/DAY_OF_MONTH:0;
+  const forecast = lcAfterFinancing+(dailyAvg*(DAYS_IN_MONTH-DAY_OF_MONTH))-(TOTAL_FIXED-fixedSoFar);
+  return { totalSales, totalPayroll, totalOtherExpense, totalFood, fixedSoFar, totalExpenses, lc:lcAfterFinancing, fc:fcAfterFinancing, foodCostPct, forecast, dailyAvg, resolvedFixed, TOTAL_FIXED, supplierTotals, totalFinancing, lcBeforeFinancing:lc };
 }
 
 function buildChart(entries) {
@@ -1173,7 +1177,7 @@ function PilotDashboard() {
                   value={fmt(metrics.totalSales)}
                   color={salesPct>=100?"#22C55E":salesPct>=70?"#F59E0B":"#EF4444"}
                   sub={`יעד ${fmt(tSales)} · ${salesPct}%`}/>
-                <KPI icon="🏦" label="LC יתרת קופה"
+                <KPI icon="📊" label="LC יתרת קופה"
                   value={fmt(metrics.lc)}
                   color={metrics.lc>=0?"#22C55E":"#EF4444"}/>
                 <KPI icon="🥗" label="פוד קוסט"
@@ -1184,6 +1188,10 @@ function PilotDashboard() {
                   value={fmtPct(laborPct)}
                   color={fcColor(laborPct,tLabor)}
                   sub={`יעד ${tLabor}% · ${fmt(metrics.totalPayroll)}`}/>
+                <KPI icon="🏦" label="עלות מימון"
+                  value={fmt(metrics.totalFinancing)}
+                  color="#F59E0B"
+                  sub="60% × 22% מהכנסות"/>
                 <KPI icon="🔮" label="תחזית סוף חודש"
                   value={fmt(metrics.forecast)}
                   color="#A3A3A3"
