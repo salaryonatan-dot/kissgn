@@ -196,6 +196,79 @@ const ROLES = {
   staff:       { label:"אחמש",         color:"#6B7280", bg:"#F9FAFB" },
 };
 
+
+// ─── JoinScreen ──────────────────────────────────────────────────────────────
+// Shows when device is fresh (no data). User can either:
+// A) Start fresh setup (first owner)
+// B) Paste an invite code to join existing workspace
+function JoinScreen({ onSetup, onJoin }) {
+  const [code, setCode] = useState("");
+  const [tab, setTab]   = useState("join"); // "join" | "new"
+  const [err, setErr]   = useState("");
+
+  const tryJoin = () => {
+    setErr("");
+    try {
+      const decoded = JSON.parse(atob(code.trim()));
+      if (!decoded.users || !decoded.businesses || !decoded.bizData) {
+        setErr("קוד לא תקין — בקש קוד חדש מהבעלים");
+        return;
+      }
+      onJoin(decoded);
+    } catch(e) {
+      setErr("קוד לא תקין — ודא שהעתקת אותו במלואו");
+    }
+  };
+
+  const J = {
+    root: {minHeight:"100vh",background:"#F1F5F9",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"20px",direction:"rtl"},
+    box: {background:"#FFFFFF",borderRadius:20,padding:"32px 28px",width:"100%",maxWidth:400,boxShadow:"0 4px 24px rgba(0,0,0,0.08)"},
+    logo: {textAlign:"center",marginBottom:24},
+    title: {fontSize:22,fontWeight:900,color:"#111827",margin:"0 0 4px"},
+    sub: {fontSize:13,color:"#9CA3AF"},
+    tabs: {display:"flex",gap:4,marginBottom:20,background:"#F1F5F9",borderRadius:12,padding:4},
+    tab: {flex:1,padding:"10px",border:"none",borderRadius:9,fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit",transition:"all 0.15s"},
+    tabActive: {background:"#FFFFFF",color:"#2563EB",boxShadow:"0 1px 6px rgba(0,0,0,0.1)"},
+    tabInactive: {background:"transparent",color:"#9CA3AF"},
+    lbl: {fontSize:13,color:"#6B7280",marginBottom:6,display:"block",fontWeight:600},
+    ta: {width:"100%",border:"1px solid #D1D5DB",borderRadius:10,padding:"12px 14px",fontSize:13,fontFamily:"inherit",resize:"vertical",minHeight:90,color:"#111827",background:"#F9FAFB",boxSizing:"border-box",direction:"ltr"},
+    btn: {width:"100%",padding:"14px",background:"#2563EB",border:"none",borderRadius:12,color:"#FFFFFF",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"inherit",marginTop:8},
+    btnGreen: {width:"100%",padding:"14px",background:"#22C55E",border:"none",borderRadius:12,color:"#FFFFFF",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"inherit",marginTop:8},
+    err: {color:"#EF4444",fontSize:13,fontWeight:600,marginBottom:8,textAlign:"center"},
+    hint: {fontSize:12,color:"#9CA3AF",textAlign:"center",marginTop:12,lineHeight:1.5},
+  };
+
+  return (
+    <div style={J.root}>
+      <div style={J.box}>
+        <div style={J.logo}>
+          <div style={{fontSize:48,marginBottom:6}}>📊</div>
+          <h1 style={J.title}>Marjin</h1>
+          <p style={J.sub}>מערכת ניהול מסעדות</p>
+        </div>
+        <div style={J.tabs}>
+          <button style={{...J.tab,...(tab==="join"?J.tabActive:J.tabInactive)}} onClick={()=>{setTab("join");setErr("");}}>🔑 כניסה לעסק קיים</button>
+          <button style={{...J.tab,...(tab==="new"?J.tabActive:J.tabInactive)}} onClick={()=>{setTab("new");setErr("");}}>✨ עסק חדש</button>
+        </div>
+        {tab==="join" ? (
+          <>
+            <label style={J.lbl}>קוד הצטרפות</label>
+            <p style={{fontSize:12,color:"#9CA3AF",margin:"0 0 8px"}}>בקש מהבעלים לפתוח הגדרות → ייצא קוד הצטרפות</p>
+            <textarea style={J.ta} placeholder="הדבק כאן את קוד ההצטרפות..." value={code} onChange={e=>setCode(e.target.value)}/>
+            {err && <div style={J.err}>{err}</div>}
+            <button style={J.btn} onClick={tryJoin}>🔑 הצטרף לעסק</button>
+          </>
+        ) : (
+          <>
+            <p style={{fontSize:14,color:"#6B7280",margin:"0 0 16px",lineHeight:1.6}}>אשף ההגדרות יוביל אותך בהקמת המערכת. בסיום תוכל לייצא קוד הצטרפות לצוות.</p>
+            <button style={J.btnGreen} onClick={onSetup}>✨ התחל הגדרת עסק חדש</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function LoginScreen({ onLogin, users }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -823,6 +896,31 @@ function PilotDashboard() {
     setAppUsers(users);
     try { await window.storage.set("app-users", JSON.stringify(users)); } catch(_){}
   };
+
+  const generateInviteCode = async () => {
+    try {
+      const bizData = {};
+      for(const biz of businesses) {
+        const keys = ["config","suppliers","fixed"];
+        for(const k of keys) {
+          try {
+            const r = await window.storage.get(`biz:${biz.id}:${k}`);
+            if(r) bizData[`biz:${biz.id}:${k}`] = JSON.parse(r.value);
+          } catch(_){}
+        }
+      }
+      const payload = { users: appUsers, businesses, bizData };
+      const code = btoa(JSON.stringify(payload));
+      // Copy to clipboard
+      try { await navigator.clipboard.writeText(code); alert("✅ קוד הועתק ללוח!\nשלח אותו לעובד שרוצה להתחבר."); }
+      catch(_) {
+        const ta = document.createElement("textarea");
+        ta.value = code; document.body.appendChild(ta); ta.select();
+        document.execCommand("copy"); document.body.removeChild(ta);
+        alert("✅ קוד הועתק ללוח!\nשלח אותו לעובד שרוצה להתחבר.");
+      }
+    } catch(e) { alert("שגיאה בייצור קוד"); }
+  };
   const saveCredits = async (credits) => {
     setPendingCredits(credits);
     if(!currentBizId) return;
@@ -911,13 +1009,33 @@ function PilotDashboard() {
 
   if(!loaded) return <div style={S.root}><div style={{padding:40,color:"#6B7280"}}>טוען...</div></div>;
 
-  // First time ever — no businesses, no users → setup
-  if(loaded && businesses.length === 0 && appUsers.length === 0) {
+  // First time ever — no businesses, no users → JoinScreen
+  if(loaded && businesses.length === 0 && appUsers.length === 0 && !showSetup) {
+    return (
+      <JoinScreen
+        onSetup={() => setShowSetup(true)}
+        onJoin={async (decoded) => {
+          // Import all data from invite code
+          try {
+            await window.storage.set("app-users", JSON.stringify(decoded.users));
+            await window.storage.set("app-businesses", JSON.stringify(decoded.businesses));
+            for(const [key, val] of Object.entries(decoded.bizData)) {
+              await window.storage.set(key, JSON.stringify(val));
+            }
+            setAppUsers(decoded.users);
+            setBusinesses(decoded.businesses);
+            if(decoded.businesses.length === 1) setCurrentBizId(decoded.businesses[0].id);
+          } catch(e) { alert("שגיאה בייבוא — נסה שוב"); }
+        }}
+      />
+    );
+  }
+  if(loaded && businesses.length === 0 && appUsers.length === 0 && showSetup) {
     return (
       <SetupWizard
         initial={businessConfig} initialSuppliers={[]} initialFixed={FIXED_EXPENSES_DEFAULT}
         onComplete={(cfg, sups, fixed, firstOwner) => { completeSetup(cfg, sups, fixed, firstOwner); }}
-        onCancel={null} isFirstSetup={true}
+        onCancel={() => setShowSetup(false)} isFirstSetup={true}
       />
     );
   }
@@ -1524,7 +1642,13 @@ function PilotDashboard() {
       {screen==="users" && !currentUser && (
         <div style={S.content}>
           <div style={S.card}>
-            <h2 style={{...S.ct,fontSize:15,color:"#111827",marginBottom:16}}>👥 ניהול משתמשים</h2>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <h2 style={{...S.ct,fontSize:15,color:"#111827",margin:0}}>👥 ניהול משתמשים</h2>
+              <button onClick={generateInviteCode}
+                style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,padding:"8px 14px",fontSize:12,fontWeight:700,color:"#2563EB",cursor:"pointer",fontFamily:"inherit"}}>
+                📤 ייצא קוד הצטרפות
+              </button>
+            </div>
             <UserManagement users={appUsers} saveUsers={saveAppUsers}/>
           </div>
         </div>
