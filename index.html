@@ -1571,7 +1571,7 @@ function PilotDashboard() {
                       {e.notes&&<p style={{margin:"4px 0 0",color:"#9CA3AF",fontSize:12,fontStyle:"italic"}}>{e.notes}</p>}
                     </div>
                     <div style={{display:"flex",flexDirection:"column",gap:5}}>
-                      <button style={S.iconBtn} onClick={()=>{setForm({...e});setEditingId(i);setScreen("entry");}}>✏️</button>
+                      <button style={S.iconBtn} onClick={()=>{setForm({...e});setEditingId(i);setEntryStep('revenue');setScreen("entry");}}>✏️</button>
                       <button style={S.iconBtn} onClick={()=>deleteEntry(i)}>🗑</button>
                     </div>
                   </div>
