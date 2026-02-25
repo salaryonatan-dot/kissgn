@@ -1392,13 +1392,13 @@ function PilotDashboard() {
             {/* VAT Toggle */}
             <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,padding:"10px 14px",background:form.includeVat?"#FFF7ED":"#F0FDF4",border:`1px solid ${form.includeVat?"#FED7AA":"#BBF7D0"}`,borderRadius:12}}>
               <div style={{flex:1}}>
-                <div style={{fontSize:13,fontWeight:700,color:"#111827"}}>סכומים {form.includeVat?"כוללים":"אינם כוללים"} מע"מ</div>
+                <div style={{fontSize:13,fontWeight:700,color:"#111827"}}>סכומים {form.includeVat?"כוללים":"אינם כוללים"} מעמ</div>
                 <div style={{fontSize:11,color:"#9CA3AF",marginTop:2}}>{form.includeVat?"המערכת תחשב נטו אוטומטית (÷1.18)":"הכנס סכומים נטו ללא מע״מ"}</div>
               </div>
               <button onClick={()=>setForm(f=>({...f,includeVat:!f.includeVat}))}
                 style={{padding:"7px 16px",borderRadius:20,border:"none",cursor:"pointer",fontFamily:"inherit",fontWeight:700,fontSize:13,
                   background:form.includeVat?"#F97316":"#22C55E",color:"#fff",minWidth:70}}>
-                {form.includeVat?"עם מע"מ":"ללא מע"מ"}
+                {form.includeVat?"עם מעמ":"ללא מעמ"}
               </button>
             </div>
 
