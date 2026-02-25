@@ -172,9 +172,9 @@ const VAT_RATE = 1.18;
 const vatNet = (v, includeVat) => includeVat ? Math.round(Number(v) / VAT_RATE) : Number(v);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-const fmt = n => new Intl.NumberFormat("he-IL", { style:"currency", currency:"ILS", maximumFractionDigits:0 })
+const fmt = n => new Intl.NumberFormat("he-IL", { style:"currency", currency:"ILS", maximumFractionDigits:0 }).format(n||0);
 const VAT = 1.18;
-const exVAT = n => Math.round(n / VAT);.format(n||0);
+const exVAT = n => Math.round(n / VAT);
 const fmtPct = n => `${Number(n).toFixed(1)}%`;
 const getDateDOW = dateStr => { const [y,m,d]=dateStr.split("-").map(Number); return new Date(y,m-1,d).getDay(); };
 const suppliersOnDay = (dow, sups=[]) => sups.filter(s => s.days.includes(dow));
