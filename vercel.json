@@ -39,8 +39,7 @@
   "crons": [
     {
       "path": "/api/analytics/daily-builder",
-      "schedule": "0 23 * * *",
-      "_note": "23:00 UTC = 01:00 IL (winter/UTC+2) or 02:00 IL (summer/UTC+3). Vercel crons are always UTC."
+      "schedule": "0 23 * * *"
     }
   ]
 }
