@@ -32,7 +32,9 @@
   <script type="module">
     import { initializeApp }                        from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { getDatabase, ref, get, set, remove, onValue } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
-    import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+    import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
+             sendPasswordResetEmail, onAuthStateChanged, signOut }
+             from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
     import { initializeAppCheck, ReCaptchaV3Provider } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app-check.js";
 
     // ── Config loaded from server (keeps keys out of static HTML) ──────────────
@@ -68,33 +70,51 @@
       console.warn("[app-check] RECAPTCHA_SITE_KEY missing — App Check disabled");
     }
 
-    // ── Auth: anonymous for pilot; upgrade to email/password later ────────────
-    let _uid   = null;
-    let _user  = null;
+    // ── Auth: Email/Password ──────────────────────────────────────────────────
+    let _uid  = null;
+    let _user = null;
 
-    // Returns a fresh ID token for Edge Function Authorization headers
+    // Returns a fresh ID token for API Authorization headers
     window.getIdToken = async (forceRefresh=false) => {
       if (!_user) throw new Error("not authenticated");
       return _user.getIdToken(forceRefresh);
     };
 
+    // Sign in with email + password
+    window.firebaseSignIn = async (email, password) => {
+      const cred = await signInWithEmailAndPassword(auth, email, password);
+      _uid  = cred.user.uid;
+      _user = cred.user;
+      return cred.user;
+    };
+
+    // Create a new Firebase Auth user (uses secondary app to avoid signing out current user)
+    window.firebaseCreateUser = async (email, password) => {
+      const secondaryApp  = initializeApp2(firebaseConfig, `secondary_${Date.now()}`);
+      const secondaryAuth = getAuth(secondaryApp);
+      const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+      const uid  = cred.user.uid;
+      await signOut(secondaryAuth);
+      return uid;
+    };
+
+    // Send password reset email
+    window.firebaseSendReset = async (email) => {
+      await sendPasswordResetEmail(auth, email);
+    };
+
+    // Sign out
+    window.firebaseSignOut = async () => {
+      await signOut(auth);
+      _uid  = null;
+      _user = null;
+    };
+
+    // Wait for auth state to settle (user may already be signed in from previous session)
     const authReady = new Promise(resolve => {
-      onAuthStateChanged(auth, async user => {
-        if (user) {
-          _uid  = user.uid;
-          _user = user;
-          resolve(user);
-        } else {
-          try {
-            const cred = await signInAnonymously(auth);
-            _uid  = cred.user.uid;
-            _user = cred.user;
-            resolve(cred.user);
-          } catch(e) {
-            console.error("[firebase-auth]", e.message);
-            resolve(null);
-          }
-        }
+      onAuthStateChanged(auth, user => {
+        if (user) { _uid = user.uid; _user = user; }
+        resolve(user); // resolve with user or null — app decides what to do
       });
     });
     await authReady;
@@ -173,6 +193,16 @@
         ...(options.headers || {}),
       };
       return fetch(path, { ...options, headers });
+    };
+
+    // Raw RTDB get (without storage wrapper) — used for pre-auth lookups
+    window._rtdbGet = async (path) => {
+      const snap = await get(ref(db, path));
+      return snap.exists() ? snap.val() : null;
+    };
+    // Raw RTDB set — used for lookup table writes
+    window._rtdbSet = async (path, val) => {
+      await set(ref(db, path), val);
     };
 
     window._firebaseReady = true;
@@ -347,17 +377,51 @@ const ROLES = {
 
 
 
-function LoginScreen({ onLogin, users }) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [err, setErr]           = useState(false);
-  const [showPass, setShowPass] = useState(false);
+function LoginScreen({ onLogin, tenantId }) {
+  const [username,    setUsername]    = useState("");
+  const [password,    setPassword]    = useState("");
+  const [err,         setErr]         = useState("");
+  const [loading,     setLoading]     = useState(false);
+  const [showPass,    setShowPass]    = useState(false);
+  const [resetMode,   setResetMode]   = useState(false);
+  const [resetEmail,  setResetEmail]  = useState("");
+  const [resetSent,   setResetSent]   = useState(false);
 
-  const tryLogin = () => {
-    console.log("Login attempt:", username.trim(), "| users count:", users.length, "| users:", users.map(u=>u.username));
-    const u = users.find(u => u.username.toLowerCase()===username.trim().toLowerCase() && u.password===password.trim());
-    if(u){ setErr(false); onLogin(u); }
-    else { setErr(true); setPassword(""); }
+  const tryLogin = async () => {
+    if(!username.trim() || !password.trim()) { setErr("יש למלא שם משתמש וסיסמה"); return; }
+    setLoading(true); setErr("");
+    try {
+      // 1. Look up email by username in public lookup table
+      const snap = await window._rtdbGet(`tenants/${tenantId}/lookup/${username.trim().toLowerCase()}`);
+      if(!snap) { setErr("שם משתמש לא נמצא"); setLoading(false); return; }
+      const email = snap.email;
+      // 2. Sign in with Firebase Auth
+      await window.firebaseSignIn(email, password);
+      // 3. Load user profile from RTDB
+      const userSnap = await window._rtdbGet(`tenants/${tenantId}/app/users`);
+      const users = userSnap ? JSON.parse(userSnap._v || "[]") : [];
+      const u = users.find(u => u.username.toLowerCase() === username.trim().toLowerCase());
+      if(!u) { setErr("משתמש לא נמצא ב-RTDB"); setLoading(false); return; }
+      setErr(""); onLogin(u);
+    } catch(e) {
+      const msg = e.code === "auth/wrong-password" || e.code === "auth/invalid-credential"
+        ? "סיסמה שגויה" : e.code === "auth/too-many-requests"
+        ? "יותר מדי ניסיונות — נסה שוב מאוחר יותר" : e.message || "שגיאה בהתחברות";
+      setErr(msg);
+    }
+    setLoading(false);
+  };
+
+  const trySendReset = async () => {
+    if(!resetEmail.trim()) { setErr("יש להזין כתובת מייל"); return; }
+    setLoading(true); setErr("");
+    try {
+      await window.firebaseSendReset(resetEmail.trim());
+      setResetSent(true);
+    } catch(e) {
+      setErr(e.code === "auth/user-not-found" ? "מייל לא נמצא במערכת" : "שגיאה בשליחת המייל");
+    }
+    setLoading(false);
   };
 
   const L = {
@@ -398,33 +462,101 @@ function LoginScreen({ onLogin, users }) {
             onKeyDown={e=>e.key==="Enter"&&tryLogin()}/>
           <button style={L.eyeBtn} onClick={()=>setShowPass(p=>!p)}>{showPass?"🙈":"👁"}</button>
         </div>
-        {err && <div style={L.err}>שם משתמש או סיסמה שגויים</div>}
-        <button style={L.btn} onClick={tryLogin}>כניסה</button>
-        <div style={L.foot}>גרסת פיילוט · {users.length} משתמשים רשומים</div>
+        {err && <div style={L.err}>{err}</div>}
+        <button style={{...L.btn, opacity:loading?0.6:1}} onClick={loading?null:tryLogin} disabled={loading}>
+          {loading ? "מתחבר..." : "כניסה"}
+        </button>
+        <div style={{textAlign:"center",marginTop:14}}>
+          <button onClick={()=>{setResetMode(true);setErr("");}}
+            style={{background:"none",border:"none",color:"#2563EB",fontSize:13,cursor:"pointer",fontFamily:"inherit",textDecoration:"underline"}}>
+            שכחתי סיסמה
+          </button>
+        </div>
       </div>
+      {/* ── Forgot password modal ─────────────────────────────────────── */}
+      {resetMode && (
+        <div style={{position:"fixed",inset:0,background:"#0006",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999}}>
+          <div style={{background:"#fff",borderRadius:16,padding:"28px 24px",width:"100%",maxWidth:360,boxShadow:"0 8px 32px #0003",direction:"rtl"}}>
+            {resetSent ? (
+              <>
+                <div style={{fontSize:36,textAlign:"center",marginBottom:12}}>✉️</div>
+                <h3 style={{margin:"0 0 8px",textAlign:"center",fontWeight:800}}>נשלח!</h3>
+                <p style={{color:"#6B7280",textAlign:"center",fontSize:14}}>בדוק את תיבת הדואר שלך ולחץ על הקישור לאיפוס הסיסמה.</p>
+                <button onClick={()=>{setResetMode(false);setResetSent(false);setResetEmail("");}}
+                  style={{width:"100%",padding:"13px",background:"#2563EB",border:"none",borderRadius:10,color:"#fff",fontWeight:700,fontSize:15,cursor:"pointer",marginTop:16,fontFamily:"inherit"}}>
+                  סגור
+                </button>
+              </>
+            ) : (
+              <>
+                <h3 style={{margin:"0 0 6px",fontWeight:800}}>איפוס סיסמה</h3>
+                <p style={{color:"#6B7280",fontSize:13,margin:"0 0 16px"}}>הזן את כתובת המייל שלך ונשלח לך קישור לאיפוס.</p>
+                <input style={{width:"100%",border:"1px solid #D1D5DB",borderRadius:9,padding:"11px 13px",fontSize:14,fontFamily:"inherit",outline:"none",boxSizing:"border-box",marginBottom:12,direction:"ltr"}}
+                  type="email" placeholder="your@email.com"
+                  value={resetEmail} onChange={e=>setResetEmail(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&trySendReset()}/>
+                {err && <div style={{color:"#EF4444",fontSize:13,marginBottom:10,fontWeight:600}}>{err}</div>}
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={trySendReset} disabled={loading}
+                    style={{flex:1,padding:"12px",background:"#2563EB",border:"none",borderRadius:10,color:"#fff",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit",opacity:loading?0.6:1}}>
+                    {loading ? "שולח..." : "שלח קישור"}
+                  </button>
+                  <button onClick={()=>{setResetMode(false);setErr("");}}
+                    style={{padding:"12px 16px",background:"#F1F5F9",border:"1px solid #E5E7EB",borderRadius:10,color:"#6B7280",fontWeight:600,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>
+                    ביטול
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 // ─── User Management Panel ────────────────────────────────────────────────────
-function UserManagement({ users, saveUsers }) {
+function UserManagement({ users, saveUsers, tenantId }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId,  setEditId]  = useState(null);
-  const [form, setForm] = useState({name:"",username:"",password:"",role:"manager"});
+  const [form, setForm] = useState({name:"",username:"",email:"",password:"",role:"manager"});
   const [err,  setErr]  = useState("");
+  const [saving, setSaving] = useState(false);
 
-  const resetForm = () => { setForm({name:"",username:"",password:"",role:"manager"}); setErr(""); setShowAdd(false); setEditId(null); };
+  const resetForm = () => { setForm({name:"",username:"",email:"",password:"",role:"manager"}); setErr(""); setShowAdd(false); setEditId(null); };
 
   const save = async () => {
-    if(!form.name.trim()||!form.username.trim()||(!editId&&!form.password)) return setErr("יש למלא שם, שם משתמש וסיסמה");
+    if(!form.name.trim()||!form.username.trim()) return setErr("יש למלא שם ושם משתמש");
+    if(!editId && (!form.email.trim()||!form.password)) return setErr("יש למלא מייל וסיסמה");
     if(users.find(u=>u.username===form.username.trim()&&u.id!==editId)) return setErr("שם משתמש כבר קיים");
-    if(editId) {
-      saveUsers(users.map(u=>u.id===editId?{...u,...form,password:form.password||u.password}:u));
-    } else {
-      const hpw2 = await hashPassword(form.password);
-      saveUsers([...users,{id:Date.now(),...form,username:form.username.trim(),password:hpw2}]);
+    if(!editId && users.find(u=>u.email===form.email.trim())) return setErr("מייל כבר קיים");
+    setSaving(true); setErr("");
+    try {
+      if(editId) {
+        // Edit: only update profile fields (not email/password — use Firebase Console)
+        saveUsers(users.map(u=>u.id===editId?{...u,name:form.name,username:form.username.trim(),role:form.role}:u));
+      } else {
+        // Create: Firebase Auth user first
+        const firebaseUid = await window.firebaseCreateUser(form.email.trim(), form.password);
+        // Write lookup table: tenants/{tenantId}/lookup/{username} = {email, firebaseUid}
+        await window._rtdbSet(
+          `tenants/${tenantId}/lookup/${form.username.trim().toLowerCase()}`,
+          { email: form.email.trim(), firebaseUid }
+        );
+        const newUser = {id:Date.now(), name:form.name.trim(), username:form.username.trim(),
+          email:form.email.trim(), role:form.role, firebaseUid};
+        saveUsers([...users, newUser]);
+        // Optionally send password reset so user sets their own password
+        // await window.firebaseSendReset(form.email.trim());
+      }
+      resetForm();
+    } catch(e) {
+      const msg = e.code==="auth/email-already-in-use" ? "המייל כבר רשום במערכת"
+        : e.code==="auth/weak-password" ? "סיסמה חלשה מדי (מינימום 6 תווים)"
+        : e.message || "שגיאה ביצירת המשתמש";
+      setErr(msg);
     }
-    resetForm();
+    setSaving(false);
   };
 
   const startEdit = (u) => { setEditId(u.id); setForm({name:u.name,username:u.username,password:"",role:u.role}); setShowAdd(true); };
@@ -471,9 +603,13 @@ function UserManagement({ users, saveUsers }) {
           <label style={UM.lbl}>שם מלא</label>
           <input style={UM.inp} placeholder="ישראל ישראלי" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))}/>
           <label style={UM.lbl}>שם משתמש</label>
-          <input style={UM.inp} placeholder="username" autoCapitalize="none" value={form.username} onChange={e=>setForm(f=>({...f,username:e.target.value}))}/>
-          <label style={UM.lbl}>{editId?"סיסמה חדשה (ריק = לא לשנות)":"סיסמה"}</label>
-          <input style={UM.inp} type="password" placeholder="••••••" value={form.password} onChange={e=>setForm(f=>({...f,password:e.target.value}))}/>
+          <input style={UM.inp} placeholder="username" autoCapitalize="none" value={form.username} onChange={e=>setForm(f=>({...f,username:e.target.value}))} disabled={!!editId}/>
+          {!editId && <>
+            <label style={UM.lbl}>כתובת מייל (לשחזור סיסמה)</label>
+            <input style={{...UM.inp,direction:"ltr"}} type="email" placeholder="user@example.com" value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))}/>
+            <label style={UM.lbl}>סיסמה ראשונית (מינימום 6 תווים)</label>
+            <input style={UM.inp} type="password" placeholder="••••••" value={form.password} onChange={e=>setForm(f=>({...f,password:e.target.value}))}/>
+          </>}
           <label style={UM.lbl}>תפקיד</label>
           <select style={UM.sel} value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value}))}>
             <option value="owner">בעלים — גישה מלאה לכל</option>
@@ -564,6 +700,7 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
   // Step 5 — owner account
   const [ownerName,     setOwnerName]     = useState("");
   const [ownerUsername, setOwnerUsername] = useState("");
+  const [ownerEmail,    setOwnerEmail]    = useState("");
   const [ownerPassword, setOwnerPassword] = useState("");
   const [ownerPass2,    setOwnerPass2]    = useState("");
   const [ownerErr,      setOwnerErr]      = useState("");
@@ -572,7 +709,9 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
 
   const finish = async () => {
     if(isFirstSetup) {
-      if(!ownerName.trim()||!ownerUsername.trim()||!ownerPassword) return setOwnerErr("יש למלא את כל השדות");
+      if(!ownerName.trim()||!ownerUsername.trim()||!ownerEmail.trim()||!ownerPassword) return setOwnerErr("יש למלא את כל השדות כולל מייל");
+      if(!/^[^@]+@[^@]+\.[^@]+$/.test(ownerEmail.trim())) return setOwnerErr("כתובת מייל לא תקינה");
+      if(ownerPassword.length < 6) return setOwnerErr("סיסמה חייבת להיות לפחות 6 תווים");
       if(ownerPassword!==ownerPass2) return setOwnerErr("הסיסמאות אינן תואמות");
       setOwnerErr("");
     }
@@ -590,8 +729,8 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
       if(f.royaltyPct) return hasRoyalty ? {...f, name:`תמלוגים (${cfg.royaltyPct}% ממחזור)`} : {...f, amount:0};
       return f;
     });
-    const ownerPwHash = isFirstSetup ? await hashPassword(ownerPassword) : null;
-    const firstOwner = isFirstSetup ? { name:ownerName.trim(), username:ownerUsername.trim(), password:ownerPwHash } : null;
+    const firstOwner = isFirstSetup ? { name:ownerName.trim(), username:ownerUsername.trim(),
+      email:ownerEmail.trim(), password:ownerPassword } : null;
     onComplete(cfg, suppliers.filter(s=>s.name), updatedFixed, firstOwner);
   };
 
@@ -768,8 +907,10 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
               <input style={{...W.inp,marginBottom:12}} placeholder="ישראל ישראלי" value={ownerName} onChange={e=>setOwnerName(e.target.value)}/>
               <label style={W.lbl}>שם משתמש לכניסה</label>
               <input style={{...W.inp,marginBottom:12}} placeholder="username" autoCapitalize="none" value={ownerUsername} onChange={e=>setOwnerUsername(e.target.value)}/>
-              <label style={W.lbl}>סיסמה</label>
-              <input style={{...W.inp,marginBottom:12}} type="password" placeholder="לפחות 4 תווים" value={ownerPassword} onChange={e=>setOwnerPassword(e.target.value)}/>
+              <label style={W.lbl}>כתובת מייל (לשחזור סיסמה)</label>
+              <input style={{...W.inp,marginBottom:12,direction:"ltr"}} type="email" placeholder="your@email.com" value={ownerEmail} onChange={e=>setOwnerEmail(e.target.value)}/>
+              <label style={W.lbl}>סיסמה (לפחות 6 תווים)</label>
+              <input style={{...W.inp,marginBottom:12}} type="password" placeholder="לפחות 6 תווים" value={ownerPassword} onChange={e=>setOwnerPassword(e.target.value)}/>
               <label style={W.lbl}>אימות סיסמה</label>
               <input style={{...W.inp,marginBottom:0}} type="password" placeholder="הכנס שוב" value={ownerPass2} onChange={e=>setOwnerPass2(e.target.value)}/>
             </div>
@@ -1021,10 +1162,32 @@ function PilotDashboard() {
     setSuppliers(sups);
     if(fixed) { setFixedList(fixed); try { await window.storage.set(`biz:${bizId}:fixed`, JSON.stringify(fixed), true); } catch(_){} }
     if(firstOwner) {
-      const users = [{id:Date.now(), ...firstOwner, role:"super_owner"}];
-      setAppUsers(users);
-      try { await window.storage.set("app-users", JSON.stringify(users), true); } catch(_){}
-      setLoggedInUser(users[0]);
+      try {
+        // Create Firebase Auth account for owner
+        const firebaseUid = await window.firebaseCreateUser(firstOwner.email, firstOwner.password);
+        // Write username lookup table
+        await window._rtdbSet(
+          `tenants/${bizId}/lookup/${firstOwner.username.toLowerCase()}`,
+          { email: firstOwner.email, firebaseUid }
+        );
+        // Sign in as owner right away
+        await window.firebaseSignIn(firstOwner.email, firstOwner.password);
+        const ownerRecord = {id:Date.now(), name:firstOwner.name, username:firstOwner.username,
+          email:firstOwner.email, role:"super_owner", firebaseUid};
+        const users = [ownerRecord];
+        setAppUsers(users);
+        try { await window.storage.set("app-users", JSON.stringify(users), true); } catch(_){}
+        setLoggedInUser(ownerRecord);
+      } catch(e) {
+        console.error("[completeSetup] owner auth creation failed:", e.message);
+        // Fallback: store user without Firebase Auth
+        const ownerRecord = {id:Date.now(), name:firstOwner.name, username:firstOwner.username,
+          email:firstOwner.email||"", role:"super_owner"};
+        const users = [ownerRecord];
+        setAppUsers(users);
+        try { await window.storage.set("app-users", JSON.stringify(users), true); } catch(_){}
+        setLoggedInUser(ownerRecord);
+      }
     }
     if(!currentBizId) setCurrentBizId(bizId);
     setSetupDone(true);
@@ -1143,7 +1306,7 @@ function PilotDashboard() {
   if(loaded && !loggedInUser) {
     return (
       <LoginScreen
-        users={appUsers}
+        tenantId={currentBizId || businesses[0]?.id}
         onLogin={async (user)=>{
           setLoggedInUser(user);
           try { const sp = isHashed(user.password)?user.password:await hashPassword(user.password); localStorage.setItem("marjin-session", JSON.stringify({id:user.id, password:sp})); } catch(_){}

@@ -91,6 +91,14 @@
         },
 
         // ── Analytics — server-write only, members read ─────────────────────
+        "lookup": {
+          // Public read — needed for username→email resolution before login
+          ".read": true,
+          ".write": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          "$username": {
+            ".validate": "newData.hasChildren(['email','firebaseUid'])"
+          }
+        },
         "analytics": {
           ".read":  "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
           ".write": false,
