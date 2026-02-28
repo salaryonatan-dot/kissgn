@@ -11,9 +11,9 @@
  *   5. Caller can only bootstrap themselves
  */
 
-import { requireAuth }                        from "../../lib/verifyToken.js";
-import { isRateLimited, errResponse, getIP }  from "../../lib/helpers.js";
-import { getAdminDb }                         from "../../lib/adminSdk.js";
+import { requireAuth }                        from "../lib/verifyToken.js";
+import { isRateLimited, errResponse, getIP }  from "../lib/helpers.js";
+import { getAdminDb }                         from "../lib/adminSdk.js";
 
 export default async function handler(req, res) {
 

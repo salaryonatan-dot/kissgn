@@ -1,9 +1,9 @@
 // Node.js serverless runtime — NOT Edge
 
-import { requireAuth }                                from "../../lib/verifyToken.js";
+import { requireAuth }                                from "../lib/verifyToken.js";
 import { requireTenantAccess, isRateLimited,
-         getIP, VALID_ROLES }                         from "../../lib/helpers.js";
-import { getAdminDb }                                 from "../../lib/adminSdk.js";
+         getIP, VALID_ROLES }                         from "../lib/helpers.js";
+import { getAdminDb }                                 from "../lib/adminSdk.js";
 
 const RTDB_FORBIDDEN = /[.#$\[\]\/]/;
 

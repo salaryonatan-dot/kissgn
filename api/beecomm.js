@@ -1,8 +1,8 @@
 // Node.js serverless runtime — NOT Edge (requires firebase-admin)
 // config.runtime omitted → defaults to Node on Vercel
 
-import { requireAuth }                                   from "../../lib/verifyToken.js";
-import { requireTenantAccess, isRateLimited, getIP } from "../../lib/helpers.js";
+import { requireAuth }                                   from "../lib/verifyToken.js";
+import { requireTenantAccess, isRateLimited, getIP } from "../lib/helpers.js";
 
 const UPSTREAM_BASE = "https://api.beecomm.co.il";
 const ALLOWED_PATHS = new Map([

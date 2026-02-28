@@ -1,5 +1,5 @@
 // Node.js serverless — public endpoint, no auth required
-import { isRateLimited, getIP } from "../../lib/helpers.js";
+import { isRateLimited, getIP } from "../lib/helpers.js";
 
 const UPSTREAM = "https://www.oref.org.il/WarningMessages/alert/alerts.json";
 

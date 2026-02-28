@@ -31,7 +31,7 @@
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
   <script type="module">
-    import { initializeApp }                        from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { initializeApp, initializeApp as initializeApp2 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { getDatabase, ref, get, set, remove, onValue, forceWebSockets } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
     import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
              sendPasswordResetEmail, onAuthStateChanged, signOut }
@@ -92,7 +92,8 @@
 
     // Create a new Firebase Auth user (uses secondary app to avoid signing out current user)
     window.firebaseCreateUser = async (email, password) => {
-      const secondaryApp  = initializeApp2(firebaseConfig, `secondary_${Date.now()}`);
+      const cfg = window._firebaseConfig || firebaseConfig;
+      const secondaryApp  = window._initializeApp(cfg, `secondary_${Date.now()}`);
       const secondaryAuth = getAuth(secondaryApp);
       const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
       const uid  = cred.user.uid;
@@ -207,6 +208,8 @@
       await set(ref(db, path), val);
     };
 
+    window._initializeApp   = initializeApp2;  // expose for creating secondary apps
+    window._firebaseConfig  = firebaseConfig;  // expose config for secondary app creation
     window._firebaseReady = true;
     window.dispatchEvent(new Event("firebase-ready"));
   </script>

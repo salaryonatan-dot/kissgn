@@ -1,7 +1,7 @@
 // Node.js serverless runtime — NOT Edge (requires firebase-admin)
 
-import { requireAuth }                                   from "../../lib/verifyToken.js";
-import { requireTenantAccess, isRateLimited, getIP } from "../../lib/helpers.js";
+import { requireAuth }                                   from "../lib/verifyToken.js";
+import { requireTenantAccess, isRateLimited, getIP } from "../lib/helpers.js";
 
 const UPSTREAM_BASE = "https://api.tabit.cloud";
 const ALLOWED_PATHS = new Map([
