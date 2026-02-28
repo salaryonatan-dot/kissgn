@@ -408,7 +408,7 @@ function UserManagement({ users, saveUsers }) {
 
   const resetForm = () => { setForm({name:"",username:"",password:"",role:"manager"}); setErr(""); setShowAdd(false); setEditId(null); };
 
-  const save = () => {
+  const save = async () => {
     if(!form.name.trim()||!form.username.trim()||(!editId&&!form.password)) return setErr("יש למלא שם, שם משתמש וסיסמה");
     if(users.find(u=>u.username===form.username.trim()&&u.id!==editId)) return setErr("שם משתמש כבר קיים");
     if(editId) {
