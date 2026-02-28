@@ -1000,6 +1000,8 @@ function PilotDashboard() {
   };
   const completeSetup = async (cfg, sups, fixed, firstOwner) => {
     const bizId = currentBizId || `biz_${Date.now()}`;
+    // Set tenantId FIRST — all storage calls depend on it
+    if (window.setTenantId) window.setTenantId(bizId);
     // Register business in list
     const bizName = cfg.businessName || "מסעדה חדשה";
     const updatedBizList = [...businesses.filter(b=>b.id!==bizId), {id:bizId, name:bizName}];
