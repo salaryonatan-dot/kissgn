@@ -187,6 +187,13 @@ const { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContain
 
 // XLSX loaded via CDN in index.html — available as window.XLSX
 
+// ─── Password helpers ──────────────────────────────────────────────────────────
+const hashPassword = async (plain) => {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(plain));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+};
+const isHashed = (pw) => typeof pw === "string" && /^[0-9a-f]{64}$/.test(pw);
+
 // ─── Config helpers ───────────────────────────────────────────────────────────
 const cfgTarget = (cfg, key, fallback) => cfg?.targets?.[key] ?? fallback;
 
