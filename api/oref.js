@@ -1,24 +1,29 @@
-export const config = { runtime: "edge" };
-import { isRateLimited, errResponse, secHeaders, getIP } from "./lib/helpers.js";
+// Node.js serverless — public endpoint, no auth required
+import { isRateLimited, getIP } from "./lib/helpers.js";
 
 const UPSTREAM = "https://www.oref.org.il/WarningMessages/alert/alerts.json";
 
 // Cache: serve same response for 15s (oref updates at most every few seconds)
 let _cache = null;   // { body, expiresAt }
 
-export default async function handler(req) {
-  if (req.method !== "GET") return errResponse(405, "method not allowed", req);
+export default async function handler(req, res) {
+  if (req.method !== "GET") { res.status(405).json({ error: "method not allowed" }); return; }
+
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Content-Type", "application/json");
 
   const ip = getIP(req);
-  // Light rate limit — clients should poll every 30s, allow burst
-  if (isRateLimited(ip, 10, 30_000)) return errResponse(429, "too many requests", req);
+  try {
+    if (await isRateLimited(`oref:ip:${ip}`, 10, 30_000)) {
+      res.status(429).json({ error: "too many requests" }); return;
+    }
+  } catch { /* rate limiter optional for public endpoint */ }
 
   // Serve from cache if fresh
   if (_cache && Date.now() < _cache.expiresAt) {
-    return new Response(_cache.body, {
-      status: 200,
-      headers: { ...secHeaders(), "X-Cache": "HIT" },
-    });
+    res.setHeader("X-Cache", "HIT");
+    res.status(200).send(_cache.body);
+    return;
   }
 
   try {
@@ -37,22 +42,19 @@ export default async function handler(req) {
 
     const text = await up.text();
 
-    // Validate: empty or valid JSON, max 10 KB
-    if (text.length > 10_240)  { _cache = { body: "{}", expiresAt: Date.now() + 15_000 }; }
-    else if (text.trim() !== "") {
-      try { JSON.parse(text); } catch { _cache = { body: "{}", expiresAt: Date.now() + 15_000 }; }
-      if (!_cache) _cache = { body: text, expiresAt: Date.now() + 15_000 };
+    if (text.length > 10_240) {
+      _cache = { body: "{}", expiresAt: Date.now() + 15_000 };
+    } else if (text.trim() !== "") {
+      try { JSON.parse(text); _cache = { body: text, expiresAt: Date.now() + 15_000 }; }
+      catch { _cache = { body: "{}", expiresAt: Date.now() + 15_000 }; }
     } else {
       _cache = { body: "{}", expiresAt: Date.now() + 15_000 };
     }
 
-    return new Response(_cache.body, {
-      status: 200,
-      headers: { ...secHeaders(), "X-Cache": "MISS" },
-    });
+    res.setHeader("X-Cache", "MISS");
+    res.status(200).send(_cache.body);
   } catch (err) {
-    // Never log request details
     console.error("[oref]", err?.name === "AbortError" ? "timeout" : "upstream-error");
-    return new Response("{}", { status: 200, headers: secHeaders() });
+    res.status(200).send("{}");
   }
 }

@@ -1,6 +1,5 @@
-export const config = { runtime: "edge" };
-
-export default function handler(req) {
+// Node.js serverless — no firebase-admin needed, just env vars
+export default function handler(req, res) {
   const cfg = {
     apiKey:            process.env.FIREBASE_API_KEY,
     authDomain:        process.env.FIREBASE_AUTH_DOMAIN,
@@ -14,19 +13,13 @@ export default function handler(req) {
 
   for (const [k, v] of Object.entries(cfg)) {
     if (v === undefined) {
-      return new Response(JSON.stringify({ error: `Missing env var for ${k}` }), {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      });
+      res.status(500).json({ error: `Missing env var for ${k}` });
+      return;
     }
   }
 
-  return new Response(JSON.stringify(cfg), {
-    status: 200,
-    headers: {
-      "Content-Type":   "application/json",
-      "Cache-Control":  "no-store",
-      "Access-Control-Allow-Origin": process.env.ALLOWED_ORIGIN || "*",
-    },
-  });
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Access-Control-Allow-Origin", process.env.ALLOWED_ORIGIN || "*");
+  res.status(200).json(cfg);
 }
