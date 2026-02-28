@@ -1135,7 +1135,7 @@ function PilotDashboard() {
     return (
       <LoginScreen
         users={appUsers}
-        onLogin={(user)=>{
+        onLogin={async (user)=>{
           setLoggedInUser(user);
           try { const sp = isHashed(user.password)?user.password:await hashPassword(user.password); localStorage.setItem("marjin-session", JSON.stringify({id:user.id, password:sp})); } catch(_){}
           if(businesses.length === 1) setCurrentBizId(businesses[0].id);
