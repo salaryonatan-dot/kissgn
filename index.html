@@ -1206,27 +1206,27 @@ function PilotDashboard() {
     if(fixed) { setFixedList(fixed); try { await window.storage.set(`biz:${bizId}:fixed`, JSON.stringify(fixed), true); } catch(_){} }
     if(firstOwner) {
       try {
-        // Create Firebase Auth account for owner (or sign in if already exists)
+        // Step 1: Create Firebase Auth account (or reuse existing)
         let firebaseUid;
         try {
           firebaseUid = await window.firebaseCreateUser(firstOwner.email, firstOwner.password);
         } catch(createErr) {
           if(createErr.code === "auth/email-already-in-use") {
-            // User already exists — sign in to get their uid
-            const existingUser = await window.firebaseSignIn(firstOwner.email, firstOwner.password);
-            firebaseUid = existingUser.uid;
+            firebaseUid = null; // will get uid after sign in
           } else { throw createErr; }
         }
-        // Write username lookup table
+
+        // Step 2: Sign in FIRST — RTDB rules require auth != null
+        const signedInUser = await window.firebaseSignIn(firstOwner.email, firstOwner.password);
+        firebaseUid = firebaseUid || signedInUser.uid;
+
+        // Step 3: Now write to RTDB (user is authenticated)
         await window._rtdbSet(
           `tenants/${bizId}/lookup/${firstOwner.username.toLowerCase()}`,
           { email: firstOwner.email, firebaseUid }
         );
-        // Write members + roles so tenant lookup works on next login
         await window._rtdbSet(`tenants/${bizId}/members/${firebaseUid}`, true);
         await window._rtdbSet(`tenants/${bizId}/roles/${firebaseUid}`, "super_owner");
-        // Sign in as owner right away
-        await window.firebaseSignIn(firstOwner.email, firstOwner.password);
         const ownerRecord = {id:Date.now(), name:firstOwner.name, username:firstOwner.username,
           email:firstOwner.email, role:"super_owner", firebaseUid};
         const users = [ownerRecord];
