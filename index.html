@@ -1184,8 +1184,17 @@ function PilotDashboard() {
     if(fixed) { setFixedList(fixed); try { await window.storage.set(`biz:${bizId}:fixed`, JSON.stringify(fixed), true); } catch(_){} }
     if(firstOwner) {
       try {
-        // Create Firebase Auth account for owner
-        const firebaseUid = await window.firebaseCreateUser(firstOwner.email, firstOwner.password);
+        // Create Firebase Auth account for owner (or sign in if already exists)
+        let firebaseUid;
+        try {
+          firebaseUid = await window.firebaseCreateUser(firstOwner.email, firstOwner.password);
+        } catch(createErr) {
+          if(createErr.code === "auth/email-already-in-use") {
+            // User already exists — sign in to get their uid
+            const existingUser = await window.firebaseSignIn(firstOwner.email, firstOwner.password);
+            firebaseUid = existingUser.uid;
+          } else { throw createErr; }
+        }
         // Write username lookup table
         await window._rtdbSet(
           `tenants/${bizId}/lookup/${firstOwner.username.toLowerCase()}`,
