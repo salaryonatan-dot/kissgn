@@ -581,11 +581,13 @@ function UserManagement({ users, saveUsers, tenantId }) {
       } else {
         // Create: Firebase Auth user first
         const firebaseUid = await window.firebaseCreateUser(form.email.trim(), form.password);
-        // Write lookup table: tenants/{tenantId}/lookup/{username} = {email, firebaseUid}
+        // Write lookup table + members so login scan works
         await window._rtdbSet(
           `tenants/${tenantId}/lookup/${form.username.trim().toLowerCase()}`,
           { email: form.email.trim(), firebaseUid }
         );
+        await window._rtdbSet(`tenants/${tenantId}/members/${firebaseUid}`, true);
+        await window._rtdbSet(`tenants/${tenantId}/roles/${firebaseUid}`, form.role);
         const newUser = {id:Date.now(), name:form.name.trim(), username:form.username.trim(),
           email:form.email.trim(), role:form.role, firebaseUid};
         saveUsers([...users, newUser]);
@@ -689,6 +691,7 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
   const [tFood,  setTFood]  = useState(initial.targets?.foodCostPct  || 33);
   const [tLabor, setTLabor] = useState(initial.targets?.laborCostPct || 27);
   const [tGrowth,setTGrowth]= useState(initial.targets?.salesGrowthPct || 5);
+  const [waGroupId, setWaGroupId] = useState(initial.whatsappGroupId || "");
 
   // Step 3 — ספקים
   const [suppliers, setSuppliers] = useState(
@@ -765,7 +768,8 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
       rentFixed: rentType==="fixed" ? Number(rentFixed)||0 : 0,
       hasRoyalty,
       royaltyPct: hasRoyalty ? Number(royaltyPct)||0 : 0,
-      targets: { salesGrowthPct:Number(tGrowth)||5, foodCostPct:Number(tFood)||33, laborCostPct:Number(tLabor)||27 }
+      targets: { salesGrowthPct:Number(tGrowth)||5, foodCostPct:Number(tFood)||33, laborCostPct:Number(tLabor)||27 },
+      whatsappGroupId: waGroupId.trim()
     };
     const updatedFixed = fixedList.map(f => {
       if(f.rentPct) return {...f, name:`שכר דירה (${cfg.rentPct}% ממחזור)`};
@@ -866,6 +870,13 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
                 </div>
               </div>
             ))}
+            <div style={W.card}>
+              <div style={{fontSize:14,color:"#111827",fontWeight:600,marginBottom:4}}>📱 קבוצת וואטסאפ</div>
+              <div style={{fontSize:11,color:"#9CA3AF",marginBottom:10}}>Group ID לקבלת דוחות והתראות (אופציונלי)</div>
+              <input style={{width:"100%",border:"1px solid #D1D5DB",borderRadius:9,padding:"10px 12px",fontSize:14,fontFamily:"inherit",outline:"none",boxSizing:"border-box",direction:"ltr",background:"#F9FAFB"}}
+                placeholder="120363420449632272" value={waGroupId}
+                onChange={e=>setWaGroupId(e.target.value.replace(/[^0-9]/g,""))}/>
+            </div>
             <button style={W.bigBtn} onClick={()=>setStep(3)}>המשך ←</button>
             <button style={W.outBtn} onClick={()=>setStep(1)}>→ חזרה</button>
           </>
@@ -1058,6 +1069,7 @@ function PilotDashboard() {
   const setCurrentBizId = id => {
     setCurrentBizId_(id);
     if (id && window.setTenantId) window.setTenantId(id);
+    if (id) window._currentTenantId = id;
   };
   const [showBizSelect, setShowBizSelect] = useState(false);
   const [entryStep, setEntryStep] = useState('idle'); // 'idle' | 'revenue' | 'suppliers'
@@ -1074,24 +1086,44 @@ function PilotDashboard() {
   // useEffect 1: global data (users, businesses)
   useEffect(()=>{
     const init = async () => {
+      // Step A: discover tenant from Firebase Auth uid (user may be signed in already)
+      const uid = window.storage.getUid ? window.storage.getUid() : null;
+      if(uid) {
+        try {
+          const allTenants = await window._rtdbGet("tenants");
+          if(allTenants) {
+            const tid = Object.keys(allTenants).find(t =>
+              allTenants[t]?.members?.[uid] === true
+            );
+            if(tid) {
+              if(window.setTenantId) window.setTenantId(tid);
+              setCurrentBizId_(tid);
+              window._currentTenantId = tid;
+            }
+          }
+        } catch(_){}
+      }
+
+      // Step B: load data (requires tenantId set above)
       const rau = await sg("app-users", true);
       if(rau) {
-        const users = JSON.parse(rau.value);
-        setAppUsers(users);
         try {
-          const saved = localStorage.getItem("marjin-session");
-          if(saved) {
-            const s = JSON.parse(saved);
-            const valid = users.find(u => u.id===s.id && u.password===s.password);
-            if(valid) setLoggedInUser(valid);
+          const users = JSON.parse(rau.value);
+          setAppUsers(users);
+          // Auto-login if Firebase Auth session is active
+          if(uid) {
+            const match = users.find(u => u.firebaseUid === uid);
+            if(match) setLoggedInUser(match);
           }
         } catch(_){}
       }
       const rb = await sg("app-businesses", true);
       if(rb) {
-        const bizList = JSON.parse(rb.value);
-        setBusinesses(bizList);
-        if(bizList.length === 1) setCurrentBizId(bizList[0].id);
+        try {
+          const bizList = JSON.parse(rb.value);
+          setBusinesses(bizList);
+          if(bizList.length === 1) setCurrentBizId(bizList[0].id);
+        } catch(_){}
       }
       setLoaded(true);
     };
@@ -1191,59 +1223,61 @@ function PilotDashboard() {
   };
   const completeSetup = async (cfg, sups, fixed, firstOwner) => {
     const bizId = currentBizId || `biz_${Date.now()}`;
-    // Set tenantId FIRST — all storage calls depend on it
-    if (window.setTenantId) window.setTenantId(bizId);
-    // Register business in list
-    const bizName = cfg.businessName || "מסעדה חדשה";
-    const updatedBizList = [...businesses.filter(b=>b.id!==bizId), {id:bizId, name:bizName}];
-    setBusinesses(updatedBizList);
-    try { await window.storage.set("app-businesses", JSON.stringify(updatedBizList), true); } catch(_){}
-    // Save biz-specific data
-    try { await window.storage.set(`biz:${bizId}:config`, JSON.stringify(cfg), true); } catch(_){}
-    setBusinessConfig(cfg);
-    try { await window.storage.set(`biz:${bizId}:suppliers`, JSON.stringify(sups), true); } catch(_){}
-    setSuppliers(sups);
-    if(fixed) { setFixedList(fixed); try { await window.storage.set(`biz:${bizId}:fixed`, JSON.stringify(fixed), true); } catch(_){} }
+
+    // ── STEP 1: Firebase Auth (must happen FIRST — RTDB rules require auth) ──
+    let firebaseUid = null;
+    let ownerRecord = null;
     if(firstOwner) {
       try {
-        // Step 1: Create Firebase Auth account (or reuse existing)
-        let firebaseUid;
         try {
           firebaseUid = await window.firebaseCreateUser(firstOwner.email, firstOwner.password);
         } catch(createErr) {
-          if(createErr.code === "auth/email-already-in-use") {
-            firebaseUid = null; // will get uid after sign in
-          } else { throw createErr; }
+          if(createErr.code !== "auth/email-already-in-use") throw createErr;
+          // user already exists — uid will come from signIn below
         }
-
-        // Step 2: Sign in FIRST — RTDB rules require auth != null
         const signedInUser = await window.firebaseSignIn(firstOwner.email, firstOwner.password);
         firebaseUid = firebaseUid || signedInUser.uid;
-
-        // Step 3: Now write to RTDB (user is authenticated)
-        await window._rtdbSet(
-          `tenants/${bizId}/lookup/${firstOwner.username.toLowerCase()}`,
-          { email: firstOwner.email, firebaseUid }
-        );
-        await window._rtdbSet(`tenants/${bizId}/members/${firebaseUid}`, true);
-        await window._rtdbSet(`tenants/${bizId}/roles/${firebaseUid}`, "super_owner");
-        const ownerRecord = {id:Date.now(), name:firstOwner.name, username:firstOwner.username,
+        ownerRecord = {id:Date.now(), name:firstOwner.name, username:firstOwner.username,
           email:firstOwner.email, role:"super_owner", firebaseUid};
-        const users = [ownerRecord];
-        setAppUsers(users);
-        try { await window.storage.set("app-users", JSON.stringify(users), true); } catch(_){}
-        setLoggedInUser(ownerRecord);
       } catch(e) {
-        console.error("[completeSetup] owner auth creation failed:", e.message);
-        // Fallback: store user without Firebase Auth
-        const ownerRecord = {id:Date.now(), name:firstOwner.name, username:firstOwner.username,
+        console.error("[completeSetup] auth failed:", e.message);
+        ownerRecord = {id:Date.now(), name:firstOwner.name, username:firstOwner.username,
           email:firstOwner.email||"", role:"super_owner"};
-        const users = [ownerRecord];
-        setAppUsers(users);
-        try { await window.storage.set("app-users", JSON.stringify(users), true); } catch(_){}
-        setLoggedInUser(ownerRecord);
       }
     }
+
+    // ── STEP 2: Set tenantId so all storage calls work ──────────────────────
+    if(window.setTenantId) window.setTenantId(bizId);
+
+    // ── STEP 3: Write all data to RTDB (user is now authenticated) ──────────
+    const bizName = cfg.businessName || "מסעדה חדשה";
+    const updatedBizList = [...businesses.filter(b=>b.id!==bizId), {id:bizId, name:bizName}];
+    setBusinesses(updatedBizList);
+    try { await window.storage.set("app-businesses", JSON.stringify(updatedBizList), true); } catch(e){ console.error("[setup] businesses save failed:", e.message); }
+    try { await window.storage.set(`biz:${bizId}:config`, JSON.stringify(cfg), true); } catch(e){ console.error("[setup] config save failed:", e.message); }
+    setBusinessConfig(cfg);
+    try { await window.storage.set(`biz:${bizId}:suppliers`, JSON.stringify(sups), true); } catch(e){ console.error("[setup] suppliers save failed:", e.message); }
+    setSuppliers(sups);
+    if(fixed) {
+      setFixedList(fixed);
+      try { await window.storage.set(`biz:${bizId}:fixed`, JSON.stringify(fixed), true); } catch(e){ console.error("[setup] fixed save failed:", e.message); }
+    }
+
+    // ── STEP 4: Write user auth data ─────────────────────────────────────────
+    if(ownerRecord) {
+      if(firebaseUid) {
+        try {
+          await window._rtdbSet(`tenants/${bizId}/lookup/${firstOwner.username.toLowerCase()}`, { email: firstOwner.email, firebaseUid });
+          await window._rtdbSet(`tenants/${bizId}/members/${firebaseUid}`, true);
+          await window._rtdbSet(`tenants/${bizId}/roles/${firebaseUid}`, "super_owner");
+        } catch(e){ console.error("[setup] lookup/members write failed:", e.message); }
+      }
+      const users = [ownerRecord];
+      setAppUsers(users);
+      try { await window.storage.set("app-users", JSON.stringify(users), true); } catch(e){ console.error("[setup] users save failed:", e.message); }
+      setLoggedInUser(ownerRecord);
+    }
+
     if(!currentBizId) setCurrentBizId(bizId);
     setSetupDone(true);
     setShowSetup(false);
@@ -1381,27 +1415,15 @@ function PilotDashboard() {
     return (
       <LoginScreen
         tenantId={currentBizId || businesses[0]?.id}
-        onLogin={async (user)=>{
+        onLogin={(user)=>{
           setLoggedInUser(user);
-          // Use tenantId returned directly from login (fastest path)
+          // _tenantId is always returned from tryLogin (found during username scan)
           if(user._tenantId) {
             setCurrentBizId(user._tenantId);
-          } else if(user.firebaseUid && window._rtdbGet) {
-            // Fallback: scan tenants for membership
-            try {
-              const tenantsSnap = await window._rtdbGet("tenants");
-              if(tenantsSnap) {
-                const tid = Object.keys(tenantsSnap).find(tid =>
-                  tenantsSnap[tid]?.members?.[user.firebaseUid] === true
-                );
-                if(tid) setCurrentBizId(tid);
-                else if(businesses.length === 1) setCurrentBizId(businesses[0].id);
-              }
-            } catch(_) {
-              if(businesses.length === 1) setCurrentBizId(businesses[0].id);
-            }
+            window._currentTenantId = user._tenantId;
           } else if(businesses.length === 1) {
             setCurrentBizId(businesses[0].id);
+            window._currentTenantId = businesses[0].id;
           }
           if(user.role==="staff") setScreen("shifts");
         }}
@@ -1537,9 +1559,7 @@ function PilotDashboard() {
             {(loggedInUser?.role==="super_owner"||loggedInUser?.role==="owner") && (
               <button style={{...S.navBtn,flex:1,textAlign:"center",fontSize:12,...(screen==="tasks"?S.navTasks:{})}} onClick={()=>setScreen("tasks")}>✅ משימות</button>
             )}
-            {(loggedInUser?.role==="super_owner"||loggedInUser?.role==="owner") && (
-              <button style={{...S.navBtn,flex:1,textAlign:"center",fontSize:12,...(screen==="whatsapp"?S.navActive:{})}} onClick={()=>setScreen("whatsapp")}>📱 וואטסאפ</button>
-            )}
+
           </div>
         )}
       </nav>
@@ -2303,12 +2323,7 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig }) {
           <EmployeesScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig}/>
         </div>
       )}
-      {/* ═══ WHATSAPP ═══ */}
-      {screen==="whatsapp" && (
-        <div style={S.content}>
-          <WhatsAppRecipientsScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig}/>
-        </div>
-      )}
+
     </div>
   );
 }
