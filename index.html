@@ -1286,8 +1286,8 @@ function PilotDashboard() {
       if(labor > laborTarget + 2) alerts.push(`👥 *עלות עבודה:* ${labor.toFixed(1)}% (יעד ${laborTarget}%)`);
       if(s > 0 && s < 5000) alerts.push(`📉 *מחזור נמוך:* ₪${Math.round(s).toLocaleString("he-IL")}`);
       if(alerts.length > 0) {
-        const msg = [`🚨 *התראת חריגה — ${bizName}*`, `📅 ${netForm.date}`, `━━━━━━━━━━━━━━━━`, ...alerts, `━━━━━━━━━━━━━━━━`, `_Marjin_`].join("
-");
+        const sep = "---";
+      const msg = ["🚨 *התראת חריגה — "+bizName+"*", "📅 "+netForm.date, sep, ...alerts, sep, "_Marjin_"].join("\n");
         sendWhatsAppNotification(currentBizId, msg, getWhatsAppTarget(businessConfig));
       }
     }
@@ -2333,6 +2333,31 @@ function WhatsAppRecipientsScreen({ businessConfig, saveBusinessConfig }) {
       {err   && <div style={W.err}>{err}</div>}
       {saved && <div style={W.ok}>✅ נשמר!</div>}
       <button style={W.btn} onClick={save}>💾 שמור</button>
+
+      {/* Test button */}
+      {groupId && (
+        <button style={{marginTop:10,padding:"13px 24px",background:"#F0FDF4",border:"2px solid #25D366",borderRadius:10,color:"#166534",fontWeight:700,fontSize:15,cursor:"pointer",fontFamily:"inherit",width:"100%"}}
+          onClick={async (e) => {
+            const btn = e.target;
+            btn.disabled = true; btn.textContent = "שולח...";
+            try {
+              const tid = window._currentTenantId || (typeof currentBizId !== "undefined" ? currentBizId : null);
+              if(!tid) { alert("לא נמצא tenantId"); return; }
+              await sendWhatsAppNotification(tid,
+                "🧪 *הודעת בדיקה — Marjin*
+✅ החיבור לוואטסאפ עובד!
+_" + new Date().toLocaleTimeString("he-IL") + "_",
+                groupId
+              );
+              btn.textContent = "✅ נשלח!";
+            } catch(e) {
+              btn.textContent = "❌ שגיאה: " + e.message;
+            }
+            setTimeout(()=>{ btn.disabled=false; btn.textContent="📤 שלח הודעת בדיקה"; }, 3000);
+          }}>
+          📤 שלח הודעת בדיקה
+        </button>
+      )}
     </div>
   );
 }
@@ -2605,7 +2630,7 @@ function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[
         `👤 ${closed.managerName || "מנהל"}`,
         `📝 משימות: ${done}/${myTasks.length} (${myTasks.length>0?Math.round(done/myTasks.length*100):100}%)`,
         closed.incidents?.length > 0 ? `📋 אירועים: ${closed.incidents.join(", ")}` : "",
-        `━━━━━━━━━━━━━━━━`,
+        "---",
         `_Marjin_`
       ].filter(Boolean).join("
 ");
