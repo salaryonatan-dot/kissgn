@@ -2343,12 +2343,8 @@ function WhatsAppRecipientsScreen({ businessConfig, saveBusinessConfig }) {
             try {
               const tid = window._currentTenantId || (typeof currentBizId !== "undefined" ? currentBizId : null);
               if(!tid) { alert("לא נמצא tenantId"); return; }
-              await sendWhatsAppNotification(tid,
-                "🧪 *הודעת בדיקה — Marjin*
-✅ החיבור לוואטסאפ עובד!
-_" + new Date().toLocaleTimeString("he-IL") + "_",
-                groupId
-              );
+              const testMsg = "🧪 *הודעת בדיקה — Marjin*" + "\n" + "✅ החיבור לוואטסאפ עובד!" + "\n" + "_" + new Date().toLocaleTimeString("he-IL") + "_";
+              await sendWhatsAppNotification(tid, testMsg, groupId);
               btn.textContent = "✅ נשלח!";
             } catch(e) {
               btn.textContent = "❌ שגיאה: " + e.message;
@@ -2632,8 +2628,7 @@ function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[
         closed.incidents?.length > 0 ? `📋 אירועים: ${closed.incidents.join(", ")}` : "",
         "---",
         `_Marjin_`
-      ].filter(Boolean).join("
-");
+      ].filter(Boolean).join("\n");
       sendWhatsAppNotification(bizId, msg, getWhatsAppTarget(businessConfig));
     }
   };
