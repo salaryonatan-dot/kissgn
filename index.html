@@ -222,6 +222,22 @@ const { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContain
 
 // XLSX loaded via CDN in index.html — available as window.XLSX
 
+// ─── WhatsApp notification helper ────────────────────────────────────────────
+const sendWhatsAppNotification = async (tenantId, message, phone) => {
+  try {
+    if(!window.apiFetch) return;
+    await window.apiFetch("/api/whatsapp", {
+      method: "POST",
+      body: JSON.stringify({ tenantId, message, phone }),
+    });
+  } catch(e) {
+    console.warn("[whatsapp] notification failed:", e.message);
+  }
+};
+
+const getWhatsAppTarget = (businessConfig) =>
+  businessConfig?.whatsappGroupId || null;
+
 // ─── Password helpers ──────────────────────────────────────────────────────────
 const hashPassword = async (plain) => {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(plain));
@@ -1175,6 +1191,9 @@ function PilotDashboard() {
           `tenants/${bizId}/lookup/${firstOwner.username.toLowerCase()}`,
           { email: firstOwner.email, firebaseUid }
         );
+        // Write members + roles so tenant lookup works on next login
+        await window._rtdbSet(`tenants/${bizId}/members/${firebaseUid}`, true);
+        await window._rtdbSet(`tenants/${bizId}/roles/${firebaseUid}`, "super_owner");
         // Sign in as owner right away
         await window.firebaseSignIn(firstOwner.email, firstOwner.password);
         const ownerRecord = {id:Date.now(), name:firstOwner.name, username:firstOwner.username,
@@ -1253,6 +1272,25 @@ function PilotDashboard() {
     }
     setForm({...EMPTY_ENTRY}); setEditingId(null); setSaved(true);
     setTimeout(()=>{setSaved(false); setEntryStep('idle'); setScreen("dashboard");},1000);
+    // Check anomalies and send WhatsApp alert if needed
+    if(currentBizId && typeof sendWhatsAppNotification === "function") {
+      const tgt = businessConfig?.targets || {};
+      const foodTarget  = tgt.foodCostPct  || 33;
+      const laborTarget = tgt.laborCostPct || 27;
+      const s = Number(netForm.sales)||0;
+      const food  = s > 0 ? ((Number(netForm.food_cost)||0) / s) * 100  : 0;
+      const labor = s > 0 ? ((Number(netForm.payroll)||0)   / s) * 100  : 0;
+      const bizName = businessConfig?.businessName || "המסעדה";
+      const alerts = [];
+      if(food  > foodTarget  + 2) alerts.push(`🍽️ *עלות מזון:* ${food.toFixed(1)}% (יעד ${foodTarget}%)`);
+      if(labor > laborTarget + 2) alerts.push(`👥 *עלות עבודה:* ${labor.toFixed(1)}% (יעד ${laborTarget}%)`);
+      if(s > 0 && s < 5000) alerts.push(`📉 *מחזור נמוך:* ₪${Math.round(s).toLocaleString("he-IL")}`);
+      if(alerts.length > 0) {
+        const msg = [`🚨 *התראת חריגה — ${bizName}*`, `📅 ${netForm.date}`, `━━━━━━━━━━━━━━━━`, ...alerts, `━━━━━━━━━━━━━━━━`, `_Marjin_`].join("
+");
+        sendWhatsAppNotification(currentBizId, msg, getWhatsAppTarget(businessConfig));
+      }
+    }
   };
 
   const deleteEntry = i => { const u=entries.filter((_,idx)=>idx!==i); setEntries(u); persist(u,null); };
@@ -1314,8 +1352,27 @@ function PilotDashboard() {
         tenantId={currentBizId || businesses[0]?.id}
         onLogin={async (user)=>{
           setLoggedInUser(user);
-          try { const sp = isHashed(user.password)?user.password:await hashPassword(user.password); localStorage.setItem("marjin-session", JSON.stringify({id:user.id, password:sp})); } catch(_){}
-          if(businesses.length === 1) setCurrentBizId(businesses[0].id);
+          // Find which tenant this user belongs to via Firebase Auth uid
+          if(user.firebaseUid && window._rtdbGet) {
+            try {
+              // Look up all tenants and find one where members/{uid} === true
+              const tenantsSnap = await window._rtdbGet("tenants");
+              if(tenantsSnap) {
+                const tenantId = Object.keys(tenantsSnap).find(tid =>
+                  tenantsSnap[tid]?.members?.[user.firebaseUid] === true
+                );
+                if(tenantId) {
+                  setCurrentBizId(tenantId);
+                } else if(businesses.length === 1) {
+                  setCurrentBizId(businesses[0].id);
+                }
+              }
+            } catch(_) {
+              if(businesses.length === 1) setCurrentBizId(businesses[0].id);
+            }
+          } else if(businesses.length === 1) {
+            setCurrentBizId(businesses[0].id);
+          }
           if(user.role==="staff") setScreen("shifts");
         }}
       />
@@ -1449,6 +1506,9 @@ function PilotDashboard() {
             ))}
             {(loggedInUser?.role==="super_owner"||loggedInUser?.role==="owner") && (
               <button style={{...S.navBtn,flex:1,textAlign:"center",fontSize:12,...(screen==="tasks"?S.navTasks:{})}} onClick={()=>setScreen("tasks")}>✅ משימות</button>
+            )}
+            {(loggedInUser?.role==="super_owner"||loggedInUser?.role==="owner") && (
+              <button style={{...S.navBtn,flex:1,textAlign:"center",fontSize:12,...(screen==="whatsapp"?S.navActive:{})}} onClick={()=>setScreen("whatsapp")}>📱 וואטסאפ</button>
             )}
           </div>
         )}
@@ -2213,6 +2273,66 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig }) {
           <EmployeesScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig}/>
         </div>
       )}
+      {/* ═══ WHATSAPP ═══ */}
+      {screen==="whatsapp" && (
+        <div style={S.content}>
+          <WhatsAppRecipientsScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ─── WhatsApp Recipients Screen ───────────────────────────────────────────────
+function WhatsAppRecipientsScreen({ businessConfig, saveBusinessConfig }) {
+  const groupId = businessConfig.whatsappGroupId || "";
+  const [input, setInput] = useState(groupId);
+  const [saved, setSaved] = useState(false);
+  const [err,   setErr]   = useState("");
+
+  const save = () => {
+    const val = input.trim();
+    if(val && !/^[0-9]+$/.test(val)) { setErr("ID לא תקין — מספרים בלבד"); return; }
+    saveBusinessConfig({...businessConfig, whatsappGroupId: val});
+    setErr(""); setSaved(true);
+    setTimeout(()=>setSaved(false), 2000);
+  };
+
+  const W = {
+    lbl:  {fontSize:13,color:"#6B7280",marginBottom:5,display:"block",fontWeight:600},
+    inp:  {width:"100%",border:"1px solid #D1D5DB",borderRadius:9,padding:"13px",fontSize:15,fontFamily:"inherit",outline:"none",boxSizing:"border-box",background:"#fff",direction:"ltr"},
+    btn:  {marginTop:12,padding:"13px 24px",background:"#25D366",border:"none",borderRadius:10,color:"#fff",fontWeight:700,fontSize:15,cursor:"pointer",fontFamily:"inherit",width:"100%"},
+    err:  {color:"#EF4444",fontSize:12,marginTop:6,fontWeight:600},
+    ok:   {color:"#22C55E",fontSize:13,marginTop:6,fontWeight:600},
+  };
+
+  return (
+    <div>
+      <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:12,padding:"14px 16px",marginBottom:20,fontSize:13,color:"#166534",lineHeight:1.6}}>
+        📢 כל ההודעות (דוח יומי, התראות חריגה, סיום משמרת) יישלחו לקבוצת הוואטסאפ שתגדיר כאן.
+      </div>
+
+      {groupId && (
+        <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:12,padding:"14px 16px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:24}}>✅</span>
+          <div>
+            <div style={{fontWeight:700,color:"#166534",fontSize:14}}>קבוצה מחוברת</div>
+            <div style={{fontSize:12,color:"#6B7280",direction:"ltr"}}>{groupId}@g.us</div>
+          </div>
+        </div>
+      )}
+
+      <label style={W.lbl}>Group ID של הקבוצה</label>
+      <input style={W.inp} placeholder="120363420449632272"
+        value={input} onChange={e=>{setInput(e.target.value);setErr("");setSaved(false);}}
+        onKeyDown={e=>e.key==="Enter"&&save()}/>
+      <div style={{fontSize:11,color:"#9CA3AF",marginTop:5}}>
+        מצא את ה-ID ב: Green API Console → Chats → הקבוצה שלך
+      </div>
+      {err   && <div style={W.err}>{err}</div>}
+      {saved && <div style={W.ok}>✅ נשמר!</div>}
+      <button style={W.btn} onClick={save}>💾 שמור</button>
     </div>
   );
 }
@@ -2470,6 +2590,27 @@ function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[
     await saveLogs([closed,...logs]);
     await saveActive(null);
     setSubScreen("home");
+    // Send WhatsApp notification to owner
+    if(bizId && typeof sendWhatsAppNotification === "function") {
+      const allTasks = masterTasks || [];
+      const myTasks  = allTasks.filter(t => !activeLog.shiftType || t.shifts?.includes(activeLog.shiftType));
+      const done     = myTasks.filter(t => closed.completedTasks?.includes(t.id)).length;
+      const DOW      = ["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];
+      const dow      = DOW[new Date().getDay()];
+      const msg = [
+        closed.completedTasks?.length === myTasks.length ? "✅" : "🟡",
+        ` *סיום משמרת*`,
+        `📅 ${closed.date || TODAY_STR} | יום ${dow}`,
+        `🕐 ${closed.shiftType || "משמרת"}  |  סגירה: ${closed.closedAt}`,
+        `👤 ${closed.managerName || "מנהל"}`,
+        `📝 משימות: ${done}/${myTasks.length} (${myTasks.length>0?Math.round(done/myTasks.length*100):100}%)`,
+        closed.incidents?.length > 0 ? `📋 אירועים: ${closed.incidents.join(", ")}` : "",
+        `━━━━━━━━━━━━━━━━`,
+        `_Marjin_`
+      ].filter(Boolean).join("
+");
+      sendWhatsAppNotification(bizId, msg, getWhatsAppTarget(businessConfig));
+    }
   };
 
   const tryOwnerLogin = () => {

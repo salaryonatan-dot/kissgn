@@ -40,6 +40,10 @@
     {
       "path": "/api/analytics/daily-builder",
       "schedule": "0 23 * * *"
+    },
+    {
+      "path": "/api/whatsapp-daily",
+      "schedule": "0 21 * * *"
     }
   ]
 }
