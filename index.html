@@ -412,18 +412,40 @@ function LoginScreen({ onLogin, tenantId }) {
     if(!username.trim() || !password.trim()) { setErr("יש למלא שם משתמש וסיסמה"); return; }
     setLoading(true); setErr("");
     try {
-      // 1. Look up email by username in public lookup table
-      const snap = await window._rtdbGet(`tenants/${tenantId}/lookup/${username.trim().toLowerCase()}`);
-      if(!snap) { setErr("שם משתמש לא נמצא"); setLoading(false); return; }
-      const email = snap.email;
+      // 1. Search all tenants for this username in lookup table
+      const uname = username.trim().toLowerCase();
+      let email = null, foundTenantId = null;
+
+      if(tenantId) {
+        // Fast path: tenantId known
+        const snap = await window._rtdbGet(`tenants/${tenantId}/lookup/${uname}`);
+        if(snap) { email = snap.email; foundTenantId = tenantId; }
+      }
+
+      if(!email) {
+        // Slow path: scan all tenants
+        const allTenants = await window._rtdbGet("tenants");
+        if(allTenants) {
+          for(const [tid, tdata] of Object.entries(allTenants)) {
+            const entry = tdata?.lookup?.[uname];
+            if(entry?.email) { email = entry.email; foundTenantId = tid; break; }
+          }
+        }
+      }
+
+      if(!email) { setErr("שם משתמש לא נמצא"); setLoading(false); return; }
+
       // 2. Sign in with Firebase Auth
-      await window.firebaseSignIn(email, password);
+      const fbUser = await window.firebaseSignIn(email, password);
+
       // 3. Load user profile from RTDB
-      const userSnap = await window._rtdbGet(`tenants/${tenantId}/app/users`);
-      const users = userSnap ? JSON.parse(userSnap._v || "[]") : [];
-      const u = users.find(u => u.username.toLowerCase() === username.trim().toLowerCase());
-      if(!u) { setErr("משתמש לא נמצא ב-RTDB"); setLoading(false); return; }
-      setErr(""); onLogin(u);
+      const userSnap = await window._rtdbGet(`tenants/${foundTenantId}/app/users`);
+      const users = userSnap?._v ? JSON.parse(userSnap._v) : [];
+      const u = users.find(u => u.username.toLowerCase() === uname);
+      if(!u) { setErr("משתמש לא נמצא"); setLoading(false); return; }
+
+      setErr("");
+      onLogin({...u, _tenantId: foundTenantId, firebaseUid: fbUser.uid});
     } catch(e) {
       const msg = e.code === "auth/wrong-password" || e.code === "auth/invalid-credential"
         ? "סיסמה שגויה" : e.code === "auth/too-many-requests"
@@ -1361,20 +1383,19 @@ function PilotDashboard() {
         tenantId={currentBizId || businesses[0]?.id}
         onLogin={async (user)=>{
           setLoggedInUser(user);
-          // Find which tenant this user belongs to via Firebase Auth uid
-          if(user.firebaseUid && window._rtdbGet) {
+          // Use tenantId returned directly from login (fastest path)
+          if(user._tenantId) {
+            setCurrentBizId(user._tenantId);
+          } else if(user.firebaseUid && window._rtdbGet) {
+            // Fallback: scan tenants for membership
             try {
-              // Look up all tenants and find one where members/{uid} === true
               const tenantsSnap = await window._rtdbGet("tenants");
               if(tenantsSnap) {
-                const tenantId = Object.keys(tenantsSnap).find(tid =>
+                const tid = Object.keys(tenantsSnap).find(tid =>
                   tenantsSnap[tid]?.members?.[user.firebaseUid] === true
                 );
-                if(tenantId) {
-                  setCurrentBizId(tenantId);
-                } else if(businesses.length === 1) {
-                  setCurrentBizId(businesses[0].id);
-                }
+                if(tid) setCurrentBizId(tid);
+                else if(businesses.length === 1) setCurrentBizId(businesses[0].id);
               }
             } catch(_) {
               if(businesses.length === 1) setCurrentBizId(businesses[0].id);
