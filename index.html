@@ -1156,6 +1156,7 @@ function PilotDashboard() {
     sub(`biz:${currentBizId}:suppliers`, setSuppliers);
     sub(`biz:${currentBizId}:config`,    setBusinessConfig);
     sub(`biz:${currentBizId}:credits`,   setPendingCredits);
+    sub(`biz:${currentBizId}:tasks`,    setMasterTasks);
     sub("app-users", u => { setAppUsers(u); }, true);
 
     // Fetch weather — Open-Meteo, no API key needed
@@ -1360,8 +1361,11 @@ function PilotDashboard() {
 
   const deleteEntry = i => { const u=entries.filter((_,idx)=>idx!==i); setEntries(u); persist(u,null); };
 
-  const metrics = calcMetrics(entries, fixedList, {...businessConfig, suppliers});
-  const chart = buildChart(entries);
+  // Filter entries to current month only — dashboard always shows current month
+  const monthPrefix = `${YEAR}-${MONTH_STR}-`;
+  const monthEntries = entries.filter(e => e.date && e.date.startsWith(monthPrefix));
+  const metrics = calcMetrics(monthEntries, fixedList, {...businessConfig, suppliers});
+  const chart = buildChart(monthEntries);
   const todayEntry = entries.find(e=>e.date===TODAY_STR);
 
   // Calculate missing supplier data per supplier this month
@@ -2453,7 +2457,7 @@ function MasterTasksScreen({ tasks, saveTasks }) {
 
       {/* Filters */}
       <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
-        {["הכל","כל המשמרות","בוקר","ערב"].map(s=>(
+        {["הכל","כל המשמרות","בוקר","ערב","שבועי"].map(s=>(
           <button key={s} style={{...S.subBtn,...(filterShift===s?S.subBtnActive:{})}} onClick={()=>setFilterShift(s)}>{s}</button>
         ))}
         <div style={{width:1,background:"#2A2A2A",margin:"0 2px"}}/>
@@ -2482,7 +2486,7 @@ function MasterTasksScreen({ tasks, saveTasks }) {
             <div style={{flex:1}}>
               <label style={S.lbl}>משמרת</label>
               <select style={{...S.inp,marginBottom:0}} value={form.shift} onChange={e=>setForm(f=>({...f,shift:e.target.value}))}>
-                {["כל המשמרות","בוקר","ערב"].map(s=><option key={s}>{s}</option>)}
+                {["כל המשמרות","בוקר","ערב","שבועי"].map(s=><option key={s}>{s}</option>)}
               </select>
             </div>
           </div>
