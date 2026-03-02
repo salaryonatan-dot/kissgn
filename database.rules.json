@@ -2,97 +2,78 @@
   "rules": {
     "tenants": {
       "$tenantId": {
-
-        // ── Default: deny everything inside this tenant ──────────────────────
-        // Only explicitly listed children are opened below.
-        ".read":  false,
+        ".read": false,
         ".write": false,
-
-        // ── Membership — server-only write (Admin SDK atomic update) ────────
         "members": {
-          // owner/manager see full list; any member can verify their own membership
-          ".read":  "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
           ".write": false,
           "$memberUid": {
             ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && (auth.uid === $memberUid || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')"
           }
         },
-
-        // ── Roles — client write FORBIDDEN, server writes via admin-roles ────
         "roles": {
-          // owner/manager see all roles; members can read their own role only
-          ".read":  "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          ".read": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
           ".write": false,
           "$roleUid": {
-            ".read":     "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && (auth.uid === $roleUid || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+            ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && (auth.uid === $roleUid || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
             ".validate": "newData.isString() && (newData.val() === 'owner' || newData.val() === 'manager' || newData.val() === 'shift_manager' || newData.val() === 'viewer')"
           }
         },
-
-        // ── Audit log — server-only write, any member may read ──────────────
         "audit": {
-          // audit contains sensitive role-change history — owner/manager only
-          ".read":  "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          ".read": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
           ".write": false
         },
-
-        // ── Operational data — owner+manager write, all members read ─────────
         "entries": {
-          ".read":  "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
           ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
-          ".validate": "newData.hasChildren(['_v']) && newData.getChildrenCount() === 1 && newData.child('_v').isString() && newData.child('_v').val().length < 16384"
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 16384"
         },
         "config": {
-          ".read":  "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
           ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
-          ".validate": "newData.hasChildren(['_v']) && newData.getChildrenCount() === 1 && newData.child('_v').isString() && newData.child('_v').val().length < 4096"
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 4096"
         },
         "suppliers": {
-          ".read":  "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
           ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
-          ".validate": "newData.hasChildren(['_v']) && newData.getChildrenCount() === 1 && newData.child('_v').isString() && newData.child('_v').val().length < 16384"
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 16384"
         },
         "fixed": {
-          ".read":  "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
           ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
-          ".validate": "newData.hasChildren(['_v']) && newData.getChildrenCount() === 1 && newData.child('_v').isString() && newData.child('_v').val().length < 8192"
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 8192"
         },
         "lastyear": {
-          ".read":  "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
           ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
-          ".validate": "newData.hasChildren(['_v']) && newData.getChildrenCount() === 1 && newData.child('_v').isString() && newData.child('_v').val().length < 32768"
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 32768"
         },
         "credits": {
-          ".read":  "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
           ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
-          ".validate": "newData.hasChildren(['_v']) && newData.getChildrenCount() === 1 && newData.child('_v').isString() && newData.child('_v').val().length < 8192"
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 8192"
         },
-
-        // ── Shift data — shift_manager+ write (not viewer) ───────────────────
         "tasks": {
-          ".read":  "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
           ".write": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() !== 'viewer'",
-          ".validate": "newData.hasChildren(['_v']) && newData.getChildrenCount() === 1 && newData.child('_v').isString() && newData.child('_v').val().length < 16384"
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 16384"
         },
         "logs": {
-          ".read":  "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
           ".write": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() !== 'viewer'",
-          ".validate": "newData.hasChildren(['_v']) && newData.getChildrenCount() === 1 && newData.child('_v').isString() && newData.child('_v').val().length < 65536"
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 65536"
         },
         "active-log": {
-          ".read":  "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
           ".write": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() !== 'viewer'",
-          ".validate": "newData.hasChildren(['_v']) && newData.getChildrenCount() === 1 && newData.child('_v').isString() && newData.child('_v').val().length < 4096"
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 4096"
         },
         "pin": {
-          ".read":  "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
           ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
-          ".validate": "newData.hasChildren(['_v']) && newData.getChildrenCount() === 1 && newData.child('_v').isString() && newData.child('_v').val().length < 256"
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 256"
         },
-
-        // ── Analytics — server-write only, members read ─────────────────────
         "lookup": {
-          // Public read — needed for username→email resolution before login
           ".read": true,
           ".write": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
           "$username": {
@@ -100,7 +81,7 @@
           }
         },
         "analytics": {
-          ".read":  "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
           ".write": false,
           "daily": {
             "$branchId": {
@@ -110,56 +91,63 @@
             }
           },
           "_lock": {
-            // server-only lock path for backfill concurrency control
-            ".read":  false,
+            ".read": false,
             ".write": false
           }
         },
-
-        // ── System paths under tenant — owner+manager only ───────────────────
         "app": {
-          ".read":  false,
+          ".read": false,
           ".write": false,
           "users": {
-            ".read":  "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+            ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
             ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
-            ".validate": "newData.hasChildren(['_v']) && newData.getChildrenCount() === 1 && newData.child('_v').isString() && newData.child('_v').val().length < 32768"
+            ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 32768"
           },
           "business": {
-            ".read":  "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+            ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
             ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
-            ".validate": "newData.hasChildren(['_v']) && newData.getChildrenCount() === 1 && newData.child('_v').isString() && newData.child('_v').val().length < 8192"
+            ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 8192"
           }
         }
       }
     },
-
-    // ── Legacy root paths — explicitly deny ───────────────────────────────────
-    "app-users":      { ".read": false, ".write": false },
-    "app-businesses": { ".read": false, ".write": false },
-    "users":          { ".read": false, ".write": false },
-    "shared":         { ".read": false, ".write": false },
-    "marjin":         { ".read": false, ".write": false },
-
-    // ── User→Tenant mapping — each user stores their tenantId here ──────────
+    "app-users": {
+      ".read": false,
+      ".write": false
+    },
+    "app-businesses": {
+      ".read": false,
+      ".write": false
+    },
+    "users": {
+      ".read": false,
+      ".write": false
+    },
+    "shared": {
+      ".read": false,
+      ".write": false
+    },
+    "marjin": {
+      ".read": false,
+      ".write": false
+    },
     "user_tenants": {
       "$uid": {
-        ".read":     "auth !== null && auth.uid === $uid",
-        ".write":    "auth !== null && auth.uid === $uid",
+        ".read": "auth !== null && auth.uid === $uid",
+        ".write": "auth !== null && auth.uid === $uid",
         ".validate": "newData.isString() && newData.val().length < 128"
       }
     },
-
-    // ── User→Active Business mapping ─────────────────────────────────────────
     "user_active_biz": {
       "$uid": {
-        ".read":     "auth !== null && auth.uid === $uid",
-        ".write":    "auth !== null && auth.uid === $uid",
+        ".read": "auth !== null && auth.uid === $uid",
+        ".write": "auth !== null && auth.uid === $uid",
         ".validate": "newData.isString() && newData.val().length < 128"
       }
     },
-
-    // ── Default deny all ──────────────────────────────────────────────────────
-    "$other": { ".read": false, ".write": false }
+    "$other": {
+      ".read": false,
+      ".write": false
+    }
   }
 }
