@@ -1579,6 +1579,7 @@ function PilotDashboard() {
           <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
             <div style={S.badge}>📊 {businessConfig.businessName||"עסק א׳"}</div>
             {businesses.length > 1 && <button onClick={()=>setShowBizSelect(true)} style={{fontSize:11,padding:"3px 10px",background:"#F1F5F9",border:"1px solid #D1D5DB",borderRadius:20,cursor:"pointer",fontFamily:"inherit",color:"#6B7280",fontWeight:600}}>החלף ⇄</button>}
+            {isSuperOwner && <button onClick={()=>{ setShowSetup(true); setCurrentBizId(null); }} style={{fontSize:11,padding:"3px 10px",background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:20,cursor:"pointer",fontFamily:"inherit",color:"#2563EB",fontWeight:600}}>+ עסק חדש</button>}
           </div>
           <h1 style={S.title}>לוח בקרה יומי</h1>
           <p style={S.sub}>{monthLabel} · {DOW_NAMES[TODAY_DOW]} {DAY_OF_MONTH}/{DAYS_IN_MONTH}</p>
