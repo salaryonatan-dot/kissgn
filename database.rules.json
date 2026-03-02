@@ -141,6 +141,24 @@
     "shared":         { ".read": false, ".write": false },
     "marjin":         { ".read": false, ".write": false },
 
+    // ── User→Tenant mapping — each user stores their tenantId here ──────────
+    "user_tenants": {
+      "$uid": {
+        ".read":     "auth !== null && auth.uid === $uid",
+        ".write":    "auth !== null && auth.uid === $uid",
+        ".validate": "newData.isString() && newData.val().length < 128"
+      }
+    },
+
+    // ── User→Active Business mapping ─────────────────────────────────────────
+    "user_active_biz": {
+      "$uid": {
+        ".read":     "auth !== null && auth.uid === $uid",
+        ".write":    "auth !== null && auth.uid === $uid",
+        ".validate": "newData.isString() && newData.val().length < 128"
+      }
+    },
+
     // ── Default deny all ──────────────────────────────────────────────────────
     "$other": { ".read": false, ".write": false }
   }

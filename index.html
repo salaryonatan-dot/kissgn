@@ -361,13 +361,18 @@ function calcMetrics(entries, fixedList, cfg={}) {
   const lc = totalSales-totalExpenses;
   const fc = totalSales-totalFood-totalPayroll-totalOtherExpense-TOTAL_FIXED;
   const foodCostPct = totalSales>0?(totalFood/totalSales)*100:0;
-  const financingPct = cfg.financingPct ?? 0.132; // 60% × 22%
-  const totalFinancing = Math.round(totalSales * financingPct);
+  // Financing = credit card commission (cash sales) + delivery platform fee (25% of deliveries)
+  const totalDeliveries = entries.reduce((a,e)=>a+(Number(e.deliveries)||0),0);
+  const cashSales = totalSales - totalDeliveries;
+  const creditCardFinancing = Math.round(cashSales * (cfg.financingPct ?? 0.132)); // 60% × 22%
+  const deliveryPlatformFee = Math.round(totalDeliveries * 0.25); // Wolt/Ten Bis 25%
+  const totalFinancing = creditCardFinancing + deliveryPlatformFee;
+  const deliveryPct = totalSales > 0 ? (totalDeliveries / totalSales) * 100 : 0;
   const lcAfterFinancing = lc - totalFinancing;
   const fcAfterFinancing = fc - totalFinancing;
   const dailyAvg = DAY_OF_MONTH>0?lcAfterFinancing/DAY_OF_MONTH:0;
   const forecast = lcAfterFinancing+(dailyAvg*(DAYS_IN_MONTH-DAY_OF_MONTH))-(TOTAL_FIXED-fixedSoFar);
-  return { totalSales, totalPayroll, totalOtherExpense, totalFood, fixedSoFar, totalExpenses, lc:lcAfterFinancing, fc:fcAfterFinancing, foodCostPct, forecast, dailyAvg, resolvedFixed, TOTAL_FIXED, supplierTotals, totalFinancing, lcBeforeFinancing:lc };
+  return { totalSales, totalPayroll, totalOtherExpense, totalFood, fixedSoFar, totalExpenses, lc:lcAfterFinancing, fc:fcAfterFinancing, foodCostPct, forecast, dailyAvg, resolvedFixed, TOTAL_FIXED, supplierTotals, totalFinancing, creditCardFinancing, deliveryPlatformFee, deliveryPct, totalDeliveries, lcBeforeFinancing:lc };
 }
 
 function buildChart(entries) {
@@ -444,6 +449,8 @@ function LoginScreen({ onLogin, tenantId }) {
       const u = users.find(u => u.username.toLowerCase() === uname);
       if(!u) { setErr("משתמש לא נמצא"); setLoading(false); return; }
 
+      // Refresh user_tenants (safety net — idempotent)
+      try { await window._rtdbSet(`user_tenants/${fbUser.uid}`, foundTenantId); } catch(_){}
       setErr("");
       onLogin({...u, _tenantId: foundTenantId, firebaseUid: fbUser.uid});
     } catch(e) {
@@ -559,40 +566,54 @@ function LoginScreen({ onLogin, tenantId }) {
 }
 
 // ─── User Management Panel ────────────────────────────────────────────────────
-function UserManagement({ users, saveUsers, tenantId }) {
+function UserManagement({ users, saveUsers, tenantId, businesses }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId,  setEditId]  = useState(null);
-  const [form, setForm] = useState({name:"",username:"",email:"",password:"",role:"manager"});
+  const [form, setForm] = useState({name:"",username:"",email:"",password:"",role:"manager",allowedBizIds:[]});
   const [err,  setErr]  = useState("");
   const [saving, setSaving] = useState(false);
 
-  const resetForm = () => { setForm({name:"",username:"",email:"",password:"",role:"manager"}); setErr(""); setShowAdd(false); setEditId(null); };
+  const resetForm = () => { setForm({name:"",username:"",email:"",password:"",role:"manager",allowedBizIds:[]}); setErr(""); setShowAdd(false); setEditId(null); };
+
+  const toggleBiz = (bizId) => {
+    setForm(f => ({
+      ...f,
+      allowedBizIds: f.allowedBizIds.includes(bizId)
+        ? f.allowedBizIds.filter(id => id !== bizId)
+        : [...f.allowedBizIds, bizId]
+    }));
+  };
+
+  // super_owner/owner always have access to all — no allowedBizIds needed
+  const needsBizAccess = form.role !== "super_owner" && form.role !== "owner";
 
   const save = async () => {
     if(!form.name.trim()||!form.username.trim()) return setErr("יש למלא שם ושם משתמש");
     if(!editId && (!form.email.trim()||!form.password)) return setErr("יש למלא מייל וסיסמה");
     if(users.find(u=>u.username===form.username.trim()&&u.id!==editId)) return setErr("שם משתמש כבר קיים");
     if(!editId && users.find(u=>u.email===form.email.trim())) return setErr("מייל כבר קיים");
+    if(needsBizAccess && form.allowedBizIds.length===0 && businesses.length>1) return setErr("יש לבחור לפחות עסק אחד");
     setSaving(true); setErr("");
     try {
+      const allowedBizIds = needsBizAccess
+        ? (businesses.length === 1 ? [businesses[0].id] : form.allowedBizIds)
+        : null; // null = all businesses
       if(editId) {
-        // Edit: only update profile fields (not email/password — use Firebase Console)
-        saveUsers(users.map(u=>u.id===editId?{...u,name:form.name,username:form.username.trim(),role:form.role}:u));
+        saveUsers(users.map(u=>u.id===editId
+          ? {...u, name:form.name, username:form.username.trim(), role:form.role, allowedBizIds}
+          : u));
       } else {
-        // Create: Firebase Auth user first
         const firebaseUid = await window.firebaseCreateUser(form.email.trim(), form.password);
-        // Write lookup table + members so login scan works
         await window._rtdbSet(
           `tenants/${tenantId}/lookup/${form.username.trim().toLowerCase()}`,
           { email: form.email.trim(), firebaseUid }
         );
         await window._rtdbSet(`tenants/${tenantId}/members/${firebaseUid}`, true);
         await window._rtdbSet(`tenants/${tenantId}/roles/${firebaseUid}`, form.role);
+        await window._rtdbSet(`user_tenants/${firebaseUid}`, tenantId);
         const newUser = {id:Date.now(), name:form.name.trim(), username:form.username.trim(),
-          email:form.email.trim(), role:form.role, firebaseUid};
+          email:form.email.trim(), role:form.role, firebaseUid, allowedBizIds};
         saveUsers([...users, newUser]);
-        // Optionally send password reset so user sets their own password
-        // await window.firebaseSendReset(form.email.trim());
       }
       resetForm();
     } catch(e) {
@@ -604,7 +625,7 @@ function UserManagement({ users, saveUsers, tenantId }) {
     setSaving(false);
   };
 
-  const startEdit = (u) => { setEditId(u.id); setForm({name:u.name,username:u.username,password:"",role:u.role}); setShowAdd(true); };
+  const startEdit = (u) => { setEditId(u.id); setForm({name:u.name,username:u.username,password:"",role:u.role,allowedBizIds:u.allowedBizIds||[]}); setShowAdd(true); };
   const deleteUser = (id) => { if(users.find(u=>u.id===id)?.role==="super_owner") return; saveUsers(users.filter(u=>u.id!==id)); };
 
   const UM = {
@@ -635,6 +656,11 @@ function UserManagement({ users, saveUsers, tenantId }) {
           <span style={{...UM.roleBadge,color:ROLES[u.role]?.color||"#6B7280",background:ROLES[u.role]?.bg||"#F9FAFB"}}>
             {ROLES[u.role]?.label||u.role}
           </span>
+          {u.allowedBizIds && u.allowedBizIds.length > 0 && businesses && (
+            <span style={{fontSize:10,color:"#6B7280",background:"#F1F5F9",borderRadius:6,padding:"2px 7px",fontWeight:600}}>
+              {u.allowedBizIds.length===businesses.length ? "כל העסקים" : u.allowedBizIds.map(id=>(businesses.find(b=>b.id===id)?.name||id)).join(", ")}
+            </span>
+          )}
           <button style={UM.editBtn} onClick={()=>startEdit(u)}>עריכה</button>
           {u.role!=="super_owner" && <button style={UM.delBtn} onClick={()=>deleteUser(u.id)}>✕</button>}
         </div>
@@ -656,11 +682,24 @@ function UserManagement({ users, saveUsers, tenantId }) {
             <input style={UM.inp} type="password" placeholder="••••••" value={form.password} onChange={e=>setForm(f=>({...f,password:e.target.value}))}/>
           </>}
           <label style={UM.lbl}>תפקיד</label>
-          <select style={UM.sel} value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value}))}>
+          <select style={UM.sel} value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value, allowedBizIds:[]}))}>
             <option value="owner">בעלים — גישה מלאה לכל</option>
             <option value="manager">מנהל מסעדה — לוח בקרה מלא</option>
             <option value="staff">אחמש — צ׳קליסט משמרות בלבד</option>
           </select>
+          {needsBizAccess && businesses && businesses.length > 1 && (
+            <div style={{marginBottom:12}}>
+              <label style={{...UM.lbl,marginBottom:8}}>גישה לעסקים</label>
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                {businesses.map(biz => (
+                  <label key={biz.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:form.allowedBizIds.includes(biz.id)?"#EFF6FF":"#F9FAFB",border:"1px solid "+(form.allowedBizIds.includes(biz.id)?"#BFDBFE":"#E5E7EB"),borderRadius:10,cursor:"pointer",fontFamily:"inherit"}}>
+                    <input type="checkbox" checked={form.allowedBizIds.includes(biz.id)} onChange={()=>toggleBiz(biz.id)} style={{width:16,height:16,accentColor:"#2563EB",cursor:"pointer",flexShrink:0}}/>
+                    <span style={{fontSize:14,fontWeight:600,color:"#111827"}}>{biz.name}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
           <div style={{display:"flex",gap:8,marginTop:4}}>
             <button style={UM.saveBtn} onClick={save}>שמור</button>
             <button style={UM.cancelBtn} onClick={resetForm}>ביטול</button>
@@ -1086,20 +1125,19 @@ function PilotDashboard() {
   // useEffect 1: global data (users, businesses)
   useEffect(()=>{
     const init = async () => {
-      // Step A: discover tenant from Firebase Auth uid (user may be signed in already)
+      // Step A: discover tenant + active business from user mappings
       const uid = window.storage.getUid ? window.storage.getUid() : null;
       if(uid) {
         try {
-          const allTenants = await window._rtdbGet("tenants");
-          if(allTenants) {
-            const tid = Object.keys(allTenants).find(t =>
-              allTenants[t]?.members?.[uid] === true
-            );
-            if(tid) {
-              if(window.setTenantId) window.setTenantId(tid);
-              setCurrentBizId_(tid);
-              window._currentTenantId = tid;
-            }
+          const tid = await window._rtdbGet(`user_tenants/${uid}`);
+          if(tid && typeof tid === "string") {
+            if(window.setTenantId) window.setTenantId(tid);
+            window._currentTenantId = tid;
+            // Load last active bizId (may differ from tenantId when multi-business)
+            const activeBiz = await window._rtdbGet(`user_active_biz/${uid}`);
+            const resolvedBizId = (activeBiz && typeof activeBiz === "string") ? activeBiz : tid;
+            setCurrentBizId_(resolvedBizId);
+            window._currentTenantId = tid; // tenantId stays fixed
           }
         } catch(_){}
       }
@@ -1125,6 +1163,17 @@ function PilotDashboard() {
           if(bizList.length === 1) setCurrentBizId(bizList[0].id);
         } catch(_){}
       }
+
+      // Restore last active biz (if tenant already found above)
+      if(uid && window._currentTenantId) {
+        try {
+          const activeBiz = await window._rtdbGet(`user_active_biz/${uid}`);
+          if(activeBiz && typeof activeBiz === "string") {
+            setCurrentBizId_(activeBiz);
+          }
+        } catch(_){}
+      }
+
       setLoaded(true);
     };
     if(window._firebaseReady) { init(); }
@@ -1223,7 +1272,11 @@ function PilotDashboard() {
     try { await window.storage.set(`biz:${currentBizId}:suppliers`, JSON.stringify(sups), true); } catch(_){}
   };
   const completeSetup = async (cfg, sups, fixed, firstOwner) => {
-    const bizId = currentBizId || `biz_${Date.now()}`;
+    // tenantId = the account/owner namespace (stays the same across all businesses)
+    // bizId    = unique id for this specific business (sub-namespace within tenant)
+    const existingTenantId = window._currentTenantId; // set if user is already logged in
+    const bizId   = `biz_${Date.now()}`;
+    const tenantId = existingTenantId || bizId; // first setup: tenantId = bizId; subsequent: reuse
 
     // ── STEP 1: Firebase Auth (must happen FIRST — RTDB rules require auth) ──
     let firebaseUid = null;
@@ -1248,7 +1301,8 @@ function PilotDashboard() {
     }
 
     // ── STEP 2: Set tenantId so all storage calls work ──────────────────────
-    if(window.setTenantId) window.setTenantId(bizId);
+    if(window.setTenantId) window.setTenantId(tenantId);
+    window._currentTenantId = tenantId;
 
     // ── STEP 3: Write all data to RTDB (user is now authenticated) ──────────
     const bizName = cfg.businessName || "מסעדה חדשה";
@@ -1263,14 +1317,17 @@ function PilotDashboard() {
       setFixedList(fixed);
       try { await window.storage.set(`biz:${bizId}:fixed`, JSON.stringify(fixed), true); } catch(e){ console.error("[setup] fixed save failed:", e.message); }
     }
+    // Store which bizId is active for this tenant
+    try { await window._rtdbSet(`user_active_biz/${window.storage.getUid ? window.storage.getUid() : firebaseUid}`, bizId); } catch(_){}
 
     // ── STEP 4: Write user auth data ─────────────────────────────────────────
     if(ownerRecord) {
       if(firebaseUid) {
         try {
-          await window._rtdbSet(`tenants/${bizId}/lookup/${firstOwner.username.toLowerCase()}`, { email: firstOwner.email, firebaseUid });
-          await window._rtdbSet(`tenants/${bizId}/members/${firebaseUid}`, true);
-          await window._rtdbSet(`tenants/${bizId}/roles/${firebaseUid}`, "super_owner");
+          await window._rtdbSet(`tenants/${tenantId}/lookup/${firstOwner.username.toLowerCase()}`, { email: firstOwner.email, firebaseUid });
+          await window._rtdbSet(`tenants/${tenantId}/members/${firebaseUid}`, true);
+          await window._rtdbSet(`tenants/${tenantId}/roles/${firebaseUid}`, "super_owner");
+          await window._rtdbSet(`user_tenants/${firebaseUid}`, tenantId);
         } catch(e){ console.error("[setup] lookup/members write failed:", e.message); }
       }
       const users = [ownerRecord];
@@ -1279,7 +1336,7 @@ function PilotDashboard() {
       setLoggedInUser(ownerRecord);
     }
 
-    if(!currentBizId) setCurrentBizId(bizId);
+    setCurrentBizId(bizId); // switch to new business
     setSetupDone(true);
     setShowSetup(false);
     setShowBizSelect(false);
@@ -1362,6 +1419,12 @@ function PilotDashboard() {
   const deleteEntry = i => { const u=entries.filter((_,idx)=>idx!==i); setEntries(u); persist(u,null); };
 
   // Filter entries to current month only — dashboard always shows current month
+  // Derive which businesses this user can see
+  const isSuperOwner = loggedInUser?.role === "super_owner" || loggedInUser?.role === "owner";
+  const allowedBusinesses = isSuperOwner
+    ? businesses
+    : businesses.filter(b => (loggedInUser?.allowedBizIds || []).includes(b.id));
+
   const monthPrefix = `${YEAR}-${MONTH_STR}-`;
   const monthEntries = entries.filter(e => e.date && e.date.startsWith(monthPrefix));
   const metrics = calcMetrics(monthEntries, fixedList, {...businessConfig, suppliers});
@@ -1421,13 +1484,21 @@ function PilotDashboard() {
         tenantId={currentBizId || businesses[0]?.id}
         onLogin={(user)=>{
           setLoggedInUser(user);
-          // _tenantId is always returned from tryLogin (found during username scan)
+          if(user._tenantId) {
+            window._currentTenantId = user._tenantId;
+          }
+          // Filter businesses to only those this user can access
+          const isSuperOwner = user.role === "super_owner" || user.role === "owner";
+          const allowed = isSuperOwner ? null : (user.allowedBizIds || []);
+          // allowed===null means all; [] means none yet; [ids] means specific
+          if(allowed !== null && allowed.length > 0) {
+            // Will be applied after businesses are loaded — store on user
+            setLoggedInUser({...user, _allowedBizIds: allowed});
+          }
           if(user._tenantId) {
             setCurrentBizId(user._tenantId);
-            window._currentTenantId = user._tenantId;
           } else if(businesses.length === 1) {
             setCurrentBizId(businesses[0].id);
-            window._currentTenantId = businesses[0].id;
           }
           if(user.role==="staff") setScreen("shifts");
         }}
@@ -1439,9 +1510,9 @@ function PilotDashboard() {
   if(loaded && loggedInUser && (!currentBizId || showBizSelect) && businesses.length > 1) {
     return (
       <BusinessSelector
-        businesses={businesses}
+        businesses={allowedBusinesses}
         userName={loggedInUser.name}
-        onSelect={(id) => { setCurrentBizId(id); setShowBizSelect(false); }}
+        onSelect={(id) => { setCurrentBizId(id); setShowBizSelect(false); const uid = window.storage.getUid?.(); if(uid) window._rtdbSet(`user_active_biz/${uid}`, id).catch(()=>{}); }}
         onAdd={() => { setCurrentBizId(null); setShowSetup(true); setShowBizSelect(false); }}
       />
     );
@@ -1632,7 +1703,7 @@ function PilotDashboard() {
                 <KPI icon="🏦" label="עלות מימון"
                   value={fmt(metrics.totalFinancing)}
                   color="#F59E0B"
-                  sub="60% × 22% מהכנסות"/>
+                  sub={"אשראי " + fmt(metrics.creditCardFinancing||0) + " + משלוחים " + fmt(metrics.deliveryPlatformFee||0)}/>
                 <KPI icon="🔮" label="תחזית סוף חודש"
                   value={fmt(metrics.forecast)}
                   color="#A3A3A3"
@@ -1992,6 +2063,24 @@ function PilotDashboard() {
             <input style={{...S.inp,fontSize:20,fontWeight:700}} type="number" inputMode="numeric" placeholder="0" value={form.sales} onChange={e=>setForm(f=>({...f,sales:e.target.value}))} autoFocus/>
             <label style={S.lbl}>משלוחים / Wolt / Ten Bis (₪)</label>
             <input style={S.inp} type="number" inputMode="numeric" placeholder="0" value={form.deliveries} onChange={e=>setForm(f=>({...f,deliveries:e.target.value}))}/>
+            {(()=>{
+              const rawSales=(Number(form.sales)||0)+(Number(form.deliveries)||0)+(Number(form.other_income)||0);
+              const del=Number(form.deliveries)||0;
+              const pct = rawSales>0 ? ((del/rawSales)*100).toFixed(1) : null;
+              const fee = Math.round(del*0.25);
+              return del>0 && pct ? (
+                <div style={{display:"flex",gap:8,marginBottom:10,marginTop:-6}}>
+                  <div style={{flex:1,background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:10,padding:"8px 12px",fontSize:12}}>
+                    <span style={{color:"#9CA3AF"}}>% ממחזור: </span>
+                    <span style={{fontWeight:800,color:"#EA580C"}}>{pct}%</span>
+                  </div>
+                  <div style={{flex:1,background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:10,padding:"8px 12px",fontSize:12}}>
+                    <span style={{color:"#9CA3AF"}}>עמלת פלטפורמה 25%: </span>
+                    <span style={{fontWeight:800,color:"#DC2626"}}>{fmt(fee)}</span>
+                  </div>
+                </div>
+              ) : null;
+            })()}
             <label style={S.lbl}>הכנסה אחרת (₪)</label>
             <input style={S.inp} type="number" inputMode="numeric" placeholder="0" value={form.other_income} onChange={e=>setForm(f=>({...f,other_income:e.target.value}))}/>
 
@@ -2154,7 +2243,7 @@ function PilotDashboard() {
         <div style={S.content}>
           <div style={S.card}>
             <h2 style={{...S.ct,fontSize:15,color:"#111827",marginBottom:16}}>👥 ניהול משתמשים</h2>
-            <UserManagement users={appUsers} saveUsers={saveAppUsers}/>
+            <UserManagement users={appUsers} saveUsers={saveAppUsers} tenantId={window._currentTenantId} businesses={businesses}/>
           </div>
         </div>
       )}
@@ -2416,7 +2505,7 @@ function MasterTasksScreen({ tasks, saveTasks }) {
   const [filterCat,   setFilterCat]   = useState("הכל");
 
   const openAdd = () => { setForm({ title:"", category:"פתיחה", shift:"כל המשמרות", note:"", proof:"check" }); setEditing(null); setAdding(true); };
-  const openEdit = (t) => { setForm({ title:t.title, category:t.category, shift:t.shift, note:t.note||"", proof:t.proof||"check" }); setEditing(t.id); setAdding(true); };
+  const openEdit = (t) => { setForm({ title:t.title, category:t.category, shift:t.shift, weekday:t.weekday||"ראשון", note:t.note||"", proof:t.proof||"check" }); setEditing(t.id); setAdding(true); };
   const cancel = () => { setAdding(false); setEditing(null); };
 
   const save = () => {
@@ -2558,7 +2647,7 @@ function MasterTasksScreen({ tasks, saveTasks }) {
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:14,color:"#111827",fontWeight:600,marginBottom:3}}>{t.title}</div>
                     <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-                      <span style={{fontSize:11,color:"#9CA3AF",background:"#F8FAFC",padding:"1px 7px",borderRadius:8}}>{t.shift}</span>
+                      <span style={{fontSize:11,color:"#9CA3AF",background:"#F8FAFC",padding:"1px 7px",borderRadius:8}}>{SHIFT_LABEL(t)}</span>
                       {t.proof==="photo" && <span style={{fontSize:11,color:"#6B7280",background:"#1C1C1C44",padding:"1px 7px",borderRadius:8}}>📸 חובה לצלם</span>}
                       {t.note && <span style={{fontSize:11,color:"#9CA3AF",fontStyle:"italic"}}>{t.note}</span>}
                     </div>
@@ -2859,7 +2948,7 @@ function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[
       </nav>
 
       {ownerTab==="tasks"    && <SMTasksPanel tasks={tasks} saveTasks={saveTasks} SS={SS}/>}
-      {ownerTab==="users"    && <div style={{padding:"0 4px"}}><UserManagement users={appUsersRef} saveUsers={saveAppUsersRef}/></div>}
+      {ownerTab==="users"    && <div style={{padding:"0 4px"}}><UserManagement users={appUsersRef} saveUsers={saveAppUsersRef} tenantId={window._currentTenantId} businesses={businesses}/></div>}
       {ownerTab==="logs" && (
         <div>
           <div style={{fontSize:11,fontWeight:700,color:"#6B7280",textTransform:"uppercase",letterSpacing:1,marginBottom:12}}>יומן משמרות</div>
@@ -2940,7 +3029,7 @@ function SMTasksPanel({tasks,saveTasks,SS}) {
               <div key={t.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",background:"#FFFFFF",border:"1px solid #0A0A0A",borderRadius:9,marginBottom:6}}>
                 <div style={{flex:1}}>
                   <div style={{fontSize:13,color:"#111827"}}>{t.title}</div>
-                  <div style={{fontSize:11,color:"#9CA3AF"}}>{t.shift}{t.note&&` · ${t.note}`}</div>
+                  <div style={{fontSize:11,color:"#9CA3AF"}}>{SHIFT_LABEL(t)}{t.note&&` · ${t.note}`}</div>
                 </div>
                 <button style={SS.iconBtn2} onClick={()=>saveTasks(tasks.filter(x=>x.id!==t.id))}>🗑</button>
               </div>
