@@ -295,7 +295,6 @@ const LAST_YEAR_2025 = [
 const DOW_NAMES = ["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];
 
 const FIXED_EXPENSES_DEFAULT = [
-  { id: 1,  name: "הוצאות מימון",             amount: 0, dueDay: 1,  rentPct: false, royaltyPct: false },
   { id: 2,  name: "שכר דירה (6.8% ממחזור)",  amount: 0, dueDay: 1,  rentPct: true,  royaltyPct: false },
   { id: 18, name: "תמלוגים לרשת (13% ממחזור)", amount: 0, dueDay: 1,  rentPct: false, royaltyPct: true  },
   { id: 3,  name: "דמי ניהול",               amount: 0, dueDay: 1,  rentPct: false, royaltyPct: false },
@@ -1365,7 +1364,18 @@ function PilotDashboard() {
     if(window.setTenantId) window.setTenantId(tenantId);
     window._currentTenantId = tenantId;
 
-    // ── STEP 3: Write all data to RTDB (user is now authenticated) ──────────
+    // ── STEP 3: members/roles FIRST — rules check role before allowing writes ──
+    if(firebaseUid) {
+      try {
+        await window._rtdbSet(`tenants/${tenantId}/members/${firebaseUid}`, true);
+        await window._rtdbSet(`tenants/${tenantId}/roles/${firebaseUid}`, "super_owner");
+        await window._rtdbSet(`user_tenants/${firebaseUid}`, tenantId);
+        if(firstOwner) await window._rtdbSet(`tenants/${tenantId}/lookup/${firstOwner.username.toLowerCase()}`, { email: firstOwner.email, firebaseUid });
+        try { localStorage.setItem("marjin_tid_" + firebaseUid, tenantId); } catch(_){}
+      } catch(e){ console.error("[setup] members/roles write failed:", e.message); }
+    }
+
+    // ── STEP 4: Write business data (role exists → allowed) ──────────────────
     const bizName = cfg.businessName || "מסעדה חדשה";
     const updatedBizList = [...businesses.filter(b=>b.id!==bizId), {id:bizId, name:bizName}];
     setBusinesses(updatedBizList);
@@ -1378,19 +1388,11 @@ function PilotDashboard() {
       setFixedList(fixed);
       try { await window.storage.set(`biz:${bizId}:fixed`, JSON.stringify(fixed), true); } catch(e){ console.error("[setup] fixed save failed:", e.message); }
     }
-    // Store which bizId is active for this tenant
     try { await window._rtdbSet(`user_active_biz/${window.storage.getUid ? window.storage.getUid() : firebaseUid}`, bizId); } catch(_){}
+    try { localStorage.setItem("marjin_biz_" + (firebaseUid||""), bizId); } catch(_){}
 
-    // ── STEP 4: Write user auth data ─────────────────────────────────────────
+    // ── STEP 5: user record ────────────────────────────────────────────────────
     if(ownerRecord) {
-      if(firebaseUid) {
-        try {
-          await window._rtdbSet(`tenants/${tenantId}/lookup/${firstOwner.username.toLowerCase()}`, { email: firstOwner.email, firebaseUid });
-          await window._rtdbSet(`tenants/${tenantId}/members/${firebaseUid}`, true);
-          await window._rtdbSet(`tenants/${tenantId}/roles/${firebaseUid}`, "super_owner");
-          await window._rtdbSet(`user_tenants/${firebaseUid}`, tenantId);
-        } catch(e){ console.error("[setup] lookup/members write failed:", e.message); }
-      }
       const users = [ownerRecord];
       setAppUsers(users);
       try { await window.storage.set("app-users", JSON.stringify(users), true); } catch(e){ console.error("[setup] users save failed:", e.message); }
