@@ -618,10 +618,9 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
           : u));
       } else {
         const firebaseUid = await window.firebaseCreateUser(form.email.trim(), form.password);
-        await window._rtdbSet(
-          `tenants/${tenantId}/lookup/${form.username.trim().toLowerCase()}`,
-          { email: form.email.trim(), firebaseUid }
-        );
+        const uLower2 = form.username.trim().toLowerCase();
+        await window._rtdbSet(`tenants/${tenantId}/lookup/${uLower2}`, { email: form.email.trim(), firebaseUid });
+        await window._rtdbSet(`username_index/${uLower2}`, { tenantId });
         await window._rtdbSet(`tenants/${tenantId}/members/${firebaseUid}`, true);
         await window._rtdbSet(`tenants/${tenantId}/roles/${firebaseUid}`, form.role);
         await window._rtdbSet(`user_tenants/${firebaseUid}`, tenantId);
@@ -1389,7 +1388,9 @@ function PilotDashboard() {
     if(ownerRecord) {
       if(firebaseUid) {
         try {
-          await window._rtdbSet(`tenants/${tenantId}/lookup/${firstOwner.username.toLowerCase()}`, { email: firstOwner.email, firebaseUid });
+          const unameLower = firstOwner.username.toLowerCase();
+          await window._rtdbSet(`tenants/${tenantId}/lookup/${unameLower}`, { email: firstOwner.email, firebaseUid });
+          await window._rtdbSet(`username_index/${unameLower}`, { tenantId });
           await window._rtdbSet(`tenants/${tenantId}/members/${firebaseUid}`, true);
           await window._rtdbSet(`tenants/${tenantId}/roles/${firebaseUid}`, "super_owner");
           await window._rtdbSet(`user_tenants/${firebaseUid}`, tenantId);
