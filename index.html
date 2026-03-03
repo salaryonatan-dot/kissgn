@@ -34,7 +34,7 @@
     import { initializeApp, initializeApp as initializeApp2 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { getDatabase, ref, get, set, remove, onValue, forceWebSockets } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
     import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
-             sendPasswordResetEmail, onAuthStateChanged, signOut }
+             sendPasswordResetEmail, onAuthStateChanged, signOut, updateProfile }
              from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
     import { initializeAppCheck, ReCaptchaV3Provider } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app-check.js";
 
@@ -104,6 +104,11 @@
     // Send password reset email
     window.firebaseSendReset = async (email) => {
       await sendPasswordResetEmail(auth, email);
+    };
+
+    // Update user display name (used for tenant discovery)
+    window.firebaseUpdateDisplayName = async (user, name) => {
+      try { await updateProfile(user, { displayName: name }); } catch(_){}
     };
 
     // Sign out
@@ -438,14 +443,15 @@ function LoginScreen({ onLogin, tenantId }) {
       }
 
       if(!email) {
-        // Slow path: scan all tenants
-        const allTenants = await window._rtdbGet("tenants");
-        if(allTenants) {
-          for(const [tid, tdata] of Object.entries(allTenants)) {
-            const entry = tdata?.lookup?.[uname];
-            if(entry?.email) { email = entry.email; foundTenantId = tid; break; }
+        // Slow path: use username_index (public read, maps username → tenantId)
+        try {
+          const indexed = await window._rtdbGet("username_index/" + uname);
+          if(indexed && indexed.tenantId) {
+            foundTenantId = indexed.tenantId;
+            const snap2 = await window._rtdbGet(`tenants/${indexed.tenantId}/lookup/${uname}`);
+            if(snap2 && snap2.email) email = snap2.email;
           }
-        }
+        } catch(_){}
       }
 
       if(!email) { setErr("שם משתמש לא נמצא"); setLoading(false); return; }
@@ -459,13 +465,17 @@ function LoginScreen({ onLogin, tenantId }) {
       const u = users.find(u => u.username.toLowerCase() === uname);
       if(!u) { setErr("משתמש לא נמצא"); setLoading(false); return; }
 
-      // Cache tenant + biz to localStorage (fast reload next time)
+      // Cache tenant + biz to localStorage + RTDB on every login
       try {
         localStorage.setItem("marjin_tid_" + fbUser.uid, foundTenantId);
         localStorage.setItem("marjin_biz_" + fbUser.uid, foundTenantId);
         await window._rtdbSet("user_tenants/" + fbUser.uid, foundTenantId);
+        // Always update username_index so new browsers can find this user
+        await window._rtdbSet("username_index/" + uname, { tenantId: foundTenantId });
       } catch(_){}
       setErr("");
+      // Store username in Firebase Auth displayName for tenant discovery fallback
+      try { await window.firebaseUpdateDisplayName(fbUser, uname); } catch(_){}
       onLogin({...u, _tenantId: foundTenantId, firebaseUid: fbUser.uid});
     } catch(e) {
       const msg = e.code === "auth/wrong-password" || e.code === "auth/invalid-credential"
@@ -1161,19 +1171,13 @@ function PilotDashboard() {
           } catch(_){}
         }
 
-        // Layer 3: scan lookup tables by email (ultimate fallback)
+        // Layer 3: use username_index to find tenant by username (uid known at this point)
         if(!tid) {
           try {
             const fbUser = window._auth ? window._auth.currentUser : null;
-            const email = fbUser ? fbUser.email : null;
-            if(email) {
-              const allTenants = await window._rtdbGet("tenants");
-              if(allTenants) {
-                for(const [t, tdata] of Object.entries(allTenants)) {
-                  const lookup = tdata && tdata.lookup ? tdata.lookup : {};
-                  if(Object.values(lookup).some(v => v && v.email === email)) { tid = t; break; }
-                }
-              }
+            if(fbUser && fbUser.displayName) {
+              const indexed = await window._rtdbGet("username_index/" + fbUser.displayName.toLowerCase());
+              if(indexed && indexed.tenantId) tid = indexed.tenantId;
             }
           } catch(_){}
         }
