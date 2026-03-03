@@ -431,35 +431,41 @@ function LoginScreen({ onLogin, tenantId }) {
   const tryLogin = async () => {
     if(!username.trim() || !password.trim()) { setErr("יש למלא שם משתמש וסיסמה"); return; }
     setLoading(true); setErr("");
+    const dbg = []; // debug log
     try {
       const input = username.trim();
       const isEmail = input.includes("@");
       const uname = isEmail ? null : input.toLowerCase();
       let email = isEmail ? input.toLowerCase() : null;
       let foundTenantId = null;
+      dbg.push("input=" + input + " isEmail=" + isEmail + " tenantId=" + tenantId);
 
       // ── Path A: username given — lookup email ────────────────────────────────
       if(!email) {
-        // Fast: tenantId already known (same browser, same session)
+        // Fast: tenantId already known
         if(tenantId) {
           try {
             const snap = await window._rtdbGet(`tenants/${tenantId}/lookup/${uname}`);
+            dbg.push("fast-lookup=" + JSON.stringify(snap));
             if(snap && snap.email) { email = snap.email; foundTenantId = tenantId; }
-          } catch(_){}
+          } catch(e){ dbg.push("fast-err=" + e.message); }
         }
-        // Medium: username_index (public, written on every login)
+        // Medium: username_index
         if(!email) {
           try {
             const indexed = await window._rtdbGet("username_index/" + uname);
+            dbg.push("index=" + JSON.stringify(indexed));
             if(indexed && indexed.email) { email = indexed.email; foundTenantId = indexed.tenantId; }
             else if(indexed && indexed.tenantId) {
               foundTenantId = indexed.tenantId;
               const snap2 = await window._rtdbGet(`tenants/${indexed.tenantId}/lookup/${uname}`);
+              dbg.push("lookup2=" + JSON.stringify(snap2));
               if(snap2 && snap2.email) email = snap2.email;
             }
-          } catch(_){}
+          } catch(e){ dbg.push("index-err=" + e.message); }
         }
-        if(!email) { setErr("שם משתמש לא נמצא — נסה להיכנס עם כתובת המייל שלך"); setLoading(false); return; }
+        if(!email) { setErr("שם משתמש לא נמצא
+[debug: " + dbg.join(" | ") + "]"); setLoading(false); return; }
       }
 
       // ── Sign in with Firebase Auth (works with email always) ────────────────
@@ -479,7 +485,8 @@ function LoginScreen({ onLogin, tenantId }) {
           if(cached) foundTenantId = cached;
         } catch(_){}
       }
-      if(!foundTenantId) { setErr("לא נמצא עסק — פנה למנהל המערכת"); setLoading(false); return; }
+      if(!foundTenantId) { setErr("לא נמצא עסק
+[debug: " + dbg.join(" | ") + "]"); setLoading(false); return; }
 
       // ── Load user profile ────────────────────────────────────────────────────
       const userSnap = await window._rtdbGet(`tenants/${foundTenantId}/app/users`);
@@ -488,7 +495,9 @@ function LoginScreen({ onLogin, tenantId }) {
       const u = uname
         ? users.find(u => u.username?.toLowerCase() === uname)
         : users.find(u => u.email?.toLowerCase() === email.toLowerCase());
-      if(!u) { setErr("משתמש לא נמצא"); setLoading(false); return; }
+      dbg.push("users=" + users.length + " searching-" + (uname||email));
+      if(!u) { setErr("משתמש לא נמצא ב-app/users
+[debug: " + dbg.join(" | ") + "]"); setLoading(false); return; }
 
       // Cache tenant + biz to localStorage + RTDB on every login
       try {
@@ -505,7 +514,8 @@ function LoginScreen({ onLogin, tenantId }) {
     } catch(e) {
       const msg = e.code === "auth/wrong-password" || e.code === "auth/invalid-credential"
         ? "סיסמה שגויה" : e.code === "auth/too-many-requests"
-        ? "יותר מדי ניסיונות — נסה שוב מאוחר יותר" : e.message || "שגיאה בהתחברות";
+        ? "יותר מדי ניסיונות — נסה שוב מאוחר יותר" : (e.message || "שגיאה") + "
+[debug: " + dbg.join(" | ") + "]";
       setErr(msg);
     }
     setLoading(false);
