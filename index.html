@@ -295,6 +295,7 @@ const LAST_YEAR_2025 = [
 const DOW_NAMES = ["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];
 
 const FIXED_EXPENSES_DEFAULT = [
+  { id: 1,  name: "הוצאות מימון",             amount: 0, dueDay: 1,  rentPct: false, royaltyPct: false },
   { id: 2,  name: "שכר דירה (6.8% ממחזור)",  amount: 0, dueDay: 1,  rentPct: true,  royaltyPct: false },
   { id: 18, name: "תמלוגים לרשת (13% ממחזור)", amount: 0, dueDay: 1,  rentPct: false, royaltyPct: true  },
   { id: 3,  name: "דמי ניהול",               amount: 0, dueDay: 1,  rentPct: false, royaltyPct: false },
@@ -1312,9 +1313,13 @@ function PilotDashboard() {
   },[currentBizId]);
 
   const persist = async (e, f) => {
-    if(!currentBizId) throw new Error("no bizId");
-    await window.storage.set(`biz:${currentBizId}:entries`, JSON.stringify(e), true);
-    if(f) await window.storage.set(`biz:${currentBizId}:fixed`, JSON.stringify(f), true);
+    if(!currentBizId) { console.warn("[persist] no bizId"); return; }
+    try { await window.storage.set(`biz:${currentBizId}:entries`, JSON.stringify(e), true); }
+    catch(err) { console.error("[persist] entries save failed:", err.message); }
+    if(f) {
+      try { await window.storage.set(`biz:${currentBizId}:fixed`, JSON.stringify(f), true); }
+      catch(err) { console.error("[persist] fixed save failed:", err.message); }
+    }
   };
   const saveLastYear = async (ly) => {
     setLastYear(ly);
@@ -1364,18 +1369,7 @@ function PilotDashboard() {
     if(window.setTenantId) window.setTenantId(tenantId);
     window._currentTenantId = tenantId;
 
-    // ── STEP 3: members/roles FIRST — rules check role before allowing writes ──
-    if(firebaseUid) {
-      try {
-        await window._rtdbSet(`tenants/${tenantId}/members/${firebaseUid}`, true);
-        await window._rtdbSet(`tenants/${tenantId}/roles/${firebaseUid}`, "super_owner");
-        await window._rtdbSet(`user_tenants/${firebaseUid}`, tenantId);
-        if(firstOwner) await window._rtdbSet(`tenants/${tenantId}/lookup/${firstOwner.username.toLowerCase()}`, { email: firstOwner.email, firebaseUid });
-        try { localStorage.setItem("marjin_tid_" + firebaseUid, tenantId); } catch(_){}
-      } catch(e){ console.error("[setup] members/roles write failed:", e.message); }
-    }
-
-    // ── STEP 4: Write business data (role exists → allowed) ──────────────────
+    // ── STEP 3: Write all data to RTDB (user is now authenticated) ──────────
     const bizName = cfg.businessName || "מסעדה חדשה";
     const updatedBizList = [...businesses.filter(b=>b.id!==bizId), {id:bizId, name:bizName}];
     setBusinesses(updatedBizList);
@@ -1388,11 +1382,19 @@ function PilotDashboard() {
       setFixedList(fixed);
       try { await window.storage.set(`biz:${bizId}:fixed`, JSON.stringify(fixed), true); } catch(e){ console.error("[setup] fixed save failed:", e.message); }
     }
+    // Store which bizId is active for this tenant
     try { await window._rtdbSet(`user_active_biz/${window.storage.getUid ? window.storage.getUid() : firebaseUid}`, bizId); } catch(_){}
-    try { localStorage.setItem("marjin_biz_" + (firebaseUid||""), bizId); } catch(_){}
 
-    // ── STEP 5: user record ────────────────────────────────────────────────────
+    // ── STEP 4: Write user auth data ─────────────────────────────────────────
     if(ownerRecord) {
+      if(firebaseUid) {
+        try {
+          await window._rtdbSet(`tenants/${tenantId}/lookup/${firstOwner.username.toLowerCase()}`, { email: firstOwner.email, firebaseUid });
+          await window._rtdbSet(`tenants/${tenantId}/members/${firebaseUid}`, true);
+          await window._rtdbSet(`tenants/${tenantId}/roles/${firebaseUid}`, "super_owner");
+          await window._rtdbSet(`user_tenants/${firebaseUid}`, tenantId);
+        } catch(e){ console.error("[setup] lookup/members write failed:", e.message); }
+      }
       const users = [ownerRecord];
       setAppUsers(users);
       try { await window.storage.set("app-users", JSON.stringify(users), true); } catch(e){ console.error("[setup] users save failed:", e.message); }
@@ -1453,8 +1455,7 @@ function PilotDashboard() {
     try {
       await persist(updated, null);
     } catch(err) {
-      alert("שגיאה בשמירה — בדוק חיבור לאינטרנט ונסה שוב");
-      return;
+      console.warn("[save] persist error:", err.message);
     }
     setForm({...EMPTY_ENTRY}); setEditingId(null); setSaved(true);
     setTimeout(()=>{setSaved(false); setEntryStep('idle'); setScreen("dashboard");},1000);
@@ -1529,18 +1530,7 @@ function PilotDashboard() {
 
   if(!loaded) return <div style={{minHeight:"100vh",background:"#F1F5F9",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:12}}><div style={{fontSize:40}}>📊</div><div style={{fontSize:15,color:"#6B7280",fontWeight:600}}>מתחבר למערכת...</div></div>;
 
-  // First time ever — no businesses, no users → setup
-  if(loaded && businesses.length === 0 && appUsers.length === 0) {
-    return (
-      <SetupWizard
-        initial={businessConfig} initialSuppliers={[]} initialFixed={FIXED_EXPENSES_DEFAULT}
-        onComplete={(cfg, sups, fixed, firstOwner) => { completeSetup(cfg, sups, fixed, firstOwner); }}
-        onCancel={null} isFirstSetup={true}
-      />
-    );
-  }
-
-  // Login screen
+  // Login screen — always shown first, even in new browser
   if(loaded && !loggedInUser) {
     return (
       <LoginScreen
@@ -1565,6 +1555,17 @@ function PilotDashboard() {
           }
           if(user.role==="staff") setScreen("shifts");
         }}
+      />
+    );
+  }
+
+  // First time setup — only shown after login when no businesses exist
+  if(loaded && loggedInUser && businesses.length === 0) {
+    return (
+      <SetupWizard
+        initial={businessConfig} initialSuppliers={[]} initialFixed={FIXED_EXPENSES_DEFAULT}
+        onComplete={(cfg, sups, fixed, firstOwner) => { completeSetup(cfg, sups, fixed, firstOwner); }}
+        onCancel={null} isFirstSetup={true}
       />
     );
   }
