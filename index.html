@@ -432,37 +432,62 @@ function LoginScreen({ onLogin, tenantId }) {
     if(!username.trim() || !password.trim()) { setErr("יש למלא שם משתמש וסיסמה"); return; }
     setLoading(true); setErr("");
     try {
-      // 1. Search all tenants for this username in lookup table
-      const uname = username.trim().toLowerCase();
-      let email = null, foundTenantId = null;
+      const input = username.trim();
+      const isEmail = input.includes("@");
+      const uname = isEmail ? null : input.toLowerCase();
+      let email = isEmail ? input.toLowerCase() : null;
+      let foundTenantId = null;
 
-      if(tenantId) {
-        // Fast path: tenantId known
-        const snap = await window._rtdbGet(`tenants/${tenantId}/lookup/${uname}`);
-        if(snap) { email = snap.email; foundTenantId = tenantId; }
-      }
-
+      // ── Path A: username given — lookup email ────────────────────────────────
       if(!email) {
-        // Slow path: use username_index (public read, maps username → tenantId)
-        try {
-          const indexed = await window._rtdbGet("username_index/" + uname);
-          if(indexed && indexed.tenantId) {
-            foundTenantId = indexed.tenantId;
-            const snap2 = await window._rtdbGet(`tenants/${indexed.tenantId}/lookup/${uname}`);
-            if(snap2 && snap2.email) email = snap2.email;
-          }
-        } catch(_){}
+        // Fast: tenantId already known (same browser, same session)
+        if(tenantId) {
+          try {
+            const snap = await window._rtdbGet(`tenants/${tenantId}/lookup/${uname}`);
+            if(snap && snap.email) { email = snap.email; foundTenantId = tenantId; }
+          } catch(_){}
+        }
+        // Medium: username_index (public, written on every login)
+        if(!email) {
+          try {
+            const indexed = await window._rtdbGet("username_index/" + uname);
+            if(indexed && indexed.email) { email = indexed.email; foundTenantId = indexed.tenantId; }
+            else if(indexed && indexed.tenantId) {
+              foundTenantId = indexed.tenantId;
+              const snap2 = await window._rtdbGet(`tenants/${indexed.tenantId}/lookup/${uname}`);
+              if(snap2 && snap2.email) email = snap2.email;
+            }
+          } catch(_){}
+        }
+        if(!email) { setErr("שם משתמש לא נמצא — נסה להיכנס עם כתובת המייל שלך"); setLoading(false); return; }
       }
 
-      if(!email) { setErr("שם משתמש לא נמצא"); setLoading(false); return; }
-
-      // 2. Sign in with Firebase Auth
+      // ── Sign in with Firebase Auth (works with email always) ────────────────
       const fbUser = await window.firebaseSignIn(email, password);
 
-      // 3. Load user profile from RTDB
+      // ── Find tenantId (authenticated now → user_tenants readable) ────────────
+      if(!foundTenantId) {
+        try {
+          const t = await window._rtdbGet("user_tenants/" + fbUser.uid);
+          if(t && typeof t === "string") foundTenantId = t;
+        } catch(_){}
+      }
+      // localStorage fallback
+      if(!foundTenantId) {
+        try {
+          const cached = localStorage.getItem("marjin_tid_" + fbUser.uid);
+          if(cached) foundTenantId = cached;
+        } catch(_){}
+      }
+      if(!foundTenantId) { setErr("לא נמצא עסק — פנה למנהל המערכת"); setLoading(false); return; }
+
+      // ── Load user profile ────────────────────────────────────────────────────
       const userSnap = await window._rtdbGet(`tenants/${foundTenantId}/app/users`);
       const users = userSnap?._v ? JSON.parse(userSnap._v) : [];
-      const u = users.find(u => u.username.toLowerCase() === uname);
+      // Find by username or by email (support both inputs)
+      const u = uname
+        ? users.find(u => u.username?.toLowerCase() === uname)
+        : users.find(u => u.email?.toLowerCase() === email.toLowerCase());
       if(!u) { setErr("משתמש לא נמצא"); setLoading(false); return; }
 
       // Cache tenant + biz to localStorage + RTDB on every login
@@ -471,7 +496,7 @@ function LoginScreen({ onLogin, tenantId }) {
         localStorage.setItem("marjin_biz_" + fbUser.uid, foundTenantId);
         await window._rtdbSet("user_tenants/" + fbUser.uid, foundTenantId);
         // Always update username_index so new browsers can find this user
-        await window._rtdbSet("username_index/" + uname, { tenantId: foundTenantId });
+        if(u.username) await window._rtdbSet("username_index/" + u.username.toLowerCase(), { tenantId: foundTenantId, email: u.email });
       } catch(_){}
       setErr("");
       // Store username in Firebase Auth displayName for tenant discovery fallback
@@ -1171,7 +1196,19 @@ function PilotDashboard() {
           } catch(_){}
         }
 
-        // Layer 3: use username_index to find tenant by username (uid known at this point)
+        // Layer 3: Firebase Auth session → uid known → user_tenants readable by owner
+        if(!tid) {
+          try {
+            const fbUser = window._auth ? window._auth.currentUser : null;
+            if(fbUser) {
+              // user_tenants/{uid} is always readable by the authenticated user
+              const rtdbTid2 = await window._rtdbGet("user_tenants/" + fbUser.uid);
+              if(rtdbTid2 && typeof rtdbTid2 === "string") tid = rtdbTid2;
+            }
+          } catch(_){}
+        }
+
+        // Layer 4: username_index (public) via displayName
         if(!tid) {
           try {
             const fbUser = window._auth ? window._auth.currentUser : null;
@@ -1215,7 +1252,13 @@ function PilotDashboard() {
           // Auto-login if Firebase Auth session is active
           if(uid) {
             const match = users.find(u => u.firebaseUid === uid);
-            if(match) setLoggedInUser(match);
+            if(match) {
+              setLoggedInUser(match);
+              // Ensure username_index is populated for future cross-browser logins
+              if(match.username) {
+                try { await window._rtdbSet("username_index/" + match.username.toLowerCase(), { tenantId: window._currentTenantId, email: match.email }); } catch(_){}
+              }
+            }
           }
         } catch(_){}
       }
