@@ -146,7 +146,8 @@
       const safe = k.replace(/[.#$\[\]]/g, "_");
       if (safe === "app-users")      return _currentTenantId ? `tenants/${_currentTenantId}/app/users`    : null;
       if (safe === "app-businesses") return _currentTenantId ? `tenants/${_currentTenantId}/app/business` : null;
-      return safe; // fallback (shouldn't be reached)
+      if (!_currentTenantId) return null;
+      return `tenants/${_currentTenantId}/${safe}`;
     };
     window.storage = {
       get: async (key, shared=false) => {

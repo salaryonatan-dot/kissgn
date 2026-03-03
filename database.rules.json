@@ -95,6 +95,10 @@
             ".write": false
           }
         },
+        "$dataKey": {
+          ".read":  "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')"
+        },
         "app": {
           ".read": false,
           ".write": false,
