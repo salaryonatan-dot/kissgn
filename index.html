@@ -108,9 +108,17 @@
 
     // Sign out
     window.firebaseSignOut = async () => {
+      const prevUid = _uid;
       await signOut(auth);
       _uid  = null;
       _user = null;
+      // Clear tenant cache on logout
+      if(prevUid) {
+        try {
+          localStorage.removeItem("marjin_tid_" + prevUid);
+          localStorage.removeItem("marjin_biz_" + prevUid);
+        } catch(_){}
+      }
     };
 
     // Wait for auth state to settle (user may already be signed in from previous session)
@@ -208,6 +216,7 @@
       await set(ref(db, path), val);
     };
 
+    window._auth            = auth;             // expose for tenant discovery fallback
     window._initializeApp   = initializeApp2;  // expose for creating secondary apps
     window._firebaseConfig  = firebaseConfig;  // expose config for secondary app creation
     window._firebaseReady = true;
@@ -449,8 +458,12 @@ function LoginScreen({ onLogin, tenantId }) {
       const u = users.find(u => u.username.toLowerCase() === uname);
       if(!u) { setErr("משתמש לא נמצא"); setLoading(false); return; }
 
-      // Refresh user_tenants (safety net — idempotent)
-      try { await window._rtdbSet(`user_tenants/${fbUser.uid}`, foundTenantId); } catch(_){}
+      // Cache tenant + biz to localStorage (fast reload next time)
+      try {
+        localStorage.setItem("marjin_tid_" + fbUser.uid, foundTenantId);
+        localStorage.setItem("marjin_biz_" + fbUser.uid, foundTenantId);
+        await window._rtdbSet("user_tenants/" + fbUser.uid, foundTenantId);
+      } catch(_){}
       setErr("");
       onLogin({...u, _tenantId: foundTenantId, firebaseUid: fbUser.uid});
     } catch(e) {
@@ -1108,7 +1121,11 @@ function PilotDashboard() {
   const setCurrentBizId = id => {
     setCurrentBizId_(id);
     if (id && window.setTenantId) window.setTenantId(id);
-    if (id) window._currentTenantId = id;
+    if (id) {
+      window._currentTenantId = id;
+      const uid = window.storage.getUid ? window.storage.getUid() : null;
+      if(uid) try { localStorage.setItem("marjin_biz_" + uid, id); } catch(_){}
+    }
   };
   const [showBizSelect, setShowBizSelect] = useState(false);
   const [entryStep, setEntryStep] = useState('idle'); // 'idle' | 'revenue' | 'suppliers'
@@ -1125,21 +1142,64 @@ function PilotDashboard() {
   // useEffect 1: global data (users, businesses)
   useEffect(()=>{
     const init = async () => {
-      // Step A: discover tenant + active business from user mappings
+      // Step A: discover tenant — 3 fallback layers
       const uid = window.storage.getUid ? window.storage.getUid() : null;
       if(uid) {
+        let tid = null;
+
+        // Layer 1: localStorage cache (survives page reloads instantly)
         try {
-          const tid = await window._rtdbGet(`user_tenants/${uid}`);
-          if(tid && typeof tid === "string") {
-            if(window.setTenantId) window.setTenantId(tid);
-            window._currentTenantId = tid;
-            // Load last active bizId (may differ from tenantId when multi-business)
-            const activeBiz = await window._rtdbGet(`user_active_biz/${uid}`);
-            const resolvedBizId = (activeBiz && typeof activeBiz === "string") ? activeBiz : tid;
-            setCurrentBizId_(resolvedBizId);
-            window._currentTenantId = tid; // tenantId stays fixed
-          }
+          const cached = localStorage.getItem("marjin_tid_" + uid);
+          if(cached) tid = cached;
         } catch(_){}
+
+        // Layer 2: RTDB user_tenants/{uid}
+        if(!tid) {
+          try {
+            const rtdbTid = await window._rtdbGet("user_tenants/" + uid);
+            if(rtdbTid && typeof rtdbTid === "string") tid = rtdbTid;
+          } catch(_){}
+        }
+
+        // Layer 3: scan lookup tables by email (ultimate fallback)
+        if(!tid) {
+          try {
+            const fbUser = window._auth ? window._auth.currentUser : null;
+            const email = fbUser ? fbUser.email : null;
+            if(email) {
+              const allTenants = await window._rtdbGet("tenants");
+              if(allTenants) {
+                for(const [t, tdata] of Object.entries(allTenants)) {
+                  const lookup = tdata && tdata.lookup ? tdata.lookup : {};
+                  if(Object.values(lookup).some(v => v && v.email === email)) { tid = t; break; }
+                }
+              }
+            }
+          } catch(_){}
+        }
+
+        if(tid) {
+          // Cache locally for next reload
+          try { localStorage.setItem("marjin_tid_" + uid, tid); } catch(_){}
+          // Repair user_tenants if missing
+          try { await window._rtdbSet("user_tenants/" + uid, tid); } catch(_){}
+
+          if(window.setTenantId) window.setTenantId(tid);
+          window._currentTenantId = tid;
+
+          // Resolve active bizId
+          let resolvedBizId = tid;
+          try {
+            const cachedBiz = localStorage.getItem("marjin_biz_" + uid);
+            if(cachedBiz) resolvedBizId = cachedBiz;
+            else {
+              const activeBiz = await window._rtdbGet("user_active_biz/" + uid);
+              if(activeBiz && typeof activeBiz === "string") resolvedBizId = activeBiz;
+            }
+          } catch(_){}
+          try { localStorage.setItem("marjin_biz_" + uid, resolvedBizId); } catch(_){}
+          setCurrentBizId_(resolvedBizId);
+        }
       }
 
       // Step B: load data (requires tenantId set above)
