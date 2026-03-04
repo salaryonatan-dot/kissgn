@@ -477,23 +477,27 @@ function LoginScreen({ onLogin, tenantId }) {
         if(!email) { setErr("debug: " + dbg.join(" | ")); setLoading(false); return; }
       }
 
-      // ── Sign in with Firebase Auth (works with email always) ────────────────
+      // ── Sign in with Firebase Auth ─────────────────────────────────────────
+      dbg.push("before-signIn email=" + email);
       const fbUser = await window.firebaseSignIn(email, password);
+      dbg.push("signIn-ok uid=" + fbUser.uid);
 
-      // ── Find tenantId (authenticated now → user_tenants readable) ────────────
+      // ── Find tenantId ─────────────────────────────────────────────────────────
       if(!foundTenantId) {
         try {
           const t = await window._rtdbGet("user_tenants/" + fbUser.uid);
+          dbg.push("user_tenants=" + t);
           if(t && typeof t === "string") foundTenantId = t;
-        } catch(_){}
+        } catch(e){ dbg.push("user_tenants-err=" + e.message); }
       }
-      // localStorage fallback
       if(!foundTenantId) {
         try {
           const cached = localStorage.getItem("marjin_tid_" + fbUser.uid);
+          dbg.push("ls-cache=" + cached);
           if(cached) foundTenantId = cached;
         } catch(_){}
       }
+      dbg.push("foundTenantId=" + foundTenantId);
       if(!foundTenantId) { setErr("debug: " + dbg.join(" | ")); setLoading(false); return; }
 
       // ── Load user profile ────────────────────────────────────────────────────
@@ -518,6 +522,7 @@ function LoginScreen({ onLogin, tenantId }) {
           await window._rtdbSet("user_tenants/" + fbUser.uid, foundTenantId);
         } catch(_){}
       }
+      dbg.push("u=" + (u ? u.username : "null"));
       if(!u) { setErr("debug: " + dbg.join(" | ")); setLoading(false); return; }
 
       // Cache tenant + biz to localStorage + RTDB on every login
