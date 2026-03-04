@@ -1638,6 +1638,17 @@ function PilotDashboard() {
           }
           if(user._tenantId) {
             setCurrentBizId(user._tenantId);
+            // Mobile: businesses not loaded before login — reload now
+            if(businesses.length === 0) {
+              window.storage.get("app-businesses", true).then(rb => {
+                if(rb) {
+                  try {
+                    const bizList = JSON.parse(rb.value);
+                    setBusinesses(bizList);
+                  } catch(_){}
+                }
+              }).catch(()=>{});
+            }
           } else if(businesses.length === 1) {
             setCurrentBizId(businesses[0].id);
           }
@@ -1647,8 +1658,8 @@ function PilotDashboard() {
     );
   }
 
-  // First time setup — only shown after login when no businesses exist
-  if(loaded && loggedInUser && businesses.length === 0) {
+  // First time setup — only if truly no business (not just slow load on mobile)
+  if(loaded && loggedInUser && businesses.length === 0 && !currentBizId) {
     return (
       <SetupWizard
         initial={businessConfig} initialSuppliers={[]} initialFixed={FIXED_EXPENSES_DEFAULT}
