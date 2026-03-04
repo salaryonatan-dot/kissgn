@@ -497,8 +497,11 @@ function LoginScreen({ onLogin, tenantId }) {
       if(!foundTenantId) { setErr("debug: " + dbg.join(" | ")); setLoading(false); return; }
 
       // ── Load user profile ────────────────────────────────────────────────────
-      const userSnap = await window._rtdbGet(`tenants/${foundTenantId}/app/users`);
-      const users = userSnap?._v ? JSON.parse(userSnap._v) : [];
+      let users = [];
+      try {
+        const userSnap = await window._rtdbGet(`tenants/${foundTenantId}/app/users`);
+        users = userSnap?._v ? JSON.parse(userSnap._v) : [];
+      } catch(_) { users = []; }
       // Find by username or by email (support both inputs)
       let u = uname
         ? users.find(u => u.username?.toLowerCase() === uname)
