@@ -1151,7 +1151,8 @@ function CreditInput({ supplierId, supplierName, date, onAdd }) {
 }
 
 // ─── Business Selector ────────────────────────────────────────────────────────
-function BusinessSelector({ businesses, onSelect, onAdd, userName }) {
+function BusinessSelector({ businesses, onSelect, onAdd, onDelete, userName, isSuperOwner }) {
+  const [confirmDelete, setConfirmDelete] = React.useState(null); // bizId to confirm
   return (
     <div style={{minHeight:"100vh",background:"#F1F5F9",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"24px",fontFamily:"'Heebo',sans-serif",direction:"rtl"}}>
       <div style={{background:"#FFFFFF",borderRadius:20,padding:"32px 28px",width:"100%",maxWidth:400,boxShadow:"0 4px 24px #0000001A",border:"1px solid #E5E7EB"}}>
@@ -1161,13 +1162,33 @@ function BusinessSelector({ businesses, onSelect, onAdd, userName }) {
           <p style={{margin:"6px 0 0",color:"#9CA3AF",fontSize:13}}>שלום {userName}</p>
         </div>
         {businesses.map(biz => (
-          <button key={biz.id} onClick={() => onSelect(biz.id)}
-            style={{width:"100%",padding:"18px 20px",background:"#F8FAFC",border:"1px solid #E5E7EB",borderRadius:14,marginBottom:10,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"space-between",transition:"all 0.15s"}}>
-            <div style={{textAlign:"right"}}>
-              <div style={{fontSize:16,fontWeight:700,color:"#111827"}}>{biz.name}</div>
-            </div>
-            <span style={{fontSize:20}}>←</span>
-          </button>
+          <div key={biz.id} style={{position:"relative",marginBottom:10}}>
+            {confirmDelete === biz.id ? (
+              <div style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:14,padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+                <span style={{fontSize:13,color:"#991B1B",fontWeight:600}}>למחוק את "{biz.name}"?</span>
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={()=>{ onDelete(biz.id); setConfirmDelete(null); }}
+                    style={{padding:"6px 14px",background:"#EF4444",border:"none",borderRadius:8,color:"#fff",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>מחק</button>
+                  <button onClick={()=>setConfirmDelete(null)}
+                    style={{padding:"6px 14px",background:"#F1F5F9",border:"1px solid #E5E7EB",borderRadius:8,color:"#6B7280",fontWeight:600,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>ביטול</button>
+                </div>
+              </div>
+            ) : (
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <button onClick={() => onSelect(biz.id)}
+                  style={{flex:1,padding:"18px 20px",background:"#F8FAFC",border:"1px solid #E5E7EB",borderRadius:14,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"space-between",transition:"all 0.15s"}}>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:16,fontWeight:700,color:"#111827"}}>{biz.name}</div>
+                  </div>
+                  <span style={{fontSize:20}}>←</span>
+                </button>
+                {isSuperOwner && (
+                  <button onClick={()=>setConfirmDelete(biz.id)}
+                    style={{padding:"10px",background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:12,color:"#EF4444",cursor:"pointer",fontSize:16,lineHeight:1,fontFamily:"inherit"}}>✕</button>
+                )}
+              </div>
+            )}
+          </div>
         ))}
         <button onClick={onAdd}
           style={{width:"100%",padding:"14px",background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:14,color:"#2563EB",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit",marginTop:4}}>
@@ -1508,8 +1529,8 @@ function PilotDashboard() {
     setCurrentBizId(bizId); // switch to new business
     setSetupDone(true);
     setShowSetup(false);
-    // If more than one business -- show selector so user can switch
-    if(businesses.length > 0) setShowBizSelect(true);
+    // Use updatedBizList (not businesses state — it's stale at this point)
+    if(updatedBizList.length > 1) setShowBizSelect(true);
     else setShowBizSelect(false);
   };
   const saveAppUsers = async (users) => {
@@ -1693,7 +1714,19 @@ function PilotDashboard() {
       <BusinessSelector
         businesses={allowedBusinesses}
         userName={loggedInUser.name}
-        onSelect={(id) => { setCurrentBizId(id); setShowBizSelect(false); const uid = window.storage.getUid?.(); if(uid) window._rtdbSet(`user_active_biz/${uid}`, id).catch(()=>{}); }}
+        isSuperOwner={isSuperOwner}
+        onSelect={(id) => {
+          setSetupDone(true);
+          setCurrentBizId(id);
+          setShowBizSelect(false);
+          const uid = window.storage.getUid?.();
+          if(uid) window._rtdbSet(`user_active_biz/${uid}`, id).catch(()=>{});
+        }}
+        onDelete={async (id) => {
+          const updated = businesses.filter(b => b.id !== id);
+          setBusinesses(updated);
+          try { await window.storage.set("app-businesses", JSON.stringify(updated), true); } catch(_){}
+        }}
         onAdd={() => { setCurrentBizId(null); setShowSetup(true); setShowBizSelect(false); }}
       />
     );
