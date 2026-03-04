@@ -6,14 +6,14 @@
         ".write": false,
         "members": {
           ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
-          ".write": false,
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true)",
           "$memberUid": {
             ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && (auth.uid === $memberUid || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')"
           }
         },
         "roles": {
           ".read": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
-          ".write": false,
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true)",
           "$roleUid": {
             ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && (auth.uid === $roleUid || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
             ".validate": "newData.isString() && (newData.val() === 'owner' || newData.val() === 'manager' || newData.val() === 'shift_manager' || newData.val() === 'viewer')"
@@ -75,7 +75,7 @@
         },
         "lookup": {
           ".read": true,
-          ".write": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true)",
           "$username": {
             ".validate": "newData.hasChildren(['email','firebaseUid'])"
           }
