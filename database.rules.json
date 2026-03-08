@@ -13,7 +13,7 @@
         },
         "roles": {
           ".read": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
-          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || !root.child('tenants').child($tenantId).child('members').exists())",
+          ".write": "auth !== null",
           "$roleUid": {
             ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && (auth.uid === $roleUid || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
             ".validate": "newData.isString() && (newData.val() === 'owner' || newData.val() === 'manager' || newData.val() === 'shift_manager' || newData.val() === 'viewer')"
