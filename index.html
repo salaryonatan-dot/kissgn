@@ -1234,7 +1234,11 @@ function PilotDashboard() {
       if(uid) try { localStorage.setItem("marjin_biz_" + uid, id); } catch(_){}
     }
   };
-  const [showBizSelect, setShowBizSelect] = useState(false);
+  const [showBizSelect, setShowBizSelect_] = useState(false);
+  const setShowBizSelect = (v) => {
+    console.log("setShowBizSelect called with:", v, new Error().stack.split('\n')[2]);
+    setShowBizSelect_(v);
+  };
   const [entryStep, setEntryStep] = useState('idle'); // 'idle' | 'revenue' | 'suppliers'
   const [pendingCredits, setPendingCredits] = useState([]); // [{id,supplierId,supplierName,date,amount,note}]
   const [businessConfig, setBusinessConfig] = useState({
