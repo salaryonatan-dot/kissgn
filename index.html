@@ -1837,7 +1837,7 @@ function PilotDashboard() {
         <div>
           <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
             <div style={S.badge}>📊 {businessConfig.businessName||"עסק א׳"}</div>
-            {businesses.length > 1 && <button onClick={(e)=>{ e.stopPropagation(); setTimeout(()=>setShowBizSelect(true), 50); }} style={{fontSize:11,padding:"3px 10px",background:"#F1F5F9",border:"1px solid #D1D5DB",borderRadius:20,cursor:"pointer",fontFamily:"inherit",color:"#6B7280",fontWeight:600}}>החלף ⇄</button>}
+            {businesses.length > 1 && <button onClick={(e)=>{ alert("נלחץ! businesses="+businesses.length+" showBizSelect="+showBizSelect); e.stopPropagation(); setShowBizSelect(true); }} style={{fontSize:11,padding:"3px 10px",background:"#F1F5F9",border:"1px solid #D1D5DB",borderRadius:20,cursor:"pointer",fontFamily:"inherit",color:"#6B7280",fontWeight:600}}>החלף ⇄</button>}
             {isSuperOwner && <button onClick={()=>{ setShowSetup(true); setCurrentBizId(null); }} style={{fontSize:11,padding:"3px 10px",background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:20,cursor:"pointer",fontFamily:"inherit",color:"#2563EB",fontWeight:600}}>+ עסק חדש</button>}
           </div>
           <h1 style={S.title}>לוח בקרה יומי</h1>
