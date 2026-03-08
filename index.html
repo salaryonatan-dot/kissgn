@@ -1325,7 +1325,7 @@ function PilotDashboard() {
           if(uid) {
             const match = users.find(u => u.firebaseUid === uid);
             if(match) {
-              setLoggedInUser(match);
+              setLoggedInUser({...match, _tenantId: window._currentTenantId});
               // Ensure username_index is populated for future cross-browser logins
               if(match.username) {
                 try { await window._rtdbSet("username_index/" + match.username.toLowerCase(), { tenantId: window._currentTenantId, email: match.email }); } catch(_){}
@@ -1457,9 +1457,13 @@ function PilotDashboard() {
   const completeSetup = async (cfg, sups, fixed, firstOwner) => {
     // tenantId = the account/owner namespace (stays the same across all businesses)
     // bizId    = unique id for this specific business (sub-namespace within tenant)
-    const existingTenantId = window._currentTenantId; // set if user is already logged in
-    const bizId   = `biz_${Date.now()}`;
-    const tenantId = existingTenantId || bizId; // first setup: tenantId = bizId; subsequent: reuse
+    // Priority: loggedInUser._tenantId > window._currentTenantId > new bizId (first setup only)
+    const existingTenantId = loggedInUser?._tenantId || window._currentTenantId || null;
+    const bizId    = `biz_${Date.now()}`;
+    const tenantId = existingTenantId || bizId;
+    // Always sync _currentTenantId immediately
+    if(window.setTenantId) window.setTenantId(tenantId);
+    window._currentTenantId = tenantId;
 
     // ── STEP 1: Firebase Auth (must happen FIRST -- RTDB rules require auth) ──
     let firebaseUid = null;
@@ -1483,11 +1487,7 @@ function PilotDashboard() {
       }
     }
 
-    // ── STEP 2: Set tenantId so all storage calls work ──────────────────────
-    if(window.setTenantId) window.setTenantId(tenantId);
-    window._currentTenantId = tenantId;
-
-    // For existing logged-in users adding a new business — get uid from Auth session
+    // ── STEP 2: get firebaseUid from Auth session if not set by firstOwner ──
     if(!firebaseUid && window._auth && window._auth.currentUser) {
       firebaseUid = window._auth.currentUser.uid;
     }
