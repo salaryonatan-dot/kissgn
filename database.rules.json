@@ -145,7 +145,7 @@
     "user_tenants": {
       "$uid": {
         ".read": "auth !== null && auth.uid === $uid",
-        ".write": "auth !== null && auth.uid === $uid",
+        ".write": "auth !== null",
         ".validate": "newData.isString() && newData.val().length < 128"
       }
     },
