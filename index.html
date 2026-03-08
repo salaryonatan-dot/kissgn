@@ -1720,7 +1720,7 @@ function PilotDashboard() {
   }
 
   // Business selector -- multiple businesses
-  if(loaded && loggedInUser && (!currentBizId || showBizSelect) && businesses.length > 1) {
+  if(loaded && loggedInUser && ((!currentBizId || showBizSelect) && businesses.length > 0)) {
     return (
       <BusinessSelector
         businesses={allowedBusinesses}
