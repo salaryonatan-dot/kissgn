@@ -692,12 +692,10 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
           firebaseUid = await window.firebaseCreateUser(form.email.trim(), form.password);
         } catch(createErr) {
           if(createErr.code === "auth/email-already-in-use") {
-            // User exists in Firebase Auth but not in app/users -- recover by signing in to get uid
+            // User exists in Firebase Auth -- use secondary app to get uid without displacing admin
             try {
-              const tmpUser = await window.firebaseSignIn(form.email.trim(), form.password);
-              firebaseUid = tmpUser.uid;
+              firebaseUid = await window.firebaseGetUidBySignIn(form.email.trim(), form.password);
             } catch(signInErr) {
-              // Can't sign in -- wrong password or other issue
               setErr("המשתמש קיים ב-Firebase אך הסיסמה שגויה -- הזן את הסיסמה המקורית שלו");
               setSaving(false); return;
             }
@@ -1763,7 +1761,22 @@ function PilotDashboard() {
       initial={businessConfig}
       initialSuppliers={suppliers}
       initialFixed={fixedList}
-      onComplete={(cfg, sups, fixed, firstOwner) => { completeSetup(cfg, sups, fixed, firstOwner); }}
+      onComplete={async (cfg, sups, fixed) => {
+        // EDIT existing business — do NOT create new bizId
+        const bizId = currentBizId;
+        setBusinessConfig(cfg);
+        setSuppliers(sups);
+        if(fixed) setFixedList(fixed);
+        // Update business name in list
+        const updatedBizList = businesses.map(b => b.id===bizId ? {...b, name:cfg.businessName||b.name} : b);
+        setBusinesses(updatedBizList);
+        try { await window.storage.set("app-businesses", JSON.stringify(updatedBizList), true); } catch(e){ console.error(e); }
+        try { await window.storage.set(`biz:${bizId}:config`, JSON.stringify(cfg), true); } catch(e){ console.error(e); }
+        try { await window.storage.set(`biz:${bizId}:suppliers`, JSON.stringify(sups), true); } catch(e){ console.error(e); }
+        if(fixed) { try { await window.storage.set(`biz:${bizId}:fixed`, JSON.stringify(fixed), true); } catch(e){ console.error(e); } }
+        setShowSetup(false);
+        setSetupDone(true);
+      }}
       onCancel={setupDone ? ()=>setShowSetup(false) : null}
       isFirstSetup={false}
     />
