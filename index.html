@@ -1234,11 +1234,7 @@ function PilotDashboard() {
       if(uid) try { localStorage.setItem("marjin_biz_" + uid, id); } catch(_){}
     }
   };
-  const [showBizSelect, setShowBizSelect_] = useState(false);
-  const setShowBizSelect = (v) => {
-    console.log("setShowBizSelect called with:", v, new Error().stack.split('\n')[2]);
-    setShowBizSelect_(v);
-  };
+  const [showBizSelect, setShowBizSelect] = useState(false);
   const [entryStep, setEntryStep] = useState('idle'); // 'idle' | 'revenue' | 'suppliers'
   const [pendingCredits, setPendingCredits] = useState([]); // [{id,supplierId,supplierName,date,amount,note}]
   const [businessConfig, setBusinessConfig] = useState({
@@ -1724,9 +1720,7 @@ function PilotDashboard() {
   }
 
   // Business selector -- multiple businesses
-  console.log("RENDER CHECK:", {loaded, loggedInUser: !!loggedInUser, showBizSelect, bizLen: businesses.length, currentBizId, cond: (!currentBizId || showBizSelect) && businesses.length > 0});
   if(loaded && loggedInUser && ((!currentBizId || showBizSelect) && businesses.length > 0)) {
-    console.log("SHOWING BusinessSelector!");
     return (
       <BusinessSelector
         businesses={allowedBusinesses}
@@ -1809,7 +1803,7 @@ function PilotDashboard() {
         <div>
           <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
             <div style={S.badge}>📊 {businessConfig.businessName||"עסק א׳"}</div>
-            {<button onClick={()=>{ console.log("SWITCH clicked, businesses:", businesses.length, "showBizSelect before:", showBizSelect); setShowBizSelect(true); console.log("setShowBizSelect(true) called"); }} style={{fontSize:11,padding:"3px 10px",background:"#F1F5F9",border:"1px solid #D1D5DB",borderRadius:20,cursor:"pointer",fontFamily:"inherit",color:"#6B7280",fontWeight:600}}>החלף ⇄</button>}
+            {businesses.length > 1 && <button onClick={(e)=>{ e.stopPropagation(); setTimeout(()=>setShowBizSelect(true), 50); }} style={{fontSize:11,padding:"3px 10px",background:"#F1F5F9",border:"1px solid #D1D5DB",borderRadius:20,cursor:"pointer",fontFamily:"inherit",color:"#6B7280",fontWeight:600}}>החלף ⇄</button>}
             {isSuperOwner && <button onClick={()=>{ setShowSetup(true); setCurrentBizId(null); }} style={{fontSize:11,padding:"3px 10px",background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:20,cursor:"pointer",fontFamily:"inherit",color:"#2563EB",fontWeight:600}}>+ עסק חדש</button>}
           </div>
           <h1 style={S.title}>לוח בקרה יומי</h1>
