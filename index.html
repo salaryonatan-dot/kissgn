@@ -1510,6 +1510,9 @@ function PilotDashboard() {
       } catch(e){ console.error("[setup] members/roles write failed:", e.message); }
     }
 
+    // Small delay so Firebase propagates the role write before data writes
+    await new Promise(r => setTimeout(r, 800));
+
     // ── STEP 4: Write business data (role exists now → allowed) ──────────────
     const bizName = cfg.businessName || "מסעדה חדשה";
     const updatedBizList = [...businesses.filter(b=>b.id!==bizId), {id:bizId, name:bizName}];
