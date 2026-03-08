@@ -1364,6 +1364,15 @@ function PilotDashboard() {
   // useEffect 2: business-specific data -- live listeners
   useEffect(()=>{
     if(!currentBizId) return;
+
+    // ── Clear stale data immediately on business switch ──
+    setEntries([]);
+    setFixedList(FIXED_EXPENSES_DEFAULT);
+    setSuppliers([]);
+    setBusinessConfig({businessName:"",rentPct:0,royaltyPct:0,hasRoyalty:false,targets:{salesGrowthPct:5,foodCostPct:33,laborCostPct:27}});
+    setPendingCredits([]);
+    setMasterTasks([]);
+
     const unsubs = [];
     const sub = (key, setter, shared=false) => {
       if(!window.storage.subscribe) return;
