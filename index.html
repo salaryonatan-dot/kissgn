@@ -1720,7 +1720,9 @@ function PilotDashboard() {
   }
 
   // Business selector -- multiple businesses
+  console.log("RENDER CHECK:", {loaded, loggedInUser: !!loggedInUser, showBizSelect, bizLen: businesses.length, currentBizId, cond: (!currentBizId || showBizSelect) && businesses.length > 0});
   if(loaded && loggedInUser && ((!currentBizId || showBizSelect) && businesses.length > 0)) {
+    console.log("SHOWING BusinessSelector!");
     return (
       <BusinessSelector
         businesses={allowedBusinesses}
