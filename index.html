@@ -1152,7 +1152,9 @@ function CreditInput({ supplierId, supplierName, date, onAdd }) {
 
 // ─── Business Selector ────────────────────────────────────────────────────────
 function BusinessSelector({ businesses, onSelect, onAdd, onDelete, userName, isSuperOwner }) {
-  const [confirmDelete, setConfirmDelete] = React.useState(null); // bizId to confirm
+  const [confirmDelete, setConfirmDelete] = React.useState(null);
+  const [ready, setReady] = React.useState(false);
+  React.useEffect(() => { const t = setTimeout(() => setReady(true), 250); return () => clearTimeout(t); }, []);
   return (
     <div style={{minHeight:"100vh",background:"#F1F5F9",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"24px",fontFamily:"'Heebo',sans-serif",direction:"rtl"}}>
       <div style={{background:"#FFFFFF",borderRadius:20,padding:"32px 28px",width:"100%",maxWidth:400,boxShadow:"0 4px 24px #0000001A",border:"1px solid #E5E7EB"}}>
@@ -1175,8 +1177,8 @@ function BusinessSelector({ businesses, onSelect, onAdd, onDelete, userName, isS
               </div>
             ) : (
               <div style={{display:"flex",alignItems:"center",gap:8}}>
-                <button onClick={() => onSelect(biz.id)}
-                  style={{flex:1,padding:"18px 20px",background:"#F8FAFC",border:"1px solid #E5E7EB",borderRadius:14,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"space-between",transition:"all 0.15s"}}>
+                <button onClick={(e) => { e.stopPropagation(); if(!ready) return; onSelect(biz.id); }}
+                  style={{flex:1,padding:"18px 20px",background:"#F8FAFC",border:"1px solid #E5E7EB",borderRadius:14,cursor:ready?"pointer":"default",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"space-between",transition:"all 0.15s",opacity:ready?1:0.6}}>
                   <div style={{textAlign:"right"}}>
                     <div style={{fontSize:16,fontWeight:700,color:"#111827"}}>{biz.name}</div>
                   </div>
