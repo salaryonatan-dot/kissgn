@@ -1722,7 +1722,8 @@ function PilotDashboard() {
   }
 
   // Business selector -- multiple businesses
-  if(loaded && loggedInUser && ((!currentBizId || showBizSelect) && businesses.length > 0)) {
+  // Full-page selector only when no business selected yet
+  if(loaded && loggedInUser && !currentBizId && businesses.length > 0) {
     return (
       <BusinessSelector
         businesses={allowedBusinesses}
@@ -1799,6 +1800,37 @@ function PilotDashboard() {
   return (
     <div dir="rtl" style={S.root}>
       <div style={S.amb1}/><div style={S.amb2}/>
+
+      {/* Business Switch Modal */}
+      {showBizSelect && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:24}} onClick={()=>setShowBizSelect(false)}>
+          <div style={{background:"#fff",borderRadius:20,padding:"28px 24px",width:"100%",maxWidth:380,boxShadow:"0 8px 40px #0002",fontFamily:"'Heebo',sans-serif",direction:"rtl"}} onClick={e=>e.stopPropagation()}>
+            <div style={{textAlign:"center",marginBottom:20}}>
+              <div style={{fontSize:36,marginBottom:6}}>🏢</div>
+              <h2 style={{margin:0,fontSize:18,fontWeight:900,color:"#111827"}}>בחר מסעדה</h2>
+            </div>
+            {allowedBusinesses.map(biz => (
+              <div key={biz.id} style={{marginBottom:8}}>
+                <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                  <button onClick={()=>{ setSetupDone(true); setCurrentBizId(biz.id); setShowBizSelect(false); const uid=window.storage.getUid?.(); if(uid) window._rtdbSet("user_active_biz/"+uid, biz.id).catch(()=>{}); }}
+                    style={{flex:1,padding:"14px 18px",background:biz.id===currentBizId?"#EFF6FF":"#F8FAFC",border:biz.id===currentBizId?"1.5px solid #3B82F6":"1px solid #E5E7EB",borderRadius:12,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"space-between",fontWeight:700,fontSize:15,color:"#111827"}}>
+                    {biz.name}
+                    {biz.id===currentBizId && <span style={{fontSize:12,color:"#3B82F6",fontWeight:600}}>● פעיל</span>}
+                  </button>
+                  {isSuperOwner && (
+                    <button onClick={async()=>{ if(!window.confirm("למחוק את "+biz.name+"?")) return; const updated=businesses.filter(b=>b.id!==biz.id); setBusinesses(updated); try{await window.storage.set("app-businesses",JSON.stringify(updated),true);}catch(_){} if(biz.id===currentBizId) setShowBizSelect(false); }}
+                      style={{padding:"10px",background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:10,color:"#EF4444",cursor:"pointer",fontSize:15,fontFamily:"inherit"}}>✕</button>
+                  )}
+                </div>
+              </div>
+            ))}
+            <button onClick={()=>{ setShowBizSelect(false); setCurrentBizId(null); setShowSetup(true); }}
+              style={{width:"100%",marginTop:8,padding:"12px",background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:12,color:"#2563EB",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>
+              + הוסף מסעדה חדשה
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Header */}
       <header style={S.header}>
