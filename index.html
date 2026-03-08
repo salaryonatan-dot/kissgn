@@ -1487,6 +1487,14 @@ function PilotDashboard() {
     if(window.setTenantId) window.setTenantId(tenantId);
     window._currentTenantId = tenantId;
 
+    // For existing logged-in users adding a new business — get uid from Auth session
+    if(!firebaseUid && window._auth && window._auth.currentUser) {
+      firebaseUid = window._auth.currentUser.uid;
+    }
+    if(!firebaseUid && window.storage.getUid) {
+      firebaseUid = window.storage.getUid();
+    }
+
     // ── STEP 3: members/roles FIRST -- rules check role before allowing writes ──
     if(firebaseUid) {
       try {
