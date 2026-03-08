@@ -1229,9 +1229,9 @@ function PilotDashboard() {
   const [currentBizId, setCurrentBizId_] = useState(null);
   const setCurrentBizId = id => {
     setCurrentBizId_(id);
-    if (id && window.setTenantId) window.setTenantId(id);
+    // NOTE: do NOT update tenantId here — tenantId is fixed per user account
+    // tenantId is set once during login/init and never changes
     if (id) {
-      window._currentTenantId = id;
       const uid = window.storage.getUid ? window.storage.getUid() : null;
       if(uid) try { localStorage.setItem("marjin_biz_" + uid, id); } catch(_){}
     }
@@ -1814,7 +1814,7 @@ function PilotDashboard() {
             {allowedBusinesses.map(biz => (
               <div key={biz.id} style={{marginBottom:8}}>
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                  <button onClick={()=>{ setSetupDone(true); setCurrentBizId(biz.id); setShowBizSelect(false); const uid=window.storage.getUid?.(); if(uid) window._rtdbSet("user_active_biz/"+uid, biz.id).catch(()=>{}); }}
+                  <button onClick={()=>{ setShowBizSelect(false); setCurrentBizId(biz.id); const uid=window.storage.getUid?.(); if(uid) window._rtdbSet("user_active_biz/"+uid, biz.id).catch(()=>{}); }}
                     style={{flex:1,padding:"14px 18px",background:biz.id===currentBizId?"#EFF6FF":"#F8FAFC",border:biz.id===currentBizId?"1.5px solid #3B82F6":"1px solid #E5E7EB",borderRadius:12,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",justifyContent:"space-between",fontWeight:700,fontSize:15,color:"#111827"}}>
                     {biz.name}
                     {biz.id===currentBizId && <span style={{fontSize:12,color:"#3B82F6",fontWeight:600}}>● פעיל</span>}
