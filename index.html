@@ -389,8 +389,7 @@ function calcMetrics(entries, fixedList, cfg={}) {
   const lcAfterFinancing = lc;
   const fcAfterFinancing = fc;
   // Count only days with actual revenue entries (not today if not yet entered)
-  const daysWithRevenue = entries ? new Set(entries.filter(e=>e.revenue>0||e.sales>0).map(e=>e.date)).size : 0;
-  const effectiveDays = Math.max(daysWithRevenue, 1);
+  const effectiveDays = Math.max(daysWithRevenue.size, 1);
   const dailyAvg = lcAfterFinancing / effectiveDays;
   const forecast = lcAfterFinancing+(dailyAvg*(DAYS_IN_MONTH-DAY_OF_MONTH))-(TOTAL_FIXED-fixedSoFar);
   return { totalSales, totalPayroll, totalOtherExpense, totalFood, fixedSoFar, totalExpenses, lc:lcAfterFinancing, fc:fcAfterFinancing, foodCostPct, forecast, dailyAvg, resolvedFixed, TOTAL_FIXED, supplierTotals, totalFinancing, creditCardFinancing, deliveryPlatformFee, deliveryPct, totalDeliveries, lcBeforeFinancing:lc };
