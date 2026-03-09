@@ -384,7 +384,10 @@ function calcMetrics(entries, fixedList, cfg={}) {
   const deliveryPct = totalSales > 0 ? (totalDeliveries / totalSales) * 100 : 0;
   const lcAfterFinancing = lc;
   const fcAfterFinancing = fc;
-  const dailyAvg = DAY_OF_MONTH>0?lcAfterFinancing/DAY_OF_MONTH:0;
+  // Count only days with actual revenue entries (not today if not yet entered)
+  const daysWithRevenue = entries ? new Set(entries.filter(e=>e.revenue>0||e.sales>0).map(e=>e.date)).size : 0;
+  const effectiveDays = Math.max(daysWithRevenue, 1);
+  const dailyAvg = lcAfterFinancing / effectiveDays;
   const forecast = lcAfterFinancing+(dailyAvg*(DAYS_IN_MONTH-DAY_OF_MONTH))-(TOTAL_FIXED-fixedSoFar);
   return { totalSales, totalPayroll, totalOtherExpense, totalFood, fixedSoFar, totalExpenses, lc:lcAfterFinancing, fc:fcAfterFinancing, foodCostPct, forecast, dailyAvg, resolvedFixed, TOTAL_FIXED, supplierTotals, totalFinancing, creditCardFinancing, deliveryPlatformFee, deliveryPct, totalDeliveries, lcBeforeFinancing:lc };
 }
@@ -837,6 +840,9 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
   const [newSupName, setNewSupName] = useState("");
   const [newSupCat,  setNewSupCat]  = useState("כללי");
   const [newSupDays, setNewSupDays] = useState([]);
+  const [editingSupId,   setEditingSupId]   = useState(null);
+  const [editingSupDays, setEditingSupDays] = useState([]);
+  const [editingSupCat,  setEditingSupCat]  = useState("כללי");
 
   // Step 4 -- קבועות
   const [fixedList, setFixedList] = useState(initialFixed);
@@ -876,6 +882,14 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
   };
 
   const removeSupplier = (id) => setSuppliers(prev => prev.filter(s=>s.id!==id));
+  const saveEditedSupplier = async (updated) => {
+    try {
+      const uid = window.storage.getUid ? window.storage.getUid() : null;
+      const bizId = uid ? localStorage.getItem("marjin_biz_"+uid) : null;
+      if(!bizId) return;
+      await window.storage.set(`biz:${bizId}:suppliers`, JSON.stringify(updated), true);
+    } catch(_){}
+  };
 
   const updateFixed = (id, field, val) => setFixedList(prev => prev.map(f => f.id===id ? {...f, [field]:field==="amount"?Number(val)||0:val} : f));
 
@@ -1022,19 +1036,48 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
         {step===3 && (
           <>
             {/* רשימת ספקים קיימים */}
-            {suppliers.filter(s=>s.name).map(sup=>(
-              <div key={sup.id} style={W.supRow}>
-                <button style={W.delBtn} onClick={()=>removeSupplier(sup.id)}>✕</button>
-                <div style={{flex:1}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+            {suppliers.filter(s=>s.name).map(sup=>{
+              const isEditing = editingSupId===sup.id;
+              return (
+              <div key={sup.id} style={{...W.supRow,flexDirection:"column",alignItems:"stretch",gap:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <button style={W.delBtn} onClick={()=>removeSupplier(sup.id)}>✕</button>
+                  <div style={{flex:1}}>
                     <div style={{fontSize:14,color:"#111827",fontWeight:600}}>{sup.name}</div>
+                    <div style={{fontSize:11,color:"#9CA3AF",marginTop:1}}>
+                      {sup.category} · {sup.days.length>0 ? sup.days.map(d=>DOW_LABELS[d]).join(" ") : "ללא ימים קבועים"}
+                    </div>
                   </div>
-                  <div style={{fontSize:11,color:"#9CA3AF",marginTop:1}}>
-                    {sup.category} · {sup.days.length>0 ? sup.days.map(d=>DOW_LABELS[d]).join(" ") : "ללא ימים קבועים"}
-                  </div>
+                  <button onClick={()=>{ if(isEditing){setEditingSupId(null);}else{setEditingSupId(sup.id);setEditingSupDays([...sup.days]);setEditingSupCat(sup.category);} }}
+                    style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:8,color:"#2563EB",padding:"4px 10px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
+                    {isEditing?"סגור":"✏️ ערוך"}
+                  </button>
                 </div>
+                {isEditing && (
+                  <div style={{marginTop:10,paddingTop:10,borderTop:"1px solid #F1F5F9"}}>
+                    <label style={W.lbl}>קטגוריה</label>
+                    <select style={{...W.inp,marginBottom:10}} value={editingSupCat} onChange={e=>setEditingSupCat(e.target.value)}>
+                      {["כללי","ירקות","בשר","חלב","מאפים","שתייה","ביצים","דגים","קפה","סלטים","כבושים"].map(c=><option key={c}>{c}</option>)}
+                    </select>
+                    <label style={W.lbl}>ימי אספקה</label>
+                    <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+                      {DOW_LABELS.map((d,i)=>(
+                        <button key={i} style={{...W.dayBtn,...(editingSupDays.includes(i)?W.dayBtnA:{})}}
+                          onClick={()=>setEditingSupDays(ds=>ds.includes(i)?ds.filter(x=>x!==i):[...ds,i].sort())}>
+                          {d}
+                        </button>
+                      ))}
+                    </div>
+                    <button onClick={()=>{
+                      const updated = suppliers.map(s=>s.id===sup.id?{...s,days:editingSupDays,category:editingSupCat}:s);
+                      setSuppliers(updated);
+                      saveEditedSupplier(updated);
+                      setEditingSupId(null);
+                    }} style={{...W.bigBtn,marginTop:0,background:"#22C55E",color:"#0A0A0A",fontSize:13,padding:"10px"}}>✅ שמור שינויים</button>
+                  </div>
+                )}
               </div>
-            ))}
+            );})}
 
             {/* הוספת ספק */}
             <div style={{...W.card,marginTop:8}}>
@@ -1219,6 +1262,7 @@ function PilotDashboard() {
   // ── הרשאות: null = בעלים, { name, role:"manager", permissions:[] } = אחמש מחובר
   const [currentUser, setCurrentUser] = useState(null);
   const [masterTasks, setMasterTasks] = useState([]);
+  const [pettyCash, setPettyCash] = useState([]);
   const [loggedInUser, setLoggedInUser] = useState(null);
   const [appUsers, setAppUsers]     = useState([]);
   const [setupDone, setSetupDone] = useState(false);
@@ -1339,16 +1383,20 @@ function PilotDashboard() {
         try {
           const bizList = JSON.parse(rb.value);
           setBusinesses(bizList);
-          if(bizList.length === 1) setCurrentBizId(bizList[0].id);
-        } catch(_){}
-      }
-
-      // Restore last active biz (if tenant already found above)
-      if(uid && window._currentTenantId) {
-        try {
-          const activeBiz = await window._rtdbGet(`user_active_biz/${uid}`);
-          if(activeBiz && typeof activeBiz === "string") {
-            setCurrentBizId_(activeBiz);
+          if(bizList.length >= 1) {
+            // Try to restore last active biz, fallback to first in list
+            let targetBizId = bizList[0].id;
+            try {
+              const cached = localStorage.getItem("marjin_biz_" + uid);
+              if(cached && bizList.find(b => b.id === cached)) targetBizId = cached;
+              else {
+                const activeBiz = await window._rtdbGet(`user_active_biz/${uid}`);
+                if(activeBiz && typeof activeBiz === "string" && bizList.find(b => b.id === activeBiz)) {
+                  targetBizId = activeBiz;
+                }
+              }
+            } catch(_){}
+            setCurrentBizId(targetBizId);
           }
         } catch(_){}
       }
@@ -1370,6 +1418,7 @@ function PilotDashboard() {
     setBusinessConfig({businessName:"",rentPct:0,royaltyPct:0,hasRoyalty:false,targets:{salesGrowthPct:5,foodCostPct:33,laborCostPct:27}});
     setPendingCredits([]);
     setMasterTasks([]);
+    setPettyCash([]);
 
     const unsubs = [];
     const sub = (key, setter, shared=false) => {
@@ -1394,6 +1443,7 @@ function PilotDashboard() {
     sub(`biz:${currentBizId}:config`,    setBusinessConfig);
     sub(`biz:${currentBizId}:credits`,   setPendingCredits);
     sub(`biz:${currentBizId}:tasks`,    setMasterTasks);
+    sub(`biz:${currentBizId}:pettycash`, setPettyCash);
     sub("app-users", u => { setAppUsers(u); }, true);
 
     // Fetch weather -- Open-Meteo, no API key needed
@@ -1558,6 +1608,12 @@ function PilotDashboard() {
     try { await window.storage.set("app-users", JSON.stringify(users), true); } catch(_){}
   };
 
+
+  const savePettyCash = async (items) => {
+    setPettyCash(items);
+    if(!currentBizId) return;
+    try { await window.storage.set(`biz:${currentBizId}:pettycash`, JSON.stringify(items), true); } catch(_){}
+  };
 
   const saveMasterTasks = async (t) => {
     setMasterTasks(t);
@@ -1918,6 +1974,15 @@ function PilotDashboard() {
             {(loggedInUser?.role==="super_owner"||loggedInUser?.role==="owner") && (
               <button style={{...S.navBtn,flex:1,textAlign:"center",fontSize:12,...(screen==="tasks"?S.navTasks:{})}} onClick={()=>setScreen("tasks")}>✅ משימות</button>
             )}
+            {(loggedInUser?.role==="super_owner"||loggedInUser?.role==="owner") && (
+              <button style={{...S.navBtn,flex:1,textAlign:"center",fontSize:12,...(screen==="pettycash"?S.navActive:{})}} onClick={()=>setScreen("pettycash")}>💵 קופה</button>
+            )}
+            {(loggedInUser?.role==="super_owner"||loggedInUser?.role==="owner") && (
+              <button style={{...S.navBtn,flex:1,textAlign:"center",fontSize:12,...(screen==="employees"?S.navActive:{})}} onClick={()=>setScreen("employees")}>👤 עובדים</button>
+            )}
+            {(loggedInUser?.role==="super_owner"||loggedInUser?.role==="owner") && (
+              <button style={{...S.navBtn,flex:1,textAlign:"center",fontSize:12,...(screen==="employees"?S.navActive:{})}} onClick={()=>setScreen("employees")}>👤 עובדים</button>
+            )}
 
           </div>
         )}
@@ -2186,10 +2251,16 @@ function PilotDashboard() {
                                   <div style={{fontSize:13,fontWeight:600,color:"#111827"}}>{DOW_NAMES[dow]} {day}/{smM}</div>
                                 </div>
                                 <input type="number" inputMode="numeric" placeholder="₪"
-                                  value={paid?val:""}
+                                  value={val==="0"||val===0?"":val||""}
                                   onChange={e=>setSupPayDate(sup.id,date,e.target.value)}
-                                  style={{flex:1,border:`1px solid ${paid?"#22C55E":"#D1D5DB"}`,borderRadius:10,padding:"9px 12px",fontSize:14,fontFamily:"inherit",color:"#111827",background:paid?"#F0FDF4":"#FFFFFF",outline:"none"}}/>
-                                {paid && <span style={{color:"#22C55E",fontSize:16}}>✓</span>}
+                                  style={{flex:1,border:`1px solid ${val==="0"||val===0?"#A855F7":paid?"#22C55E":"#D1D5DB"}`,borderRadius:10,padding:"9px 12px",fontSize:14,fontFamily:"inherit",color:"#111827",background:val==="0"||val===0?"#FAF5FF":paid?"#F0FDF4":"#FFFFFF",outline:"none"}}/>
+                                {(val==="0"||val===0) && <span style={{color:"#A855F7",fontSize:16}} title="דולגה">✗</span>}
+                                {paid && val!=="0" && val!==0 && <span style={{color:"#22C55E",fontSize:16}}>✓</span>}
+                                <button onClick={()=>setSupPayDate(sup.id,date,val==="0"||val===0?"":"0")}
+                                  title={val==="0"||val===0?"בטל דילוג":"דלגתי על הזמנה"}
+                                  style={{background:val==="0"||val===0?"#A855F7":"#F3F4F6",border:"none",borderRadius:8,color:val==="0"||val===0?"#fff":"#9CA3AF",padding:"6px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                                  {val==="0"||val===0?"↩ בטל":"✗ דלגתי"}
+                                </button>
                               </div>
                             );
                           })}
@@ -2384,7 +2455,29 @@ function PilotDashboard() {
                     </div>
                   </div>
                 )}
-                <label style={S.lbl}>עלות שעתיים / נוכחות יומית (₪)</label>
+                {/* עובדים שעתיים — הזנה יומית לפי שם */}
+                {(()=>{
+                  const hourlyEmps = (businessConfig.employees||[]).filter(e=>e.type==="hourly");
+                  if(!hourlyEmps.length) return null;
+                  return (
+                    <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:12,padding:"12px 14px",marginBottom:10}}>
+                      <div style={{fontSize:11,color:"#1D4ED8",fontWeight:700,marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>עובדים שעתיים — הזן עלות יומית</div>
+                      {hourlyEmps.map(emp=>{
+                        const val = (form.hourly_payroll||{})[emp.id]||"";
+                        return (
+                          <div key={emp.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                            <span style={{flex:1,fontSize:13,color:"#374151"}}>{emp.name} <span style={{color:"#9CA3AF",fontSize:11}}>{emp.role}</span></span>
+                            <input type="number" inputMode="numeric" placeholder="₪"
+                              value={val}
+                              onChange={e=>setForm(f=>({...f,hourly_payroll:{...(f.hourly_payroll||{}),[emp.id]:e.target.value}}))}
+                              style={{width:90,border:`1px solid ${val?"#2563EB":"#D1D5DB"}`,borderRadius:8,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:"#111827",background:val?"#EFF6FF":"#FFFFFF",textAlign:"left",outline:"none"}}/>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+                <label style={S.lbl}>עלות שעתיים / נוכחות יומית נוספת (₪)</label>
                 <input style={S.inp} type="number" inputMode="numeric" placeholder="0" value={form.payroll} onChange={e=>setForm(f=>({...f,payroll:e.target.value}))}/>
                 {(globalDaily+(Number(form.payroll)||0))>0 && (
                   <div style={{background:"#F8FAFC",border:"1px solid #E5E7EB",borderRadius:10,padding:"10px 14px",display:"flex",justifyContent:"space-between",fontSize:14,fontWeight:800,marginBottom:8}}>
@@ -2511,6 +2604,18 @@ function PilotDashboard() {
       )}
 
       {/* ═══ TASKS (בעלים בלבד) ═══ */}
+      {screen==="pettycash" && !currentUser && (
+        <div style={S.content}>
+          <PettyCashScreen items={pettyCash} saveItems={savePettyCash}/>
+        </div>
+      )}
+
+      {screen==="employees" && !currentUser && (
+        <div style={S.content}>
+          <EmployeesScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig}/>
+        </div>
+      )}
+
       {screen==="tasks" && !currentUser && (
         <div style={S.content}>
           <MasterTasksScreen
@@ -2692,13 +2797,6 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig }) {
           </div>
         )}
       </div>
-      {/* ═══ EMPLOYEES ═══ */}
-      {screen==="employees" && (
-        <div style={S.content}>
-          <EmployeesScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig}/>
-        </div>
-      )}
-
     </div>
   );
 }
@@ -2779,6 +2877,127 @@ function WhatsAppRecipientsScreen({ businessConfig, saveBusinessConfig }) {
 }
 
 // ─── Master Tasks Screen (בעלים ישיר) ────────────────────────────────────────
+
+// ─── Petty Cash Screen ────────────────────────────────────────────────────────
+const PETTY_CATEGORIES = ["מזון ושתיה","ציוד וכלים","ניקיון","תחזוקה","תחבורה","משרד","שונות"];
+
+function PettyCashScreen({ items, saveItems }) {
+  const [adding, setAdding] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [form, setForm] = useState({ date: TODAY_STR, amount: "", category: "שונות", note: "" });
+  const [filterCat, setFilterCat] = useState("הכל");
+
+  const openAdd = () => { setForm({ date:TODAY_STR, amount:"", category:"שונות", note:"" }); setEditId(null); setAdding(true); };
+  const openEdit = (item) => { setForm({...item}); setEditId(item.id); setAdding(true); };
+  const cancel = () => { setAdding(false); setEditId(null); };
+
+  const save = () => {
+    if(!form.amount || !form.date) return;
+    const list = items||[];
+    if(editId) {
+      saveItems(list.map(i => i.id===editId ? {...form, id:editId} : i));
+    } else {
+      saveItems([...list, {...form, id:Date.now(), amount:Number(form.amount)}]);
+    }
+    setAdding(false); setEditId(null);
+  };
+
+  const remove = (id) => { if(window.confirm("למחוק רשומה זו?")) saveItems((items||[]).filter(i=>i.id!==id)); };
+
+  const filtered = (items||[]).filter(i => filterCat==="הכל" || i.category===filterCat);
+  const total = filtered.reduce((s,i)=>s+(Number(i.amount)||0), 0);
+  const monthTotal = (items||[]).filter(i=>i.date&&i.date.startsWith(`${YEAR}-${MONTH_STR}`)).reduce((s,i)=>s+(Number(i.amount)||0),0);
+
+  const exportToExcel = () => {
+    const rows = [["תאריך","קטגוריה","סכום","הערה"]];
+    (items||[]).sort((a,b)=>a.date<b.date?1:-1).forEach(i=>rows.push([i.date, i.category, i.amount, i.note||""]));
+    const csv = rows.map(r=>r.join(",")).join("\n");
+    const blob = new Blob(["\uFEFF"+csv], {type:"text/csv;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href=url; a.download="קופה_קטנה.csv"; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center",flexWrap:"wrap"}}>
+        <div style={{flex:1}}>
+          <h2 style={{margin:0,fontSize:17,fontWeight:800,color:"#111827"}}>💵 קופה קטנה</h2>
+          <p style={{margin:"2px 0 0",fontSize:12,color:"#9CA3AF"}}>{(items||[]).length} רשומות · חודש נוכחי: {fmt(monthTotal)}</p>
+        </div>
+        <button onClick={exportToExcel} style={{padding:"8px 14px",background:"#F0FDF4",border:"1px solid #86EFAC",borderRadius:10,color:"#15803D",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>📥 ייצוא CSV</button>
+        <button onClick={openAdd} style={{...S.addBtn,fontSize:13,padding:"8px 14px"}}>+ הוסף</button>
+      </div>
+
+      {/* Filter */}
+      <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+        {["הכל",...PETTY_CATEGORIES].map(cat=>(
+          <button key={cat} style={{...S.subBtn,...(filterCat===cat?S.subBtnActive:{})}} onClick={()=>setFilterCat(cat)}>{cat}</button>
+        ))}
+      </div>
+
+      {/* Add/Edit form */}
+      {adding && (
+        <div style={{...S.card,border:"1px solid #FCD34D44",marginBottom:14}}>
+          <h3 style={{margin:"0 0 12px",fontSize:14,fontWeight:700,color:"#111827"}}>{editId?"✏️ עריכת רשומה":"➕ רשומה חדשה"}</h3>
+          <div style={{display:"flex",gap:8,marginBottom:8}}>
+            <div style={{flex:1}}>
+              <label style={S.lbl}>תאריך</label>
+              <input type="date" style={{...S.inp,marginBottom:0}} value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))}/>
+            </div>
+            <div style={{flex:1}}>
+              <label style={S.lbl}>סכום (₪)</label>
+              <input type="number" inputMode="numeric" placeholder="0" style={{...S.inp,marginBottom:0}} value={form.amount}
+                onChange={e=>setForm(f=>({...f,amount:e.target.value}))} autoFocus/>
+            </div>
+          </div>
+          <label style={S.lbl}>קטגוריה</label>
+          <select style={S.inp} value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>
+            {PETTY_CATEGORIES.map(cat=><option key={cat}>{cat}</option>)}
+          </select>
+          <label style={S.lbl}>הערה</label>
+          <input style={S.inp} placeholder="תיאור ההוצאה..." value={form.note||""}
+            onChange={e=>setForm(f=>({...f,note:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&save()}/>
+          <div style={{display:"flex",gap:8,marginTop:4}}>
+            <button style={S.saveBtn} onClick={save}>{editId?"עדכן":"הוסף"}</button>
+            <button style={S.cancelBtn} onClick={cancel}>ביטול</button>
+          </div>
+        </div>
+      )}
+
+      {/* Total bar */}
+      {filtered.length > 0 && (
+        <div style={{background:"#FFFBEB",border:"1px solid #FCD34D",borderRadius:12,padding:"10px 16px",marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{fontWeight:700,color:"#92400E"}}>סה״כ {filterCat==="הכל"?"כל הרשומות":filterCat}</span>
+          <span style={{fontWeight:800,fontSize:16,color:"#92400E"}}>{fmt(total)}</span>
+        </div>
+      )}
+
+      {/* Items list */}
+      {filtered.length === 0 && !adding ? (
+        <div style={S.empty}><div style={{fontSize:40,marginBottom:10}}>💵</div><p style={{color:"#9CA3AF"}}>אין רשומות -- לחץ + הוסף</p></div>
+      ) : (
+        <div>
+          {filtered.sort((a,b)=>a.date<b.date?1:-1).map(item=>(
+            <div key={item.id} style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:12,padding:"12px 16px",marginBottom:8,display:"flex",alignItems:"center",gap:10}}>
+              <div style={{flex:1}}>
+                <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:3}}>
+                  <span style={{fontSize:13,fontWeight:700,color:"#111827"}}>{fmt(Number(item.amount))}</span>
+                  <span style={{fontSize:11,padding:"2px 8px",background:"#F3F4F6",borderRadius:20,color:"#6B7280"}}>{item.category}</span>
+                </div>
+                <div style={{fontSize:12,color:"#9CA3AF"}}>{item.date} {item.note && <span style={{color:"#6B7280"}}>· {item.note}</span>}</div>
+              </div>
+              <button onClick={()=>openEdit(item)} style={{background:"none",border:"none",cursor:"pointer",color:"#6B7280",fontSize:16,padding:"4px 6px"}}>✏️</button>
+              <button onClick={()=>remove(item.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#EF4444",fontSize:16,padding:"4px 6px"}}>🗑</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MasterTasksScreen({ tasks, saveTasks }) {
   const [adding, setAdding]   = useState(false);
   const [editing, setEditing] = useState(null); // task id being edited
@@ -2793,14 +3012,14 @@ function MasterTasksScreen({ tasks, saveTasks }) {
   const save = () => {
     if (!form.title.trim()) return;
     if (editing !== null) {
-      saveTasks(tasks.map(t => t.id===editing ? {...t,...form} : t));
+      saveTasks((tasks||[]).map(t => t.id===editing ? {...t,...form} : t));
     } else {
-      saveTasks([...tasks, {...form, id:Date.now()}]);
+      saveTasks([...(tasks||[]), {...form, id:Date.now()}]);
     }
     setAdding(false); setEditing(null);
   };
 
-  const remove = (id) => saveTasks(tasks.filter(t => t.id !== id));
+  const remove = (id) => saveTasks((tasks||[]).filter(t => t.id !== id));
 
   const moveUp   = (i, arr) => { if(i===0) return arr; const a=[...arr]; [a[i-1],a[i]]=[a[i],a[i-1]]; return a; };
   const moveDown = (i, arr) => { if(i===arr.length-1) return arr; const a=[...arr]; [a[i],a[i+1]]=[a[i+1],a[i]]; return a; };
@@ -2820,7 +3039,7 @@ function MasterTasksScreen({ tasks, saveTasks }) {
         <div style={{flex:1}}>
           <h2 style={{margin:0,fontSize:17,fontWeight:800,color:"#111827"}}>✅ ניהול משימות</h2>
           <p style={{margin:"2px 0 0",fontSize:12,color:"#9CA3AF"}}>
-            {tasks.length} משימות · בוקר: {tasks.filter(t=>t.shift==="בוקר"||t.shift==="כל המשמרות").length} · ערב: {tasks.filter(t=>t.shift==="ערב"||t.shift==="כל המשמרות").length}
+            {(tasks||[]).length} משימות · בוקר: {(tasks||[]).filter(t=>t.shift==="בוקר"||t.shift==="כל המשמרות").length} · ערב: {(tasks||[]).filter(t=>t.shift==="ערב"||t.shift==="כל המשמרות").length}
           </p>
         </div>
         <button style={{...S.addBtn, fontSize:13, padding:"8px 14px"}} onClick={openAdd}>+ הוסף משימה</button>
