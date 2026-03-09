@@ -347,11 +347,15 @@ function calcMetrics(entries, fixedList, cfg={}) {
   const rentPct    = cfg.rentPct    ?? RENT_PCT;
   const royaltyPct = cfg.royaltyPct ?? ROYALTY_PCT;
   const totalSales = entries.reduce((a,e)=>a+(Number(e.sales)||0)+(Number(e.deliveries)||0)+(Number(e.other_income)||0),0);
+  // Global employees: add daily cost for every day that has revenue
+  const globalEmpsAll = (cfg.employees||[]).filter(e=>e.type==="global"&&Number(e.monthlySalary)>0);
+  const globalDailyAll = globalEmpsAll.reduce((a,e)=>a+Math.round(Number(e.monthlySalary)/DAYS_IN_MONTH),0);
+  const daysWithRevenue = new Set(entries.filter(e=>(Number(e.sales)||0)+(Number(e.deliveries)||0)>0).map(e=>e.date));
   const totalPayroll = entries.reduce((a,e)=>{
-    const globalPay = Number(e.payroll)||0;
+    const manualPay = Number(e.payroll)||0;
     const hourlyPay = e.hourly_payroll ? Object.values(e.hourly_payroll).reduce((s,v)=>s+(Number(v)||0),0) : 0;
-    return a + globalPay + hourlyPay;
-  },0);
+    return a + manualPay + hourlyPay;
+  },0) + (daysWithRevenue.size * globalDailyAll);
   const totalOtherExpense = entries.reduce((a,e)=>a+(Number(e.other_expense)||0),0);
   const supplierTotals = {};
   (cfg.suppliers||[]).forEach(s => { supplierTotals[s.id]=0; });
@@ -1344,18 +1348,7 @@ function PilotDashboard() {
           if(window.setTenantId) window.setTenantId(tid);
           window._currentTenantId = tid;
 
-          // Resolve active bizId
-          let resolvedBizId = tid;
-          try {
-            const cachedBiz = localStorage.getItem("marjin_biz_" + uid);
-            if(cachedBiz) resolvedBizId = cachedBiz;
-            else {
-              const activeBiz = await window._rtdbGet("user_active_biz/" + uid);
-              if(activeBiz && typeof activeBiz === "string") resolvedBizId = activeBiz;
-            }
-          } catch(_){}
-          try { localStorage.setItem("marjin_biz_" + uid, resolvedBizId); } catch(_){}
-          setCurrentBizId_(resolvedBizId);
+          // bizId will be resolved below after loading businesses list
         }
       }
 
@@ -1382,6 +1375,7 @@ function PilotDashboard() {
       if(rb) {
         try {
           const bizList = JSON.parse(rb.value);
+          console.log("[init] bizList:", bizList.map(b=>({id:b.id,name:b.name})), "uid:", uid, "cached:", localStorage.getItem("marjin_biz_"+uid));
           setBusinesses(bizList);
           if(bizList.length >= 1) {
             // Try to restore last active biz, fallback to first in list
@@ -1640,9 +1634,7 @@ function PilotDashboard() {
   };
 
   const saveEntry = async (skipSuppliers=false) => {
-    const globalEmps = (businessConfig.employees||[]).filter(e=>Number(e.monthlySalary)>0);
-    const globalDaily = globalEmps.reduce((a,e)=>a+Math.round(Number(e.monthlySalary)/DAYS_IN_MONTH),0);
-    const formFinal = {...form, payroll: globalDaily + (Number(form.payroll)||0)};
+    const formFinal = {...form};  // payroll stores manual entry only; global employees added in calcMetrics
     const netForm = formFinal.includeVat ? {
       ...formFinal,
       sales:        Math.round((Number(formFinal.sales)||0)        / VAT_RATE),
