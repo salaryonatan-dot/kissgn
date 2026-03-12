@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.sheetjs.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://www.gstatic.com https://*.firebaseio.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' https://*.firebaseio.com wss://*.firebaseio.com https://*.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://api.open-meteo.com https://www.oref.org.il https://api.open-meteo.com https://*.cloudfunctions.net https://firestore.googleapis.com wss://*.firebaseio.com https://firebase.googleapis.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.sheetjs.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://www.gstatic.com https://*.firebaseio.com https://*.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' https://*.firebaseio.com wss://*.firebaseio.com https://*.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://api.open-meteo.com https://www.oref.org.il https://*.cloudfunctions.net https://firestore.googleapis.com https://firebase.googleapis.com wss://*.firebaseio.com https://*.firebase.com wss://*.firebase.com https://fcmregistrations.googleapis.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com https://fonts.googleapis.com; object-src 'none'; base-uri 'self';">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#2563EB" />
@@ -3081,7 +3081,7 @@ function MasterTasksScreen({ tasks, saveTasks }) {
   const moveUp   = (i, arr) => { if(i===0) return arr; const a=[...arr]; [a[i-1],a[i]]=[a[i],a[i-1]]; return a; };
   const moveDown = (i, arr) => { if(i===arr.length-1) return arr; const a=[...arr]; [a[i],a[i+1]]=[a[i+1],a[i]]; return a; };
 
-  const filtered = tasks.filter(t =>
+  const filtered = (tasks||[]).filter(t =>
     (filterShift==="הכל" || t.shift===filterShift) &&
     (filterCat==="הכל"   || t.category===filterCat)
   );
@@ -3309,7 +3309,7 @@ function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[
     setSubScreen("home");
     // Send WhatsApp notification to owner
     if(bizId && typeof sendWhatsAppNotification === "function") {
-      const allTasks = masterTasks || [];
+      const allTasks = tasks || [];
       const myTasks  = allTasks.filter(t => !activeLog.shiftType || t.shifts?.includes(activeLog.shiftType));
       const done     = myTasks.filter(t => closed.completedTasks?.includes(t.id)).length;
       const DOW      = ["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];
