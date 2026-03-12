@@ -373,8 +373,8 @@ function calcMetrics(entries, fixedList, cfg={}) {
     if (f.royaltyPct) return {...f, amount: Math.round(totalSales * royaltyPct / 100)};
     return f;
   });
-  const TOTAL_FIXED = resolvedFixed.reduce((a,b)=>a+b.amount,0);
-  const fixedSoFar = resolvedFixed.filter(f=>f.dueDay<=DAY_OF_MONTH).reduce((a,b)=>a+b.amount,0);
+  const TOTAL_FIXED = resolvedFixed.filter(f=>!f.disabled).reduce((a,b)=>a+b.amount,0);
+  const fixedSoFar = resolvedFixed.filter(f=>!f.disabled&&f.dueDay<=DAY_OF_MONTH).reduce((a,b)=>a+b.amount,0);
   const totalExpenses = totalFood+totalPayroll+totalOtherExpense+fixedSoFar;
   const lc = totalSales-totalExpenses;
   const fc = totalSales-totalFood-totalPayroll-totalOtherExpense-TOTAL_FIXED;
@@ -1743,14 +1743,26 @@ function PilotDashboard() {
             setLoggedInUser({...user, _allowedBizIds: allowed});
           }
           if(user._tenantId) {
-            setCurrentBizId(user._tenantId);
-            // Mobile: businesses not loaded before login -- reload now
-            if(businesses.length === 0) {
+            // Load businesses and pick the right bizId (NOT tenantId)
+            const resolveAndSet = (bizList) => {
+              if(!bizList || bizList.length === 0) return;
+              const uid2 = window.storage.getUid?.();
+              let target = bizList[0].id;
+              try {
+                const cached2 = uid2 ? localStorage.getItem("marjin_biz_" + uid2) : null;
+                if(cached2 && bizList.find(b => b.id === cached2)) target = cached2;
+              } catch(_){}
+              setCurrentBizId(target);
+            };
+            if(businesses.length > 0) {
+              resolveAndSet(businesses);
+            } else {
               window.storage.get("app-businesses", true).then(rb => {
                 if(rb) {
                   try {
                     const bizList = JSON.parse(rb.value);
                     setBusinesses(bizList);
+                    resolveAndSet(bizList);
                   } catch(_){}
                 }
               }).catch(()=>{});
@@ -1956,25 +1968,17 @@ function PilotDashboard() {
             return <button key={s} style={{...S.navBtn,flex:1,textAlign:"center",...(screen===s?S.navActive:{})}} onClick={()=>setScreen(s)}>{l}</button>;
           })}
         </div>
-        {/* שורה 2 -- היסטוריה, קבועות, משימות */}
+        {/* שורה 2 -- היסטוריה, קבועות, משימות, קופה, כ״א */}
         {(!currentUser && loggedInUser?.role!=="staff") && (
           <div style={{display:"flex",padding:"0 12px",gap:2,borderTop:"1px solid #E5E7EB",overflowX:"auto",WebkitOverflowScrolling:"touch",scrollbarWidth:"none"}}>
             {[["history","📋 היסטוריה"],["fixed","🔒 קבועות"],["users","👥 משתמשים"]].map(([s,l])=>(
               <button key={s} style={{...S.navBtn,flex:1,textAlign:"center",fontSize:12,...(screen===s?S.navActive:{})}} onClick={()=>setScreen(s)}>{l}</button>
             ))}
-            {(loggedInUser?.role==="super_owner"||loggedInUser?.role==="owner") && (
+            {(loggedInUser?.role==="super_owner"||loggedInUser?.role==="owner") && (<>
               <button style={{...S.navBtn,flex:1,textAlign:"center",fontSize:12,...(screen==="tasks"?S.navTasks:{})}} onClick={()=>setScreen("tasks")}>✅ משימות</button>
-            )}
-            {(loggedInUser?.role==="super_owner"||loggedInUser?.role==="owner") && (
               <button style={{...S.navBtn,flex:1,textAlign:"center",fontSize:12,...(screen==="pettycash"?S.navActive:{})}} onClick={()=>setScreen("pettycash")}>💵 קופה</button>
-            )}
-            {(loggedInUser?.role==="super_owner"||loggedInUser?.role==="owner") && (
               <button style={{...S.navBtn,flex:1,textAlign:"center",fontSize:12,...(screen==="employees"?S.navActive:{})}} onClick={()=>setScreen("employees")}>👤 כ״א</button>
-            )}
-            {(loggedInUser?.role==="super_owner"||loggedInUser?.role==="owner") && (
-              <button style={{...S.navBtn,flex:1,textAlign:"center",fontSize:12,...(screen==="employees"?S.navActive:{})}} onClick={()=>setScreen("employees")}>👤 כ״א</button>
-            )}
-
+            </>)}
           </div>
         )}
       </nav>
@@ -2241,7 +2245,7 @@ function PilotDashboard() {
                                 <div style={{minWidth:88}}>
                                   <div style={{fontSize:13,fontWeight:600,color:"#111827"}}>{DOW_NAMES[dow]} {day}/{smM}</div>
                                 </div>
-                                <input type="number" inputMode="numeric" placeholder="₪"
+                                <input type="number" inputMode="decimal" placeholder="₪"
                                   value={val==="0"||val===0?"":val||""}
                                   onChange={e=>setSupPayDate(sup.id,date,e.target.value)}
                                   style={{flex:1,border:`1px solid ${val==="0"||val===0?"#A855F7":paid?"#22C55E":"#D1D5DB"}`,borderRadius:10,padding:"9px 12px",fontSize:14,fontFamily:"inherit",color:"#111827",background:val==="0"||val===0?"#FAF5FF":paid?"#F0FDF4":"#FFFFFF",outline:"none"}}/>
@@ -2259,8 +2263,16 @@ function PilotDashboard() {
                             <summary style={{fontSize:12,color:"#9CA3AF",cursor:"pointer",listStyle:"none",padding:"4px 0"}}>➕ יום אספקה לא מתוכנן</summary>
                             <div style={{marginTop:8,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                               <input type="date" id={`xd-${sup.id}`} style={{flex:"1 1 120px",border:"1px solid #D1D5DB",borderRadius:10,padding:"9px 12px",fontSize:13,fontFamily:"inherit",color:"#111827"}}/>
-                              <input type="number" inputMode="numeric" placeholder="₪" id={`xa-${sup.id}`} style={{flex:"1 1 80px",border:"1px solid #D1D5DB",borderRadius:10,padding:"9px 12px",fontSize:14,fontFamily:"inherit",color:"#111827"}}/>
-                              <button onClick={()=>{const d=document.getElementById(`xd-${sup.id}`).value;const a=document.getElementById(`xa-${sup.id}`).value;if(d&&a)setSupPayDate(sup.id,d,a);}}
+                              <input type="number" inputMode="decimal" placeholder="₪" id={`xa-${sup.id}`} style={{flex:"1 1 80px",border:"1px solid #D1D5DB",borderRadius:10,padding:"9px 12px",fontSize:14,fontFamily:"inherit",color:"#111827"}}/>
+                              <button onClick={()=>{
+                                const d=document.getElementById(`xd-${sup.id}`).value;
+                                const a=document.getElementById(`xa-${sup.id}`).value;
+                                if(d&&a){
+                                  const existing=Number(getSupPay(sup.id,d))||0;
+                                  const newVal=existing+Number(a);
+                                  setSupPayDate(sup.id,d,String(newVal));
+                                  document.getElementById(`xa-${sup.id}`).value="";
+                                }}}
                                 style={{background:"#2563EB",border:"none",borderRadius:10,color:"#fff",padding:"9px 16px",fontWeight:700,cursor:"pointer",fontFamily:"inherit",fontSize:13}}>הוסף</button>
                             </div>
                           </details>
@@ -2633,19 +2645,33 @@ function PilotDashboard() {
             <h2 style={{...S.ct,fontSize:15,color:"#111827",marginBottom:8}}>הוצאות קבועות חודשיות</h2>
             <p style={{color:"#9CA3AF",fontSize:13,margin:"0 0 14px"}}>שכ״ד מחושב אוטומטית לפי {businessConfig.rentType==="fixed" ? `${(businessConfig.rentFixed||0).toLocaleString()} ₪ קבוע` : `${businessConfig.rentPct||0}% ממחזור`}.</p>
             {fixedList.map((f,i)=>(
-              <div key={f.id} style={{marginBottom:8,padding:"10px 12px",background:"#F8FAFC",borderRadius:10,border:"1px solid #0A0A0A"}}>
+              <div key={f.id} style={{marginBottom:8,padding:"10px 12px",background:f.disabled?"#F9FAFB":"#F8FAFC",borderRadius:10,border:`1px solid ${f.disabled?"#E5E7EB":"#0A0A0A"}`,opacity:f.disabled?0.5:1}}>
                 <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6}}>
                   {f.rentPct&&<span style={{fontSize:10,color:"#22C55E",background:"#16653444",padding:"1px 7px",borderRadius:8,flexShrink:0}}>🔗 {businessConfig.rentType==="fixed"?`${(businessConfig.rentFixed||0).toLocaleString()}₪`:`${businessConfig.rentPct||0}%`}</span>}
                   {f.royaltyPct&&businessConfig.hasRoyalty&&<span style={{fontSize:10,color:"#6B7280",background:"#40404044",padding:"1px 7px",borderRadius:8,flexShrink:0}}>🔗 {businessConfig.royaltyPct||0}%</span>}
-                  <input style={{...S.inp,marginBottom:0,flex:1,padding:"6px 10px",fontSize:13}} value={f.name}
+                  <input style={{...S.inp,marginBottom:0,flex:1,padding:"6px 10px",fontSize:13,textDecoration:f.disabled?"line-through":"none",color:f.disabled?"#9CA3AF":"#111827"}} value={f.name}
                     onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,name:e.target.value}:x);setFixedList(u);persist(entries,u);}}/>
+                  {/* כפתור הפעל/בטל */}
+                  <button title={f.disabled?"הפעל הוצאה":"בטל הוצאה זמנית"}
+                    onClick={()=>{const u=fixedList.map((x,j)=>j===i?{...x,disabled:!x.disabled}:x);setFixedList(u);persist(entries,u);}}
+                    style={{background:f.disabled?"#F3F4F6":"#FEF2F2",border:`1px solid ${f.disabled?"#D1D5DB":"#FECACA"}`,borderRadius:8,padding:"4px 8px",cursor:"pointer",fontSize:13,flexShrink:0,color:f.disabled?"#6B7280":"#EF4444"}}>
+                    {f.disabled?"✓ בטל":"✕"}
+                  </button>
+                  {/* כפתור מחיקה — רק להוצאות ידניות (לא שכ״ד/תמלוגים) */}
+                  {!f.rentPct&&!f.royaltyPct&&(
+                    <button title="מחק הוצאה"
+                      onClick={()=>{if(window.confirm(`למחוק "${f.name}"?`)){const u=fixedList.filter((_,j)=>j!==i);setFixedList(u);persist(entries,u);}}}
+                      style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:8,padding:"4px 8px",cursor:"pointer",fontSize:13,flexShrink:0,color:"#EF4444"}}>
+                      🗑
+                    </button>
+                  )}
                 </div>
                 <div style={{display:"flex",gap:8,alignItems:"center"}}>
                   {f.rentPct
                     ? <div style={{...S.inp,padding:"6px 10px",flex:1,marginBottom:0,color:"#22C55E",fontSize:13}}>≈ {businessConfig.rentType==="fixed"?fmt(businessConfig.rentFixed||0):fmt(Math.round(metrics.totalSales*(businessConfig.rentPct||0)/100))}</div>
                     : f.royaltyPct
                     ? <div style={{...S.inp,padding:"6px 10px",flex:1,marginBottom:0,color:"#6B7280",fontSize:13}}>≈ {fmt(Math.round(metrics.totalSales*(businessConfig.royaltyPct||0)/100))}</div>
-                    : <input style={{...S.inp,padding:"6px 10px",flex:1,marginBottom:0}} type="number" placeholder="₪" value={f.amount||""}
+                    : <input style={{...S.inp,padding:"6px 10px",flex:1,marginBottom:0}} type="number" inputMode="decimal" placeholder="₪" value={f.amount||""}
                         onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,amount:Number(e.target.value)}:x);setFixedList(u);persist(entries,u);}}/>
                   }
                   <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
@@ -3029,6 +3055,7 @@ function PettyCashScreen({ items, saveItems }) {
 }
 
 function MasterTasksScreen({ tasks, saveTasks }) {
+  const SHIFT_LABEL = t => t.shift==="שבועי" ? `📅 ${t.weekday||""}` : t.shift||"";
   const [adding, setAdding]   = useState(false);
   const [editing, setEditing] = useState(null); // task id being edited
   const [form, setForm]       = useState({ title:"", category:"פתיחה", shift:"כל המשמרות", note:"" });
