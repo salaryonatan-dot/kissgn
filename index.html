@@ -1428,8 +1428,46 @@ function PilotDashboard() {
     })();
     // Live listeners -- fire immediately with current value AND on every change
     sub(`biz:${currentBizId}:entries`, (val) => {
-      // Only update if we received a non-empty array, or entries is currently empty
-      if(Array.isArray(val) && (val.length > 0 || true)) setEntries(val);
+      if(!Array.isArray(val)) return;
+      // Merge duplicates by date — combine all fields, prefer non-zero values
+      const mergeEntries = (a, b) => {
+        const merged = {...a};
+        Object.keys(b).forEach(k => {
+          if(k === 'date') return;
+          if(k === 'supplier_payments') {
+            // Merge supplier payments — sum amounts for same supplier
+            const ap = a.supplier_payments || {};
+            const bp = b.supplier_payments || {};
+            const sp = {...ap};
+            Object.keys(bp).forEach(sid => {
+              sp[sid] = (Number(sp[sid])||0) + (Number(bp[sid])||0);
+            });
+            merged.supplier_payments = sp;
+          } else if(typeof b[k] === 'number') {
+            // For numeric fields: take whichever is non-zero, or sum if both non-zero
+            if(!merged[k] || merged[k] === 0) merged[k] = b[k];
+          } else if(b[k] && !merged[k]) {
+            merged[k] = b[k];
+          }
+        });
+        return merged;
+      };
+      const seen = new Map();
+      val.forEach(e => {
+        if(!e?.date) return;
+        if(seen.has(e.date)) {
+          seen.set(e.date, mergeEntries(seen.get(e.date), e));
+        } else {
+          seen.set(e.date, e);
+        }
+      });
+      const deduped = [...seen.values()].sort((a,b)=>a.date.localeCompare(b.date));
+      setEntries(deduped);
+      // If duplicates were found — write merged version back to Firebase
+      if(deduped.length < val.length) {
+        console.log(`[dedup] merged ${val.length - deduped.length} duplicate entries, saving back`);
+        window.storage.set(`biz:${currentBizId}:entries`, JSON.stringify(deduped), true).catch(()=>{});
+      }
     });
     sub(`biz:${currentBizId}:fixed`,     setFixedList);
     sub(`biz:${currentBizId}:suppliers`, setSuppliers);
