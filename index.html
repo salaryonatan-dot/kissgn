@@ -717,14 +717,18 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
           } else throw createErr;
         }
         const uLower2 = form.username.trim().toLowerCase();
-        await window._rtdbSet(`tenants/${tenantId}/lookup/${uLower2}`, { email: placeholderEmail, firebaseUid });
-        await window._rtdbSet(`username_index/${uLower2}`, { tenantId, email: placeholderEmail });
-        await window._rtdbSet(`tenants/${tenantId}/members/${firebaseUid}`, true);
-        await window._rtdbSet(`tenants/${tenantId}/roles/${firebaseUid}`, form.role);
-        await window._rtdbSet(`user_tenants/${firebaseUid}`, tenantId);
+        // Write each path independently — some may be blocked by RTDB rules
+        const safeWrite = async (path, val) => {
+          try { await window._rtdbSet(path, val); } catch(_) {}
+        };
+        await safeWrite(`tenants/${tenantId}/lookup/${uLower2}`, { email: placeholderEmail, firebaseUid });
+        await safeWrite(`username_index/${uLower2}`, { tenantId, email: placeholderEmail });
+        await safeWrite(`tenants/${tenantId}/members/${firebaseUid}`, true);
+        await safeWrite(`tenants/${tenantId}/roles/${firebaseUid}`, form.role);
+        await safeWrite(`user_tenants/${firebaseUid}`, tenantId);
         const newUser = {id:Date.now(), name:form.name.trim(), username:form.username.trim(),
           email: placeholderEmail, role:form.role, firebaseUid, allowedBizIds,
-          mustCompleteProfile: true}; // ← flag for first-login flow
+          mustCompleteProfile: true};
         saveUsers([...users, newUser]);
       }
       resetForm();
@@ -1966,16 +1970,19 @@ function PilotDashboard() {
           );
           setAppUsers(updatedUsers);
           setLoggedInUser(updatedUser);
-          // Update username_index with real email
+          // Now the user is authenticated — repair any RTDB writes that failed during creation
+          const safeWrite = async (path, val) => {
+            try { await window._rtdbSet(path, val); } catch(_) {}
+          };
           if(loggedInUser.username && window._currentTenantId) {
-            try {
-              await window._rtdbSet(`username_index/${loggedInUser.username.toLowerCase()}`, {
-                tenantId: window._currentTenantId, email
-              });
-              await window._rtdbSet(`tenants/${window._currentTenantId}/lookup/${loggedInUser.username.toLowerCase()}`, {
-                email, firebaseUid: loggedInUser.firebaseUid
-              });
-            } catch(_) {}
+            const uname = loggedInUser.username.toLowerCase();
+            const tid   = window._currentTenantId;
+            const uid   = loggedInUser.firebaseUid;
+            await safeWrite(`username_index/${uname}`, { tenantId: tid, email });
+            await safeWrite(`tenants/${tid}/lookup/${uname}`, { email, firebaseUid: uid });
+            await safeWrite(`tenants/${tid}/members/${uid}`, true);
+            await safeWrite(`tenants/${tid}/roles/${uid}`, loggedInUser.role);
+            await safeWrite(`user_tenants/${uid}`, tid);
           }
           try { await window.storage.set("app-users", JSON.stringify(updatedUsers), true); } catch(_) {}
           setMustCompleteProfile(false);
