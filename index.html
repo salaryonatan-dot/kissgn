@@ -34,7 +34,8 @@
     import { initializeApp, initializeApp as initializeApp2 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { getDatabase, ref, get, set, remove, onValue, forceWebSockets } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
     import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
-             sendPasswordResetEmail, onAuthStateChanged, signOut, updateProfile }
+             sendPasswordResetEmail, onAuthStateChanged, signOut, updateProfile,
+             updateEmail, updatePassword }
              from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
     import { initializeAppCheck, ReCaptchaV3Provider } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app-check.js";
 
@@ -109,6 +110,18 @@
     // Update user display name (used for tenant discovery)
     window.firebaseUpdateDisplayName = async (user, name) => {
       try { await updateProfile(user, { displayName: name }); } catch(_){}
+    };
+
+    // Update email for current logged-in user (used on first login profile completion)
+    window.firebaseUpdateEmail = async (newEmail) => {
+      if (!_user) throw new Error("not authenticated");
+      await updateEmail(_user, newEmail);
+    };
+
+    // Update password for current logged-in user
+    window.firebaseUpdatePassword = async (newPassword) => {
+      if (!_user) throw new Error("not authenticated");
+      await updatePassword(_user, newPassword);
     };
 
     // Sign out
@@ -659,11 +672,11 @@ function LoginScreen({ onLogin, tenantId }) {
 function UserManagement({ users, saveUsers, tenantId, businesses }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId,  setEditId]  = useState(null);
-  const [form, setForm] = useState({name:"",username:"",email:"",password:"",role:"manager",allowedBizIds:[]});
+  const [form, setForm] = useState({name:"",username:"",password:"",role:"manager",allowedBizIds:[]});
   const [err,  setErr]  = useState("");
   const [saving, setSaving] = useState(false);
 
-  const resetForm = () => { setForm({name:"",username:"",email:"",password:"",role:"manager",allowedBizIds:[]}); setErr(""); setShowAdd(false); setEditId(null); };
+  const resetForm = () => { setForm({name:"",username:"",password:"",role:"manager",allowedBizIds:[]}); setErr(""); setShowAdd(false); setEditId(null); };
 
   const toggleBiz = (bizId) => {
     setForm(f => ({
@@ -674,49 +687,44 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
     }));
   };
 
-  // super_owner/owner always have access to all -- no allowedBizIds needed
   const needsBizAccess = form.role !== "super_owner" && form.role !== "owner";
 
   const save = async () => {
     if(!form.name.trim()||!form.username.trim()) return setErr("יש למלא שם ושם משתמש");
-    if(!editId && (!form.email.trim()||!form.password)) return setErr("יש למלא מייל וסיסמה");
+    if(!editId && !form.password) return setErr("יש להזין סיסמה ראשונית");
+    if(!editId && form.password.length < 6) return setErr("סיסמה חייבת להיות לפחות 6 תווים");
     if(users.find(u=>u.username===form.username.trim()&&u.id!==editId)) return setErr("שם משתמש כבר קיים");
-    if(!editId && users.find(u=>u.email===form.email.trim())) return setErr("מייל כבר קיים");
     if(needsBizAccess && form.allowedBizIds.length===0 && businesses.length>1) return setErr("יש לבחור לפחות עסק אחד");
     setSaving(true); setErr("");
     try {
       const allowedBizIds = needsBizAccess
         ? (businesses.length === 1 ? [businesses[0].id] : form.allowedBizIds)
-        : null; // null = all businesses
+        : null;
       if(editId) {
         saveUsers(users.map(u=>u.id===editId
           ? {...u, name:form.name, username:form.username.trim(), role:form.role, allowedBizIds}
           : u));
       } else {
+        // Use placeholder email — user will set real email on first login
+        const placeholderEmail = `${form.username.trim().toLowerCase()}@marjin-user.app`;
         let firebaseUid;
         try {
-          firebaseUid = await window.firebaseCreateUser(form.email.trim(), form.password);
+          firebaseUid = await window.firebaseCreateUser(placeholderEmail, form.password);
         } catch(createErr) {
           if(createErr.code === "auth/email-already-in-use") {
-            // User exists in Firebase Auth -- use secondary app to get uid without displacing admin
-            try {
-              firebaseUid = await window.firebaseGetUidBySignIn(form.email.trim(), form.password);
-            } catch(signInErr) {
-              setErr("המשתמש קיים ב-Firebase אך הסיסמה שגויה -- הזן את הסיסמה המקורית שלו");
-              setSaving(false); return;
-            }
-          } else {
-            throw createErr;
-          }
+            setErr("שם משתמש כבר קיים במערכת — נסה שם אחר");
+            setSaving(false); return;
+          } else throw createErr;
         }
         const uLower2 = form.username.trim().toLowerCase();
-        await window._rtdbSet(`tenants/${tenantId}/lookup/${uLower2}`, { email: form.email.trim(), firebaseUid });
-        await window._rtdbSet(`username_index/${uLower2}`, { tenantId, email: form.email.trim() });
+        await window._rtdbSet(`tenants/${tenantId}/lookup/${uLower2}`, { email: placeholderEmail, firebaseUid });
+        await window._rtdbSet(`username_index/${uLower2}`, { tenantId, email: placeholderEmail });
         await window._rtdbSet(`tenants/${tenantId}/members/${firebaseUid}`, true);
         await window._rtdbSet(`tenants/${tenantId}/roles/${firebaseUid}`, form.role);
         await window._rtdbSet(`user_tenants/${firebaseUid}`, tenantId);
         const newUser = {id:Date.now(), name:form.name.trim(), username:form.username.trim(),
-          email:form.email.trim(), role:form.role, firebaseUid, allowedBizIds};
+          email: placeholderEmail, role:form.role, firebaseUid, allowedBizIds,
+          mustCompleteProfile: true}; // ← flag for first-login flow
         saveUsers([...users, newUser]);
       }
       resetForm();
@@ -745,6 +753,7 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
     delBtn:{background:"none",border:"none",color:"#D1D5DB",cursor:"pointer",fontSize:18,padding:"4px 6px"},
     editBtn:{background:"#F1F5F9",border:"1px solid #E5E7EB",borderRadius:8,padding:"5px 10px",color:"#6B7280",cursor:"pointer",fontFamily:"inherit",fontSize:12,fontWeight:600},
     err:{color:"#EF4444",fontSize:12,marginBottom:8,fontWeight:600},
+    hint:{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:10,padding:"10px 13px",fontSize:12,color:"#1D4ED8",marginBottom:12,lineHeight:1.5},
   };
 
   return (
@@ -753,7 +762,14 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
       {users.map(u=>(
         <div key={u.id} style={UM.card}>
           <div style={{flex:1}}>
-            <div style={{fontWeight:700,color:"#111827",fontSize:14}}>{u.name}</div>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{fontWeight:700,color:"#111827",fontSize:14}}>{u.name}</div>
+              {u.mustCompleteProfile && (
+                <span style={{fontSize:10,background:"#FEF9C3",border:"1px solid #FDE047",color:"#854D0E",borderRadius:6,padding:"1px 7px",fontWeight:700}}>
+                  ⏳ טרם הושלם
+                </span>
+              )}
+            </div>
             <div style={{fontSize:12,color:"#9CA3AF",marginTop:2}}>@{u.username}</div>
           </div>
           <span style={{...UM.roleBadge,color:ROLES[u.role]?.color||"#6B7280",background:ROLES[u.role]?.bg||"#F9FAFB"}}>
@@ -773,15 +789,18 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
       {showAdd ? (
         <div style={UM.addForm}>
           <div style={{fontWeight:700,color:"#111827",fontSize:15,marginBottom:14}}>{editId?"עריכת משתמש":"הוספת משתמש"}</div>
+          {!editId && (
+            <div style={UM.hint}>
+              💡 המשתמש יתבקש להזין מייל וסיסמה חדשה בכניסה הראשונה שלו
+            </div>
+          )}
           {err && <div style={UM.err}>{err}</div>}
           <label style={UM.lbl}>שם מלא</label>
           <input style={UM.inp} placeholder="ישראל ישראלי" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))}/>
           <label style={UM.lbl}>שם משתמש</label>
           <input style={UM.inp} placeholder="username" autoCapitalize="none" value={form.username} onChange={e=>setForm(f=>({...f,username:e.target.value}))} disabled={!!editId}/>
           {!editId && <>
-            <label style={UM.lbl}>כתובת מייל (לשחזור סיסמה)</label>
-            <input style={{...UM.inp,direction:"ltr"}} type="email" placeholder="user@example.com" value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))}/>
-            <label style={UM.lbl}>סיסמה ראשונית (מינימום 6 תווים)</label>
+            <label style={UM.lbl}>סיסמה ראשונית (לפחות 6 תווים)</label>
             <input style={UM.inp} type="password" placeholder="••••••" value={form.password} onChange={e=>setForm(f=>({...f,password:e.target.value}))}/>
           </>}
           <label style={UM.lbl}>תפקיד</label>
@@ -804,13 +823,128 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
             </div>
           )}
           <div style={{display:"flex",gap:8,marginTop:4}}>
-            <button style={UM.saveBtn} onClick={save}>שמור</button>
+            <button style={UM.saveBtn} onClick={save} disabled={saving}>{saving?"שומר...":"שמור"}</button>
             <button style={UM.cancelBtn} onClick={resetForm}>ביטול</button>
           </div>
         </div>
       ) : (
         <button style={UM.addBtn} onClick={()=>{setShowAdd(true);setEditId(null);}}>+ הוסף משתמש</button>
       )}
+    </div>
+  );
+}
+
+// ─── Profile Completion Screen (first login) ──────────────────────────────────
+function ProfileCompletionScreen({ user, onComplete }) {
+  const [email,    setEmail]    = useState("");
+  const [pass,     setPass]     = useState("");
+  const [pass2,    setPass2]    = useState("");
+  const [showPass, setShowPass] = useState(false);
+  const [err,      setErr]      = useState("");
+  const [loading,  setLoading]  = useState(false);
+  const [step,     setStep]     = useState(1); // 1=welcome, 2=form
+
+  const save = async () => {
+    if(!email.trim()) return setErr("יש להזין כתובת מייל");
+    if(!/^[^@]+@[^@]+\.[^@]+$/.test(email.trim())) return setErr("כתובת מייל לא תקינה");
+    if(!pass) return setErr("יש לבחור סיסמה חדשה");
+    if(pass.length < 6) return setErr("סיסמה חייבת להיות לפחות 6 תווים");
+    if(pass !== pass2) return setErr("הסיסמאות אינן תואמות");
+    setLoading(true); setErr("");
+    try {
+      // Update Firebase Auth email + password
+      await window.firebaseUpdateEmail(email.trim());
+      await window.firebaseUpdatePassword(pass);
+      // Update user record
+      onComplete({ email: email.trim() });
+    } catch(e) {
+      const msg = e.code === "auth/email-already-in-use"
+        ? "כתובת המייל כבר בשימוש -- נסה כתובת אחרת"
+        : e.code === "auth/invalid-email"
+        ? "כתובת מייל לא תקינה"
+        : e.message || "שגיאה בשמירת הפרטים";
+      setErr(msg);
+    }
+    setLoading(false);
+  };
+
+  const L = {
+    root:{minHeight:"100vh",background:"linear-gradient(135deg,#EFF6FF 0%,#F0FDF4 100%)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"24px",fontFamily:"inherit",direction:"rtl"},
+    box:{background:"#FFFFFF",borderRadius:24,padding:"36px 28px",width:"100%",maxWidth:380,boxShadow:"0 8px 40px #00000015",border:"1px solid #E5E7EB"},
+    emoji:{fontSize:52,textAlign:"center",marginBottom:12,display:"block"},
+    title:{fontSize:22,fontWeight:900,color:"#111827",textAlign:"center",margin:"0 0 6px"},
+    sub:{fontSize:14,color:"#6B7280",textAlign:"center",margin:"0 0 24px",lineHeight:1.5},
+    name:{fontSize:18,fontWeight:800,color:"#2563EB",textAlign:"center",margin:"0 0 20px",padding:"12px 20px",background:"#EFF6FF",borderRadius:12,border:"1px solid #BFDBFE"},
+    lbl:{fontSize:13,color:"#6B7280",marginBottom:6,display:"block",fontWeight:600},
+    inp:{width:"100%",border:"1px solid #D1D5DB",borderRadius:12,padding:"14px",color:"#111827",fontSize:15,fontFamily:"inherit",outline:"none",boxSizing:"border-box",marginBottom:12,background:"#F8FAFC"},
+    passWrap:{position:"relative",marginBottom:12},
+    passInp:{width:"100%",border:"1px solid #D1D5DB",borderRadius:12,padding:"14px 44px 14px 14px",color:"#111827",fontSize:15,fontFamily:"inherit",outline:"none",boxSizing:"border-box",background:"#F8FAFC"},
+    eyeBtn:{position:"absolute",left:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",color:"#9CA3AF",fontSize:18,padding:4},
+    btn:{width:"100%",padding:"16px",background:"#2563EB",border:"none",borderRadius:14,color:"#FFFFFF",fontWeight:800,fontSize:16,cursor:"pointer",fontFamily:"inherit"},
+    err:{color:"#EF4444",fontSize:13,textAlign:"center",marginBottom:12,fontWeight:600},
+    steps:{display:"flex",gap:6,justifyContent:"center",marginBottom:24},
+    stepDot:{width:8,height:8,borderRadius:"50%"},
+  };
+
+  if(step === 1) return (
+    <div style={L.root}>
+      <div style={L.box}>
+        <span style={L.emoji}>👋</span>
+        <h2 style={L.title}>ברוך הבא, {user.name}!</h2>
+        <p style={L.sub}>בכניסה הראשונה נבקש ממך להגדיר מייל וסיסמה אישית</p>
+        <div style={L.name}>@{user.username}</div>
+        <div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:12,padding:"14px 16px",marginBottom:20}}>
+          <div style={{fontSize:13,color:"#166534",fontWeight:700,marginBottom:6}}>מה נגדיר עכשיו?</div>
+          {[
+            {icon:"📧", text:"כתובת מייל לשחזור סיסמה"},
+            {icon:"🔐", text:"סיסמה אישית שרק אתה יודע"},
+          ].map((item,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",gap:10,fontSize:13,color:"#166534",marginBottom:i===0?6:0}}>
+              <span>{item.icon}</span><span>{item.text}</span>
+            </div>
+          ))}
+        </div>
+        <button style={L.btn} onClick={()=>setStep(2)}>בואו נתחיל ←</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={L.root}>
+      <div style={L.box}>
+        <div style={L.steps}>
+          <div style={{...L.stepDot,background:"#BBF7D0"}}/>
+          <div style={{...L.stepDot,background:"#2563EB"}}/>
+        </div>
+        <span style={{...L.emoji,fontSize:38}}>🔐</span>
+        <h2 style={{...L.title,fontSize:20,marginBottom:4}}>הגדרת פרטים אישיים</h2>
+        <p style={{...L.sub,fontSize:13,marginBottom:20}}>פרטים אלו שמורים אצלך בלבד</p>
+
+        <label style={L.lbl}>📧 כתובת מייל (לשחזור סיסמה)</label>
+        <input style={{...L.inp,direction:"ltr"}} type="email" placeholder="your@email.com"
+          value={email} onChange={e=>{setEmail(e.target.value);setErr("");}}
+          onKeyDown={e=>e.key==="Enter"&&save()}/>
+
+        <label style={L.lbl}>🔑 סיסמה חדשה</label>
+        <div style={L.passWrap}>
+          <input style={L.passInp} type={showPass?"text":"password"} placeholder="לפחות 6 תווים"
+            value={pass} onChange={e=>{setPass(e.target.value);setErr("");}}/>
+          <button style={L.eyeBtn} onClick={()=>setShowPass(p=>!p)}>{showPass?"🙈":"👁"}</button>
+        </div>
+
+        <label style={L.lbl}>✅ אימות סיסמה</label>
+        <input style={{...L.inp,border:`1px solid ${pass2&&pass2!==pass?"#EF4444":pass2?"#22C55E":"#D1D5DB"}`}}
+          type="password" placeholder="הכנס שוב"
+          value={pass2} onChange={e=>{setPass2(e.target.value);setErr("");}}
+          onKeyDown={e=>e.key==="Enter"&&save()}/>
+        {pass2 && pass2!==pass && <div style={{fontSize:12,color:"#EF4444",marginTop:-8,marginBottom:8}}>הסיסמאות אינן תואמות</div>}
+        {pass2 && pass2===pass && <div style={{fontSize:12,color:"#22C55E",marginTop:-8,marginBottom:8}}>✓ הסיסמאות תואמות</div>}
+
+        {err && <div style={L.err}>{err}</div>}
+        <button style={{...L.btn,opacity:loading?0.6:1}} onClick={loading?null:save} disabled={loading}>
+          {loading?"שומר...":"💾 שמור וכנס למערכת"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1267,6 +1401,7 @@ function PilotDashboard() {
   const [masterTasks, setMasterTasks] = useState([]);
   const [pettyCash, setPettyCash] = useState([]);
   const [loggedInUser, setLoggedInUser] = useState(null);
+  const [mustCompleteProfile, setMustCompleteProfile] = useState(false);
   const [appUsers, setAppUsers]     = useState([]);
   const [setupDone, setSetupDone] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
@@ -1769,6 +1904,10 @@ function PilotDashboard() {
         tenantId={currentBizId || businesses[0]?.id}
         onLogin={(user)=>{
           setLoggedInUser(user);
+          // First-login flow: user hasn't set real email/password yet
+          if(user.mustCompleteProfile) {
+            setMustCompleteProfile(true);
+          }
           if(user._tenantId) {
             window._currentTenantId = user._tenantId;
           }
@@ -1809,6 +1948,37 @@ function PilotDashboard() {
             setCurrentBizId(businesses[0].id);
           }
           if(user.role==="staff") setScreen("shifts");
+        }}
+      />
+    );
+  }
+
+  // First login — complete profile (email + new password)
+  if(loaded && loggedInUser && mustCompleteProfile) {
+    return (
+      <ProfileCompletionScreen
+        user={loggedInUser}
+        onComplete={async ({ email }) => {
+          // Update user record in Firebase
+          const updatedUser = { ...loggedInUser, email, mustCompleteProfile: false };
+          const updatedUsers = appUsers.map(u =>
+            u.id === loggedInUser.id ? updatedUser : u
+          );
+          setAppUsers(updatedUsers);
+          setLoggedInUser(updatedUser);
+          // Update username_index with real email
+          if(loggedInUser.username && window._currentTenantId) {
+            try {
+              await window._rtdbSet(`username_index/${loggedInUser.username.toLowerCase()}`, {
+                tenantId: window._currentTenantId, email
+              });
+              await window._rtdbSet(`tenants/${window._currentTenantId}/lookup/${loggedInUser.username.toLowerCase()}`, {
+                email, firebaseUid: loggedInUser.firebaseUid
+              });
+            } catch(_) {}
+          }
+          try { await window.storage.set("app-users", JSON.stringify(updatedUsers), true); } catch(_) {}
+          setMustCompleteProfile(false);
         }}
       />
     );
