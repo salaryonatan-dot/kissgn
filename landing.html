@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Marjin — ניהול מסעדות חכם</title>
+  <meta name="description" content="פוד קוסט, לייבור, ספקים ותחזית — הכל במסך אחד. לדעת את המספרים שלך לפני שהם מפתיעים אותך."/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Heebo', sans-serif;
+      background: #0A0A0F;
+      color: #F8FAFC;
+      direction: rtl;
+      overflow-x: hidden;
+    }
+
+    /* ── CSS Variables ── */
+    :root {
+      --indigo: #6366F1;
+      --indigo-light: #818CF8;
+      --indigo-dim: rgba(99,102,241,.15);
+      --slate: #1E293B;
+      --slate-light: #334155;
+      --muted: #64748B;
+      --faint: #94A3B8;
+      --white: #F8FAFC;
+      --green: #10B981;
+      --amber: #F59E0B;
+    }
+
+    /* ── Noise texture overlay ── */
+    body::before {
+      content: '';
+      position: fixed; inset: 0; z-index: 0; pointer-events: none;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+      opacity: .4;
+    }
+
+    /* ── Glow blobs ── */
+    .blob1 {
+      position: fixed; width: 600px; height: 600px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(99,102,241,.18) 0%, transparent 70%);
+      top: -200px; right: -200px; pointer-events: none; z-index: 0;
+      animation: blobFloat 8s ease-in-out infinite;
+    }
+    .blob2 {
+      position: fixed; width: 400px; height: 400px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(16,185,129,.1) 0%, transparent 70%);
+      bottom: 100px; left: -100px; pointer-events: none; z-index: 0;
+      animation: blobFloat 10s ease-in-out infinite reverse;
+    }
+    @keyframes blobFloat {
+      0%, 100% { transform: translateY(0) scale(1); }
+      50% { transform: translateY(-30px) scale(1.05); }
+    }
+
+    /* ── Layout ── */
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
+
+    /* ── NAV ── */
+    nav {
+      position: sticky; top: 0; z-index: 100;
+      padding: 16px 0;
+      background: rgba(10,10,15,.8);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid rgba(255,255,255,.06);
+    }
+    .nav-inner { display: flex; align-items: center; justify-content: space-between; }
+    .nav-logo { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+    .nav-logo-mark {
+      width: 32px; height: 32px; background: var(--indigo); border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; font-weight: 800; color: white; letter-spacing: -0.5px;
+    }
+    .nav-logo-text { font-size: 18px; font-weight: 800; color: white; letter-spacing: -0.5px; }
+    .nav-actions { display: flex; gap: 10px; align-items: center; }
+    .btn-ghost {
+      padding: 8px 18px; background: transparent; border: 1px solid rgba(255,255,255,.15);
+      border-radius: 10px; color: #94A3B8; font-size: 13px; font-weight: 500;
+      cursor: pointer; font-family: inherit; text-decoration: none;
+      transition: all .2s;
+    }
+    .btn-ghost:hover { border-color: rgba(255,255,255,.3); color: white; }
+    .btn-primary {
+      padding: 9px 22px; background: var(--indigo); border: none;
+      border-radius: 10px; color: white; font-size: 13px; font-weight: 700;
+      cursor: pointer; font-family: inherit; text-decoration: none;
+      transition: all .2s; box-shadow: 0 0 24px rgba(99,102,241,.4);
+    }
+    .btn-primary:hover { background: var(--indigo-light); box-shadow: 0 0 32px rgba(99,102,241,.6); transform: translateY(-1px); }
+
+    /* ── HERO ── */
+    .hero {
+      padding: 100px 0 80px;
+      text-align: center;
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--indigo-dim); border: 1px solid rgba(99,102,241,.3);
+      border-radius: 999px; padding: 6px 16px; font-size: 12px;
+      color: var(--indigo-light); font-weight: 600; letter-spacing: .3px;
+      margin-bottom: 28px;
+      animation: fadeUp .5s ease both;
+    }
+    .hero-badge::before { content: ''; width: 6px; height: 6px; background: var(--indigo-light); border-radius: 50%; animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    @keyframes fadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:none} }
+
+    .hero h1 {
+      font-size: clamp(36px, 7vw, 72px);
+      font-weight: 900;
+      line-height: 1.1;
+      letter-spacing: -2.5px;
+      margin-bottom: 20px;
+      animation: fadeUp .5s .1s ease both;
+    }
+    .hero h1 em { font-style: normal; color: var(--indigo-light); }
+    .hero-sub {
+      font-size: clamp(16px, 2.5vw, 20px);
+      color: var(--faint);
+      line-height: 1.7;
+      max-width: 560px;
+      margin: 0 auto 40px;
+      font-weight: 400;
+      animation: fadeUp .5s .2s ease both;
+    }
+    .hero-ctas {
+      display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;
+      animation: fadeUp .5s .3s ease both;
+    }
+    .btn-hero-main {
+      padding: 16px 36px;
+      background: var(--indigo);
+      border: none; border-radius: 14px;
+      color: white; font-size: 16px; font-weight: 800;
+      cursor: pointer; font-family: inherit; text-decoration: none;
+      box-shadow: 0 0 40px rgba(99,102,241,.5);
+      transition: all .2s; letter-spacing: -.3px;
+      display: inline-flex; align-items: center; gap: 8px;
+    }
+    .btn-hero-main:hover { transform: translateY(-2px); box-shadow: 0 0 60px rgba(99,102,241,.7); }
+    .btn-hero-sec {
+      padding: 16px 28px;
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 14px; color: #CBD5E1; font-size: 15px; font-weight: 600;
+      cursor: pointer; font-family: inherit; text-decoration: none;
+      transition: all .2s; letter-spacing: -.2px;
+    }
+    .btn-hero-sec:hover { background: rgba(255,255,255,.1); color: white; border-color: rgba(255,255,255,.2); }
+    .hero-note { font-size: 12px; color: #475569; margin-top: 16px; animation: fadeUp .5s .4s ease both; }
+
+    /* ── MOCK DASHBOARD ── */
+    .dash-mock-wrap {
+      margin: 60px auto 0;
+      max-width: 860px;
+      animation: fadeUp .6s .4s ease both;
+    }
+    .dash-mock {
+      background: #111827;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 0 40px 100px rgba(0,0,0,.6), 0 0 0 1px rgba(99,102,241,.15);
+    }
+    .mock-bar {
+      background: #0F172A;
+      border-bottom: 1px solid rgba(255,255,255,.06);
+      padding: 12px 20px;
+      display: flex; align-items: center; gap: 12px;
+    }
+    .mock-dots { display: flex; gap: 6px; }
+    .mock-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .mock-title { font-size: 12px; color: #475569; flex: 1; text-align: center; }
+    .mock-body { padding: 20px; display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+    .mock-kpi { background: #1E293B; border-radius: 12px; padding: 16px; }
+    .mock-kpi-lbl { font-size: 9px; color: #475569; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+    .mock-kpi-val { font-size: 20px; font-weight: 800; letter-spacing: -1px; }
+    .mock-kpi-sub { font-size: 10px; color: #475569; margin-top: 4px; }
+    .mock-hero-row { grid-column: 1/-1; }
+    .mock-hero { background: linear-gradient(135deg,#1E3A5F,#1E293B); border-radius: 14px; padding: 20px 24px; border: 1px solid rgba(99,102,241,.2); }
+    .mock-hero-num { font-size: 36px; font-weight: 900; letter-spacing: -2px; color: white; }
+    .mock-prog { height: 6px; background: rgba(255,255,255,.1); border-radius: 999px; margin: 12px 0 6px; overflow: hidden; }
+    .mock-prog-fill { height: 100%; background: linear-gradient(90deg, #6366F1, #818CF8); border-radius: 999px; width: 62%; }
+    .mock-chart-row { grid-column: 1/-1; }
+    .mock-chart { background: #1E293B; border-radius: 12px; padding: 16px; height: 100px; display: flex; align-items: flex-end; gap: 4px; }
+    .mock-bar-el { background: rgba(99,102,241,.3); border-radius: 3px 3px 0 0; flex: 1; transition: background .3s; }
+    .mock-bar-el:hover { background: rgba(99,102,241,.8); }
+
+    /* ── SECTION HEADER ── */
+    .section { padding: 80px 0; }
+    .section-label { font-size: 11px; color: var(--indigo-light); font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 14px; }
+    .section-title { font-size: clamp(26px, 4vw, 42px); font-weight: 800; letter-spacing: -1.5px; line-height: 1.2; margin-bottom: 16px; }
+    .section-sub { font-size: 16px; color: var(--faint); line-height: 1.7; max-width: 520px; }
+
+    /* ── FEATURES GRID ── */
+    .features-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 48px; }
+    @media (max-width: 640px) { .features-grid { grid-template-columns: 1fr; } }
+    .feature-card {
+      background: rgba(30,41,59,.6);
+      border: 1px solid rgba(255,255,255,.07);
+      border-radius: 18px; padding: 28px;
+      transition: all .25s;
+      position: relative; overflow: hidden;
+    }
+    .feature-card::before {
+      content: ''; position: absolute; inset: 0; border-radius: 18px;
+      background: radial-gradient(ellipse at top right, var(--card-glow, rgba(99,102,241,.08)), transparent 60%);
+      pointer-events: none;
+    }
+    .feature-card:hover { border-color: rgba(99,102,241,.25); transform: translateY(-3px); box-shadow: 0 20px 40px rgba(0,0,0,.4); }
+    .feature-icon {
+      width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+      margin-bottom: 18px; font-size: 22px;
+    }
+    .feature-title { font-size: 17px; font-weight: 700; margin-bottom: 8px; letter-spacing: -.3px; }
+    .feature-body { font-size: 14px; color: var(--faint); line-height: 1.7; }
+    .feature-metric {
+      display: inline-flex; align-items: center; gap: 6px; margin-top: 14px;
+      background: rgba(16,185,129,.1); border: 1px solid rgba(16,185,129,.2);
+      border-radius: 999px; padding: 4px 12px; font-size: 12px; color: var(--green); font-weight: 600;
+    }
+
+    /* ── AI SECTION ── */
+    .ai-section { padding: 80px 0; }
+    .ai-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center; margin-top: 48px; }
+    @media (max-width: 640px) { .ai-grid { grid-template-columns: 1fr; } .ai-mock-side { order: -1; } }
+    .ai-chat-mock {
+      background: #111827; border: 1px solid rgba(255,255,255,.08); border-radius: 18px;
+      overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.5);
+    }
+    .ai-chat-header { background: #0F172A; padding: 14px 18px; border-bottom: 1px solid rgba(255,255,255,.06); display: flex; align-items: center; gap: 10px; }
+    .ai-chat-logo { width: 24px; height: 24px; background: var(--indigo); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: white; }
+    .ai-chat-title { font-size: 13px; font-weight: 600; color: #94A3B8; }
+    .ai-chat-body { padding: 20px 16px; display: flex; flex-direction: column; gap: 12px; }
+    .ai-q { background: rgba(99,102,241,.15); border: 1px solid rgba(99,102,241,.2); border-radius: 12px 12px 4px 12px; padding: 11px 14px; font-size: 13px; color: #C7D2FE; align-self: flex-end; max-width: 85%; }
+    .ai-a { background: rgba(30,41,59,.8); border: 1px solid rgba(255,255,255,.07); border-radius: 4px 12px 12px 12px; padding: 11px 14px; font-size: 13px; color: #CBD5E1; max-width: 90%; line-height: 1.6; }
+    .ai-a strong { color: var(--indigo-light); }
+    .ai-chip-row { display: flex; gap: 7px; flex-wrap: wrap; padding: 0 16px 16px; }
+    .ai-chip-mock { background: rgba(30,41,59,.8); border: 1px solid rgba(255,255,255,.1); border-radius: 999px; padding: 6px 13px; font-size: 11px; color: #64748B; }
+
+    /* ── SOCIAL PROOF ── */
+    .proof-row { display: flex; gap: 40px; margin-top: 60px; flex-wrap: wrap; }
+    .proof-item { }
+    .proof-num { font-size: 36px; font-weight: 900; letter-spacing: -1.5px; color: white; }
+    .proof-num span { color: var(--indigo-light); }
+    .proof-label { font-size: 13px; color: var(--faint); margin-top: 4px; }
+
+    /* ── FINAL CTA ── */
+    .final-cta {
+      text-align: center; padding: 100px 0 80px;
+      background: radial-gradient(ellipse at center, rgba(99,102,241,.12) 0%, transparent 65%);
+      border-top: 1px solid rgba(255,255,255,.05);
+    }
+    .final-cta h2 { font-size: clamp(28px, 5vw, 52px); font-weight: 900; letter-spacing: -2px; margin-bottom: 16px; }
+    .final-cta p { font-size: 17px; color: var(--faint); margin-bottom: 36px; }
+
+    /* ── FOOTER ── */
+    footer { padding: 28px 0; border-top: 1px solid rgba(255,255,255,.05); text-align: center; font-size: 12px; color: #334155; }
+
+    /* ── WA FLOAT ── */
+    .wa-float {
+      position: fixed; bottom: 24px; left: 20px; z-index: 200;
+      width: 52px; height: 52px; background: #25D366;
+      border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 4px 20px rgba(37,211,102,.45); cursor: pointer; text-decoration: none;
+      transition: transform .2s;
+    }
+    .wa-float:hover { transform: scale(1.08); }
+
+    /* ── Scroll animations ── */
+    .reveal { opacity: 0; transform: translateY(24px); transition: opacity .6s ease, transform .6s ease; }
+    .reveal.visible { opacity: 1; transform: none; }
+
+    @media (max-width: 480px) {
+      .mock-body { grid-template-columns: repeat(2,1fr); }
+      .nav-actions .btn-ghost { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="blob1"></div>
+<div class="blob2"></div>
+
+<!-- NAV -->
+<nav>
+  <div class="container nav-inner">
+    <a href="/" class="nav-logo">
+      <div class="nav-logo-mark">M</div>
+      <span class="nav-logo-text">Marjin</span>
+    </a>
+    <div class="nav-actions">
+      <a href="/app?login=1" class="btn-ghost">כניסה למערכת</a>
+      <a href="/app?demo=1" class="btn-primary">התחל עכשיו</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-badge">ניהול מסעדות חכם · 2026</div>
+    <h1>תדע בדיוק לאן<br/>הולך <em>הכסף שלך</em></h1>
+    <p class="hero-sub">פוד קוסט, לייבור, ספקים ותחזית — הכל במסך אחד. קבל תובנות AI יומיות לפני שהמספרים מפתיעים אותך.</p>
+    <div class="hero-ctas">
+      <a href="/app?demo=1" class="btn-hero-main">
+        🚀 התחל עכשיו — חינם
+      </a>
+      <a href="/app?login=1" class="btn-hero-sec">כניסה למערכת</a>
+    </div>
+    <p class="hero-note">ללא כרטיס אשראי · ללא הרשמה · דמו מלא</p>
+
+    <!-- Mock Dashboard -->
+    <div class="dash-mock-wrap">
+      <div class="dash-mock">
+        <div class="mock-bar">
+          <div class="mock-dots">
+            <div class="mock-dot" style="background:#EF4444"></div>
+            <div class="mock-dot" style="background:#F59E0B"></div>
+            <div class="mock-dot" style="background:#10B981"></div>
+          </div>
+          <span class="mock-title">Marjin — Dashboard · מרץ 2026</span>
+        </div>
+        <div class="mock-body">
+          <div class="mock-kpi">
+            <div class="mock-kpi-lbl">הכנסות</div>
+            <div class="mock-kpi-val" style="color:#818CF8">₪372k</div>
+            <div class="mock-kpi-sub">חזוי: ₪680k</div>
+          </div>
+          <div class="mock-kpi">
+            <div class="mock-kpi-lbl">קניות</div>
+            <div class="mock-kpi-val" style="color:#F8FAFC">₪113k</div>
+            <div class="mock-kpi-sub">פוד קוסט: 30.5%</div>
+          </div>
+          <div class="mock-kpi">
+            <div class="mock-kpi-lbl">עלות עובדים</div>
+            <div class="mock-kpi-val" style="color:#F8FAFC">₪87k</div>
+            <div class="mock-kpi-sub">לייבור: 23.4%</div>
+          </div>
+          <div class="mock-kpi">
+            <div class="mock-kpi-lbl">הוצאות קבועות</div>
+            <div class="mock-kpi-val" style="color:#F8FAFC">₪24k</div>
+            <div class="mock-kpi-sub">6.4% ממחזור</div>
+          </div>
+          <div class="mock-hero-row">
+            <div class="mock-hero">
+              <div style="font-size:11px;color:#64748B;margin-bottom:8px;letter-spacing:.5px">הכנסות מול יעד · מרץ 2026</div>
+              <div class="mock-hero-num">₪372,540</div>
+              <div style="font-size:12px;color:#475569;margin-top:4px">מתוך יעד ₪600,000 · 12 ימים נותרו</div>
+              <div class="mock-prog"><div class="mock-prog-fill"></div></div>
+              <div style="display:flex;justify-content:space-between;font-size:10px;color:#475569">
+                <span>₪0</span><span style="color:#818CF8">62%</span><span>₪600k</span>
+              </div>
+            </div>
+          </div>
+          <div class="mock-chart-row">
+            <div class="mock-chart" id="mockChart">
+              <!-- Bars injected by JS -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section class="section">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">מה המערכת עושה</div>
+      <h2 class="section-title">כל מה שאתה צריך<br/>לדעת על העסק שלך</h2>
+      <p class="section-sub">ניהול מסעדה כרוך בעשרות מספרים. Marjin מרכז אותם, מחשב אותם, ומסביר מה לעשות.</p>
+    </div>
+
+    <div class="features-grid reveal">
+      <div class="feature-card" style="--card-glow:rgba(99,102,241,.12)">
+        <div class="feature-icon" style="background:rgba(99,102,241,.15)">📊</div>
+        <div class="feature-title">מחזור ותחזית מיידית</div>
+        <div class="feature-body">ראה בדיוק כמה הכנסת עד היום, מה הממוצע היומי שלך, ומה הסיכוי להגיע ליעד — כולל תחזית לסוף חודש.</div>
+        <div class="feature-metric">⬆ 12% מעל ממוצע שבועי</div>
+      </div>
+
+      <div class="feature-card" style="--card-glow:rgba(245,158,11,.08)">
+        <div class="feature-icon" style="background:rgba(245,158,11,.15)">🥩</div>
+        <div class="feature-title">פוד קוסט לפי ספק</div>
+        <div class="feature-body">עקוב אחרי כל ספק — כמה שילמת, אחוז מהמחזור, ואם אתה בחריגה. קבל התראה לפני שזה מצטבר.</div>
+        <div class="feature-metric">✓ ספקים מוזנים אוטומטית</div>
+      </div>
+
+      <div class="feature-card" style="--card-glow:rgba(16,185,129,.08)">
+        <div class="feature-icon" style="background:rgba(16,185,129,.15)">👥</div>
+        <div class="feature-title">שליטה בעלות עובדים</div>
+        <div class="feature-body">לוח יומי לכ"א — כמה עלה כל יום, מה אחוז הלייבור מהפדיון, ומה הממוצע החודשי שלך.</div>
+        <div class="feature-metric">23.4% לייבור — תקין</div>
+      </div>
+
+      <div class="feature-card" style="--card-glow:rgba(129,140,248,.12)">
+        <div class="feature-icon" style="background:rgba(129,140,248,.15)">🤖</div>
+        <div class="feature-title">תובנות AI יומיות</div>
+        <div class="feature-body">שאל שאלה בעברית ותקבל תשובה מיידית על העסק שלך — "מאיפה הפוד קוסט עלה השבוע?", "איזה יום הכי רווחי?"</div>
+        <div class="feature-metric">AI מחובר לנתונים האמיתיים</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- AI SECTION -->
+<section class="ai-section">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">AI עסקי</div>
+      <h2 class="section-title">שאל שאלה —<br/>קבל תשובה על העסק שלך</h2>
+      <p class="section-sub">לא תשובות גנריות. AI שמחובר לנתוני הפדיון, הספקים והעלויות שלך — ועונה בדיוק על מה שחשוב לך.</p>
+    </div>
+
+    <div class="ai-grid">
+      <div class="reveal" style="transition-delay:.1s">
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <div style="padding:20px;background:rgba(30,41,59,.6);border:1px solid rgba(255,255,255,.07);border-radius:14px">
+            <div style="font-size:13px;color:#64748B;margin-bottom:6px">לדוגמה — שאלה שמנהל שואל:</div>
+            <div style="font-size:15px;font-weight:600;color:#C7D2FE">"מה עלה הפוד קוסט שלי השבוע ומאיפה?"</div>
+          </div>
+          <div style="padding:20px;background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.2);border-radius:14px">
+            <div style="font-size:11px;color:#818CF8;font-weight:700;margin-bottom:8px;letter-spacing:.5px">MARJIN AI</div>
+            <div style="font-size:14px;color:#CBD5E1;line-height:1.7">הפוד קוסט השבוע עלה ל-<strong style="color:#818CF8">34.1%</strong> לעומת 29.8% בשבוע שעבר. הגורם העיקרי הוא ספק <strong style="color:#818CF8">פריים בשר</strong> שעלה ב-₪4,200 מעל הממוצע. כדאי לבדוק הזמנת רביעי.</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div style="font-size:12px;color:#475569;margin-bottom:4px">שאלות נפוצות:</div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px">
+              <span style="background:rgba(30,41,59,.8);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:7px 14px;font-size:12px;color:#64748B">מה הממוצע יומי שלי?</span>
+              <span style="background:rgba(30,41,59,.8);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:7px 14px;font-size:12px;color:#64748B">איזה יום הכי רווחי?</span>
+              <span style="background:rgba(30,41,59,.8);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:7px 14px;font-size:12px;color:#64748B">מה התחזית לסוף חודש?</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="ai-mock-side reveal" style="transition-delay:.2s">
+        <div class="ai-chat-mock">
+          <div class="ai-chat-header">
+            <div class="ai-chat-logo">M</div>
+            <span class="ai-chat-title">Marjin AI — עוזר עסקי</span>
+          </div>
+          <div class="ai-chat-body">
+            <div class="ai-q">באיזה יום בשבוע אני מרוויח הכי הרבה?</div>
+            <div class="ai-a">ב-18 הימים האחרונים, <strong>שישי</strong> הוא היום הרווחי ביותר עם ממוצע של <strong>₪28,400</strong> הכנסות. יום שלישי הגרוע ביותר — ₪14,200. ממליץ לשקול הגדלת כח אדם בשישי ולצמצם בשלישי.</div>
+            <div class="ai-q">מה מצב הלייבור שלי החודש?</div>
+            <div class="ai-a">לייבור <strong>23.4%</strong> — תקין לפי היעד 24%. שכר עולה ל-₪87,000 מתוך מחזור ₪372,540. בקצב הנוכחי תסיים בסביבות <strong>₪162k</strong> שזה 23.8% — בתוך טווח.</div>
+          </div>
+          <div class="ai-chip-row">
+            <div class="ai-chip-mock">מה הפוד קוסט שלי?</div>
+            <div class="ai-chip-mock">תחזית סוף חודש</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PROOF -->
+<section class="section" style="padding:60px 0">
+  <div class="container">
+    <div class="reveal">
+      <div class="section-label">Marjin במספרים</div>
+      <div class="proof-row">
+        <div class="proof-item"><div class="proof-num">15<span>דק׳</span></div><div class="proof-label">לחיבור המערכת</div></div>
+        <div class="proof-item"><div class="proof-num">3<span>%</span></div><div class="proof-label">חיסכון ממוצע בפוד קוסט</div></div>
+        <div class="proof-item"><div class="proof-num">30<span>+</span></div><div class="proof-label">שאלות AI שאפשר לשאול</div></div>
+        <div class="proof-item"><div class="proof-num">0<span>₪</span></div><div class="proof-label">לצאת ולנסות עכשיו</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FINAL CTA -->
+<section class="final-cta">
+  <div class="container reveal">
+    <h2>מוכן לראות את המספרים<br/>שלך בסדר?</h2>
+    <p>תוך 15 דקות תדע בדיוק כמה עולה לך כל שישי</p>
+    <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
+      <a href="/app?demo=1" class="btn-hero-main">🚀 נסה עכשיו — בחינם</a>
+      <a href="https://wa.me/972501234567?text=%D7%94%D7%99%D7%99%20%F0%9F%91%8B%20%D7%90%D7%A0%D7%99%20%D7%A8%D7%95%D7%A6%D7%94%20%D7%9C%D7%94%D7%A6%D7%98%D7%A8%D7%A3%20%D7%9C-Marjin"
+        target="_blank" rel="noopener"
+        style="padding:16px 28px;background:#25D366;border-radius:14px;color:white;font-size:15px;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;gap:8px">
+        💬 דבר איתנו
+      </a>
+    </div>
+    <p style="font-size:12px;color:#334155;margin-top:20px">ללא כרטיס אשראי · ללא הרשמה · דמו מלא עם נתונים לדוגמה</p>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="container">
+    <span>© 2026 Marjin · מערכת ניהול מסעדות</span>
+    <span style="margin:0 16px;color:#1E293B">·</span>
+    <a href="/app?login=1" style="color:#334155;text-decoration:none">כניסה למערכת</a>
+  </div>
+</footer>
+
+<!-- WA Float -->
+<a href="https://wa.me/972501234567?text=%D7%94%D7%99%D7%99%20%F0%9F%91%8B%20%D7%A8%D7%90%D7%99%D7%AA%D7%99%20%D7%90%D7%AA%20Marjin%20%D7%95%D7%A8%D7%95%D7%A6%D7%94%20%D7%9C%D7%93%D7%A2%D7%AA%20%D7%99%D7%95%D7%AA%D7%A8"
+  target="_blank" rel="noopener" class="wa-float" title="דבר איתנו">
+  <svg width="26" height="26" viewBox="0 0 24 24" fill="white">
+    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347zM12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.12 1.526 5.856L0 24l6.336-1.498A11.924 11.924 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0z"/>
+  </svg>
+</a>
+
+<script>
+  // Generate mock chart bars
+  const chartEl = document.getElementById('mockChart');
+  if(chartEl) {
+    const heights = [30,45,55,38,70,85,60,92,75,65,88,95,72,80,68,42,76,85];
+    heights.forEach(h=>{
+      const bar = document.createElement('div');
+      bar.className = 'mock-bar-el';
+      bar.style.height = h+'%';
+      chartEl.appendChild(bar);
+    });
+  }
+
+  // Scroll reveal
+  const observer = new IntersectionObserver((entries)=>{
+    entries.forEach(e=>{ if(e.isIntersecting) e.target.classList.add('visible'); });
+  }, { threshold: 0.12 });
+  document.querySelectorAll('.reveal').forEach(el=>observer.observe(el));
+</script>
+</body>
+</html>

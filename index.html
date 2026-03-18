@@ -1059,7 +1059,7 @@ const ROLES = {
 
 
 
-function LoginScreen({ onLogin, tenantId }) {
+function LoginScreen({ onLogin, tenantId, autoDemo=false }) {
   const [username,    setUsername]    = useState("");
   const [password,    setPassword]    = useState("");
   const [err,         setErr]         = useState("");
@@ -1068,6 +1068,11 @@ function LoginScreen({ onLogin, tenantId }) {
   const [resetMode,   setResetMode]   = useState(false);
   const [resetEmail,  setResetEmail]  = useState("");
   const [resetSent,   setResetSent]   = useState(false);
+
+  // Auto-enter demo mode if URL param
+  React.useEffect(()=>{
+    if(autoDemo) { onLogin({_demo:true,name:"Demo",role:"owner"}); }
+  }, [autoDemo]);
 
   // ── Hardcoded master user fallback ─────────────────────────────────────────
   const MASTER_USERS = {
@@ -2616,9 +2621,12 @@ function PilotDashboard() {
 
   // Login screen -- always shown first, even in new browser
   if(loaded && !loggedInUser) {
+    const params = new URLSearchParams(window.location.search);
+    const autoDemo = params.get("demo")==="1";
     return (
       <LoginScreen
         tenantId={currentBizId || businesses[0]?.id}
+        autoDemo={autoDemo}
         onLogin={(user)=>{
           // ── Demo Mode bypass ──────────────────────────────────────────────
           if(user._demo) {
