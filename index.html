@@ -261,65 +261,78 @@
     .shadow-md { box-shadow:var(--shadow-md); }
 
     /* ══ Dashboard ══════════════════════════════════════════════════════════ */
-    .dash               { padding:0 0 80px; background:var(--bg); }
-    .dash-status        { display:flex; align-items:center; gap:8px; padding:12px 20px; font-size:12px; color:var(--ink-muted); border-bottom:1px solid var(--border-sub); }
-    .dash-status-dot    { width:5px; height:5px; border-radius:50%; flex-shrink:0; }
+    /* ══ Dashboard ══════════════════════════════════════════════════════ */
+    .dash               { padding:0 0 80px; background:#F9FAFB; }
 
-    /* KPI row */
-    .kpi-row            { display:grid; grid-template-columns:repeat(2,1fr); gap:1px; background:var(--border); border-bottom:1px solid var(--border); }
-    .kpi-item           { background:var(--surface); padding:18px 20px 16px; }
-    .kpi-item-label     { font-size:10px; font-weight:600; color:var(--ink-muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
-    .kpi-item-value     { font-size:24px; font-weight:700; letter-spacing:-1px; line-height:1; color:var(--ink); }
-    .kpi-item-value.warn   { color:var(--warning); }
-    .kpi-item-value.danger { color:var(--danger); }
-    .kpi-item-sub       { font-size:11px; color:var(--ink-muted); margin-top:5px; line-height:1.3; }
+    /* Status strip */
+    .dash-status        { display:flex; align-items:center; gap:8px; padding:10px 20px; font-size:12px; color:#6B7280; background:#FFFFFF; border-bottom:1px solid #E5E7EB; }
+    .dash-status-dot    { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
 
-    /* Forecast — primary section */
-    .forecast-section   { padding:20px; border-bottom:1px solid var(--border-sub); background:var(--surface); }
-    .forecast-header    { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:20px; }
-    .forecast-title     { font-size:13px; font-weight:600; color:var(--ink); letter-spacing:-.2px; }
-    .forecast-days      { font-size:11px; color:var(--ink-muted); }
-    .forecast-progress-wrap { margin-bottom:20px; }
-    .forecast-progress-row  { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px; }
-    .forecast-progress-label{ font-size:12px; color:var(--ink-sub); }
-    .forecast-progress-vals { font-size:13px; color:var(--ink); font-weight:600; }
-    .forecast-progress-muted{ font-size:12px; color:var(--ink-muted); font-weight:400; }
-    .forecast-bar-wrap  { height:3px; background:var(--border-sub); border-radius:2px; position:relative; overflow:hidden; }
-    .forecast-bar-fill  { height:100%; border-radius:2px; transition:width .5s ease; }
-    .forecast-bar-marker{ position:absolute; top:0; bottom:0; width:1px; background:var(--ink-muted); opacity:.35; }
-    .forecast-metrics   { display:grid; grid-template-columns:repeat(3,1fr); gap:0; padding-top:18px; border-top:1px solid var(--border-sub); }
-    .fm-cell            { }
-    .fm-cell:not(:last-child) { padding-left:16px; border-left:1px solid var(--border-sub); margin-left:16px; }
-    .fm-label           { font-size:10px; font-weight:600; color:var(--ink-muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:6px; }
-    .fm-value           { font-size:18px; font-weight:700; color:var(--ink); letter-spacing:-.5px; line-height:1; }
-    .fm-value.danger    { color:var(--danger); }
-    .fm-sub             { font-size:10px; color:var(--ink-muted); margin-top:4px; }
+    /* KPI row — 4 equal white cards */
+    .kpi-row            { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; padding:16px 20px 0; background:#F9FAFB; }
+    .kpi-item           { background:#FFFFFF; border-radius:12px; padding:18px 16px 16px; box-shadow:0 1px 3px rgba(0,0,0,0.06),0 1px 2px rgba(0,0,0,0.04); border:1px solid #F3F4F6; }
+    .kpi-item-label     { font-size:11px; font-weight:500; color:#9CA3AF; text-transform:uppercase; letter-spacing:.6px; margin-bottom:10px; }
+    .kpi-item-value     { font-size:26px; font-weight:700; letter-spacing:-1.2px; line-height:1; color:#111827; }
+    .kpi-item-value.warn   { color:#F59E0B; }
+    .kpi-item-value.danger { color:#EF4444; }
+    .kpi-item-sub       { font-size:11px; color:#9CA3AF; margin-top:6px; line-height:1.4; }
 
-    /* Chart section */
-    .chart-section      { padding:20px; border-bottom:1px solid var(--border-sub); background:var(--surface); }
-    .chart-title        { font-size:11px; font-weight:600; color:var(--ink-muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:14px; }
+    /* Main forecast card */
+    .forecast-card      { background:#FFFFFF; border-radius:12px; margin:14px 20px 0; padding:20px; box-shadow:0 1px 3px rgba(0,0,0,0.06),0 1px 2px rgba(0,0,0,0.04); border:1px solid #F3F4F6; }
+    .forecast-header    { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:16px; }
+    .forecast-title     { font-size:14px; font-weight:600; color:#111827; }
+    .forecast-subtitle  { font-size:12px; color:#9CA3AF; }
 
-    /* Alerts */
-    .alerts-section     { padding:16px 20px; background:var(--surface); border-bottom:1px solid var(--border-sub); }
-    .alert-item         { display:flex; align-items:flex-start; gap:10px; }
-    .alert-item + .alert-item { margin-top:10px; padding-top:10px; border-top:1px solid var(--border-sub); }
-    .alert-dot          { width:5px; height:5px; border-radius:50%; flex-shrink:0; margin-top:4px; }
-    .alert-title-text   { font-size:12px; font-weight:500; color:var(--ink); margin-bottom:2px; }
-    .alert-body-text    { font-size:11px; color:var(--ink-sub); }
+    /* Revenue progress */
+    .rev-progress-wrap  { margin-bottom:20px; }
+    .rev-row            { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+    .rev-label          { font-size:12px; color:#6B7280; }
+    .rev-vals           { font-size:13px; font-weight:600; color:#111827; }
+    .rev-vals span      { font-weight:400; color:#9CA3AF; }
+    .rev-pct-badge      { font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; }
+    .rev-pct-badge.ok   { color:#10B981; background:#ECFDF5; }
+    .rev-pct-badge.warn { color:#F59E0B; background:#FFFBEB; }
+    .rev-pct-badge.dn   { color:#EF4444; background:#FEF2F2; }
+    .rev-bar-track      { height:8px; background:#F3F4F6; border-radius:6px; overflow:hidden; position:relative; }
+    .rev-bar-fill       { height:100%; border-radius:6px; transition:width .6s ease; }
+    .rev-bar-today      { position:absolute; top:0; bottom:0; width:2px; background:rgba(0,0,0,0.12); border-radius:2px; }
+
+    /* Forecast text row */
+    .forecast-text-row  { display:grid; grid-template-columns:repeat(3,1fr); gap:0; border-top:1px solid #F3F4F6; padding-top:18px; margin-top:4px; }
+    .ftc               { }
+    .ftc:not(:last-child){ padding-left:18px; border-left:1px solid #F3F4F6; margin-left:18px; }
+    .ftc-label         { font-size:10px; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:.8px; margin-bottom:5px; }
+    .ftc-value         { font-size:20px; font-weight:700; color:#111827; letter-spacing:-.6px; line-height:1; }
+    .ftc-value.dn      { color:#EF4444; }
+    .ftc-sub           { font-size:11px; color:#9CA3AF; margin-top:4px; }
+
+    /* Chart card */
+    .chart-card         { background:#FFFFFF; border-radius:12px; margin:12px 20px 0; padding:20px 16px 14px; box-shadow:0 1px 3px rgba(0,0,0,0.06),0 1px 2px rgba(0,0,0,0.04); border:1px solid #F3F4F6; }
+    .chart-card-title   { font-size:11px; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:.6px; margin-bottom:12px; }
+
+    /* Alerts card */
+    .alerts-card        { background:#FFFBEB; border-radius:12px; margin:12px 20px 0; padding:14px 16px; border:1px solid #FDE68A; }
+    .alert-row-item     { display:flex; align-items:flex-start; gap:10px; }
+    .alert-row-item + .alert-row-item { margin-top:10px; padding-top:10px; border-top:1px solid rgba(0,0,0,0.05); }
+    .alert-dot-sm       { width:6px; height:6px; border-radius:50%; flex-shrink:0; margin-top:4px; }
+    .alert-row-title    { font-size:12px; font-weight:500; color:#111827; margin-bottom:2px; }
+    .alert-row-body     { font-size:11px; color:#6B7280; }
+
+    /* Expense breakdown card */
+    .breakdown-card     { background:#FFFFFF; border-radius:12px; margin:12px 20px 0; padding:20px; box-shadow:0 1px 3px rgba(0,0,0,0.06),0 1px 2px rgba(0,0,0,0.04); border:1px solid #F3F4F6; }
+    .breakdown-title    { font-size:11px; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:.6px; margin-bottom:16px; }
+    .breakdown-row      { margin-bottom:13px; }
+    .breakdown-row:last-child { margin-bottom:0; }
+    .breakdown-row-hdr  { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:5px; }
+    .breakdown-row-lbl  { font-size:12px; color:#374151; }
+    .breakdown-row-val  { font-size:12px; font-weight:600; color:#111827; }
+    .breakdown-row-pct  { font-size:10px; color:#9CA3AF; margin-right:6px; }
+    .breakdown-bar      { height:6px; background:#F3F4F6; border-radius:4px; overflow:hidden; }
+    .breakdown-fill     { height:100%; border-radius:4px; transition:width .4s ease; }
 
     /* Weather strip */
-    .weather-strip      { padding:10px 20px; background:var(--bg); border-bottom:1px solid var(--border-sub); display:flex; gap:6px; font-size:11px; color:var(--ink-muted); }
+    .weather-strip      { display:flex; gap:8px; align-items:center; font-size:11px; color:#9CA3AF; padding:10px 20px; }
 
-    /* Expense breakdown */
-    .expense-section    { padding:20px; background:var(--surface); }
-    .expense-row        { margin-bottom:13px; }
-    .expense-row:last-child { margin-bottom:0; }
-    .expense-row-header { display:flex; justify-content:space-between; margin-bottom:5px; }
-    .expense-row-label  { font-size:12px; color:var(--ink-sub); }
-    .expense-row-val    { font-size:12px; font-weight:600; color:var(--ink); }
-
-    /* Spacer between sections */
-    .dash-gap { height:8px; background:var(--border-sub); }
   </style>
 </head>
 <body>
@@ -2646,170 +2659,208 @@ function PilotDashboard() {
             const tFood     = cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct);
             const tLabor    = cfgTarget(businessConfig,"laborCostPct",TARGETS.laborCostPct);
             const tFixed    = metrics.TOTAL_FIXED;
-            const salesPct  = tSales>0 ? Math.round((metrics.totalSales/tSales)*100) : 0;
+            const salesPct  = tSales>0 ? Math.min(Math.round((metrics.totalSales/tSales)*100),100) : 0;
             const laborPct  = metrics.totalSales>0 ? (metrics.totalPayroll/metrics.totalSales)*100 : 0;
             const dayPct    = DAYS_IN_MONTH>0 ? Math.round((DAY_OF_MONTH/DAYS_IN_MONTH)*100) : 0;
             const fSalesFull= metrics.totalSales+(DAY_OF_MONTH>0?(metrics.totalSales/DAY_OF_MONTH)*(DAYS_IN_MONTH-DAY_OF_MONTH):0);
             const estProfit = fSalesFull*(1-tFood/100-tLabor/100-((businessConfig.rentPct||0)+(businessConfig.hasRoyalty?businessConfig.royaltyPct||0:0))/100)-tFixed;
             const daysLeft  = DAYS_IN_MONTH-DAY_OF_MONTH;
 
-            const salesStatus = salesPct<60?"danger":salesPct<80?"warn":null;
-            const lcStatus    = metrics.lc<0?"danger":null;
-            const foodStatus  = metrics.foodCostPct>tFood+3?"danger":metrics.foodCostPct>tFood?"warn":null;
-            const laborStatus = laborPct>tLabor+3?"danger":laborPct>tLabor?"warn":null;
-
-            const barColor = salesStatus==="danger"?"var(--danger)":salesStatus==="warn"?"var(--warning)":"var(--ink)";
-
+            // Status logic — minimal coloring
+            const salesGood = salesPct >= 90;
+            const salesWarn = !salesGood && salesPct >= 70;
+            const salesBad  = salesPct < 70 && salesPct > 0;
+            const barColor  = salesBad ? "#EF4444" : salesWarn ? "#F59E0B" : "#3B82F6";
+            const pctClass  = salesBad ? "dn" : salesWarn ? "warn" : "ok";
+            const lcStatus  = metrics.lc < 0 ? "danger" : null;
+            const foodStatus= metrics.foodCostPct>tFood+3?"danger":metrics.foodCostPct>tFood?"warn":null;
+            const laborStatus=laborPct>tLabor+3?"danger":laborPct>tLabor?"warn":null;
             const hasAlerts = todayMissing.length>0||orefAlert||weather?.alert;
+
+            // For chart: build cumulative revenue data
+            const revChart = chart.map(pt=>({...pt}));
 
             return (<>
 
-              {/* ── Status strip ─────────────────────────────────────── */}
+              {/* ── Status strip ─────────────────────────────────── */}
               <div className="dash-status">
-                <div className="dash-status-dot" style={{background:todayEntry?"var(--border)":"var(--warning)"}}/>
-                <span style={{color:todayEntry?"var(--ink-muted)":"var(--warning)"}}>
+                <div className="dash-status-dot" style={{background:todayEntry?"#D1D5DB":"#F59E0B"}}/>
+                <span style={{color:todayEntry?"#6B7280":"#F59E0B"}}>
                   {todayEntry
                     ? `הוזן — ${fmt((Number(todayEntry.sales)||0)+(Number(todayEntry.deliveries)||0))}`
                     : `נתוני ${DOW_NAMES[TODAY_DOW]} טרם הוזנו`}
                 </span>
                 {orefAlert && <>
-                  <span style={{color:"var(--border-sub)"}}>·</span>
-                  <span style={{color:"var(--danger)",fontWeight:600,display:"flex",alignItems:"center",gap:5}}>
-                    <span className="dash-status-dot" style={{background:"var(--danger)",animation:"pulse 1s infinite"}}/>
+                  <span style={{color:"#E5E7EB"}}>·</span>
+                  <span style={{color:"#EF4444",fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
+                    <span className="dash-status-dot" style={{background:"#EF4444",animation:"pulse 1s infinite"}}/>
                     אזעקה פעילה
                   </span>
                 </>}
+                {weather && !weather.alert && (
+                  <span style={{marginRight:"auto",color:"#9CA3AF"}}>
+                    {weather.temp}° · {weather.desc}
+                  </span>
+                )}
               </div>
 
-              {/* ── 1. KPI row — 4 tiles ─────────────────────────────── */}
+              {/* ── 1. KPI row — 4 cards ─────────────────────────── */}
               <div className="kpi-row">
-                {[
-                  {label:"הכנסות", value:fmt(metrics.totalSales), sub:salesPct>0?`${salesPct}% מיעד ${fmt(tSales)}`:null, status:salesStatus},
-                  {label:"יתרת קופה", value:fmt(metrics.lc), sub:DAY_OF_MONTH>0?`${fmt(Math.round(metrics.dailyAvg))} ממוצע יומי`:null, status:lcStatus},
-                  {label:"פוד קוסט", value:metrics.foodCostPct>0?fmtPct(metrics.foodCostPct):"—", sub:`יעד ${tFood}%`, status:foodStatus},
-                  {label:"לייבור", value:laborPct>0?fmtPct(laborPct):"—", sub:`יעד ${tLabor}% · ${fmt(metrics.totalPayroll)}`, status:laborStatus},
-                ].map(({label,value,sub,status},i)=>(
-                  <div key={i} className="kpi-item">
-                    <div className="kpi-item-label">{label}</div>
-                    <div className={`kpi-item-value${status?" "+status:""}`}>{value}</div>
-                    {sub && <div className="kpi-item-sub">{sub}</div>}
+                {/* Revenue */}
+                <div className="kpi-item">
+                  <div className="kpi-item-label">הכנסות חודשיות</div>
+                  <div className="kpi-item-value" style={{color:salesBad?"#EF4444":salesWarn?"#F59E0B":"#111827"}}>
+                    {fmt(metrics.totalSales)}
                   </div>
-                ))}
+                  <div className="kpi-item-sub">{salesPct>0?`${salesPct}% מיעד ${fmt(tSales)}`:`יעד ${fmt(tSales)}`}</div>
+                </div>
+
+                {/* Cash balance */}
+                <div className="kpi-item">
+                  <div className="kpi-item-label">יתרת קופה</div>
+                  <div className="kpi-item-value" style={{color:metrics.lc<0?"#EF4444":"#111827"}}>
+                    {fmt(metrics.lc)}
+                  </div>
+                  {DAY_OF_MONTH>0 && <div className="kpi-item-sub">{fmt(Math.round(metrics.dailyAvg))} ממוצע יומי</div>}
+                </div>
+
+                {/* Food cost */}
+                <div className="kpi-item">
+                  <div className="kpi-item-label">פוד קוסט</div>
+                  <div className="kpi-item-value" style={{color:foodStatus==="danger"?"#EF4444":foodStatus==="warn"?"#F59E0B":"#111827"}}>
+                    {metrics.foodCostPct>0?fmtPct(metrics.foodCostPct):"—"}
+                  </div>
+                  <div className="kpi-item-sub">יעד {tFood}%{foodStatus?" · חריגה":""}</div>
+                </div>
+
+                {/* Labor */}
+                <div className="kpi-item">
+                  <div className="kpi-item-label">לייבור קוסט</div>
+                  <div className="kpi-item-value" style={{color:laborStatus==="danger"?"#EF4444":laborStatus==="warn"?"#F59E0B":"#111827"}}>
+                    {laborPct>0?fmtPct(laborPct):"—"}
+                  </div>
+                  <div className="kpi-item-sub">יעד {tLabor}% · {fmt(metrics.totalPayroll)}</div>
+                </div>
               </div>
 
-              {/* ── 2. Forecast — primary section ────────────────────── */}
-              <div className="dash-gap"/>
-              <div className="forecast-section">
+              {/* ── 2. Forecast card — primary ───────────────────── */}
+              <div className="forecast-card">
                 <div className="forecast-header">
-                  <span className="forecast-title">תחזית סוף חודש</span>
-                  <span className="forecast-days">{daysLeft} ימים נותרו</span>
+                  <span className="forecast-title">מצב והכנסות</span>
+                  <span className="forecast-subtitle">{daysLeft} ימים נותרו בחודש</span>
                 </div>
 
-                {/* Progress bar — sales vs target */}
-                <div className="forecast-progress-wrap">
-                  <div className="forecast-progress-row">
-                    <span className="forecast-progress-label">מכירות</span>
-                    <span className="forecast-progress-vals">
-                      {fmt(metrics.totalSales)}<span className="forecast-progress-muted"> / {fmt(tSales)}</span>
-                    </span>
+                {/* Revenue progress bar */}
+                <div className="rev-progress-wrap">
+                  <div className="rev-row">
+                    <span className="rev-label">הכנסות עד כה</span>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span className={`rev-pct-badge ${pctClass}`}>{salesPct}%</span>
+                      <span className="rev-vals">{fmt(metrics.totalSales)} <span>/ {fmt(tSales)}</span></span>
+                    </div>
                   </div>
-                  <div className="forecast-bar-wrap">
-                    <div className="forecast-bar-fill" style={{width:`${Math.min(salesPct,100)}%`,background:barColor}}/>
-                    <div className="forecast-bar-marker" style={{left:`${Math.min(dayPct,99)}%`}}/>
+                  <div className="rev-bar-track">
+                    <div className="rev-bar-fill" style={{width:`${salesPct}%`,background:barColor}}/>
+                    <div className="rev-bar-today" style={{left:`${Math.min(dayPct,99)}%`}}/>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",marginTop:5,fontSize:10,color:"#9CA3AF"}}>
+                    <span>יום {DAY_OF_MONTH}</span>
+                    <span>סוף חודש</span>
                   </div>
                 </div>
 
-                {/* Three forecast metrics */}
-                <div className="forecast-metrics">
+                {/* Forecast text metrics */}
+                <div className="forecast-text-row">
                   {[
-                    {label:"מחזור חזוי",  value:fmt(Math.round(fSalesFull)), sub:`יעד ${fmt(tSales)}`},
-                    {label:"תחזית LC",    value:fmt(Math.round(metrics.forecast)), sub:`${fmt(Math.round(metrics.dailyAvg))} ממוצע`},
-                    {label:"רווח חזוי",   value:fmt(Math.round(estProfit)), sub:fSalesFull>0?fmtPct((estProfit/fSalesFull)*100):"—", danger:estProfit<0},
-                  ].map(({label,value,sub,danger},i)=>(
-                    <div key={i} className="fm-cell">
-                      <div className="fm-label">{label}</div>
-                      <div className={`fm-value${danger?" danger":""}`}>{value}</div>
-                      {sub && <div className="fm-sub">{sub}</div>}
+                    {label:"מחזור חזוי",  value:fmt(Math.round(fSalesFull)), sub:`לעומת יעד ${fmt(tSales)}`},
+                    {label:"תחזית LC",    value:fmt(Math.round(metrics.forecast)), sub:`${fmt(Math.round(metrics.dailyAvg))} $/יום ממוצע`},
+                    {label:"רווח חזוי",   value:fmt(Math.round(estProfit)),
+                      sub:fSalesFull>0?`${fmtPct((estProfit/fSalesFull)*100)} מהמחזור`:"—",
+                      dn:estProfit<0},
+                  ].map(({label,value,sub,dn},i)=>(
+                    <div key={i} className="ftc">
+                      <div className="ftc-label">{label}</div>
+                      <div className={`ftc-value${dn?" dn":""}`}>{value}</div>
+                      {sub && <div className="ftc-sub">{sub}</div>}
                     </div>
                   ))}
                 </div>
               </div>
 
-              {/* ── 3. Trend chart ───────────────────────────────────── */}
-              {chart.length>0 && <>
-                <div className="dash-gap"/>
-                <div className="chart-section">
-                  <div className="chart-title">יתרה מצטברת</div>
-                  <ResponsiveContainer width="100%" height={110}>
-                    <AreaChart data={chart} margin={{top:2,right:2,left:0,bottom:0}}>
+              {/* ── 3. Revenue trend chart ───────────────────────── */}
+              {revChart.length>0 && (
+                <div className="chart-card">
+                  <div className="chart-card-title">הכנסות מצטברות</div>
+                  <ResponsiveContainer width="100%" height={120}>
+                    <AreaChart data={revChart} margin={{top:4,right:4,left:0,bottom:0}}>
+                      <defs>
+                        <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#3B82F6" stopOpacity={0.15}/>
+                          <stop offset="100%" stopColor="#3B82F6" stopOpacity={0}/>
+                        </linearGradient>
+                      </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false}/>
-                      <XAxis dataKey="day" stroke="none" tick={{fill:"#9CA3AF",fontSize:10}} axisLine={false}/>
-                      <YAxis stroke="none" tick={{fill:"#9CA3AF",fontSize:10}} axisLine={false} tickLine={false} tickFormatter={v=>`₪${(v/1000).toFixed(0)}k`} width={38}/>
-                      <Tooltip contentStyle={TT} formatter={v=>[fmt(v),""]} cursor={{stroke:"#E5E7EB",strokeWidth:1}}/>
-                      <Area type="monotone" dataKey="יתרה" stroke="#111827" strokeWidth={1.5} fill="none" dot={false} activeDot={{r:3,fill:"#111827"}}/>
+                      <XAxis dataKey="day" stroke="none" tick={{fill:"#9CA3AF",fontSize:10}} axisLine={false} tickLine={false}/>
+                      <YAxis stroke="none" tick={{fill:"#9CA3AF",fontSize:10}} axisLine={false} tickLine={false}
+                        tickFormatter={v=>`₪${(v/1000).toFixed(0)}k`} width={36}/>
+                      <Tooltip contentStyle={{...TT,borderColor:"#E5E7EB"}} formatter={v=>[fmt(v),""]}
+                        cursor={{stroke:"#E5E7EB",strokeWidth:1}}/>
+                      <Area type="monotone" dataKey="הכנסות" stroke="#3B82F6" strokeWidth={2}
+                        fill="url(#revGrad)" dot={false} activeDot={{r:4,fill:"#3B82F6",stroke:"#fff",strokeWidth:2}}/>
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
-              </>}
+              )}
 
-              {/* ── 4. Alerts ────────────────────────────────────────── */}
-              {hasAlerts && <>
-                <div className="dash-gap"/>
-                <div className="alerts-section">
+              {/* ── 4. Alerts ────────────────────────────────────── */}
+              {hasAlerts && (
+                <div className="alerts-card">
                   {[
-                    orefAlert && {dot:"var(--danger)",pulse:true,title:"אזעקה פעילה — פיקוד העורף",
+                    orefAlert && {color:"#EF4444",pulse:true,
+                      title:"אזעקה פעילה — פיקוד העורף",
                       body:orefAlert.cities.slice(0,4).join(" · ")+(orefAlert.cities.length>4?` +${orefAlert.cities.length-4}`:"")},
-                    weather?.alert && {dot:"var(--warning)",pulse:false,
-                      title:weather.isRain?"גשם — צפויה השפעה על הפדיון":weather.isHeat?"חום קיצוני":"קור קיצוני",
+                    weather?.alert && {color:"#F59E0B",pulse:false,
+                      title:weather.isRain?"גשם — השפעה צפויה על פדיון":weather.isHeat?"חום קיצוני":"קור קיצוני",
                       body:`${weather.temp}°C · ${weather.desc}`},
-                    todayMissing.length>0 && {dot:"var(--warning)",pulse:false,
+                    todayMissing.length>0 && {color:"#F59E0B",pulse:false,
                       title:`${todayMissing.length} ספקים לא הוזנו היום`,
                       body:todayMissing.map(s=>s.name).join(", ")},
                   ].filter(Boolean).map((item,i)=>(
-                    <div key={i} className="alert-item">
-                      <div className="alert-dot" style={{background:item.dot,...(item.pulse?{animation:"pulse 1s infinite"}:{})}}/>
+                    <div key={i} className="alert-row-item">
+                      <div className="alert-dot-sm" style={{background:item.color,...(item.pulse?{animation:"pulse 1s infinite"}:{})}}/>
                       <div>
-                        <div className="alert-title-text">{item.title}</div>
-                        <div className="alert-body-text">{item.body}</div>
+                        <div className="alert-row-title">{item.title}</div>
+                        <div className="alert-row-body">{item.body}</div>
                       </div>
                     </div>
                   ))}
                 </div>
-              </>}
-
-              {/* Quiet weather strip — only when no alert */}
-              {weather && !weather.alert && (
-                <div className="weather-strip">
-                  <span>{weather.temp}°</span>
-                  <span>·</span>
-                  <span>{weather.desc}</span>
-                  {weather.rain>0&&<><span>·</span><span>{weather.rain}מ"מ</span></>}
-                </div>
               )}
 
-              {/* ── 5. Expense breakdown — secondary ─────────────────── */}
-              <div className="dash-gap"/>
-              <div className="expense-section">
-                <div className="sec-head" style={{marginBottom:16}}>פירוט הוצאות</div>
+              {/* ── 5. Expense breakdown ─────────────────────────── */}
+              <div className="breakdown-card">
+                <div className="breakdown-title">פירוט הוצאות</div>
                 {[
-                  {label:"רכש ספקים",   val:metrics.totalFood},
-                  {label:"שכר",          val:metrics.totalPayroll},
-                  ...(businessConfig.hasRoyalty?[{label:`תמלוגים ${businessConfig.royaltyPct}%`,val:Math.round(metrics.totalSales*(businessConfig.royaltyPct||0)/100)}]:[]),
-                  ...(businessConfig.rentPct>0?[{label:`שכ״ד ${businessConfig.rentPct}%`,val:Math.round(metrics.totalSales*(businessConfig.rentPct||0)/100)}]:[]),
-                  ...(businessConfig.rentType==="fixed"&&businessConfig.rentFixed>0?[{label:"שכ״ד קבוע",val:businessConfig.rentFixed}]:[]),
-                  {label:"קבועות",       val:metrics.fixedSoFar},
-                  {label:"שונות",         val:metrics.totalOtherExpense},
-                ].filter(r=>r.val>0).map(({label,val},i,arr)=>{
+                  {label:"רכש ספקים",  val:metrics.totalFood,       color:"#3B82F6"},
+                  {label:"שכר",         val:metrics.totalPayroll,     color:"#8B5CF6"},
+                  ...(businessConfig.hasRoyalty?[{label:`תמלוגים ${businessConfig.royaltyPct}%`,val:Math.round(metrics.totalSales*(businessConfig.royaltyPct||0)/100),color:"#6B7280"}]:[]),
+                  ...(businessConfig.rentPct>0?[{label:`שכ״ד ${businessConfig.rentPct}%`,val:Math.round(metrics.totalSales*(businessConfig.rentPct||0)/100),color:"#6B7280"}]:[]),
+                  ...(businessConfig.rentType==="fixed"&&businessConfig.rentFixed>0?[{label:"שכ״ד קבוע",val:businessConfig.rentFixed,color:"#6B7280"}]:[]),
+                  {label:"קבועות",      val:metrics.fixedSoFar,      color:"#9CA3AF"},
+                  {label:"שונות",        val:metrics.totalOtherExpense,color:"#D1D5DB"},
+                ].filter(r=>r.val>0).map(({label,val,color},i)=>{
                   const pct = metrics.totalExpenses>0 ? Math.min((val/metrics.totalExpenses)*100,100) : 0;
-                  const isFirst = i===0;
                   return (
-                    <div key={i} className="expense-row">
-                      <div className="expense-row-header">
-                        <span className="expense-row-label">{label}</span>
-                        <span className="expense-row-val">{fmt(val)}</span>
+                    <div key={i} className="breakdown-row">
+                      <div className="breakdown-row-hdr">
+                        <span className="breakdown-row-lbl">{label}</span>
+                        <div>
+                          <span className="breakdown-row-pct">{Math.round(pct)}%</span>
+                          <span className="breakdown-row-val">{fmt(val)}</span>
+                        </div>
                       </div>
-                      <div className="progress">
-                        <div className="progress-fill" style={{width:`${pct}%`,background:isFirst?"#111827":"#D1D5DB"}}/>
+                      <div className="breakdown-bar">
+                        <div className="breakdown-fill" style={{width:`${pct}%`,background:color}}/>
                       </div>
                     </div>
                   );
@@ -2821,7 +2872,7 @@ function PilotDashboard() {
         </div>
       )}
 
-            {/* ═══ FOOD COST ═══ */}
+                  {/* ═══ FOOD COST ═══ */}
       {screen==="foodcost" && (
         <div className="screen">
           <div style={{display:"flex",gap:6,marginBottom:16}}>
