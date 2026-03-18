@@ -496,6 +496,44 @@
     @keyframes aiBounce { 0%,80%,100%{transform:translateY(0)} 40%{transform:translateY(-5px)} }
     @keyframes spin      { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
 
+    /* ══ Demo / Onboarding ═══════════════════════════════════════════════════ */
+    .demo-banner   { background:linear-gradient(135deg,#6366F1,#818CF8); color:#fff;
+                     text-align:center; padding:7px 16px; font-size:12px; font-weight:600;
+                     letter-spacing:.2px; position:sticky; top:0; z-index:60; }
+    .demo-banner span { opacity:.8; font-weight:400; margin-right:8px; }
+
+    .conv-modal    { position:fixed; inset:0; background:rgba(15,23,42,.55); z-index:1000;
+                     display:flex; align-items:flex-end; padding:0;
+                     backdrop-filter:blur(3px); }
+    .conv-sheet    { background:#FFFFFF; width:100%; border-radius:24px 24px 0 0;
+                     padding:28px 24px 36px; animation:slideUp .3s cubic-bezier(.4,0,.2,1); }
+    @keyframes slideUp { from{transform:translateY(100%)} to{transform:translateY(0)} }
+    .conv-title    { font-size:20px; font-weight:800; color:#0F172A; letter-spacing:-.5px;
+                     margin-bottom:8px; line-height:1.3; }
+    .conv-body     { font-size:14px; color:#64748B; line-height:1.7; margin-bottom:24px; }
+    .conv-btn-main { width:100%; padding:15px; background:#6366F1; color:#fff; border:none;
+                     border-radius:14px; font-size:15px; font-weight:700; cursor:pointer;
+                     font-family:inherit; letter-spacing:-.2px; margin-bottom:10px; }
+    .conv-btn-wa   { width:100%; padding:14px; background:#25D366; color:#fff; border:none;
+                     border-radius:14px; font-size:14px; font-weight:600; cursor:pointer;
+                     font-family:inherit; display:flex; align-items:center; justify-content:center;
+                     gap:8px; margin-bottom:10px; }
+    .conv-btn-skip { width:100%; padding:10px; background:none; border:none; color:#94A3B8;
+                     font-size:13px; cursor:pointer; font-family:inherit; }
+
+    .wa-float      { position:fixed; bottom:76px; left:16px; z-index:190;
+                     width:50px; height:50px; background:#25D366; border-radius:50%;
+                     display:flex; align-items:center; justify-content:center;
+                     box-shadow:0 4px 16px rgba(37,211,102,.4); cursor:pointer;
+                     animation:waPulse 2.5s ease-in-out infinite; }
+    @keyframes waPulse { 0%,100%{box-shadow:0 4px 16px rgba(37,211,102,.4)} 50%{box-shadow:0 4px 24px rgba(37,211,102,.6)} }
+
+    .connect-screen { padding:28px 20px 80px; max-width:500px; margin:0 auto; direction:rtl; }
+    .connect-hero   { text-align:center; margin-bottom:32px; }
+    .connect-step   { display:flex; gap:14px; align-items:flex-start; margin-bottom:20px; }
+    .connect-icon   { width:36px; height:36px; background:#EEF2FF; border-radius:10px;
+                      display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+
   </style>
 </head>
 <body>
@@ -700,10 +738,11 @@
 
     // ── Authenticated fetch for Edge Functions ────────────────────────────────
     window.apiFetch = async (path, options={}) => {
-      const token = await window.getIdToken();
+      let token = null;
+      try { token = await window.getIdToken(); } catch(_) { /* demo mode or not logged in */ }
       const headers = {
-        "Authorization": `Bearer ${token}`,
-        "Content-Type":  "application/json",
+        ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+        "Content-Type": "application/json",
         ...(options.headers || {}),
       };
       return fetch(path, { ...options, headers });
@@ -1192,6 +1231,19 @@ function LoginScreen({ onLogin, tenantId }) {
         <div style={{textAlign:"center",marginTop:16}}>
           <button className="btn-link" onClick={()=>{setResetMode(true);setErr("");}}>שכחתי סיסמה
           </button>
+        </div>
+        {/* Demo Mode CTA */}
+        <div style={{marginTop:24,paddingTop:20,borderTop:"1px solid #F1F5F9",textAlign:"center"}}>
+          <div style={{fontSize:12,color:"#94A3B8",marginBottom:10}}>רוצה לראות איך זה עובד?</div>
+          <button
+            onClick={()=>onLogin({_demo:true,name:"Demo",role:"owner"})}
+            style={{width:"100%",padding:"13px",background:"linear-gradient(135deg,#6366F1,#818CF8)",
+              color:"#fff",border:"none",borderRadius:12,fontSize:14,fontWeight:700,
+              cursor:"pointer",fontFamily:"inherit",letterSpacing:"-.2px",
+              boxShadow:"0 4px 14px rgba(99,102,241,.35)"}}>
+            🚀 התחל עכשיו — Demo חינם
+          </button>
+          <div style={{fontSize:11,color:"#CBD5E1",marginTop:8}}>ללא הרשמה · נתונים לדוגמה</div>
         </div>
       </div>
       {/* ── Forgot password modal ─────────────────────────────────────── */}
@@ -2047,6 +2099,9 @@ function PilotDashboard() {
   const [setupDone, setSetupDone] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const [showFixed, setShowFixed] = useState(false);
+  const [isDemoMode, setIsDemoMode]   = useState(false);
+  const [demoModal,  setDemoModal]    = useState(null); // null | 'main' | 'smart' | 'connect'
+  const [demoTriggered, setDemoTriggered] = useState({smart:false});
   const [aiQuery,   setAiQuery]   = useState("");
   const [aiAnswer,  setAiAnswer]  = useState(null);   // null | {text, loading}
   const [aiLoading, setAiLoading] = useState(false);
@@ -2179,6 +2234,22 @@ function PilotDashboard() {
     if(window._firebaseReady) { init(); }
     else { window.addEventListener("firebase-ready", init, {once:true}); }
   },[]);
+
+  // Demo mode — auto-popup timer (30-45s)
+  useEffect(()=>{
+    if(!isDemoMode) return;
+    const t = setTimeout(()=>setDemoModal('main'), 35000);
+    return ()=>clearTimeout(t);
+  }, [isDemoMode]);
+
+  // Smart trigger — foodcost/purchases screen while in demo
+  useEffect(()=>{
+    if(!isDemoMode || demoTriggered.smart) return;
+    if(screen==="foodcost") {
+      const t = setTimeout(()=>{ setDemoModal('smart'); setDemoTriggered(p=>({...p,smart:true})); }, 4000);
+      return ()=>clearTimeout(t);
+    }
+  }, [screen, isDemoMode, demoTriggered.smart]);
 
   // useEffect 2: business-specific data -- live listeners
   useEffect(()=>{
@@ -2549,6 +2620,49 @@ function PilotDashboard() {
       <LoginScreen
         tenantId={currentBizId || businesses[0]?.id}
         onLogin={(user)=>{
+          // ── Demo Mode bypass ──────────────────────────────────────────────
+          if(user._demo) {
+            setIsDemoMode(true);
+            setLoggedInUser({name:"Demo", role:"owner", _demo:true});
+            // Inject realistic demo data
+            const today = _NOW;
+            const demoEntries = Array.from({length:18},(_,i)=>{
+              const d = new Date(today); d.setDate(d.getDate()-i);
+              const ds = d.toISOString().slice(0,10);
+              const dow = d.getDay();
+              if(dow===6) return null; // skip Saturday
+              const base = dow===5?28000:dow===4?22000:dow===3?19000:dow===2?17000:dow===1?15000:12000;
+              const sales = Math.round(base * (0.88 + Math.random()*0.25));
+              const deliveries = Math.round(sales * 0.12);
+              const food = Math.round(sales * (0.29 + Math.random()*0.06));
+              const payroll = Math.round(sales * (0.23 + Math.random()*0.04));
+              return {date:ds,sales:String(sales),deliveries:String(deliveries),
+                food_cost:String(food),payroll:String(payroll),other_expense:"0",
+                supplier_payments:{"sup1":String(Math.round(food*0.55)),"sup2":String(Math.round(food*0.3)),"sup3":String(Math.round(food*0.15))}};
+            }).filter(Boolean);
+            setEntries(demoEntries);
+            setSetupDone(true);
+            setCurrentBizId_("demo_biz");
+            setBusinesses([{id:"demo_biz",name:"מסעדת הדגל"}]);
+            setBusinessConfig({
+              businessName:"מסעדת הדגל",
+              rentType:"pct", rentPct:8, hasRoyalty:false,
+              targets:{salesGrowthPct:5, foodCostPct:30, laborCostPct:24}
+            });
+            setSuppliers([
+              {id:"sup1",name:"פריים בשר",category:"בשר",days:[0,3]},
+              {id:"sup2",name:"תנובה",category:"חלב",days:[1,4]},
+              {id:"sup3",name:"אנגל",category:"ירקות",days:[0,2,4]},
+            ]);
+            setFixedList([
+              {id:1,name:"שכ״ד",amount:18000,dueDay:1,rentPct:false},
+              {id:2,name:"ארנונה",amount:2200,dueDay:5,rentPct:false},
+              {id:3,name:"חשמל",amount:3500,dueDay:10,rentPct:false},
+            ]);
+            setLoaded(true);
+            return;
+          }
+          // ── Real login flow ───────────────────────────────────────────────
           setLoggedInUser(user);
           // First-login flow: user hasn't set real email/password yet
           if(user.mustCompleteProfile) {
@@ -3937,7 +4051,118 @@ function PilotDashboard() {
         </div>
       )}
 
-      {/* ═══ AI CHAT BAR ═══ */}
+      {/* ═══ DEMO BANNER ═══ */}
+      {isDemoMode && screen!=="connect" && (
+        <div className="demo-banner">
+          <span>מצב דמו</span>
+          הנתונים הם לדוגמה בלבד ·
+          <button onClick={()=>setDemoModal('main')}
+            style={{background:"rgba(255,255,255,.2)",border:"none",color:"#fff",padding:"2px 10px",
+              borderRadius:999,fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit",marginRight:10}}>
+            חבר את העסק שלי
+          </button>
+        </div>
+      )}
+
+      {/* ═══ WHATSAPP FLOAT ═══ */}
+      {isDemoMode && screen!=="connect" && (
+        <a href="https://wa.me/972501234567?text=%D7%94%D7%99%D7%99%20%F0%9F%91%8B%20%D7%A8%D7%90%D7%99%D7%AA%D7%99%20%D7%90%D7%AA%20%D7%94%D7%9E%D7%A2%D7%A8%D7%9B%D7%AA%20%D7%95%D7%A8%D7%95%D7%A6%D7%94%20%D7%9C%D7%97%D7%91%D7%A8%20%D7%90%D7%AA%20%D7%94%D7%A2%D7%A1%D7%A7%20%D7%A9%D7%9C%D7%99"
+          target="_blank" rel="noopener" className="wa-float" title="דבר איתנו בוואטסאפ">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="white">
+            <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/>
+            <path d="M12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.12 1.526 5.856L0 24l6.336-1.498A11.924 11.924 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.8 9.8 0 01-5.017-1.377l-.36-.213-3.727.881.924-3.638-.235-.374A9.797 9.797 0 012.182 12C2.182 6.57 6.57 2.182 12 2.182S21.818 6.57 21.818 12 17.43 21.818 12 21.818z"/>
+          </svg>
+        </a>
+      )}
+
+      {/* ═══ DEMO CONNECT SCREEN ═══ */}
+      {isDemoMode && screen==="connect" && (
+        <div className="connect-screen">
+          <div className="connect-hero">
+            <div style={{width:56,height:56,background:"linear-gradient(135deg,#6366F1,#818CF8)",
+              borderRadius:16,display:"flex",alignItems:"center",justifyContent:"center",
+              margin:"0 auto 16px",boxShadow:"0 8px 24px rgba(99,102,241,.3)"}}>
+              <svg width="28" height="28" fill="none" stroke="white" strokeWidth="2" viewBox="0 0 24 24">
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+              </svg>
+            </div>
+            <h1 style={{fontSize:22,fontWeight:800,color:"#0F172A",letterSpacing:"-.5px",marginBottom:8}}>
+              חיבור המערכת לעסק שלך
+            </h1>
+            <p style={{fontSize:14,color:"#64748B",lineHeight:1.7}}>
+              תהליך פשוט של 15 דקות — ואתה מתחיל לראות נתונים אמיתיים
+            </p>
+          </div>
+
+          {[
+            {n:1, title:"שיחת היכרות", desc:"נבין את מבנה העסק שלך — ספקים, עובדים, הוצאות"},
+            {n:2, title:"הגדרת ספקים",  desc:"נוסיף את הספקים שלך עם ימי אספקה ויעדי עלות"},
+            {n:3, title:"הזנת יעדים",   desc:"נגדיר יעדי מחזור ופוד קוסט לפי הסטנדרט שלך"},
+            {n:4, title:"ולך!",          desc:"מהיום אתה רואה את הכסף אמיתי בכל יום"},
+          ].map(step=>(
+            <div key={step.n} className="connect-step">
+              <div className="connect-icon">
+                <span style={{fontSize:15,fontWeight:800,color:"#6366F1"}}>{step.n}</span>
+              </div>
+              <div>
+                <div style={{fontSize:14,fontWeight:700,color:"#0F172A",marginBottom:3}}>{step.title}</div>
+                <div style={{fontSize:13,color:"#64748B",lineHeight:1.5}}>{step.desc}</div>
+              </div>
+            </div>
+          ))}
+
+          <div style={{marginTop:32,display:"flex",flexDirection:"column",gap:10}}>
+            <a href="https://wa.me/972501234567?text=%D7%94%D7%99%D7%99%20%F0%9F%91%8B%20%D7%A8%D7%95%D7%A6%D7%94%20%D7%9C%D7%97%D7%91%D7%A8%20%D7%90%D7%AA%20%D7%94%D7%A2%D7%A1%D7%A7%20%D7%A9%D7%9C%D7%99%20%D7%9C-Marjin"
+              target="_blank" rel="noopener"
+              style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,
+                padding:"15px",background:"#25D366",color:"#fff",borderRadius:14,
+                fontSize:15,fontWeight:700,textDecoration:"none",
+                boxShadow:"0 4px 16px rgba(37,211,102,.35)"}}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="white">
+                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347zM12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.12 1.526 5.856L0 24l6.336-1.498A11.924 11.924 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0z"/>
+              </svg>
+              שלח לי הודעה בוואטסאפ
+            </a>
+            <button onClick={()=>setScreen("dashboard")}
+              style={{padding:"12px",background:"none",border:"1px solid #E2E8F0",
+                borderRadius:14,color:"#64748B",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+              ← חזרה לדמו
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ CONVERSION MODALS ═══ */}
+      {(demoModal==='main' || demoModal==='smart') && (
+        <div className="conv-modal" onClick={()=>setDemoModal(null)}>
+          <div className="conv-sheet" onClick={e=>e.stopPropagation()}>
+            {demoModal==='smart' ? (<>
+              <div style={{fontSize:32,marginBottom:12}}>🔍</div>
+              <h2 className="conv-title">רוצה להבין מאיפה מגיעה החריגה אצלך?</h2>
+              <p className="conv-body">
+                ב-Marjin תראה בדיוק איזה ספק חרג, באיזה יום, ובכמה — עם התראות אוטומטיות לפני שזה גדל.
+              </p>
+            </>) : (<>
+              <div style={{fontSize:32,marginBottom:12}}>👀</div>
+              <h2 className="conv-title">רוצה לראות את העסק שלך ככה?</h2>
+              <p className="conv-body">
+                המערכת יכולה להתחבר לנתונים האמיתיים שלך ולהציג פוד קוסט, לייבור ותחזית — כל יום, בזמן אמת.
+              </p>
+            </>)}
+            <button className="conv-btn-main" onClick={()=>{ setDemoModal(null); setScreen("connect"); }}>
+              חבר את העסק שלי →
+            </button>
+            <a href="https://wa.me/972501234567?text=%D7%94%D7%99%D7%99%20%F0%9F%91%8B%20%D7%A8%D7%90%D7%99%D7%AA%D7%99%20%D7%90%D7%AA%20%D7%94%D7%9E%D7%A2%D7%A8%D7%9B%D7%AA%20%D7%95%D7%A8%D7%95%D7%A6%D7%94%20%D7%9C%D7%A9%D7%9E%D7%95%D7%A2%20%D7%A2%D7%95%D7%93"
+              target="_blank" rel="noopener" className="conv-btn-wa">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="white">
+                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347zM12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.12 1.526 5.856L0 24l6.336-1.498A11.924 11.924 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0z"/>
+              </svg>
+              דבר איתנו עכשיו
+            </a>
+            <button className="conv-btn-skip" onClick={()=>setDemoModal(null)}>המשך בדמו</button>
+          </div>
+        </div>
+      )}
       {(()=>{
         const askAI = async (q) => {
           if(!q.trim() || aiLoading) return;
@@ -3976,14 +4201,29 @@ ${recentEntries.slice(0,7).map(e=>{
           try {
             const resp = await window.apiFetch("/api/ai-chat", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ prompt: context }),
             });
+            if (!resp.ok) {
+              let errMsg = "שגיאת שרת";
+              try {
+                const errData = await resp.json();
+                if (errData.error === "ANTHROPIC_API_KEY not configured")
+                  errMsg = "מפתח AI לא מוגדר בשרת — בדוק הגדרות Vercel";
+                else if (errData.error)
+                  errMsg = `שגיאה: ${errData.error}`;
+              } catch(_) {}
+              setAiAnswer({text: errMsg, loading:false});
+              setAiLoading(false);
+              return;
+            }
             const data = await resp.json();
             const text = data.text || "לא הצלחתי לעבד את הבקשה.";
             setAiAnswer({text, loading:false});
           } catch(e) {
-            setAiAnswer({text:"שגיאת חיבור — בדוק אינטרנט ונסה שוב.", loading:false});
+            const msg = e.message?.includes("Failed to fetch")
+              ? "לא ניתן להתחבר לשרת — בדוק שה-endpoint /api/ai-chat קיים ב-Vercel"
+              : `שגיאה: ${e.message}`;
+            setAiAnswer({text: msg, loading:false});
           }
           setAiLoading(false);
         };
