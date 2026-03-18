@@ -551,6 +551,91 @@ const { AreaChart, BarChart, LineChart, XAxis, YAxis, CartesianGrid, Tooltip,
 
 // KPI alias — the dashboard uses <KPI>, pointing to the <Kpi> component defined below
 const KPI = (props) => <Kpi {...props}/>;
+
+// ─── Blank daily entry template ───────────────────────────────────────────────
+const FIXED_EXPENSES_DEFAULT = [
+  { id: 'rent',     name: 'שכר דירה',    amount: 0, rentPct: false, royaltyPct: false },
+  { id: 'arnona',   name: 'ארנונה',       amount: 0 },
+  { id: 'elect',    name: 'חשמל/גז/מים', amount: 0 },
+  { id: 'internet', name: 'תקשורת',      amount: 0 },
+  { id: 'insure',   name: 'ביטוחים',     amount: 0 },
+  { id: 'account',  name: 'הנהלת חשבונות',amount: 0 },
+  { id: 'other',    name: 'אחר',          amount: 0 },
+];
+
+// ─── Last year placeholder (12 months, overwritten from storage) ──────────────
+const LAST_YEAR_2025 = Array.from({length: 12}, () => ({
+  sales:          0,
+  foodCost:       0,
+  laborCost:      0,
+  grossProfitPct: 0,
+  fixedExpenses:  0,
+  networkPct:     0,
+}));
+
+const EMPTY_ENTRY = {
+  date:              "",
+  sales:             "",
+  deliveries:        "",
+  food_cost:         "",
+  payroll:           "",
+  hourly_payroll:    "",
+  other_expense:     "",
+  other_income:      "",
+  supplier_payments: {},
+  weather_impact:    "",
+  security_event:    false,
+  includeVat:        false,
+  notes:             "",
+};
+
+// ─── Formatters (module-level for use in helper components) ───────────────────
+const fmt = (n) => {
+  const num = Number(n) || 0;
+  return '₪' + Math.round(num).toLocaleString('he-IL');
+};
+const fmtPct = (n) => (Number(n) || 0).toFixed(1) + '%';
+const cfgTarget = (cfg, key, def) => Number(cfg?.[key]) || def;
+
+// ─── Date constants (computed once at load) ────────────────────────────────────
+const _NOW          = new Date();
+const YEAR          = _NOW.getFullYear();
+const MONTH         = _NOW.getMonth();          // 0-11
+const MONTH_STR      = String(MONTH + 1).padStart(2, '0');
+const DAY_OF_MONTH  = _NOW.getDate();
+const DAYS_IN_MONTH = new Date(YEAR, MONTH + 1, 0).getDate();
+const TODAY_DOW     = _NOW.getDay();            // 0=Sun
+const TODAY_STR     = `${YEAR}-${String(MONTH+1).padStart(2,'0')}-${String(DAY_OF_MONTH).padStart(2,'0')}`;
+const YESTERDAY_STR = (() => {
+  const d = new Date(_NOW); d.setDate(d.getDate()-1);
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+})();
+
+// ─── Label arrays ──────────────────────────────────────────────────────────────
+const MONTH_NAMES = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+const DOW_NAMES   = ['ראשון','שני','שלישי','רביעי','חמישי','שישי','שבת'];
+const DOW_LABELS  = ["א׳","ב׳","ג׳","ד׳","ה׳","ו׳","ש׳"];
+
+// ─── Default business targets ──────────────────────────────────────────────────
+const VAT_RATE = 1.18; // Israeli VAT (18%)
+const TARGETS = {
+  salesGrowthPct: 5,
+  foodCostPct:   33,
+  laborCostPct:  27,
+};
+
+// ─── Date helpers ──────────────────────────────────────────────────────────────
+const getDateDOW = (dateStr) => {
+  if (!dateStr) return -1;
+  const d = new Date(dateStr + 'T00:00:00');
+  return d.getDay();
+};
+const getDateDay = (dateStr) => {
+  if (!dateStr) return 0;
+  return new Date(dateStr + 'T00:00:00').getDate();
+};
+
+
 // ─── Design tokens ──────────────────────────────────────────────────────────
 // ─── Design constants (JS-side, for dynamic color logic) ──────────────────
 const COLOR = {
@@ -733,6 +818,12 @@ const ProgressBar = ({label,current,target,color}) => {
 
 
 
+const ROLE_COLORS = {
+  super_owner: { color: '#111827', bg: '#F3F4F6' },
+  owner:       { color: '#374151', bg: '#F3F4F6' },
+  manager:     { color: '#374151', bg: '#F3F4F6' },
+  staff:       { color: '#6B7280', bg: '#F9FAFB' },
+};
 const ROLES = {
   super_owner: { label:"בעלים ראשי", color:"#111827", bg:"#F3F4F6" },
   owner:       { label:"בעלים",       color:"#6B7280", bg:"#F3F4F6" },
@@ -1208,7 +1299,6 @@ function ProfileCompletionScreen({ user, onComplete }) {
 }
 
 // ─── Setup Wizard ─────────────────────────────────────────────────────────────
-const DOW_LABELS = ["א׳","ב׳","ג׳","ד׳","ה׳","ו׳","ש׳"];
 const DOW_FULL   = ["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];
 
 function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCancel, isFirstSetup=true }) {
@@ -2111,7 +2201,7 @@ function PilotDashboard() {
       });
     }
   }
-  const monthLabel = TODAY.toLocaleDateString("he-IL",{month:"long",year:"numeric"});
+  const monthLabel = _NOW.toLocaleDateString("he-IL",{month:"long",year:"numeric"});
 
   // Supplier alerts
   const supplierAlerts = [];
@@ -4122,7 +4212,7 @@ const MONTH_IDX = {
   "1":0,"2":1,"3":2,"4":3,"5":4,"6":5,"7":6,"8":7,"9":8,"10":9,"11":10,"12":11,
 };
 
-function ForecastScreen({ metrics, lastYear, saveLastYear, currentMonth, entries=[], businessConfig={}, TARGETS_DEFAULT={salesGrowthPct:5,foodCostPct:33,laborCostPct:27} }) {
+function ForecastScreen({ metrics, lastYear, saveLastYear, currentMonth, entries=[], businessConfig={}, TARGETS={salesGrowthPct:5,foodCostPct:33,laborCostPct:27} }) {
   const fileRef = useRef();
   const [mode, setMode] = useState("view"); // view | manual | mapCols
   const [lyDraft, setLyDraft] = useState(() => lastYear.map(m=>({...m})));
@@ -4242,8 +4332,8 @@ function ForecastScreen({ metrics, lastYear, saveLastYear, currentMonth, entries
 
       {/* ── Forecast card ── */}
       {(()=>{
-        const tSales  = Math.round((lastYear[currentMonth]?.sales||650000)*(1+(cfgTarget(businessConfig,"salesGrowthPct",TARGETS_DEFAULT.salesGrowthPct)/100)));
-        const tNet    = fSales > 0 ? (fSales*(1-cfgTarget(businessConfig,"foodCostPct",TARGETS_DEFAULT.foodCostPct)/100-cfgTarget(businessConfig,"laborCostPct",TARGETS_DEFAULT.laborCostPct)/100-((businessConfig.rentPct||0)+(businessConfig.hasRoyalty?businessConfig.royaltyPct||0:0))/100)-metrics.TOTAL_FIXED) : 0;
+        const tSales  = Math.round((lastYear[currentMonth]?.sales||650000)*(1+(cfgTarget(businessConfig,"salesGrowthPct",TARGETS.salesGrowthPct)/100)));
+        const tNet    = fSales > 0 ? (fSales*(1-cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct)/100-cfgTarget(businessConfig,"laborCostPct",TARGETS.laborCostPct)/100-((businessConfig.rentPct||0)+(businessConfig.hasRoyalty?businessConfig.royaltyPct||0:0))/100)-metrics.TOTAL_FIXED) : 0;
         const tNetPct = fSales > 0 ? (tNet/fSales)*100 : 0;
         return (
           <div className="card card-p" style={{ marginBottom:10}}>
@@ -4260,12 +4350,12 @@ function ForecastScreen({ metrics, lastYear, saveLastYear, currentMonth, entries
                 sub={`יעד: ${fmt(tSales)}`} />
               <MetricBox label="פוד קוסט"
                 value={fmtPct(fFoodPct)}
-                color={fcColor(fFoodPct, cfgTarget(businessConfig,"foodCostPct",TARGETS_DEFAULT.foodCostPct))}
-                sub={`יעד ${cfgTarget(businessConfig,"foodCostPct",TARGETS_DEFAULT.foodCostPct)}%`} />
+                color={fcColor(fFoodPct, cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct))}
+                sub={`יעד ${cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct)}%`} />
               <MetricBox label="לייבור קוסט"
                 value={fmtPct(fLaborPct)}
-                color={fcColor(fLaborPct, cfgTarget(businessConfig,"laborCostPct",TARGETS_DEFAULT.laborCostPct))}
-                sub={`יעד ${cfgTarget(businessConfig,"laborCostPct",TARGETS_DEFAULT.laborCostPct)}%`} />
+                color={fcColor(fLaborPct, cfgTarget(businessConfig,"laborCostPct",TARGETS.laborCostPct))}
+                sub={`יעד ${cfgTarget(businessConfig,"laborCostPct",TARGETS.laborCostPct)}%`} />
               <MetricBox label="רווח נקי חזוי"
                 value={fmt(Math.round(tNet))}
                 color={tNet>0?"#16A34A":"#DC2626"}
