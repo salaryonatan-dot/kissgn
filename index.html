@@ -2129,6 +2129,27 @@ function PilotDashboard() {
   const [aiLoading, setAiLoading] = useState(false);
 
   // ── AI send — defined at component level so it's never stale ──────────────
+  const [businesses, setBusinesses] = useState([]);
+  const [currentBizId, setCurrentBizId_] = useState(null);
+  const setCurrentBizId = id => {
+    setCurrentBizId_(id);
+    // NOTE: do NOT update tenantId here — tenantId is fixed per user account
+    // tenantId is set once during login/init and never changes
+    if (id) {
+      const uid = window.storage.getUid ? window.storage.getUid() : null;
+      if(uid) try { localStorage.setItem("marjin_biz_" + uid, id); } catch(_){}
+    }
+  };
+  const [showBizSelect, setShowBizSelect] = useState(false);
+  const [entryStep, setEntryStep] = useState('idle'); // 'idle' | 'revenue' | 'suppliers'
+  const [pendingCredits, setPendingCredits] = useState([]); // [{id,supplierId,supplierName,date,amount,note}]
+  const [businessConfig, setBusinessConfig] = useState({
+    businessName: "",
+    rentPct: 0, royaltyPct: 0, hasRoyalty: false,
+    targets: { salesGrowthPct:5, foodCostPct:33, laborCostPct:27 }
+  });
+  const [suppliers, setSuppliers] = useState([]);
+
   const sendAI = React.useCallback(async (query) => {
     const q = (typeof query === "string" ? query : aiQuery).trim();
     console.log("[Marjin AI] sendAI called, query:", q, "| loading:", aiLoading);
@@ -2220,26 +2241,6 @@ ${recent}
     setAiLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiQuery, aiLoading, entries, suppliers, metrics, businessConfig, lastYear]);
-  const [businesses, setBusinesses] = useState([]);
-  const [currentBizId, setCurrentBizId_] = useState(null);
-  const setCurrentBizId = id => {
-    setCurrentBizId_(id);
-    // NOTE: do NOT update tenantId here — tenantId is fixed per user account
-    // tenantId is set once during login/init and never changes
-    if (id) {
-      const uid = window.storage.getUid ? window.storage.getUid() : null;
-      if(uid) try { localStorage.setItem("marjin_biz_" + uid, id); } catch(_){}
-    }
-  };
-  const [showBizSelect, setShowBizSelect] = useState(false);
-  const [entryStep, setEntryStep] = useState('idle'); // 'idle' | 'revenue' | 'suppliers'
-  const [pendingCredits, setPendingCredits] = useState([]); // [{id,supplierId,supplierName,date,amount,note}]
-  const [businessConfig, setBusinessConfig] = useState({
-    businessName: "",
-    rentPct: 0, royaltyPct: 0, hasRoyalty: false,
-    targets: { salesGrowthPct:5, foodCostPct:33, laborCostPct:27 }
-  });
-  const [suppliers, setSuppliers] = useState([]);
 
   const sg = async (key, shared=false) => { try { return await window.storage.get(key, shared); } catch(_){ return null; } };
 
