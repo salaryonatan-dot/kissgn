@@ -461,6 +461,41 @@
     }
 
 
+    /* ══ AI Chat Bar ══════════════════════════════════════════════════════════ */
+    .ai-bar          { position:fixed; bottom:0; left:0; right:0; z-index:200;
+                       background:#FFFFFF; border-top:1px solid #E5E7EB;
+                       padding:10px 14px 14px; box-shadow:0 -4px 20px rgba(0,0,0,.07); }
+    .ai-bar-input    { display:flex; gap:8px; align-items:center; }
+    .ai-input        { flex:1; background:#F8FAFC; border:1.5px solid #E2E8F0; border-radius:12px;
+                       padding:10px 14px; font-size:14px; font-family:inherit; color:#111827;
+                       outline:none; direction:rtl; transition:border-color .15s; }
+    .ai-input:focus  { border-color:#6366F1; background:#FAFBFF; }
+    .ai-input::placeholder { color:#9CA3AF; }
+    .ai-send         { width:40px; height:40px; border-radius:12px; background:#6366F1; border:none;
+                       cursor:pointer; display:flex; align-items:center; justify-content:center;
+                       flex-shrink:0; transition:opacity .15s; }
+    .ai-send:disabled{ opacity:.45; cursor:default; }
+    .ai-chips        { display:flex; gap:6px; overflow-x:auto; padding-bottom:8px; scrollbar-width:none; margin-bottom:6px; }
+    .ai-chips::-webkit-scrollbar { display:none; }
+    .ai-chip         { white-space:nowrap; font-size:11px; font-weight:500; padding:5px 11px;
+                       background:#F1F5F9; border:1px solid #E2E8F0; border-radius:999px;
+                       color:#475569; cursor:pointer; font-family:inherit; flex-shrink:0; transition:all .15s; }
+    .ai-chip:hover   { background:#EEF2FF; border-color:#C7D2FE; color:#4F46E5; }
+    .ai-answer       { background:#FAFBFF; border:1px solid #E0E7FF; border-radius:14px;
+                       padding:14px 16px; margin-bottom:8px; font-size:13px; line-height:1.65;
+                       color:#1E293B; position:relative; max-height:180px; overflow-y:auto; }
+    .ai-answer-label { font-size:10px; font-weight:600; color:#818CF8; letter-spacing:.5px;
+                       text-transform:uppercase; margin-bottom:7px; display:flex; align-items:center; gap:5px; }
+    .ai-answer-dot   { width:6px; height:6px; border-radius:50%; background:#818CF8; animation:pulse 1.2s infinite; }
+    .ai-close        { position:absolute; top:8px; left:10px; background:none; border:none;
+                       cursor:pointer; color:#CBD5E1; font-size:16px; padding:2px 5px; line-height:1; }
+    .ai-loading      { display:flex; gap:4px; align-items:center; padding:4px 0; }
+    .ai-dot          { width:6px; height:6px; border-radius:50%; background:#818CF8; animation:aiBounce .9s ease infinite; }
+    .ai-dot:nth-child(2){ animation-delay:.15s; }
+    .ai-dot:nth-child(3){ animation-delay:.3s; }
+    @keyframes aiBounce { 0%,80%,100%{transform:translateY(0)} 40%{transform:translateY(-5px)} }
+    @keyframes spin      { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+
   </style>
 </head>
 <body>
@@ -2012,6 +2047,9 @@ function PilotDashboard() {
   const [setupDone, setSetupDone] = useState(false);
   const [showSetup, setShowSetup] = useState(false);
   const [showFixed, setShowFixed] = useState(false);
+  const [aiQuery,   setAiQuery]   = useState("");
+  const [aiAnswer,  setAiAnswer]  = useState(null);   // null | {text, loading}
+  const [aiLoading, setAiLoading] = useState(false);
   const [businesses, setBusinesses] = useState([]);
   const [currentBizId, setCurrentBizId_] = useState(null);
   const setCurrentBizId = id => {
@@ -3843,6 +3881,7 @@ function PilotDashboard() {
       )}
 
       {/* ═══ FIXED ═══ */}
+      {/* ═══ FIXED SCREEN (legacy, kept for backward compat) ═══ */}
       {screen==="fixed" && (
         <div className="screen">
           <div className="card card-p">
@@ -3897,6 +3936,120 @@ function PilotDashboard() {
           </div>
         </div>
       )}
+
+      {/* ═══ AI CHAT BAR ═══ */}
+      {(()=>{
+        const askAI = async (q) => {
+          if(!q.trim() || aiLoading) return;
+          setAiLoading(true);
+          setAiAnswer({text:"", loading:true});
+
+          // Build rich context from current business data
+          const recentEntries = [...entries].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,30);
+          const suppTotals = suppliers.map(s=>{
+            const tot = entries.reduce((a,e)=>a+(Number(e.supplier_payments?.[s.id])||0),0);
+            return `${s.name}: ${fmt(tot)}`;
+          }).join(", ");
+
+          const context = `
+אתה יועץ עסקי של מסעדה בישראל. ענה בעברית, קצר וישיר (2-4 שורות מקסימום).
+
+נתוני העסק — ${businessConfig.businessName||"המסעדה"}, ${MONTH_NAMES[MONTH]} ${YEAR}:
+• הכנסות עד כה: ${fmt(metrics.totalSales)} (יעד: ${fmt(Math.round((lastYear[MONTH]?.sales||650000)*(1+(cfgTarget(businessConfig,"salesGrowthPct",TARGETS.salesGrowthPct)/100))))})
+• פוד קוסט: ${metrics.foodCostPct.toFixed(1)}% (יעד: ${cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct)}%)
+• עלות עובדים: ${fmt(metrics.totalPayroll)} (${metrics.totalSales>0?((metrics.totalPayroll/metrics.totalSales)*100).toFixed(1):"0"}% ממחזור)
+• הוצאות קבועות: ${fmt(metrics.TOTAL_FIXED)}
+• יתרת קופה: ${fmt(metrics.lc)}
+• ממוצע יומי: ${fmt(Math.round(metrics.dailyAvg))}
+• ימים בחודש: ${DAY_OF_MONTH}/${DAYS_IN_MONTH}
+• קניות לפי ספק: ${suppTotals||"אין נתונים"}
+• ${recentEntries.length} ימים מוזנים
+${recentEntries.slice(0,7).map(e=>{
+  const inc=(Number(e.sales)||0)+(Number(e.deliveries)||0);
+  const sup=e.supplier_payments?Object.values(e.supplier_payments).reduce((a,b)=>a+(Number(b)||0),0):0;
+  const pay=Number(e.payroll)||0;
+  return `  ${e.date}: הכנסות ${fmt(inc)}, קניות ${fmt(sup)}, שכר ${fmt(pay)}`;
+}).join("\n")}
+
+שאלת המשתמש: ${q}`;
+
+          try {
+            const resp = await window.apiFetch("/api/ai-chat", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ prompt: context }),
+            });
+            const data = await resp.json();
+            const text = data.text || "לא הצלחתי לעבד את הבקשה.";
+            setAiAnswer({text, loading:false});
+          } catch(e) {
+            setAiAnswer({text:"שגיאת חיבור — בדוק אינטרנט ונסה שוב.", loading:false});
+          }
+          setAiLoading(false);
+        };
+
+        const CHIPS = [
+          "מה מצב הפוד קוסט שלי?",
+          "מה הממוצע היומי השבוע?",
+          "באיזה יום מרוויחים הכי הרבה?",
+          "מה התחזית לסוף החודש?",
+          "איזה ספק הכי יקר?",
+        ];
+
+        return (
+          <div className="ai-bar">
+            {/* Answer bubble */}
+            {aiAnswer && (
+              <div className="ai-answer">
+                <button className="ai-close" onClick={()=>setAiAnswer(null)}>×</button>
+                <div className="ai-answer-label">
+                  {aiAnswer.loading && <div className="ai-answer-dot"/>}
+                  Marjin AI
+                </div>
+                {aiAnswer.loading
+                  ? <div className="ai-loading">
+                      <div className="ai-dot"/><div className="ai-dot"/><div className="ai-dot"/>
+                    </div>
+                  : <div style={{whiteSpace:"pre-wrap"}}>{aiAnswer.text}</div>
+                }
+              </div>
+            )}
+
+            {/* Quick chips */}
+            {!aiAnswer && (
+              <div className="ai-chips">
+                {CHIPS.map(chip=>(
+                  <button key={chip} className="ai-chip" onClick={()=>{ setAiQuery(chip); askAI(chip); }}>
+                    {chip}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Input row */}
+            <div className="ai-bar-input">
+              <input
+                className="ai-input"
+                placeholder="שאל שאלה על העסק..."
+                value={aiQuery}
+                onChange={e=>setAiQuery(e.target.value)}
+                onKeyDown={e=>{ if(e.key==="Enter") askAI(aiQuery); }}
+              />
+              <button className="ai-send" onClick={()=>askAI(aiQuery)} disabled={aiLoading||!aiQuery.trim()}>
+                {aiLoading
+                  ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"
+                      style={{animation:"spin 1s linear infinite"}}>
+                      <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4"/>
+                    </svg>
+                  : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
+                      <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                    </svg>
+                }
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
     </div>
   );
