@@ -4,364 +4,194 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Marjin — ניהול מסעדות חכם</title>
-  <meta name="description" content="פוד קוסט, לייבור, ספקים ותחזית — הכל במסך אחד. לדעת את המספרים שלך לפני שהם מפתיעים אותך."/>
+  <meta name="description" content="פוד קוסט, לייבור, ספקים ותחזית — הכל במסך אחד."/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet"/>
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html { scroll-behavior: smooth; }
-    body {
-      font-family: 'Heebo', sans-serif;
-      background: #0A0A0F;
-      color: #F8FAFC;
-      direction: rtl;
-      overflow-x: hidden;
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html{scroll-behavior:smooth}
+    body{font-family:'Heebo',sans-serif;background:#F8FAFC;color:#0F172A;direction:rtl;overflow-x:hidden}
+    :root{
+      --ind:#6366F1;--indl:#818CF8;--indd:#EEF2FF;
+      --sl:#1E293B;--mu:#64748B;--fa:#94A3B8;
+      --br:#E2E8F0;--su:#FFFFFF;--gr:#10B981;
     }
-
-    /* ── CSS Variables ── */
-    :root {
-      --indigo: #6366F1;
-      --indigo-light: #818CF8;
-      --indigo-dim: rgba(99,102,241,.15);
-      --slate: #1E293B;
-      --slate-light: #334155;
-      --muted: #64748B;
-      --faint: #94A3B8;
-      --white: #F8FAFC;
-      --green: #10B981;
-      --amber: #F59E0B;
-    }
-
-    /* ── Noise texture overlay ── */
-    body::before {
-      content: '';
-      position: fixed; inset: 0; z-index: 0; pointer-events: none;
-      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
-      opacity: .4;
-    }
-
-    /* ── Glow blobs ── */
-    .blob1 {
-      position: fixed; width: 600px; height: 600px; border-radius: 50%;
-      background: radial-gradient(circle, rgba(99,102,241,.18) 0%, transparent 70%);
-      top: -200px; right: -200px; pointer-events: none; z-index: 0;
-      animation: blobFloat 8s ease-in-out infinite;
-    }
-    .blob2 {
-      position: fixed; width: 400px; height: 400px; border-radius: 50%;
-      background: radial-gradient(circle, rgba(16,185,129,.1) 0%, transparent 70%);
-      bottom: 100px; left: -100px; pointer-events: none; z-index: 0;
-      animation: blobFloat 10s ease-in-out infinite reverse;
-    }
-    @keyframes blobFloat {
-      0%, 100% { transform: translateY(0) scale(1); }
-      50% { transform: translateY(-30px) scale(1.05); }
-    }
-
-    /* ── Layout ── */
-    .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
-
-    /* ── NAV ── */
-    nav {
-      position: sticky; top: 0; z-index: 100;
-      padding: 16px 0;
-      background: rgba(10,10,15,.8);
-      backdrop-filter: blur(16px);
-      border-bottom: 1px solid rgba(255,255,255,.06);
-    }
-    .nav-inner { display: flex; align-items: center; justify-content: space-between; }
-    .nav-logo { display: flex; align-items: center; gap: 10px; text-decoration: none; }
-    .nav-logo-mark {
-      width: 32px; height: 32px; background: var(--indigo); border-radius: 8px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 14px; font-weight: 800; color: white; letter-spacing: -0.5px;
-    }
-    .nav-logo-text { font-size: 18px; font-weight: 800; color: white; letter-spacing: -0.5px; }
-    .nav-actions { display: flex; gap: 10px; align-items: center; }
-    .btn-ghost {
-      padding: 8px 18px; background: transparent; border: 1px solid rgba(255,255,255,.15);
-      border-radius: 10px; color: #94A3B8; font-size: 13px; font-weight: 500;
-      cursor: pointer; font-family: inherit; text-decoration: none;
-      transition: all .2s;
-    }
-    .btn-ghost:hover { border-color: rgba(255,255,255,.3); color: white; }
-    .btn-primary {
-      padding: 9px 22px; background: var(--indigo); border: none;
-      border-radius: 10px; color: white; font-size: 13px; font-weight: 700;
-      cursor: pointer; font-family: inherit; text-decoration: none;
-      transition: all .2s; box-shadow: 0 0 24px rgba(99,102,241,.4);
-    }
-    .btn-primary:hover { background: var(--indigo-light); box-shadow: 0 0 32px rgba(99,102,241,.6); transform: translateY(-1px); }
-
-    /* ── HERO ── */
-    .hero {
-      padding: 100px 0 80px;
-      text-align: center;
-    }
-    .hero-badge {
-      display: inline-flex; align-items: center; gap: 8px;
-      background: var(--indigo-dim); border: 1px solid rgba(99,102,241,.3);
-      border-radius: 999px; padding: 6px 16px; font-size: 12px;
-      color: var(--indigo-light); font-weight: 600; letter-spacing: .3px;
-      margin-bottom: 28px;
-      animation: fadeUp .5s ease both;
-    }
-    .hero-badge::before { content: ''; width: 6px; height: 6px; background: var(--indigo-light); border-radius: 50%; animation: pulse 1.5s infinite; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-    @keyframes fadeUp { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:none} }
-
-    .hero h1 {
-      font-size: clamp(36px, 7vw, 72px);
-      font-weight: 900;
-      line-height: 1.1;
-      letter-spacing: -2.5px;
-      margin-bottom: 20px;
-      animation: fadeUp .5s .1s ease both;
-    }
-    .hero h1 em { font-style: normal; color: var(--indigo-light); }
-    .hero-sub {
-      font-size: clamp(16px, 2.5vw, 20px);
-      color: var(--faint);
-      line-height: 1.7;
-      max-width: 560px;
-      margin: 0 auto 40px;
-      font-weight: 400;
-      animation: fadeUp .5s .2s ease both;
-    }
-    .hero-ctas {
-      display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;
-      animation: fadeUp .5s .3s ease both;
-    }
-    .btn-hero-main {
-      padding: 16px 36px;
-      background: var(--indigo);
-      border: none; border-radius: 14px;
-      color: white; font-size: 16px; font-weight: 800;
-      cursor: pointer; font-family: inherit; text-decoration: none;
-      box-shadow: 0 0 40px rgba(99,102,241,.5);
-      transition: all .2s; letter-spacing: -.3px;
-      display: inline-flex; align-items: center; gap: 8px;
-    }
-    .btn-hero-main:hover { transform: translateY(-2px); box-shadow: 0 0 60px rgba(99,102,241,.7); }
-    .btn-hero-sec {
-      padding: 16px 28px;
-      background: rgba(255,255,255,.06);
-      border: 1px solid rgba(255,255,255,.12);
-      border-radius: 14px; color: #CBD5E1; font-size: 15px; font-weight: 600;
-      cursor: pointer; font-family: inherit; text-decoration: none;
-      transition: all .2s; letter-spacing: -.2px;
-    }
-    .btn-hero-sec:hover { background: rgba(255,255,255,.1); color: white; border-color: rgba(255,255,255,.2); }
-    .hero-note { font-size: 12px; color: #475569; margin-top: 16px; animation: fadeUp .5s .4s ease both; }
-
-    /* ── MOCK DASHBOARD ── */
-    .dash-mock-wrap {
-      margin: 60px auto 0;
-      max-width: 860px;
-      animation: fadeUp .6s .4s ease both;
-    }
-    .dash-mock {
-      background: #111827;
-      border: 1px solid rgba(255,255,255,.08);
-      border-radius: 20px;
-      overflow: hidden;
-      box-shadow: 0 40px 100px rgba(0,0,0,.6), 0 0 0 1px rgba(99,102,241,.15);
-    }
-    .mock-bar {
-      background: #0F172A;
-      border-bottom: 1px solid rgba(255,255,255,.06);
-      padding: 12px 20px;
-      display: flex; align-items: center; gap: 12px;
-    }
-    .mock-dots { display: flex; gap: 6px; }
-    .mock-dot { width: 10px; height: 10px; border-radius: 50%; }
-    .mock-title { font-size: 12px; color: #475569; flex: 1; text-align: center; }
-    .mock-body { padding: 20px; display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
-    .mock-kpi { background: #1E293B; border-radius: 12px; padding: 16px; }
-    .mock-kpi-lbl { font-size: 9px; color: #475569; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
-    .mock-kpi-val { font-size: 20px; font-weight: 800; letter-spacing: -1px; }
-    .mock-kpi-sub { font-size: 10px; color: #475569; margin-top: 4px; }
-    .mock-hero-row { grid-column: 1/-1; }
-    .mock-hero { background: linear-gradient(135deg,#1E3A5F,#1E293B); border-radius: 14px; padding: 20px 24px; border: 1px solid rgba(99,102,241,.2); }
-    .mock-hero-num { font-size: 36px; font-weight: 900; letter-spacing: -2px; color: white; }
-    .mock-prog { height: 6px; background: rgba(255,255,255,.1); border-radius: 999px; margin: 12px 0 6px; overflow: hidden; }
-    .mock-prog-fill { height: 100%; background: linear-gradient(90deg, #6366F1, #818CF8); border-radius: 999px; width: 62%; }
-    .mock-chart-row { grid-column: 1/-1; }
-    .mock-chart { background: #1E293B; border-radius: 12px; padding: 16px; height: 100px; display: flex; align-items: flex-end; gap: 4px; }
-    .mock-bar-el { background: rgba(99,102,241,.3); border-radius: 3px 3px 0 0; flex: 1; transition: background .3s; }
-    .mock-bar-el:hover { background: rgba(99,102,241,.8); }
-
-    /* ── SECTION HEADER ── */
-    .section { padding: 80px 0; }
-    .section-label { font-size: 11px; color: var(--indigo-light); font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 14px; }
-    .section-title { font-size: clamp(26px, 4vw, 42px); font-weight: 800; letter-spacing: -1.5px; line-height: 1.2; margin-bottom: 16px; }
-    .section-sub { font-size: 16px; color: var(--faint); line-height: 1.7; max-width: 520px; }
-
-    /* ── FEATURES GRID ── */
-    .features-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 48px; }
-    @media (max-width: 640px) { .features-grid { grid-template-columns: 1fr; } }
-    .feature-card {
-      background: rgba(30,41,59,.6);
-      border: 1px solid rgba(255,255,255,.07);
-      border-radius: 18px; padding: 28px;
-      transition: all .25s;
-      position: relative; overflow: hidden;
-    }
-    .feature-card::before {
-      content: ''; position: absolute; inset: 0; border-radius: 18px;
-      background: radial-gradient(ellipse at top right, var(--card-glow, rgba(99,102,241,.08)), transparent 60%);
-      pointer-events: none;
-    }
-    .feature-card:hover { border-color: rgba(99,102,241,.25); transform: translateY(-3px); box-shadow: 0 20px 40px rgba(0,0,0,.4); }
-    .feature-icon {
-      width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
-      margin-bottom: 18px; font-size: 22px;
-    }
-    .feature-title { font-size: 17px; font-weight: 700; margin-bottom: 8px; letter-spacing: -.3px; }
-    .feature-body { font-size: 14px; color: var(--faint); line-height: 1.7; }
-    .feature-metric {
-      display: inline-flex; align-items: center; gap: 6px; margin-top: 14px;
-      background: rgba(16,185,129,.1); border: 1px solid rgba(16,185,129,.2);
-      border-radius: 999px; padding: 4px 12px; font-size: 12px; color: var(--green); font-weight: 600;
-    }
-
-    /* ── AI SECTION ── */
-    .ai-section { padding: 80px 0; }
-    .ai-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: center; margin-top: 48px; }
-    @media (max-width: 640px) { .ai-grid { grid-template-columns: 1fr; } .ai-mock-side { order: -1; } }
-    .ai-chat-mock {
-      background: #111827; border: 1px solid rgba(255,255,255,.08); border-radius: 18px;
-      overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.5);
-    }
-    .ai-chat-header { background: #0F172A; padding: 14px 18px; border-bottom: 1px solid rgba(255,255,255,.06); display: flex; align-items: center; gap: 10px; }
-    .ai-chat-logo { width: 24px; height: 24px; background: var(--indigo); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: white; }
-    .ai-chat-title { font-size: 13px; font-weight: 600; color: #94A3B8; }
-    .ai-chat-body { padding: 20px 16px; display: flex; flex-direction: column; gap: 12px; }
-    .ai-q { background: rgba(99,102,241,.15); border: 1px solid rgba(99,102,241,.2); border-radius: 12px 12px 4px 12px; padding: 11px 14px; font-size: 13px; color: #C7D2FE; align-self: flex-end; max-width: 85%; }
-    .ai-a { background: rgba(30,41,59,.8); border: 1px solid rgba(255,255,255,.07); border-radius: 4px 12px 12px 12px; padding: 11px 14px; font-size: 13px; color: #CBD5E1; max-width: 90%; line-height: 1.6; }
-    .ai-a strong { color: var(--indigo-light); }
-    .ai-chip-row { display: flex; gap: 7px; flex-wrap: wrap; padding: 0 16px 16px; }
-    .ai-chip-mock { background: rgba(30,41,59,.8); border: 1px solid rgba(255,255,255,.1); border-radius: 999px; padding: 6px 13px; font-size: 11px; color: #64748B; }
-
-    /* ── SOCIAL PROOF ── */
-    .proof-row { display: flex; gap: 40px; margin-top: 60px; flex-wrap: wrap; }
-    .proof-item { }
-    .proof-num { font-size: 36px; font-weight: 900; letter-spacing: -1.5px; color: white; }
-    .proof-num span { color: var(--indigo-light); }
-    .proof-label { font-size: 13px; color: var(--faint); margin-top: 4px; }
-
-    /* ── FINAL CTA ── */
-    .final-cta {
-      text-align: center; padding: 100px 0 80px;
-      background: radial-gradient(ellipse at center, rgba(99,102,241,.12) 0%, transparent 65%);
-      border-top: 1px solid rgba(255,255,255,.05);
-    }
-    .final-cta h2 { font-size: clamp(28px, 5vw, 52px); font-weight: 900; letter-spacing: -2px; margin-bottom: 16px; }
-    .final-cta p { font-size: 17px; color: var(--faint); margin-bottom: 36px; }
-
-    /* ── FOOTER ── */
-    footer { padding: 28px 0; border-top: 1px solid rgba(255,255,255,.05); text-align: center; font-size: 12px; color: #334155; }
-
-    /* ── WA FLOAT ── */
-    .wa-float {
-      position: fixed; bottom: 24px; left: 20px; z-index: 200;
-      width: 52px; height: 52px; background: #25D366;
-      border-radius: 50%; display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 4px 20px rgba(37,211,102,.45); cursor: pointer; text-decoration: none;
-      transition: transform .2s;
-    }
-    .wa-float:hover { transform: scale(1.08); }
-
-    /* ── Scroll animations ── */
-    .reveal { opacity: 0; transform: translateY(24px); transition: opacity .6s ease, transform .6s ease; }
-    .reveal.visible { opacity: 1; transform: none; }
-
-    @media (max-width: 480px) {
-      .mock-body { grid-template-columns: repeat(2,1fr); }
-      .nav-actions .btn-ghost { display: none; }
+    .container{max-width:1100px;margin:0 auto;padding:0 24px}
+    nav{position:sticky;top:0;z-index:100;padding:14px 0;background:rgba(248,250,252,.92);backdrop-filter:blur(12px);border-bottom:1px solid var(--br)}
+    .nav-inner{display:flex;align-items:center;justify-content:space-between}
+    .nav-logo{display:flex;align-items:center;gap:10px;text-decoration:none}
+    .nav-mark{width:32px;height:32px;background:#0F172A;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;color:white}
+    .nav-name{font-size:17px;font-weight:800;color:#0F172A;letter-spacing:-.4px}
+    .nav-acts{display:flex;gap:10px;align-items:center}
+    .btn-ghost{padding:8px 18px;background:transparent;border:1px solid var(--br);border-radius:10px;color:var(--mu);font-size:13px;font-weight:500;cursor:pointer;font-family:inherit;text-decoration:none;transition:all .18s}
+    .btn-ghost:hover{border-color:#94A3B8;color:#0F172A}
+    .btn-pri{padding:9px 22px;background:var(--ind);border:none;border-radius:10px;color:white;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;text-decoration:none;transition:all .18s}
+    .btn-pri:hover{background:var(--indl);transform:translateY(-1px);box-shadow:0 4px 14px rgba(99,102,241,.3)}
+    @keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+    .hero{padding:80px 0 60px;text-align:center;background:linear-gradient(180deg,#fff 0%,#F8FAFC 100%)}
+    .hero-badge{display:inline-flex;align-items:center;gap:7px;background:var(--indd);border:1px solid #C7D2FE;border-radius:999px;padding:5px 14px;font-size:12px;color:var(--ind);font-weight:600;margin-bottom:24px;animation:fadeUp .4s ease both}
+    .bdot{width:6px;height:6px;background:var(--ind);border-radius:50%}
+    .hero h1{font-size:clamp(32px,6vw,60px);font-weight:900;line-height:1.12;letter-spacing:-2px;color:#0F172A;margin-bottom:18px;animation:fadeUp .4s .08s ease both}
+    .hero h1 em{font-style:normal;color:var(--ind)}
+    .hero-sub{font-size:clamp(15px,2.2vw,18px);color:var(--mu);line-height:1.75;max-width:520px;margin:0 auto 36px;animation:fadeUp .4s .16s ease both}
+    .hero-ctas{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;animation:fadeUp .4s .22s ease both}
+    .btn-hm{padding:14px 32px;background:var(--ind);border:none;border-radius:12px;color:white;font-size:15px;font-weight:800;cursor:pointer;font-family:inherit;text-decoration:none;box-shadow:0 4px 20px rgba(99,102,241,.35);transition:all .18s;display:inline-flex;align-items:center;gap:8px}
+    .btn-hm:hover{transform:translateY(-2px);box-shadow:0 8px 28px rgba(99,102,241,.45);background:#4F46E5}
+    .btn-hs{padding:14px 24px;background:white;border:1.5px solid var(--br);border-radius:12px;color:#374151;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit;text-decoration:none;transition:all .18s}
+    .btn-hs:hover{border-color:#94A3B8;color:#0F172A;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+    .hero-note{font-size:11px;color:var(--fa);margin-top:14px;animation:fadeUp .4s .28s ease both}
+    .mock-wrap{margin:52px auto 0;max-width:860px;animation:fadeUp .5s .3s ease both}
+    .mock{background:white;border:1px solid var(--br);border-radius:18px;overflow:hidden;box-shadow:0 4px 6px rgba(0,0,0,.04),0 20px 60px rgba(0,0,0,.08),0 0 0 1px rgba(99,102,241,.06)}
+    .mock-top{background:#F8FAFC;border-bottom:1px solid var(--br);padding:10px 20px;display:flex;align-items:center;gap:10px}
+    .mock-dots{display:flex;gap:5px}
+    .md{width:9px;height:9px;border-radius:50%}
+    .mock-url{flex:1;text-align:center;font-size:11px;color:var(--fa)}
+    .mock-body{padding:18px}
+    .mock-nav{display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid #F1F5F9;padding-bottom:10px}
+    .mnav-t{font-size:11px;padding:5px 12px;border-radius:6px;color:var(--fa)}
+    .mnav-t.a{background:var(--ind);color:white;font-weight:700}
+    .kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+    .kpi-c{background:white;border:1px solid #F1F5F9;border-radius:12px;padding:14px 12px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+    .kl{font-size:9px;color:var(--fa);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px}
+    .kv{font-size:17px;font-weight:800;color:#0F172A;letter-spacing:-.7px}
+    .ks{font-size:9px;color:var(--fa);margin-top:4px}
+    .hero-c{background:#EEF2FF;border:1px solid #C7D2FE;border-radius:14px;padding:18px 20px;margin-bottom:14px;position:relative;overflow:hidden}
+    .hero-c::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--ind),var(--indl))}
+    .hero-num{font-size:28px;font-weight:900;color:#0F172A;letter-spacing:-1.5px}
+    .hero-sub2{font-size:11px;color:var(--mu);margin-top:4px}
+    .prog{height:5px;background:rgba(99,102,241,.15);border-radius:999px;margin:12px 0 4px;overflow:hidden}
+    .prog-f{height:100%;width:62%;background:linear-gradient(90deg,var(--ind),var(--indl));border-radius:999px}
+    .prog-l{display:flex;justify-content:space-between;font-size:9px;color:var(--fa)}
+    .bot-row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .bot-c{background:white;border:1px solid #F1F5F9;border-radius:12px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+    .bot-t{font-size:9px;color:var(--fa);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
+    .chart-bars{height:60px;display:flex;align-items:flex-end;gap:3px}
+    .cb{border-radius:3px 3px 0 0;flex:1;background:#EEF2FF}
+    .bd-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:11px}
+    .bd-bar{height:4px;background:#F1F5F9;border-radius:999px;overflow:hidden;margin-top:3px}
+    .bd-fill{height:100%;border-radius:999px}
+    .section{padding:80px 0}
+    .sec-lbl{font-size:11px;color:var(--ind);font-weight:700;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:12px}
+    .sec-h{font-size:clamp(24px,3.5vw,38px);font-weight:800;letter-spacing:-1.2px;line-height:1.2;margin-bottom:14px;color:#0F172A}
+    .sec-sub{font-size:15px;color:var(--mu);line-height:1.75;max-width:500px}
+    .feat-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:44px}
+    .feat-c{background:white;border:1px solid var(--br);border-radius:16px;padding:26px;transition:all .2s;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+    .feat-c:hover{border-color:#C7D2FE;transform:translateY(-2px);box-shadow:0 8px 24px rgba(99,102,241,.1)}
+    .feat-ico{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:16px;font-size:20px}
+    .feat-t{font-size:16px;font-weight:700;color:#0F172A;margin-bottom:8px;letter-spacing:-.2px}
+    .feat-b{font-size:13px;color:var(--mu);line-height:1.7}
+    .feat-pill{display:inline-flex;align-items:center;gap:5px;margin-top:14px;background:#F0FDF4;border:1px solid #BBF7D0;border-radius:999px;padding:3px 11px;font-size:11px;color:#15803D;font-weight:600}
+    .ai-sec{padding:80px 0;background:white;border-top:1px solid var(--br);border-bottom:1px solid var(--br)}
+    .ai-grid{display:grid;grid-template-columns:1fr 1.1fr;gap:48px;align-items:center;margin-top:44px}
+    .ai-mock{background:#F8FAFC;border:1px solid var(--br);border-radius:16px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.06)}
+    .ai-hdr{background:white;padding:12px 16px;border-bottom:1px solid var(--br);display:flex;align-items:center;gap:8px}
+    .ai-logo{width:22px;height:22px;background:var(--ind);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:white}
+    .ai-nm{font-size:12px;font-weight:600;color:#374151}
+    .ai-dot{width:6px;height:6px;background:var(--gr);border-radius:50%}
+    .ai-body{padding:16px;display:flex;flex-direction:column;gap:10px}
+    .ai-q{background:var(--ind);border-radius:12px 12px 4px 12px;padding:10px 14px;font-size:13px;color:white;align-self:flex-end;max-width:85%;font-weight:500}
+    .ai-a{background:white;border:1px solid var(--br);border-radius:4px 12px 12px 12px;padding:10px 14px;font-size:13px;color:#374151;max-width:90%;line-height:1.65;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+    .ai-a strong{color:var(--ind);font-weight:700}
+    .ai-chips{padding:0 16px 14px;display:flex;gap:6px;flex-wrap:wrap}
+    .ai-chip{background:white;border:1px solid var(--br);border-radius:999px;padding:5px 12px;font-size:11px;color:var(--fa)}
+    .proof-band{background:white;border-top:1px solid var(--br);border-bottom:1px solid var(--br);padding:48px 0}
+    .proof-row{display:flex}
+    .proof-item{flex:1;text-align:center;padding:0 20px;border-left:1px solid var(--br)}
+    .proof-item:last-child{border-left:none}
+    .pnum{font-size:34px;font-weight:900;color:#0F172A;letter-spacing:-1.5px}
+    .pnum span{color:var(--ind)}
+    .plbl{font-size:12px;color:var(--fa);margin-top:5px}
+    .final{text-align:center;padding:90px 0 80px;background:linear-gradient(180deg,#F8FAFC 0%,#EEF2FF 100%)}
+    .final h2{font-size:clamp(26px,4.5vw,46px);font-weight:900;letter-spacing:-1.8px;color:#0F172A;margin-bottom:14px}
+    .final p{font-size:16px;color:var(--mu);margin-bottom:32px}
+    footer{padding:24px 0;border-top:1px solid var(--br);background:white}
+    .foot-i{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+    .foot-c{font-size:12px;color:var(--fa)}
+    .foot-l{display:flex;gap:20px}
+    .foot-l a{font-size:12px;color:var(--fa);text-decoration:none;transition:color .15s}
+    .foot-l a:hover{color:#374151}
+    .wa-float{position:fixed;bottom:24px;left:20px;z-index:200;width:50px;height:50px;background:#25D366;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(37,211,102,.4);text-decoration:none;transition:transform .18s}
+    .wa-float:hover{transform:scale(1.08)}
+    .reveal{opacity:0;transform:translateY(20px);transition:opacity .55s ease,transform .55s ease}
+    .reveal.in{opacity:1;transform:none}
+    @media(max-width:640px){
+      .feat-grid{grid-template-columns:1fr}
+      .ai-grid{grid-template-columns:1fr}
+      .ai-mock-side{order:-1}
+      .kpi-row{grid-template-columns:repeat(2,1fr)}
+      .bot-row{grid-template-columns:1fr}
+      .nav-acts .btn-ghost{display:none}
+      .proof-row{flex-wrap:wrap}
+      .proof-item{flex:1 1 50%;border-bottom:1px solid var(--br)}
     }
   </style>
 </head>
 <body>
 
-<div class="blob1"></div>
-<div class="blob2"></div>
-
-<!-- NAV -->
 <nav>
   <div class="container nav-inner">
     <a href="/" class="nav-logo">
-      <div class="nav-logo-mark">M</div>
-      <span class="nav-logo-text">Marjin</span>
+      <div class="nav-mark">M</div>
+      <span class="nav-name">Marjin</span>
     </a>
-    <div class="nav-actions">
+    <div class="nav-acts">
       <a href="/app?login=1" class="btn-ghost">כניסה למערכת</a>
-      <a href="/app?demo=1" class="btn-primary">התחל עכשיו</a>
+      <a href="/app?demo=1" class="btn-pri">התחל עכשיו</a>
     </div>
   </div>
 </nav>
 
-<!-- HERO -->
 <section class="hero">
   <div class="container">
-    <div class="hero-badge">ניהול מסעדות חכם · 2026</div>
+    <div class="hero-badge"><div class="bdot"></div>ניהול מסעדות חכם</div>
     <h1>תדע בדיוק לאן<br/>הולך <em>הכסף שלך</em></h1>
     <p class="hero-sub">פוד קוסט, לייבור, ספקים ותחזית — הכל במסך אחד. קבל תובנות AI יומיות לפני שהמספרים מפתיעים אותך.</p>
     <div class="hero-ctas">
-      <a href="/app?demo=1" class="btn-hero-main">
-        🚀 התחל עכשיו — חינם
-      </a>
-      <a href="/app?login=1" class="btn-hero-sec">כניסה למערכת</a>
+      <a href="/app?demo=1" class="btn-hm">🚀 התחל עכשיו — חינם</a>
+      <a href="/app?login=1" class="btn-hs">כניסה למערכת</a>
     </div>
-    <p class="hero-note">ללא כרטיס אשראי · ללא הרשמה · דמו מלא</p>
-
-    <!-- Mock Dashboard -->
-    <div class="dash-mock-wrap">
-      <div class="dash-mock">
-        <div class="mock-bar">
-          <div class="mock-dots">
-            <div class="mock-dot" style="background:#EF4444"></div>
-            <div class="mock-dot" style="background:#F59E0B"></div>
-            <div class="mock-dot" style="background:#10B981"></div>
-          </div>
-          <span class="mock-title">Marjin — Dashboard · מרץ 2026</span>
+    <p class="hero-note">ללא כרטיס אשראי · ללא הרשמה · דמו מלא עם נתונים לדוגמה</p>
+    <div class="mock-wrap">
+      <div class="mock">
+        <div class="mock-top">
+          <div class="mock-dots"><div class="md" style="background:#EF4444"></div><div class="md" style="background:#F59E0B"></div><div class="md" style="background:#10B981"></div></div>
+          <span class="mock-url">kissgn.vercel.app — Dashboard</span>
         </div>
         <div class="mock-body">
-          <div class="mock-kpi">
-            <div class="mock-kpi-lbl">הכנסות</div>
-            <div class="mock-kpi-val" style="color:#818CF8">₪372k</div>
-            <div class="mock-kpi-sub">חזוי: ₪680k</div>
+          <div class="mock-nav">
+            <div class="mnav-t a">Dashboard</div>
+            <div class="mnav-t">פדיון יומי</div>
+            <div class="mnav-t">קניות</div>
+            <div class="mnav-t">עלות עובדים</div>
+            <div class="mnav-t">קופה קטנה</div>
           </div>
-          <div class="mock-kpi">
-            <div class="mock-kpi-lbl">קניות</div>
-            <div class="mock-kpi-val" style="color:#F8FAFC">₪113k</div>
-            <div class="mock-kpi-sub">פוד קוסט: 30.5%</div>
+          <div class="kpi-row">
+            <div class="kpi-c"><div class="kl">הכנסות</div><div class="kv" style="color:#6366F1">₪372k</div><div class="ks">חזוי: ₪680k</div></div>
+            <div class="kpi-c"><div class="kl">קניות</div><div class="kv">₪113k</div><div class="ks">פוד קוסט: 30.5%</div></div>
+            <div class="kpi-c"><div class="kl">עלות עובדים</div><div class="kv">₪87k</div><div class="ks">לייבור: 23.4%</div></div>
+            <div class="kpi-c"><div class="kl">הוצאות קבועות</div><div class="kv">₪24k</div><div class="ks">6.4% ממחזור</div></div>
           </div>
-          <div class="mock-kpi">
-            <div class="mock-kpi-lbl">עלות עובדים</div>
-            <div class="mock-kpi-val" style="color:#F8FAFC">₪87k</div>
-            <div class="mock-kpi-sub">לייבור: 23.4%</div>
-          </div>
-          <div class="mock-kpi">
-            <div class="mock-kpi-lbl">הוצאות קבועות</div>
-            <div class="mock-kpi-val" style="color:#F8FAFC">₪24k</div>
-            <div class="mock-kpi-sub">6.4% ממחזור</div>
-          </div>
-          <div class="mock-hero-row">
-            <div class="mock-hero">
-              <div style="font-size:11px;color:#64748B;margin-bottom:8px;letter-spacing:.5px">הכנסות מול יעד · מרץ 2026</div>
-              <div class="mock-hero-num">₪372,540</div>
-              <div style="font-size:12px;color:#475569;margin-top:4px">מתוך יעד ₪600,000 · 12 ימים נותרו</div>
-              <div class="mock-prog"><div class="mock-prog-fill"></div></div>
-              <div style="display:flex;justify-content:space-between;font-size:10px;color:#475569">
-                <span>₪0</span><span style="color:#818CF8">62%</span><span>₪600k</span>
-              </div>
+          <div class="hero-c">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
+              <div><div style="font-size:10px;color:#818CF8;font-weight:600;margin-bottom:6px">הכנסות · מרץ 2026</div><div class="hero-num">₪372,540</div><div class="hero-sub2">מתוך יעד ₪600,000 · 12 ימים נותרו</div></div>
+              <span style="background:rgba(99,102,241,.12);color:#6366F1;font-size:11px;font-weight:700;padding:4px 12px;border-radius:999px">62%</span>
             </div>
+            <div class="prog"><div class="prog-f"></div></div>
+            <div class="prog-l"><span>₪0</span><span>יום 18 / 31</span><span>₪600k</span></div>
           </div>
-          <div class="mock-chart-row">
-            <div class="mock-chart" id="mockChart">
-              <!-- Bars injected by JS -->
+          <div class="bot-row">
+            <div class="bot-c">
+              <div class="bot-t">הכנסות מצטברות</div>
+              <div class="chart-bars" id="mockChart"></div>
+            </div>
+            <div class="bot-c">
+              <div class="bot-t">פירוט הוצאות</div>
+              <div class="bd-row"><span style="color:#374151;font-weight:500">רכש ספקים</span><span style="font-weight:700">₪113k</span></div>
+              <div class="bd-bar"><div class="bd-fill" style="width:72%;background:#6366F1"></div></div>
+              <div class="bd-row" style="margin-top:6px"><span style="color:#374151;font-weight:500">שכר עובדים</span><span style="font-weight:700">₪87k</span></div>
+              <div class="bd-bar"><div class="bd-fill" style="width:55%;background:#818CF8"></div></div>
+              <div class="bd-row" style="margin-top:6px"><span style="color:#374151;font-weight:500">קבועות</span><span style="font-weight:700">₪24k</span></div>
+              <div class="bd-bar"><div class="bd-fill" style="width:20%;background:#C7D2FE"></div></div>
             </div>
           </div>
         </div>
@@ -370,167 +200,77 @@
   </div>
 </section>
 
-<!-- FEATURES -->
-<section class="section">
+<section class="section" style="background:#F8FAFC">
   <div class="container">
-    <div class="reveal">
-      <div class="section-label">מה המערכת עושה</div>
-      <h2 class="section-title">כל מה שאתה צריך<br/>לדעת על העסק שלך</h2>
-      <p class="section-sub">ניהול מסעדה כרוך בעשרות מספרים. Marjin מרכז אותם, מחשב אותם, ומסביר מה לעשות.</p>
-    </div>
-
-    <div class="features-grid reveal">
-      <div class="feature-card" style="--card-glow:rgba(99,102,241,.12)">
-        <div class="feature-icon" style="background:rgba(99,102,241,.15)">📊</div>
-        <div class="feature-title">מחזור ותחזית מיידית</div>
-        <div class="feature-body">ראה בדיוק כמה הכנסת עד היום, מה הממוצע היומי שלך, ומה הסיכוי להגיע ליעד — כולל תחזית לסוף חודש.</div>
-        <div class="feature-metric">⬆ 12% מעל ממוצע שבועי</div>
-      </div>
-
-      <div class="feature-card" style="--card-glow:rgba(245,158,11,.08)">
-        <div class="feature-icon" style="background:rgba(245,158,11,.15)">🥩</div>
-        <div class="feature-title">פוד קוסט לפי ספק</div>
-        <div class="feature-body">עקוב אחרי כל ספק — כמה שילמת, אחוז מהמחזור, ואם אתה בחריגה. קבל התראה לפני שזה מצטבר.</div>
-        <div class="feature-metric">✓ ספקים מוזנים אוטומטית</div>
-      </div>
-
-      <div class="feature-card" style="--card-glow:rgba(16,185,129,.08)">
-        <div class="feature-icon" style="background:rgba(16,185,129,.15)">👥</div>
-        <div class="feature-title">שליטה בעלות עובדים</div>
-        <div class="feature-body">לוח יומי לכ"א — כמה עלה כל יום, מה אחוז הלייבור מהפדיון, ומה הממוצע החודשי שלך.</div>
-        <div class="feature-metric">23.4% לייבור — תקין</div>
-      </div>
-
-      <div class="feature-card" style="--card-glow:rgba(129,140,248,.12)">
-        <div class="feature-icon" style="background:rgba(129,140,248,.15)">🤖</div>
-        <div class="feature-title">תובנות AI יומיות</div>
-        <div class="feature-body">שאל שאלה בעברית ותקבל תשובה מיידית על העסק שלך — "מאיפה הפוד קוסט עלה השבוע?", "איזה יום הכי רווחי?"</div>
-        <div class="feature-metric">AI מחובר לנתונים האמיתיים</div>
-      </div>
+    <div class="reveal"><div class="sec-lbl">מה המערכת עושה</div><h2 class="sec-h">כל מה שצריך לדעת<br/>על העסק שלך</h2><p class="sec-sub">ניהול מסעדה כרוך בעשרות מספרים. Marjin מרכז, מחשב, ומסביר מה לעשות.</p></div>
+    <div class="feat-grid reveal">
+      <div class="feat-c"><div class="feat-ico" style="background:#EEF2FF">📊</div><div class="feat-t">מחזור ותחזית מיידית</div><div class="feat-b">ראה כמה הכנסת עד היום, ממוצע יומי, ותחזית אוטומטית לסוף החודש.</div><div class="feat-pill">⬆ 12% מעל ממוצע שבועי</div></div>
+      <div class="feat-c"><div class="feat-ico" style="background:#FFF7ED">🥩</div><div class="feat-t">פוד קוסט לפי ספק</div><div class="feat-b">עקוב אחרי כל ספק — כמה שילמת, אחוז מהמחזור, וקבל התראה לפני שהחריגה גדלה.</div><div class="feat-pill">✓ ספקים מוזנים ומנוטרים</div></div>
+      <div class="feat-c"><div class="feat-ico" style="background:#F0FDF4">👥</div><div class="feat-t">שליטה בעלות עובדים</div><div class="feat-b">לוח יומי לכ"א — כמה עלה כל יום, אחוז הלייבור מהפדיון, וממוצע חודשי.</div><div class="feat-pill">23.4% לייבור — תקין</div></div>
+      <div class="feat-c"><div class="feat-ico" style="background:#EEF2FF">🤖</div><div class="feat-t">תובנות AI יומיות</div><div class="feat-b">שאל שאלה בעברית וקבל תשובה מיידית — AI מחובר לנתוני הפדיון, הספקים והעלויות שלך.</div><div class="feat-pill">AI מחובר לנתונים שלך</div></div>
     </div>
   </div>
 </section>
 
-<!-- AI SECTION -->
-<section class="ai-section">
+<section class="ai-sec">
   <div class="container">
-    <div class="reveal">
-      <div class="section-label">AI עסקי</div>
-      <h2 class="section-title">שאל שאלה —<br/>קבל תשובה על העסק שלך</h2>
-      <p class="section-sub">לא תשובות גנריות. AI שמחובר לנתוני הפדיון, הספקים והעלויות שלך — ועונה בדיוק על מה שחשוב לך.</p>
-    </div>
-
+    <div class="reveal"><div class="sec-lbl">AI עסקי</div><h2 class="sec-h">שאל שאלה —<br/>קבל תשובה על העסק</h2><p class="sec-sub">לא תשובות גנריות. AI שמחובר לנתוני הפדיון, הספקים והעלויות שלך — ועונה בעברית.</p></div>
     <div class="ai-grid">
       <div class="reveal" style="transition-delay:.1s">
-        <div style="display:flex;flex-direction:column;gap:16px">
-          <div style="padding:20px;background:rgba(30,41,59,.6);border:1px solid rgba(255,255,255,.07);border-radius:14px">
-            <div style="font-size:13px;color:#64748B;margin-bottom:6px">לדוגמה — שאלה שמנהל שואל:</div>
-            <div style="font-size:15px;font-weight:600;color:#C7D2FE">"מה עלה הפוד קוסט שלי השבוע ומאיפה?"</div>
-          </div>
-          <div style="padding:20px;background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.2);border-radius:14px">
-            <div style="font-size:11px;color:#818CF8;font-weight:700;margin-bottom:8px;letter-spacing:.5px">MARJIN AI</div>
-            <div style="font-size:14px;color:#CBD5E1;line-height:1.7">הפוד קוסט השבוע עלה ל-<strong style="color:#818CF8">34.1%</strong> לעומת 29.8% בשבוע שעבר. הגורם העיקרי הוא ספק <strong style="color:#818CF8">פריים בשר</strong> שעלה ב-₪4,200 מעל הממוצע. כדאי לבדוק הזמנת רביעי.</div>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:10px">
-            <div style="font-size:12px;color:#475569;margin-bottom:4px">שאלות נפוצות:</div>
-            <div style="display:flex;flex-wrap:wrap;gap:8px">
-              <span style="background:rgba(30,41,59,.8);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:7px 14px;font-size:12px;color:#64748B">מה הממוצע יומי שלי?</span>
-              <span style="background:rgba(30,41,59,.8);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:7px 14px;font-size:12px;color:#64748B">איזה יום הכי רווחי?</span>
-              <span style="background:rgba(30,41,59,.8);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:7px 14px;font-size:12px;color:#64748B">מה התחזית לסוף חודש?</span>
-            </div>
-          </div>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div style="padding:18px;background:#F8FAFC;border:1px solid var(--br);border-radius:14px"><div style="font-size:11px;color:var(--fa);margin-bottom:6px">לדוגמה — שאלה אמיתית:</div><div style="font-size:15px;font-weight:700;color:#0F172A">"מה עלה הפוד קוסט שלי השבוע ומאיפה?"</div></div>
+          <div style="padding:18px;background:white;border:1.5px solid #C7D2FE;border-radius:14px"><div style="font-size:10px;color:var(--ind);font-weight:700;margin-bottom:8px;letter-spacing:.5px">MARJIN AI</div><div style="font-size:14px;color:#374151;line-height:1.7">הפוד קוסט השבוע עלה ל-<strong style="color:var(--ind)">34.1%</strong> לעומת 29.8%. הגורם העיקרי — ספק <strong style="color:var(--ind)">פריים בשר</strong>, ₪4,200 מעל הממוצע.</div></div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px"><span style="background:white;border:1px solid var(--br);border-radius:999px;padding:6px 14px;font-size:12px;color:var(--mu)">מה הממוצע יומי?</span><span style="background:white;border:1px solid var(--br);border-radius:999px;padding:6px 14px;font-size:12px;color:var(--mu)">איזה יום הכי רווחי?</span><span style="background:white;border:1px solid var(--br);border-radius:999px;padding:6px 14px;font-size:12px;color:var(--mu)">תחזית סוף חודש?</span></div>
         </div>
       </div>
-
-      <div class="ai-mock-side reveal" style="transition-delay:.2s">
-        <div class="ai-chat-mock">
-          <div class="ai-chat-header">
-            <div class="ai-chat-logo">M</div>
-            <span class="ai-chat-title">Marjin AI — עוזר עסקי</span>
-          </div>
-          <div class="ai-chat-body">
+      <div class="ai-mock-side reveal" style="transition-delay:.15s">
+        <div class="ai-mock">
+          <div class="ai-hdr"><div class="ai-logo">M</div><span class="ai-nm">Marjin AI — עוזר עסקי</span><div class="ai-dot"></div></div>
+          <div class="ai-body">
             <div class="ai-q">באיזה יום בשבוע אני מרוויח הכי הרבה?</div>
-            <div class="ai-a">ב-18 הימים האחרונים, <strong>שישי</strong> הוא היום הרווחי ביותר עם ממוצע של <strong>₪28,400</strong> הכנסות. יום שלישי הגרוע ביותר — ₪14,200. ממליץ לשקול הגדלת כח אדם בשישי ולצמצם בשלישי.</div>
-            <div class="ai-q">מה מצב הלייבור שלי החודש?</div>
-            <div class="ai-a">לייבור <strong>23.4%</strong> — תקין לפי היעד 24%. שכר עולה ל-₪87,000 מתוך מחזור ₪372,540. בקצב הנוכחי תסיים בסביבות <strong>₪162k</strong> שזה 23.8% — בתוך טווח.</div>
+            <div class="ai-a"><strong>שישי</strong> — ממוצע ₪28,400. שלישי הגרוע — ₪14,200. ממליץ לחזק כח אדם בשישי.</div>
+            <div class="ai-q">מה מצב הלייבור שלי?</div>
+            <div class="ai-a">לייבור <strong>23.4%</strong> — תקין לפי יעד 24%. תסיים ב-<strong>23.8%</strong> — בתוך הטווח.</div>
           </div>
-          <div class="ai-chip-row">
-            <div class="ai-chip-mock">מה הפוד קוסט שלי?</div>
-            <div class="ai-chip-mock">תחזית סוף חודש</div>
-          </div>
+          <div class="ai-chips"><div class="ai-chip">פוד קוסט?</div><div class="ai-chip">תחזית חודש</div><div class="ai-chip">ספק יקר?</div></div>
         </div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- PROOF -->
-<section class="section" style="padding:60px 0">
+<section class="proof-band">
   <div class="container">
-    <div class="reveal">
-      <div class="section-label">Marjin במספרים</div>
-      <div class="proof-row">
-        <div class="proof-item"><div class="proof-num">15<span>דק׳</span></div><div class="proof-label">לחיבור המערכת</div></div>
-        <div class="proof-item"><div class="proof-num">3<span>%</span></div><div class="proof-label">חיסכון ממוצע בפוד קוסט</div></div>
-        <div class="proof-item"><div class="proof-num">30<span>+</span></div><div class="proof-label">שאלות AI שאפשר לשאול</div></div>
-        <div class="proof-item"><div class="proof-num">0<span>₪</span></div><div class="proof-label">לצאת ולנסות עכשיו</div></div>
-      </div>
+    <div class="proof-row reveal">
+      <div class="proof-item"><div class="pnum">15<span>דק׳</span></div><div class="plbl">לחיבור המערכת</div></div>
+      <div class="proof-item"><div class="pnum">3<span>%</span></div><div class="plbl">חיסכון בפוד קוסט</div></div>
+      <div class="proof-item"><div class="pnum">30<span>+</span></div><div class="plbl">שאלות AI</div></div>
+      <div class="proof-item"><div class="pnum">0<span>₪</span></div><div class="plbl">לנסות עכשיו</div></div>
     </div>
   </div>
 </section>
 
-<!-- FINAL CTA -->
-<section class="final-cta">
+<section class="final">
   <div class="container reveal">
     <h2>מוכן לראות את המספרים<br/>שלך בסדר?</h2>
     <p>תוך 15 דקות תדע בדיוק כמה עולה לך כל שישי</p>
     <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap">
-      <a href="/app?demo=1" class="btn-hero-main">🚀 נסה עכשיו — בחינם</a>
-      <a href="https://wa.me/972501234567?text=%D7%94%D7%99%D7%99%20%F0%9F%91%8B%20%D7%90%D7%A0%D7%99%20%D7%A8%D7%95%D7%A6%D7%94%20%D7%9C%D7%94%D7%A6%D7%98%D7%A8%D7%A3%20%D7%9C-Marjin"
-        target="_blank" rel="noopener"
-        style="padding:16px 28px;background:#25D366;border-radius:14px;color:white;font-size:15px;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;gap:8px">
-        💬 דבר איתנו
-      </a>
+      <a href="/app?demo=1" class="btn-hm">🚀 נסה עכשיו — בחינם</a>
+      <a href="https://wa.me/972501234567?text=%D7%94%D7%99%D7%99%20%F0%9F%91%8B%20%D7%90%D7%A0%D7%99%20%D7%A8%D7%95%D7%A6%D7%94%20%D7%9C%D7%94%D7%A6%D7%98%D7%A8%D7%A3%20%D7%9C-Marjin" target="_blank" rel="noopener" style="padding:14px 24px;background:#25D366;border-radius:12px;color:white;font-size:14px;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;gap:8px;box-shadow:0 4px 14px rgba(37,211,102,.3)">💬 דבר איתנו</a>
     </div>
-    <p style="font-size:12px;color:#334155;margin-top:20px">ללא כרטיס אשראי · ללא הרשמה · דמו מלא עם נתונים לדוגמה</p>
+    <p style="font-size:11px;color:var(--fa);margin-top:16px">ללא כרטיס אשראי · ללא הרשמה · דמו מלא</p>
   </div>
 </section>
 
-<!-- FOOTER -->
-<footer>
-  <div class="container">
-    <span>© 2026 Marjin · מערכת ניהול מסעדות</span>
-    <span style="margin:0 16px;color:#1E293B">·</span>
-    <a href="/app?login=1" style="color:#334155;text-decoration:none">כניסה למערכת</a>
-  </div>
-</footer>
+<footer><div class="container foot-i"><div class="foot-c">© 2026 Marjin · מערכת ניהול מסעדות</div><div class="foot-l"><a href="/app?login=1">כניסה למערכת</a><a href="/app?demo=1">התחל בחינם</a></div></div></footer>
 
-<!-- WA Float -->
-<a href="https://wa.me/972501234567?text=%D7%94%D7%99%D7%99%20%F0%9F%91%8B%20%D7%A8%D7%90%D7%99%D7%AA%D7%99%20%D7%90%D7%AA%20Marjin%20%D7%95%D7%A8%D7%95%D7%A6%D7%94%20%D7%9C%D7%93%D7%A2%D7%AA%20%D7%99%D7%95%D7%AA%D7%A8"
-  target="_blank" rel="noopener" class="wa-float" title="דבר איתנו">
-  <svg width="26" height="26" viewBox="0 0 24 24" fill="white">
-    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347zM12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.12 1.526 5.856L0 24l6.336-1.498A11.924 11.924 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0z"/>
-  </svg>
-</a>
+<a href="https://wa.me/972501234567?text=%D7%94%D7%99%D7%99%20%F0%9F%91%8B%20%D7%A8%D7%90%D7%99%D7%AA%D7%99%20%D7%90%D7%AA%20Marjin%20%D7%95%D7%A8%D7%95%D7%A6%D7%94%20%D7%9C%D7%93%D7%A2%D7%AA%20%D7%99%D7%95%D7%AA%D7%A8" target="_blank" rel="noopener" class="wa-float" title="דבר איתנו"><svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347zM12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.12 1.526 5.856L0 24l6.336-1.498A11.924 11.924 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0z"/></svg></a>
 
 <script>
-  // Generate mock chart bars
-  const chartEl = document.getElementById('mockChart');
-  if(chartEl) {
-    const heights = [30,45,55,38,70,85,60,92,75,65,88,95,72,80,68,42,76,85];
-    heights.forEach(h=>{
-      const bar = document.createElement('div');
-      bar.className = 'mock-bar-el';
-      bar.style.height = h+'%';
-      chartEl.appendChild(bar);
-    });
-  }
-
-  // Scroll reveal
-  const observer = new IntersectionObserver((entries)=>{
-    entries.forEach(e=>{ if(e.isIntersecting) e.target.classList.add('visible'); });
-  }, { threshold: 0.12 });
-  document.querySelectorAll('.reveal').forEach(el=>observer.observe(el));
+  const chart = document.getElementById('mockChart');
+  if(chart){const v=[28,42,52,35,68,80,56,88,72,62,84,92,68,76,60,38,72,82];v.forEach(h=>{const b=document.createElement('div');b.className='cb';b.style.height=h+'%';if(h>75)b.style.background='#6366F1';else if(h>55)b.style.background='#C7D2FE';chart.appendChild(b);});}
+  const obs=new IntersectionObserver(e=>e.forEach(x=>{if(x.isIntersecting)x.target.classList.add('in')}),{threshold:.1});
+  document.querySelectorAll('.reveal').forEach(el=>obs.observe(el));
 </script>
 </body>
 </html>
