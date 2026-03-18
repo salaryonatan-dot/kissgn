@@ -544,6 +544,23 @@
   <script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
+
+  <!-- Synchronous stub: apiFetch is available immediately, upgraded by the module once Firebase loads -->
+  <script>
+    window.apiFetch = async function(path, options) {
+      options = options || {};
+      var headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
+      // Try to get auth token — silently skip if not available
+      if (typeof window.getIdToken === "function") {
+        try {
+          var token = await window.getIdToken();
+          if (token) headers["Authorization"] = "Bearer " + token;
+        } catch(_) {}
+      }
+      return fetch(path, Object.assign({}, options, { headers: headers }));
+    };
+    console.log("[Marjin] apiFetch stub registered");
+  </script>
     <script type="module">
     import { initializeApp, initializeApp as initializeApp2 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
     import { getDatabase, ref, get, set, remove, onValue, forceWebSockets } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
@@ -2110,6 +2127,99 @@ function PilotDashboard() {
   const [aiQuery,   setAiQuery]   = useState("");
   const [aiAnswer,  setAiAnswer]  = useState(null);   // null | {text, loading}
   const [aiLoading, setAiLoading] = useState(false);
+
+  // ── AI send — defined at component level so it's never stale ──────────────
+  const sendAI = React.useCallback(async (query) => {
+    const q = (typeof query === "string" ? query : aiQuery).trim();
+    console.log("[Marjin AI] sendAI called, query:", q, "| loading:", aiLoading);
+
+    if (!q) { console.warn("[Marjin AI] empty query — aborted"); return; }
+    if (aiLoading) { console.warn("[Marjin AI] already loading — aborted"); return; }
+    if (typeof window.apiFetch !== "function") {
+      console.error("[Marjin AI] window.apiFetch is not defined");
+      setAiAnswer({ text: "שגיאה: apiFetch לא נמצא. רענן את הדף.", loading: false });
+      return;
+    }
+
+    setAiLoading(true);
+    setAiAnswer({ text: "", loading: true });
+    setAiQuery("");
+
+    // Build context snapshot (values captured at call time via closure over component state)
+    const snap = {
+      biz: businessConfig.businessName || "המסעדה",
+      sales: metrics.totalSales,
+      foodPct: metrics.foodCostPct,
+      payroll: metrics.totalPayroll,
+      fixed: metrics.TOTAL_FIXED,
+      lc: metrics.lc,
+      avg: metrics.dailyAvg,
+      day: DAY_OF_MONTH,
+      days: DAYS_IN_MONTH,
+      month: MONTH_NAMES[MONTH],
+      year: YEAR,
+      tFood: cfgTarget(businessConfig, "foodCostPct", TARGETS.foodCostPct),
+      tLabor: cfgTarget(businessConfig, "laborCostPct", TARGETS.laborCostPct),
+      tSales: Math.round((lastYear[MONTH]?.sales || 650000) * (1 + (cfgTarget(businessConfig, "salesGrowthPct", TARGETS.salesGrowthPct) / 100))),
+    };
+    const suppTotals = suppliers.map(s => {
+      const tot = entries.reduce((a, e) => a + (Number(e.supplier_payments?.[s.id]) || 0), 0);
+      return `${s.name}: ${fmt(tot)}`;
+    }).join(", ");
+    const recent = [...entries].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 7).map(e => {
+      const inc = (Number(e.sales) || 0) + (Number(e.deliveries) || 0);
+      const sup = e.supplier_payments ? Object.values(e.supplier_payments).reduce((a, b) => a + (Number(b) || 0), 0) : 0;
+      return `  ${e.date}: הכנסות ${fmt(inc)}, קניות ${fmt(sup)}, שכר ${fmt(Number(e.payroll) || 0)}`;
+    }).join("\n");
+
+    const prompt = `אתה יועץ עסקי של מסעדה בישראל. ענה בעברית, קצר וישיר (2-4 שורות מקסימום).
+
+נתוני העסק — ${snap.biz}, ${snap.month} ${snap.year}:
+• הכנסות: ${fmt(snap.sales)} (יעד: ${fmt(snap.tSales)})
+• פוד קוסט: ${snap.foodPct.toFixed(1)}% (יעד: ${snap.tFood}%)
+• עלות עובדים: ${fmt(snap.payroll)} (${snap.sales > 0 ? ((snap.payroll / snap.sales) * 100).toFixed(1) : 0}% ממחזור, יעד: ${snap.tLabor}%)
+• הוצאות קבועות: ${fmt(snap.fixed)}
+• יתרת קופה: ${fmt(snap.lc)}
+• ממוצע יומי: ${fmt(Math.round(snap.avg))}
+• יום ${snap.day} מתוך ${snap.days}
+• קניות לפי ספק: ${suppTotals || "אין נתונים"}
+${recent}
+
+שאלת המשתמש: ${q}`;
+
+    console.log("[Marjin AI] sending request, prompt chars:", prompt.length);
+    try {
+      const resp = await window.apiFetch("/api/ai-chat", {
+        method: "POST",
+        body: JSON.stringify({ prompt }),
+      });
+      console.log("[Marjin AI] response status:", resp.status);
+      if (!resp.ok) {
+        let msg = `שגיאת שרת (${resp.status})`;
+        try {
+          const d = await resp.json();
+          if (d.error === "ANTHROPIC_API_KEY not configured")
+            msg = "מפתח AI חסר ב-Vercel — הוסף ANTHROPIC_API_KEY ב-Environment Variables";
+          else if (d.error) msg = d.error + (d.detail ? ` (${d.detail})` : "");
+        } catch (_) {}
+        setAiAnswer({ text: msg, loading: false });
+      } else {
+        const d = await resp.json();
+        console.log("[Marjin AI] success, reply:", d.text?.slice(0, 60));
+        setAiAnswer({ text: d.text || "לא הצלחתי לעבד את הבקשה.", loading: false });
+      }
+    } catch (err) {
+      console.error("[Marjin AI] fetch error:", err.message);
+      setAiAnswer({
+        text: err.message?.includes("Failed to fetch")
+          ? "לא ניתן להגיע ל-/api/ai-chat — בדוק שהקובץ קיים ב-Vercel"
+          : `שגיאה: ${err.message}`,
+        loading: false
+      });
+    }
+    setAiLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiQuery, aiLoading, entries, suppliers, metrics, businessConfig, lastYear]);
   const [businesses, setBusinesses] = useState([]);
   const [currentBizId, setCurrentBizId_] = useState(null);
   const setCurrentBizId = id => {
@@ -4171,133 +4281,47 @@ function PilotDashboard() {
           </div>
         </div>
       )}
-      {(()=>{
-        const askAI = async (q) => {
-          if(!q.trim() || aiLoading) return;
-          setAiLoading(true);
-          setAiAnswer({text:"", loading:true});
-
-          // Build rich context from current business data
-          const recentEntries = [...entries].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,30);
-          const suppTotals = suppliers.map(s=>{
-            const tot = entries.reduce((a,e)=>a+(Number(e.supplier_payments?.[s.id])||0),0);
-            return `${s.name}: ${fmt(tot)}`;
-          }).join(", ");
-
-          const context = `
-אתה יועץ עסקי של מסעדה בישראל. ענה בעברית, קצר וישיר (2-4 שורות מקסימום).
-
-נתוני העסק — ${businessConfig.businessName||"המסעדה"}, ${MONTH_NAMES[MONTH]} ${YEAR}:
-• הכנסות עד כה: ${fmt(metrics.totalSales)} (יעד: ${fmt(Math.round((lastYear[MONTH]?.sales||650000)*(1+(cfgTarget(businessConfig,"salesGrowthPct",TARGETS.salesGrowthPct)/100))))})
-• פוד קוסט: ${metrics.foodCostPct.toFixed(1)}% (יעד: ${cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct)}%)
-• עלות עובדים: ${fmt(metrics.totalPayroll)} (${metrics.totalSales>0?((metrics.totalPayroll/metrics.totalSales)*100).toFixed(1):"0"}% ממחזור)
-• הוצאות קבועות: ${fmt(metrics.TOTAL_FIXED)}
-• יתרת קופה: ${fmt(metrics.lc)}
-• ממוצע יומי: ${fmt(Math.round(metrics.dailyAvg))}
-• ימים בחודש: ${DAY_OF_MONTH}/${DAYS_IN_MONTH}
-• קניות לפי ספק: ${suppTotals||"אין נתונים"}
-• ${recentEntries.length} ימים מוזנים
-${recentEntries.slice(0,7).map(e=>{
-  const inc=(Number(e.sales)||0)+(Number(e.deliveries)||0);
-  const sup=e.supplier_payments?Object.values(e.supplier_payments).reduce((a,b)=>a+(Number(b)||0),0):0;
-  const pay=Number(e.payroll)||0;
-  return `  ${e.date}: הכנסות ${fmt(inc)}, קניות ${fmt(sup)}, שכר ${fmt(pay)}`;
-}).join("\n")}
-
-שאלת המשתמש: ${q}`;
-
-          try {
-            const resp = await window.apiFetch("/api/ai-chat", {
-              method: "POST",
-              body: JSON.stringify({ prompt: context }),
-            });
-            if (!resp.ok) {
-              let errMsg = "שגיאת שרת";
-              try {
-                const errData = await resp.json();
-                if (errData.error === "ANTHROPIC_API_KEY not configured")
-                  errMsg = "מפתח AI לא מוגדר בשרת — בדוק הגדרות Vercel";
-                else if (errData.error)
-                  errMsg = `שגיאה: ${errData.error}`;
-              } catch(_) {}
-              setAiAnswer({text: errMsg, loading:false});
-              setAiLoading(false);
-              return;
-            }
-            const data = await resp.json();
-            const text = data.text || "לא הצלחתי לעבד את הבקשה.";
-            setAiAnswer({text, loading:false});
-          } catch(e) {
-            const msg = e.message?.includes("Failed to fetch")
-              ? "לא ניתן להתחבר לשרת — בדוק שה-endpoint /api/ai-chat קיים ב-Vercel"
-              : `שגיאה: ${e.message}`;
-            setAiAnswer({text: msg, loading:false});
-          }
-          setAiLoading(false);
-        };
-
-        const CHIPS = [
-          "מה מצב הפוד קוסט שלי?",
-          "מה הממוצע היומי השבוע?",
-          "באיזה יום מרוויחים הכי הרבה?",
-          "מה התחזית לסוף החודש?",
-          "איזה ספק הכי יקר?",
-        ];
-
-        return (
-          <div className="ai-bar">
-            {/* Answer bubble */}
-            {aiAnswer && (
-              <div className="ai-answer">
-                <button className="ai-close" onClick={()=>setAiAnswer(null)}>×</button>
-                <div className="ai-answer-label">
-                  {aiAnswer.loading && <div className="ai-answer-dot"/>}
-                  Marjin AI
-                </div>
-                {aiAnswer.loading
-                  ? <div className="ai-loading">
-                      <div className="ai-dot"/><div className="ai-dot"/><div className="ai-dot"/>
-                    </div>
-                  : <div style={{whiteSpace:"pre-wrap"}}>{aiAnswer.text}</div>
-                }
-              </div>
-            )}
-
-            {/* Quick chips */}
-            {!aiAnswer && (
-              <div className="ai-chips">
-                {CHIPS.map(chip=>(
-                  <button key={chip} className="ai-chip" onClick={()=>{ setAiQuery(chip); askAI(chip); }}>
-                    {chip}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Input row */}
-            <div className="ai-bar-input">
-              <input
-                className="ai-input"
-                placeholder="שאל שאלה על העסק..."
-                value={aiQuery}
-                onChange={e=>setAiQuery(e.target.value)}
-                onKeyDown={e=>{ if(e.key==="Enter") askAI(aiQuery); }}
-              />
-              <button className="ai-send" onClick={()=>askAI(aiQuery)} disabled={aiLoading||!aiQuery.trim()}>
-                {aiLoading
-                  ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"
-                      style={{animation:"spin 1s linear infinite"}}>
-                      <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4"/>
-                    </svg>
-                  : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5">
-                      <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                    </svg>
-                }
-              </button>
+      {/* ═══ AI CHAT BAR ═══ */}
+      <div className="ai-bar">
+        {aiAnswer && (
+          <div className="ai-answer">
+            <button className="ai-close" onClick={()=>setAiAnswer(null)}>×</button>
+            <div className="ai-answer-label">
+              {aiAnswer.loading && <div className="ai-answer-dot"/>}
+              Marjin AI
             </div>
+            {aiAnswer.loading
+              ? <div className="ai-loading"><div className="ai-dot"/><div className="ai-dot"/><div className="ai-dot"/></div>
+              : <div style={{whiteSpace:"pre-wrap"}}>{aiAnswer.text}</div>
+            }
           </div>
-        );
-      })()}
+        )}
+        {!aiAnswer && (
+          <div className="ai-chips">
+            {["מה מצב הפוד קוסט שלי?","מה הממוצע היומי השבוע?","באיזה יום מרוויחים הכי הרבה?","מה התחזית לסוף החודש?","איזה ספק הכי יקר?"].map(chip=>(
+              <button key={chip} className="ai-chip" onClick={()=>sendAI(chip)}>{chip}</button>
+            ))}
+          </div>
+        )}
+        <div className="ai-bar-input">
+          <input
+            className="ai-input"
+            placeholder="שאל שאלה על העסק..."
+            value={aiQuery}
+            onChange={e=>setAiQuery(e.target.value)}
+            onKeyDown={e=>{ if(e.key==="Enter") sendAI(aiQuery); }}
+          />
+          <button
+            className="ai-send"
+            disabled={aiLoading||!aiQuery.trim()}
+            onClick={()=>{ console.log("[Marjin AI] button clicked, query:", aiQuery); sendAI(aiQuery); }}>
+            {aiLoading
+              ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" style={{animation:"spin 1s linear infinite"}}><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4"/></svg>
+              : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            }
+          </button>
+        </div>
+      </div>
 
     </div>
   );
