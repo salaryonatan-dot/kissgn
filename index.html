@@ -261,77 +261,87 @@
     .shadow-md { box-shadow:var(--shadow-md); }
 
     /* ══ Dashboard ══════════════════════════════════════════════════════════ */
-    /* ══ Dashboard ══════════════════════════════════════════════════════ */
-    .dash               { padding:0 0 80px; background:#F9FAFB; }
+    .dash               { padding:0 0 88px; background:#F7F8FA; }
+    .dash-inner         { max-width:1280px; margin:0 auto; padding:0 24px; }
 
     /* Status strip */
-    .dash-status        { display:flex; align-items:center; gap:8px; padding:10px 20px; font-size:12px; color:#6B7280; background:#FFFFFF; border-bottom:1px solid #E5E7EB; }
-    .dash-status-dot    { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+    .dash-status        { display:flex; align-items:center; gap:10px; padding:11px 0; font-size:12px; color:#6B7280; }
 
-    /* KPI row — 4 equal white cards */
-    .kpi-row            { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; padding:16px 20px 0; background:#F9FAFB; }
-    .kpi-item           { background:#FFFFFF; border-radius:12px; padding:18px 16px 16px; box-shadow:0 1px 3px rgba(0,0,0,0.06),0 1px 2px rgba(0,0,0,0.04); border:1px solid #F3F4F6; }
-    .kpi-item-label     { font-size:11px; font-weight:500; color:#9CA3AF; text-transform:uppercase; letter-spacing:.6px; margin-bottom:10px; }
-    .kpi-item-value     { font-size:26px; font-weight:700; letter-spacing:-1.2px; line-height:1; color:#111827; }
+    /* KPI row */
+    .kpi-row            { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; padding:0; margin-bottom:0; }
+    .kpi-item           { background:#FFFFFF; border-radius:14px; padding:22px 20px 18px;
+                          box-shadow:0 1px 4px rgba(0,0,0,0.05); border:1px solid rgba(0,0,0,0.04); }
+    .kpi-item-label     { font-size:11px; font-weight:500; color:#9CA3AF; text-transform:uppercase;
+                          letter-spacing:.7px; margin-bottom:12px; }
+    .kpi-item-value     { font-size:28px; font-weight:700; letter-spacing:-1.4px; line-height:1; color:#111827; }
     .kpi-item-value.warn   { color:#F59E0B; }
     .kpi-item-value.danger { color:#EF4444; }
-    .kpi-item-sub       { font-size:11px; color:#9CA3AF; margin-top:6px; line-height:1.4; }
+    .kpi-item-sub       { font-size:11px; color:#9CA3AF; margin-top:8px; line-height:1.4; }
 
-    /* Main forecast card */
-    .forecast-card      { background:#FFFFFF; border-radius:12px; margin:14px 20px 0; padding:20px; box-shadow:0 1px 3px rgba(0,0,0,0.06),0 1px 2px rgba(0,0,0,0.04); border:1px solid #F3F4F6; }
-    .forecast-header    { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:16px; }
-    .forecast-title     { font-size:14px; font-weight:600; color:#111827; }
+    /* Main forecast card — dominant */
+    .forecast-card      { background:#FFFFFF; border-radius:16px; padding:28px;
+                          box-shadow:0 2px 12px rgba(0,0,0,0.06),0 1px 3px rgba(0,0,0,0.04);
+                          border:1px solid rgba(0,0,0,0.04); }
+    .forecast-header    { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:22px; }
+    .forecast-title     { font-size:15px; font-weight:600; color:#111827; letter-spacing:-.2px; }
     .forecast-subtitle  { font-size:12px; color:#9CA3AF; }
 
     /* Revenue progress */
-    .rev-progress-wrap  { margin-bottom:20px; }
-    .rev-row            { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
-    .rev-label          { font-size:12px; color:#6B7280; }
-    .rev-vals           { font-size:13px; font-weight:600; color:#111827; }
+    .rev-progress-wrap  { margin-bottom:24px; }
+    .rev-row            { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+    .rev-label          { font-size:12px; color:#6B7280; font-weight:500; }
+    .rev-vals           { font-size:14px; font-weight:600; color:#111827; }
     .rev-vals span      { font-weight:400; color:#9CA3AF; }
-    .rev-pct-badge      { font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; }
-    .rev-pct-badge.ok   { color:#10B981; background:#ECFDF5; }
+    .rev-pct-badge      { font-size:11px; font-weight:600; padding:3px 9px; border-radius:20px; }
+    .rev-pct-badge.ok   { color:#3B82F6; background:#EFF6FF; }
     .rev-pct-badge.warn { color:#F59E0B; background:#FFFBEB; }
     .rev-pct-badge.dn   { color:#EF4444; background:#FEF2F2; }
-    .rev-bar-track      { height:8px; background:#F3F4F6; border-radius:6px; overflow:hidden; position:relative; }
-    .rev-bar-fill       { height:100%; border-radius:6px; transition:width .6s ease; }
-    .rev-bar-today      { position:absolute; top:0; bottom:0; width:2px; background:rgba(0,0,0,0.12); border-radius:2px; }
+    .rev-bar-track      { height:8px; background:#F1F5F9; border-radius:6px; overflow:hidden; position:relative; }
+    .rev-bar-fill       { height:100%; border-radius:6px; transition:width .7s cubic-bezier(.4,0,.2,1); }
+    .rev-bar-today      { position:absolute; top:-1px; bottom:-1px; width:2px;
+                          background:rgba(0,0,0,0.08); border-radius:2px; pointer-events:none; }
 
-    /* Forecast text row */
-    .forecast-text-row  { display:grid; grid-template-columns:repeat(3,1fr); gap:0; border-top:1px solid #F3F4F6; padding-top:18px; margin-top:4px; }
+    /* Forecast metrics row */
+    .forecast-text-row  { display:grid; grid-template-columns:repeat(3,1fr); gap:0;
+                          border-top:1px solid #F3F4F6; padding-top:22px; margin-top:22px; }
     .ftc               { }
-    .ftc:not(:last-child){ padding-left:18px; border-left:1px solid #F3F4F6; margin-left:18px; }
-    .ftc-label         { font-size:10px; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:.8px; margin-bottom:5px; }
-    .ftc-value         { font-size:20px; font-weight:700; color:#111827; letter-spacing:-.6px; line-height:1; }
+    .ftc:not(:last-child){ padding-left:22px; border-left:1px solid #F3F4F6; margin-left:22px; }
+    .ftc-label         { font-size:10px; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:.8px; margin-bottom:6px; }
+    .ftc-value         { font-size:22px; font-weight:700; color:#111827; letter-spacing:-.7px; line-height:1; }
     .ftc-value.dn      { color:#EF4444; }
-    .ftc-sub           { font-size:11px; color:#9CA3AF; margin-top:4px; }
+    .ftc-sub           { font-size:11px; color:#9CA3AF; margin-top:5px; }
 
     /* Chart card */
-    .chart-card         { background:#FFFFFF; border-radius:12px; margin:12px 20px 0; padding:20px 16px 14px; box-shadow:0 1px 3px rgba(0,0,0,0.06),0 1px 2px rgba(0,0,0,0.04); border:1px solid #F3F4F6; }
-    .chart-card-title   { font-size:11px; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:.6px; margin-bottom:12px; }
+    .chart-card         { background:#FFFFFF; border-radius:14px; padding:24px 20px 18px;
+                          box-shadow:0 1px 4px rgba(0,0,0,0.05); border:1px solid rgba(0,0,0,0.04); }
+    .chart-card-title   { font-size:12px; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:.7px; margin-bottom:16px; }
 
     /* Alerts card */
-    .alerts-card        { background:#FFFBEB; border-radius:12px; margin:12px 20px 0; padding:14px 16px; border:1px solid #FDE68A; }
+    .alerts-card        { background:#FFFBEB; border-radius:12px; padding:16px 18px; border:1px solid #FDE68A; }
     .alert-row-item     { display:flex; align-items:flex-start; gap:10px; }
-    .alert-row-item + .alert-row-item { margin-top:10px; padding-top:10px; border-top:1px solid rgba(0,0,0,0.05); }
-    .alert-dot-sm       { width:6px; height:6px; border-radius:50%; flex-shrink:0; margin-top:4px; }
-    .alert-row-title    { font-size:12px; font-weight:500; color:#111827; margin-bottom:2px; }
+    .alert-row-item + .alert-row-item { margin-top:11px; padding-top:11px; border-top:1px solid rgba(0,0,0,0.05); }
+    .alert-dot-sm       { width:7px; height:7px; border-radius:50%; flex-shrink:0; margin-top:3px; }
+    .alert-row-title    { font-size:12px; font-weight:600; color:#111827; margin-bottom:2px; }
     .alert-row-body     { font-size:11px; color:#6B7280; }
 
     /* Expense breakdown card */
-    .breakdown-card     { background:#FFFFFF; border-radius:12px; margin:12px 20px 0; padding:20px; box-shadow:0 1px 3px rgba(0,0,0,0.06),0 1px 2px rgba(0,0,0,0.04); border:1px solid #F3F4F6; }
-    .breakdown-title    { font-size:11px; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:.6px; margin-bottom:16px; }
-    .breakdown-row      { margin-bottom:13px; }
+    .breakdown-card     { background:#FFFFFF; border-radius:14px; padding:24px;
+                          box-shadow:0 1px 4px rgba(0,0,0,0.05); border:1px solid rgba(0,0,0,0.04); }
+    .breakdown-title    { font-size:12px; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:.7px; margin-bottom:20px; }
+    .breakdown-row      { margin-bottom:16px; }
     .breakdown-row:last-child { margin-bottom:0; }
-    .breakdown-row-hdr  { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:5px; }
-    .breakdown-row-lbl  { font-size:12px; color:#374151; }
-    .breakdown-row-val  { font-size:12px; font-weight:600; color:#111827; }
-    .breakdown-row-pct  { font-size:10px; color:#9CA3AF; margin-right:6px; }
-    .breakdown-bar      { height:6px; background:#F3F4F6; border-radius:4px; overflow:hidden; }
-    .breakdown-fill     { height:100%; border-radius:4px; transition:width .4s ease; }
+    .breakdown-row-hdr  { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px; }
+    .breakdown-row-lbl  { font-size:13px; color:#374151; font-weight:500; }
+    .breakdown-row-val  { font-size:13px; font-weight:600; color:#111827; }
+    .breakdown-row-pct  { font-size:11px; color:#9CA3AF; margin-right:8px; }
+    .breakdown-bar      { height:6px; background:#F1F5F9; border-radius:4px; overflow:hidden; }
+    .breakdown-fill     { height:100%; border-radius:4px; transition:width .5s ease; }
+
+    /* Section spacing helper */
+    .dash-section       { margin-top:24px; }
 
     /* Weather strip */
-    .weather-strip      { display:flex; gap:8px; align-items:center; font-size:11px; color:#9CA3AF; padding:10px 20px; }
+    .weather-strip      { font-size:11px; color:#9CA3AF; display:flex; gap:6px; align-items:center; }
 
   </style>
 </head>
@@ -2682,189 +2692,206 @@ function PilotDashboard() {
 
             return (<>
 
-              {/* ── Status strip ─────────────────────────────────── */}
-              <div className="dash-status">
-                <div className="dash-status-dot" style={{background:todayEntry?"#D1D5DB":"#F59E0B"}}/>
-                <span style={{color:todayEntry?"#6B7280":"#F59E0B"}}>
-                  {todayEntry
-                    ? `הוזן — ${fmt((Number(todayEntry.sales)||0)+(Number(todayEntry.deliveries)||0))}`
-                    : `נתוני ${DOW_NAMES[TODAY_DOW]} טרם הוזנו`}
-                </span>
-                {orefAlert && <>
-                  <span style={{color:"#E5E7EB"}}>·</span>
-                  <span style={{color:"#EF4444",fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
-                    <span className="dash-status-dot" style={{background:"#EF4444",animation:"pulse 1s infinite"}}/>
-                    אזעקה פעילה
+              {/* ── Status + weather inline ──────────────────────── */}
+              <div className="dash-inner">
+                <div className="dash-status" style={{paddingTop:16,paddingBottom:8}}>
+                  <div className="dash-status-dot" style={{background:todayEntry?"#D1D5DB":"#F59E0B"}}/>
+                  <span style={{color:todayEntry?"#6B7280":"#F59E0B"}}>
+                    {todayEntry
+                      ? `הוזן — ${fmt((Number(todayEntry.sales)||0)+(Number(todayEntry.deliveries)||0))}`
+                      : `נתוני ${DOW_NAMES[TODAY_DOW]} טרם הוזנו`}
                   </span>
-                </>}
-                {weather && !weather.alert && (
-                  <span style={{marginRight:"auto",color:"#9CA3AF"}}>
-                    {weather.temp}° · {weather.desc}
-                  </span>
-                )}
-              </div>
-
-              {/* ── 1. KPI row — 4 cards ─────────────────────────── */}
-              <div className="kpi-row">
-                {/* Revenue */}
-                <div className="kpi-item">
-                  <div className="kpi-item-label">הכנסות חודשיות</div>
-                  <div className="kpi-item-value" style={{color:salesBad?"#EF4444":salesWarn?"#F59E0B":"#111827"}}>
-                    {fmt(metrics.totalSales)}
-                  </div>
-                  <div className="kpi-item-sub">{salesPct>0?`${salesPct}% מיעד ${fmt(tSales)}`:`יעד ${fmt(tSales)}`}</div>
-                </div>
-
-                {/* Cash balance */}
-                <div className="kpi-item">
-                  <div className="kpi-item-label">יתרת קופה</div>
-                  <div className="kpi-item-value" style={{color:metrics.lc<0?"#EF4444":"#111827"}}>
-                    {fmt(metrics.lc)}
-                  </div>
-                  {DAY_OF_MONTH>0 && <div className="kpi-item-sub">{fmt(Math.round(metrics.dailyAvg))} ממוצע יומי</div>}
-                </div>
-
-                {/* Food cost */}
-                <div className="kpi-item">
-                  <div className="kpi-item-label">פוד קוסט</div>
-                  <div className="kpi-item-value" style={{color:foodStatus==="danger"?"#EF4444":foodStatus==="warn"?"#F59E0B":"#111827"}}>
-                    {metrics.foodCostPct>0?fmtPct(metrics.foodCostPct):"—"}
-                  </div>
-                  <div className="kpi-item-sub">יעד {tFood}%{foodStatus?" · חריגה":""}</div>
-                </div>
-
-                {/* Labor */}
-                <div className="kpi-item">
-                  <div className="kpi-item-label">לייבור קוסט</div>
-                  <div className="kpi-item-value" style={{color:laborStatus==="danger"?"#EF4444":laborStatus==="warn"?"#F59E0B":"#111827"}}>
-                    {laborPct>0?fmtPct(laborPct):"—"}
-                  </div>
-                  <div className="kpi-item-sub">יעד {tLabor}% · {fmt(metrics.totalPayroll)}</div>
+                  {orefAlert && <>
+                    <span style={{color:"#E5E7EB",margin:"0 2px"}}>·</span>
+                    <span style={{color:"#EF4444",fontWeight:600,display:"flex",alignItems:"center",gap:5}}>
+                      <span className="dash-status-dot" style={{background:"#EF4444",animation:"pulse 1s infinite"}}/>
+                      אזעקה פעילה
+                    </span>
+                  </>}
+                  {weather && !weather.alert && (
+                    <span className="weather-strip" style={{marginRight:"auto"}}>
+                      <span>{weather.temp}°</span><span>·</span><span>{weather.desc}</span>
+                    </span>
+                  )}
                 </div>
               </div>
 
-              {/* ── 2. Forecast card — primary ───────────────────── */}
-              <div className="forecast-card">
-                <div className="forecast-header">
-                  <span className="forecast-title">מצב והכנסות</span>
-                  <span className="forecast-subtitle">{daysLeft} ימים נותרו בחודש</span>
-                </div>
-
-                {/* Revenue progress bar */}
-                <div className="rev-progress-wrap">
-                  <div className="rev-row">
-                    <span className="rev-label">הכנסות עד כה</span>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <span className={`rev-pct-badge ${pctClass}`}>{salesPct}%</span>
-                      <span className="rev-vals">{fmt(metrics.totalSales)} <span>/ {fmt(tSales)}</span></span>
+              {/* ── 1. KPI row ───────────────────────────────────── */}
+              <div className="dash-inner">
+                <div className="kpi-row">
+                  <div className="kpi-item">
+                    <div className="kpi-item-label">הכנסות חודש</div>
+                    <div className="kpi-item-value" style={{color:salesBad?"#EF4444":salesWarn?"#F59E0B":"#111827"}}>
+                      {fmt(metrics.totalSales)}
+                    </div>
+                    <div className="kpi-item-sub">
+                      {salesPct>0 ? `${salesPct}% מיעד` : `יעד ${fmt(tSales)}`}
                     </div>
                   </div>
-                  <div className="rev-bar-track">
-                    <div className="rev-bar-fill" style={{width:`${salesPct}%`,background:barColor}}/>
-                    <div className="rev-bar-today" style={{left:`${Math.min(dayPct,99)}%`}}/>
-                  </div>
-                  <div style={{display:"flex",justifyContent:"space-between",marginTop:5,fontSize:10,color:"#9CA3AF"}}>
-                    <span>יום {DAY_OF_MONTH}</span>
-                    <span>סוף חודש</span>
-                  </div>
-                </div>
 
-                {/* Forecast text metrics */}
-                <div className="forecast-text-row">
-                  {[
-                    {label:"מחזור חזוי",  value:fmt(Math.round(fSalesFull)), sub:`לעומת יעד ${fmt(tSales)}`},
-                    {label:"תחזית LC",    value:fmt(Math.round(metrics.forecast)), sub:`${fmt(Math.round(metrics.dailyAvg))} $/יום ממוצע`},
-                    {label:"רווח חזוי",   value:fmt(Math.round(estProfit)),
-                      sub:fSalesFull>0?`${fmtPct((estProfit/fSalesFull)*100)} מהמחזור`:"—",
-                      dn:estProfit<0},
-                  ].map(({label,value,sub,dn},i)=>(
-                    <div key={i} className="ftc">
-                      <div className="ftc-label">{label}</div>
-                      <div className={`ftc-value${dn?" dn":""}`}>{value}</div>
-                      {sub && <div className="ftc-sub">{sub}</div>}
+                  <div className="kpi-item">
+                    <div className="kpi-item-label">יתרת קופה</div>
+                    <div className="kpi-item-value" style={{color:metrics.lc<0?"#EF4444":"#111827"}}>
+                      {fmt(metrics.lc)}
                     </div>
-                  ))}
+                    <div className="kpi-item-sub">
+                      {DAY_OF_MONTH>0 ? `${fmt(Math.round(metrics.dailyAvg))} / יום` : `יום ${DAY_OF_MONTH}`}
+                    </div>
+                  </div>
+
+                  <div className="kpi-item">
+                    <div className="kpi-item-label">פוד קוסט</div>
+                    <div className="kpi-item-value" style={{color:foodStatus==="danger"?"#EF4444":foodStatus==="warn"?"#F59E0B":"#111827"}}>
+                      {metrics.foodCostPct>0 ? fmtPct(metrics.foodCostPct) : "—"}
+                    </div>
+                    <div className="kpi-item-sub">יעד {tFood}%</div>
+                  </div>
+
+                  <div className="kpi-item">
+                    <div className="kpi-item-label">לייבור קוסט</div>
+                    <div className="kpi-item-value" style={{color:laborStatus==="danger"?"#EF4444":laborStatus==="warn"?"#F59E0B":"#111827"}}>
+                      {laborPct>0 ? fmtPct(laborPct) : "—"}
+                    </div>
+                    <div className="kpi-item-sub">יעד {tLabor}%</div>
+                  </div>
                 </div>
               </div>
 
-              {/* ── 3. Revenue trend chart ───────────────────────── */}
+              {/* ── 2. Forecast — primary dominant card ──────────── */}
+              <div className="dash-inner dash-section">
+                <div className="forecast-card">
+                  <div className="forecast-header">
+                    <span className="forecast-title">הכנסות ותחזית</span>
+                    <span className="forecast-subtitle">{daysLeft} ימים נותרו · {MONTH_NAMES[MONTH]}</span>
+                  </div>
+
+                  <div className="rev-progress-wrap">
+                    <div className="rev-row">
+                      <span className="rev-label">עד כה</span>
+                      <div style={{display:"flex",alignItems:"center",gap:10}}>
+                        <span className={`rev-pct-badge ${pctClass}`}>{salesPct}%</span>
+                        <span className="rev-vals">
+                          {fmt(metrics.totalSales)}
+                          <span> / {fmt(tSales)}</span>
+                        </span>
+                      </div>
+                    </div>
+                    <div className="rev-bar-track">
+                      <div className="rev-bar-fill" style={{width:`${salesPct}%`,background:barColor}}/>
+                      <div className="rev-bar-today" style={{left:`${Math.min(dayPct,99)}%`}}/>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",marginTop:6,fontSize:10,color:"#C0C8D4"}}>
+                      <span>יום 1</span>
+                      <span style={{position:"relative",left:`${Math.min(dayPct,99)}%`,transform:"translateX(50%)",color:"#9CA3AF"}}>
+                        היום
+                      </span>
+                      <span>יום {DAYS_IN_MONTH}</span>
+                    </div>
+                  </div>
+
+                  <div className="forecast-text-row">
+                    {[
+                      {label:"מחזור חזוי", value:fmt(Math.round(fSalesFull)), sub:`יעד ${fmt(tSales)}`},
+                      {label:"תחזית קופה", value:fmt(Math.round(metrics.forecast)), sub:`${fmt(Math.round(metrics.dailyAvg))} / יום`},
+                      {label:"רווח חזוי",  value:fmt(Math.round(estProfit)),
+                        sub:fSalesFull>0 ? fmtPct((estProfit/fSalesFull)*100)+" מהמחזור" : "—",
+                        dn:estProfit<0},
+                    ].map(({label,value,sub,dn},i)=>(
+                      <div key={i} className="ftc">
+                        <div className="ftc-label">{label}</div>
+                        <div className={`ftc-value${dn?" dn":""}`}>{value}</div>
+                        {sub && <div className="ftc-sub">{sub}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* ── 3. Chart ─────────────────────────────────────── */}
               {revChart.length>0 && (
-                <div className="chart-card">
-                  <div className="chart-card-title">הכנסות מצטברות</div>
-                  <ResponsiveContainer width="100%" height={120}>
-                    <AreaChart data={revChart} margin={{top:4,right:4,left:0,bottom:0}}>
-                      <defs>
-                        <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#3B82F6" stopOpacity={0.15}/>
-                          <stop offset="100%" stopColor="#3B82F6" stopOpacity={0}/>
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false}/>
-                      <XAxis dataKey="day" stroke="none" tick={{fill:"#9CA3AF",fontSize:10}} axisLine={false} tickLine={false}/>
-                      <YAxis stroke="none" tick={{fill:"#9CA3AF",fontSize:10}} axisLine={false} tickLine={false}
-                        tickFormatter={v=>`₪${(v/1000).toFixed(0)}k`} width={36}/>
-                      <Tooltip contentStyle={{...TT,borderColor:"#E5E7EB"}} formatter={v=>[fmt(v),""]}
-                        cursor={{stroke:"#E5E7EB",strokeWidth:1}}/>
-                      <Area type="monotone" dataKey="הכנסות" stroke="#3B82F6" strokeWidth={2}
-                        fill="url(#revGrad)" dot={false} activeDot={{r:4,fill:"#3B82F6",stroke:"#fff",strokeWidth:2}}/>
-                    </AreaChart>
-                  </ResponsiveContainer>
+                <div className="dash-inner dash-section">
+                  <div className="chart-card">
+                    <div className="chart-card-title">הכנסות מצטברות</div>
+                    <ResponsiveContainer width="100%" height={130}>
+                      <AreaChart data={revChart} margin={{top:6,right:6,left:0,bottom:0}}>
+                        <defs>
+                          <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#3B82F6" stopOpacity={0.12}/>
+                            <stop offset="100%" stopColor="#3B82F6" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 4" stroke="#F1F5F9" vertical={false}/>
+                        <XAxis dataKey="day" stroke="none" tick={{fill:"#C0C8D4",fontSize:10}} axisLine={false} tickLine={false}/>
+                        <YAxis stroke="none" tick={{fill:"#C0C8D4",fontSize:10}} axisLine={false} tickLine={false}
+                          tickFormatter={v=>`${(v/1000).toFixed(0)}k`} width={32}/>
+                        <Tooltip contentStyle={{...TT,borderColor:"#F1F5F9"}} formatter={v=>[fmt(v),""]}
+                          cursor={{stroke:"#E5E7EB",strokeWidth:1}}/>
+                        <Area type="monotone" dataKey="הכנסות" stroke="#3B82F6" strokeWidth={2}
+                          fill="url(#revGrad)" dot={false}
+                          activeDot={{r:4,fill:"#3B82F6",stroke:"#fff",strokeWidth:2}}/>
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
                 </div>
               )}
 
               {/* ── 4. Alerts ────────────────────────────────────── */}
               {hasAlerts && (
-                <div className="alerts-card">
-                  {[
-                    orefAlert && {color:"#EF4444",pulse:true,
-                      title:"אזעקה פעילה — פיקוד העורף",
-                      body:orefAlert.cities.slice(0,4).join(" · ")+(orefAlert.cities.length>4?` +${orefAlert.cities.length-4}`:"")},
-                    weather?.alert && {color:"#F59E0B",pulse:false,
-                      title:weather.isRain?"גשם — השפעה צפויה על פדיון":weather.isHeat?"חום קיצוני":"קור קיצוני",
-                      body:`${weather.temp}°C · ${weather.desc}`},
-                    todayMissing.length>0 && {color:"#F59E0B",pulse:false,
-                      title:`${todayMissing.length} ספקים לא הוזנו היום`,
-                      body:todayMissing.map(s=>s.name).join(", ")},
-                  ].filter(Boolean).map((item,i)=>(
-                    <div key={i} className="alert-row-item">
-                      <div className="alert-dot-sm" style={{background:item.color,...(item.pulse?{animation:"pulse 1s infinite"}:{})}}/>
-                      <div>
-                        <div className="alert-row-title">{item.title}</div>
-                        <div className="alert-row-body">{item.body}</div>
+                <div className="dash-inner dash-section">
+                  <div className="alerts-card">
+                    {[
+                      orefAlert && {color:"#EF4444",pulse:true,
+                        title:"אזעקה פעילה — פיקוד העורף",
+                        body:orefAlert.cities.slice(0,4).join(" · ")+(orefAlert.cities.length>4?` +${orefAlert.cities.length-4}`:"")},
+                      weather?.alert && {color:"#F59E0B",pulse:false,
+                        title:weather.isRain?"גשם — השפעה צפויה על הפדיון":weather.isHeat?"חום קיצוני":"קור קיצוני",
+                        body:`${weather.temp}°C · ${weather.desc}`},
+                      todayMissing.length>0 && {color:"#F59E0B",pulse:false,
+                        title:`${todayMissing.length} ספקים לא הוזנו היום`,
+                        body:todayMissing.map(s=>s.name).join(", ")},
+                    ].filter(Boolean).map((item,i)=>(
+                      <div key={i} className="alert-row-item">
+                        <div className="alert-dot-sm" style={{background:item.color,...(item.pulse?{animation:"pulse 1s infinite"}:{})}}/>
+                        <div>
+                          <div className="alert-row-title">{item.title}</div>
+                          <div className="alert-row-body">{item.body}</div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
               )}
 
               {/* ── 5. Expense breakdown ─────────────────────────── */}
-              <div className="breakdown-card">
-                <div className="breakdown-title">פירוט הוצאות</div>
-                {[
-                  {label:"רכש ספקים",  val:metrics.totalFood,       color:"#3B82F6"},
-                  {label:"שכר",         val:metrics.totalPayroll,     color:"#8B5CF6"},
-                  ...(businessConfig.hasRoyalty?[{label:`תמלוגים ${businessConfig.royaltyPct}%`,val:Math.round(metrics.totalSales*(businessConfig.royaltyPct||0)/100),color:"#6B7280"}]:[]),
-                  ...(businessConfig.rentPct>0?[{label:`שכ״ד ${businessConfig.rentPct}%`,val:Math.round(metrics.totalSales*(businessConfig.rentPct||0)/100),color:"#6B7280"}]:[]),
-                  ...(businessConfig.rentType==="fixed"&&businessConfig.rentFixed>0?[{label:"שכ״ד קבוע",val:businessConfig.rentFixed,color:"#6B7280"}]:[]),
-                  {label:"קבועות",      val:metrics.fixedSoFar,      color:"#9CA3AF"},
-                  {label:"שונות",        val:metrics.totalOtherExpense,color:"#D1D5DB"},
-                ].filter(r=>r.val>0).map(({label,val,color},i)=>{
-                  const pct = metrics.totalExpenses>0 ? Math.min((val/metrics.totalExpenses)*100,100) : 0;
-                  return (
-                    <div key={i} className="breakdown-row">
-                      <div className="breakdown-row-hdr">
-                        <span className="breakdown-row-lbl">{label}</span>
-                        <div>
-                          <span className="breakdown-row-pct">{Math.round(pct)}%</span>
-                          <span className="breakdown-row-val">{fmt(val)}</span>
+              <div className="dash-inner dash-section">
+                <div className="breakdown-card">
+                  <div className="breakdown-title">פירוט הוצאות</div>
+                  {[
+                    {label:"רכש ספקים",  val:metrics.totalFood,       color:"#3B82F6"},
+                    {label:"שכר עובדים", val:metrics.totalPayroll,     color:"#818CF8"},
+                    ...(businessConfig.hasRoyalty?[{label:`תמלוגים ${businessConfig.royaltyPct}%`,val:Math.round(metrics.totalSales*(businessConfig.royaltyPct||0)/100),color:"#94A3B8"}]:[]),
+                    ...(businessConfig.rentPct>0?[{label:`שכ״ד ${businessConfig.rentPct}%`,val:Math.round(metrics.totalSales*(businessConfig.rentPct||0)/100),color:"#94A3B8"}]:[]),
+                    ...(businessConfig.rentType==="fixed"&&businessConfig.rentFixed>0?[{label:"שכ״ד קבוע",val:businessConfig.rentFixed,color:"#94A3B8"}]:[]),
+                    {label:"הוצאות קבועות", val:metrics.fixedSoFar,   color:"#CBD5E1"},
+                    {label:"שונות",          val:metrics.totalOtherExpense, color:"#E2E8F0"},
+                  ].filter(r=>r.val>0).map(({label,val,color},i)=>{
+                    const pct = metrics.totalExpenses>0 ? Math.min((val/metrics.totalExpenses)*100,100) : 0;
+                    return (
+                      <div key={i} className="breakdown-row">
+                        <div className="breakdown-row-hdr">
+                          <span className="breakdown-row-lbl">{label}</span>
+                          <div>
+                            <span className="breakdown-row-pct">{Math.round(pct)}%</span>
+                            <span className="breakdown-row-val">{fmt(val)}</span>
+                          </div>
+                        </div>
+                        <div className="breakdown-bar">
+                          <div className="breakdown-fill" style={{width:`${pct}%`,background:color}}/>
                         </div>
                       </div>
-                      <div className="breakdown-bar">
-                        <div className="breakdown-fill" style={{width:`${pct}%`,background:color}}/>
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
 
             </>);
