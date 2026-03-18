@@ -544,6 +544,7 @@
 
 
 // storage handled by Firebase above
+// Build: 2026-03-18T07:06Z
 
 const { useState, useEffect, useRef } = React;
 const { AreaChart, BarChart, LineChart, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -596,6 +597,7 @@ const fmt = (n) => {
 };
 const fmtPct = (n) => (Number(n) || 0).toFixed(1) + '%';
 const cfgTarget = (cfg, key, def) => Number(cfg?.[key]) || def;
+const fcColor = (v, t) => v > t+3 ? '#DC2626' : v > t ? '#D97706' : '#16A34A';
 
 // ─── Date constants (computed once at load) ────────────────────────────────────
 const _NOW          = new Date();
@@ -1703,6 +1705,114 @@ function BusinessSelector({ businesses, onSelect, onAdd, onDelete, userName, isS
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
+
+// ─── Helper: suppliers expected on a given day-of-week ───────────────────────
+function suppliersOnDay(dow, suppliers) {
+  if (!Array.isArray(suppliers)) return [];
+  return suppliers.filter(s => {
+    if (!s || !Array.isArray(s.days)) return false;
+    return s.days.includes(dow);
+  });
+}
+
+// ─── Helper: compute monthly metrics from entries ────────────────────────────
+function calcMetrics(entries, fixedList, cfg) {
+  const { rentPct=0, rentType='fixed', rentFixed=0, hasRoyalty=false, royaltyPct=0,
+          suppliers=[] } = cfg || {};
+
+  let totalSales=0, totalFood=0, totalPayroll=0, totalOtherExpense=0,
+      totalOtherIncome=0, totalNetworkDelivery=0;
+
+  entries.forEach(e => {
+    const sales        = Number(e.sales)        || 0;
+    const deliveries   = Number(e.deliveries)   || 0;
+    const food         = Number(e.food_cost)    || 0;
+    const payroll      = Number(e.payroll)      || 0;
+    const hourly       = Object.values(e.hourly_payroll || {}).reduce((a,v)=>a+(Number(v)||0),0);
+    const otherExp     = Number(e.other_expense) || 0;
+    const otherInc     = Number(e.other_income)  || 0;
+    const supPayments  = Object.values(e.supplier_payments || {}).reduce((a,v)=>a+(Number(v)||0),0);
+
+    totalSales           += sales + deliveries + otherInc;
+    totalNetworkDelivery += deliveries;
+    totalFood            += supPayments > 0 ? supPayments : food;
+    totalPayroll         += payroll + hourly;
+    totalOtherExpense    += otherExp;
+    totalOtherIncome     += otherInc;
+  });
+
+  // Fixed expenses prorated to days elapsed
+  const daysPassed = entries.length;
+  const daysInMonth = DAYS_IN_MONTH || 30;
+  const fixedMonthly = fixedList.reduce((a,f) => {
+    if (f.rentPct)    return a + Math.round(totalSales * (rentPct/100));
+    if (f.royaltyPct) return a + (hasRoyalty ? Math.round(totalSales * (royaltyPct/100)) : 0);
+    return a + (Number(f.amount) || 0);
+  }, 0);
+
+  const rentAmount = rentType === 'pct' ? Math.round(totalSales * (rentPct/100)) : rentFixed;
+  const royaltyAmount = hasRoyalty ? Math.round(totalSales * (royaltyPct/100)) : 0;
+  const TOTAL_FIXED = fixedMonthly;
+  const fixedSoFar  = daysInMonth > 0 ? Math.round(TOTAL_FIXED * (daysPassed / daysInMonth)) : 0;
+
+  const totalExpenses = totalFood + totalPayroll + totalOtherExpense + rentAmount + royaltyAmount + fixedSoFar;
+  const lc            = totalSales - totalExpenses;
+  const foodCostPct   = totalSales > 0 ? (totalFood / totalSales) * 100 : 0;
+  const dailyAvg      = daysPassed > 0 ? lc / daysPassed : 0;
+  const daysLeft      = Math.max(daysInMonth - daysPassed, 0);
+  const forecast      = lc + (dailyAvg * daysLeft);
+
+  return {
+    totalSales, totalFood, totalPayroll, totalOtherExpense,
+    totalNetworkDelivery, fixedSoFar, totalExpenses,
+    lc, foodCostPct, dailyAvg, forecast, TOTAL_FIXED,
+  };
+}
+
+// ─── Helper: build daily LC cumulative chart data ────────────────────────────
+function buildChart(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) return [];
+  let cum = 0;
+  return entries
+    .slice()
+    .sort((a, b) => (a.date||'').localeCompare(b.date||''))
+    .map(e => {
+      const sales = (Number(e.sales)||0) + (Number(e.deliveries)||0) + (Number(e.other_income)||0);
+      const food  = Object.values(e.supplier_payments||{}).reduce((a,v)=>a+(Number(v)||0),0) || (Number(e.food_cost)||0);
+      const pay   = (Number(e.payroll)||0) + Object.values(e.hourly_payroll||{}).reduce((a,v)=>a+(Number(v)||0),0);
+      const exp   = food + pay + (Number(e.other_expense)||0);
+      cum += sales - exp;
+      return { day: (e.date||'').slice(8), יתרה: Math.round(cum), הכנסות: Math.round(sales), הוצאות: Math.round(exp) };
+    });
+}
+
+// Expose helpers globally as safety net
+window.calcMetrics    = calcMetrics;
+window.buildChart     = buildChart;
+window.suppliersOnDay = suppliersOnDay;
+window.getDateDOW     = getDateDOW;
+window.fcColor        = fcColor;
+
+
+
+// ─── Helper: WhatsApp notification ────────────────────────────────────────────
+async function sendWhatsAppNotification(bizId, msg, groupId) {
+  if (!groupId || !msg) return;
+  try {
+    await fetch('/api/whatsapp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bizId, message: msg, groupId }),
+    });
+  } catch (e) {
+    console.warn('[WA]', e.message);
+  }
+}
+
+function getWhatsAppTarget(businessConfig) {
+  return businessConfig?.whatsappGroupId || businessConfig?.waGroupId || '';
+}
+
 function PilotDashboard() {
   const [entries, setEntries] = useState([]);
   const [screen, setScreen] = useState("dashboard");
@@ -4276,7 +4386,7 @@ function ForecastScreen({ metrics, lastYear, saveLastYear, currentMonth, entries
   const fLaborPct = fSales > 0 ? (fLabor / fSales) * 100 : 0;
   const fGross    = 100 - fFoodPct - fLaborPct - (businessConfig.rentPct||0) - (businessConfig.hasRoyalty?(businessConfig.royaltyPct||0):0);
 
-  const fcColor = (v,t) => v > t+3 ? "#DC2626" : v > t ? "#D97706" : "#16A34A";
+  // fcColor now defined at module scope
   const dlt  = (cur,prv,inv) => { const d=cur-prv; const good=inv?d<0:d>0; return { str:`${d>=0?"+":""}${d.toFixed(1)}%`, good }; };
   const dltA = (cur,prv,inv) => { const d=cur-prv; const good=inv?d<0:d>0; return { str:`${d>=0?"+":""}${fmt(Math.round(d))}`, good }; };
 
