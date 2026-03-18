@@ -285,6 +285,9 @@
     .kpi-card-link  { cursor:pointer; }
     .kpi-card-link:active { transform:translateY(0); box-shadow:0 1px 3px rgba(0,0,0,.05); background:#FAFBFF; }
     .kpi-forecast   { font-size:10px; color:#94A3B8; margin-top:6px; line-height:1.4; font-weight:400; }
+    .kpi-pct-badge  { font-size:10px; font-weight:600; margin-top:5px; display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
+    .kpi-pct-bar    { height:3px; background:#F1F5F9; border-radius:3px; overflow:hidden; margin-top:7px; }
+    .kpi-pct-fill   { height:100%; border-radius:3px; transition:width .6s ease; }
     .kpi-label { font-size:10px; font-weight:400; color:#94A3B8; letter-spacing:.5px; text-transform:uppercase; margin-bottom:9px; display:block; line-height:1.4; }
     .kpi-val   { font-size:21px; font-weight:600; color:#64748B; letter-spacing:-.8px; line-height:1; }
     .kpi-val.s-warn { color:#D97706; }
@@ -318,7 +321,7 @@
     .hero-main    { display:flex; justify-content:space-between; align-items:flex-end; position:relative; z-index:1; }
     .hero-left    { }
     .hero-amount  { font-size:76px; font-weight:800; color:#0F172A; letter-spacing:-4.5px; line-height:1; }
-    .hero-target  { font-size:12px; color:#94A3B8; font-weight:400; margin-top:10px; line-height:1.5; }
+    .hero-target  { font-size:13px; color:#64748B; font-weight:500; margin-top:10px; line-height:1.5; }
     .hero-badge   { font-size:12px; font-weight:600; padding:6px 16px; border-radius:999px; align-self:flex-start; margin-top:4px; }
     .hero-badge.ok   { background:rgba(129,140,248,.18); color:#4F46E5; }
     .hero-badge.warn { background:rgba(253,230,138,.4); color:#B45309; }
@@ -334,10 +337,10 @@
     .hm-row  { display:grid; grid-template-columns:repeat(3,1fr); padding-top:26px; margin-top:26px; border-top:1px solid rgba(99,102,241,.1); position:relative; z-index:1; }
     .hm-cell { }
     .hm-cell:not(:last-child) { padding-left:28px; border-left:1px solid rgba(99,102,241,.1); margin-left:28px; }
-    .hm-label { font-size:10px; font-weight:400; color:#94A3B8; letter-spacing:.5px; text-transform:uppercase; margin-bottom:7px; line-height:1.4; }
-    .hm-val   { font-size:21px; font-weight:700; color:#1E293B; letter-spacing:-.7px; line-height:1; }
+    .hm-label { font-size:11px; font-weight:600; color:#64748B; letter-spacing:.2px; margin-bottom:7px; line-height:1.4; }
+    .hm-val   { font-size:22px; font-weight:700; color:#0F172A; letter-spacing:-.8px; line-height:1; }
     .hm-val.neg { color:#818CF8; }
-    .hm-sub   { font-size:11px; color:#94A3B8; margin-top:5px; line-height:1.4; }
+    .hm-sub   { font-size:11px; color:#64748B; margin-top:5px; line-height:1.4; font-weight:500; }
 
     /* ── 2-col grid ── */
     .dash-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; width:100%; }
@@ -2689,7 +2692,7 @@ function PilotDashboard() {
           <div className="app-nav-inner">
             <button className="nav-tab is-red" onClick={()=>setScreen("shifts")}>משמרות</button>
             {(currentUser.permissions||[]).map(s=>{
-              const lbl={"dashboard":"סקירה","foodcost":"קניות","history":"פדיון יומי","pettycash":"קופה קטנה","employees":"עלות עובדים","tasks":"משימות","users":"משתמשים"}[s];
+              const lbl={"dashboard":"Dashboard","foodcost":"קניות","history":"פדיון יומי","pettycash":"קופה קטנה","employees":"עלות עובדים","tasks":"משימות","users":"משתמשים"}[s];
               return lbl ? <button key={s} className={`nav-tab ${screen===s?"is-active":""}`} onClick={()=>setScreen(s)}>{lbl}</button> : null;
             })}
           </div>
@@ -2851,7 +2854,7 @@ function PilotDashboard() {
         <div className="mhd-nav">
           <div className="mhd-nav-inner">
             {[
-              {key:"dashboard",  label:"סקירה",         ownerOnly:false},
+              {key:"dashboard",  label:"Dashboard",      ownerOnly:false},
               {key:"history",    label:"פדיון יומי",    ownerOnly:false},
               {key:"pettycash",  label:"קופה קטנה",     ownerOnly:true},
               {key:"foodcost",   label:"קניות",         ownerOnly:false},
@@ -2935,34 +2938,47 @@ function PilotDashboard() {
                   )}
                 </div>
 
-                {/* ── 1. KPI row — actual + forecast per metric ── */}
+                {/* ── 1. KPI row — actual + forecast + % ── */}
                 <div className="dash-section kpi-row">
+
                   {/* הכנסות */}
                   <div className="kpi-card kpi-card-link" onClick={()=>setScreen("history")} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" ")setScreen("history");}}>
                     <div className="kpi-label">הכנסות</div>
                     <div className={`kpi-val${salesBad?" s-bad":salesWarn?" s-warn":""}`}>{fmt(metrics.totalSales)}</div>
                     <div className="kpi-forecast">חזוי: {fmt(Math.round(fSales))}</div>
+                    {salesPct>0&&<div className="kpi-pct-bar"><div className="kpi-pct-fill" style={{width:`${salesPct}%`,background:salesBad?"#EF4444":salesWarn?"#F59E0B":"#6366F1"}}/></div>}
                   </div>
 
-                  {/* קניות / פוד קוסט */}
+                  {/* קניות — פוד קוסט % */}
                   <div className="kpi-card kpi-card-link" onClick={()=>setScreen("foodcost")} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" ")setScreen("foodcost");}}>
                     <div className="kpi-label">קניות</div>
                     <div className={`kpi-val${foodBad?" s-bad":foodWarn?" s-warn":""}`}>{fmt(metrics.totalFood)}</div>
-                    <div className="kpi-forecast">פוד קוסט: {metrics.foodCostPct>0?fmtPct(metrics.foodCostPct):"—"} · יעד {tFood}%</div>
+                    <div className="kpi-pct-badge" style={{color:foodBad?"#EF4444":foodWarn?"#F59E0B":"#64748B"}}>
+                      פוד קוסט: {metrics.foodCostPct>0?fmtPct(metrics.foodCostPct):"—"}
+                      <span style={{color:"#CBD5E1",marginRight:4}}>יעד {tFood}%</span>
+                    </div>
+                    <div className="kpi-forecast">חזוי: {fmt(Math.round((metrics.totalFood/Math.max(metrics.totalSales,1))*fSales))}</div>
                   </div>
 
-                  {/* עלות עובדים */}
+                  {/* עלות עובדים — לייבור % */}
                   <div className="kpi-card kpi-card-link" onClick={()=>setScreen("employees")} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" ")setScreen("employees");}}>
                     <div className="kpi-label">עלות עובדים</div>
                     <div className={`kpi-val${lbrBad?" s-bad":lbrWarn?" s-warn":""}`}>{fmt(metrics.totalPayroll)}</div>
-                    <div className="kpi-forecast">לייבור: {laborPct>0?fmtPct(laborPct):"—"} · יעד {tLabor}%</div>
+                    <div className="kpi-pct-badge" style={{color:lbrBad?"#EF4444":lbrWarn?"#F59E0B":"#64748B"}}>
+                      לייבור: {laborPct>0?fmtPct(laborPct):"—"}
+                      <span style={{color:"#CBD5E1",marginRight:4}}>יעד {tLabor}%</span>
+                    </div>
+                    <div className="kpi-forecast">חזוי: {fmt(Math.round((metrics.totalPayroll/Math.max(metrics.totalSales,1))*fSales))}</div>
                   </div>
 
-                  {/* יתרת קופה */}
-                  <div className="kpi-card kpi-card-link" onClick={()=>setScreen("pettycash")} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" ")setScreen("pettycash");}}>
-                    <div className="kpi-label">יתרת קופה</div>
-                    <div className={`kpi-val${metrics.lc<0?" s-bad":""}`}>{fmt(metrics.lc)}</div>
-                    <div className="kpi-forecast">חזוי: {fmt(Math.round(metrics.forecast))}</div>
+                  {/* הוצאות קבועות */}
+                  <div className="kpi-card kpi-card-link" onClick={()=>setShowFixed(true)} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" ")setShowFixed(true);}}>
+                    <div className="kpi-label">הוצאות קבועות</div>
+                    <div className="kpi-val">{fmt(metrics.TOTAL_FIXED)}</div>
+                    <div className="kpi-forecast">
+                      עד עכשיו: {fmt(metrics.fixedSoFar)}
+                      {metrics.totalSales>0&&<span style={{marginRight:6,color:"#94A3B8"}}>· {fmtPct(metrics.TOTAL_FIXED/metrics.totalSales*100)}</span>}
+                    </div>
                   </div>
                 </div>
 
@@ -3181,8 +3197,37 @@ function PilotDashboard() {
               const d=String(i+1).padStart(2,"0");
               return Number(getSupPay(sup.id,`${smY}-${String(smM).padStart(2,"0")}-${d}`))||0;
             }).reduce((a,b)=>a+b,0),0);
+            const monthRevenue = entries.filter(e=>e.date.startsWith(`${smY}-${String(smM).padStart(2,"0")}`)).reduce((a,e)=>a+(Number(e.sales)||0)+(Number(e.deliveries)||0),0);
+            const topSupplier = suppliers.map(sup=>{
+              const tot=Array.from({length:smDays},(_,i)=>{const d=String(i+1).padStart(2,"0");return Number(getSupPay(sup.id,`${smY}-${String(smM).padStart(2,"0")}-${d}`))||0;}).reduce((a,b)=>a+b,0);
+              return {name:sup.name,total:tot,pct:monthRevenue>0?(tot/monthRevenue)*100:0};
+            }).sort((a,b)=>b.total-a.total)[0];
             return (
               <div>
+                {/* Summary strip — total + food cost % + top supplier */}
+                {monthTotal>0&&(
+                  <div style={{background:"#EEF2FF",borderRadius:12,padding:"12px 16px",marginBottom:14,border:"1px solid #E0E7FF"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                      <div>
+                        <div style={{fontSize:11,color:"#818CF8",fontWeight:600,textTransform:"uppercase",letterSpacing:".4px",marginBottom:3}}>סה״כ קניות</div>
+                        <div style={{fontSize:20,fontWeight:800,color:"#1E293B",letterSpacing:"-1px"}}>{fmt(monthTotal)}</div>
+                      </div>
+                      {monthRevenue>0&&(
+                        <div style={{textAlign:"left"}}>
+                          <div style={{fontSize:11,color:"#818CF8",fontWeight:600,textTransform:"uppercase",letterSpacing:".4px",marginBottom:3}}>פוד קוסט</div>
+                          <div style={{fontSize:20,fontWeight:800,color:"#1E293B",letterSpacing:"-1px"}}>{fmtPct(monthTotal/monthRevenue*100)}</div>
+                        </div>
+                      )}
+                      {topSupplier&&topSupplier.total>0&&(
+                        <div style={{textAlign:"left"}}>
+                          <div style={{fontSize:11,color:"#818CF8",fontWeight:600,textTransform:"uppercase",letterSpacing:".4px",marginBottom:3}}>ספק מוביל</div>
+                          <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>{topSupplier.name}</div>
+                          <div style={{fontSize:11,color:"#64748B"}}>{fmt(topSupplier.total)} · {topSupplier.pct.toFixed(1)}%</div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,background:"#FFFFFF",borderRadius:8,padding:"10px 16px",border:"1px solid #E5E7EB"}}>
                   <button onClick={prevMonth} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:"#6B7280",padding:"0 8px",lineHeight:1}}>‹</button>
                   <span style={{fontWeight:700,color:"#111827",fontSize:15}}>{smLabel}</span>
@@ -3194,6 +3239,7 @@ function PilotDashboard() {
                     const d=String(i+1).padStart(2,"0");
                     return Number(getSupPay(sup.id,`${smY}-${String(smM).padStart(2,"0")}-${d}`))||0;
                   }).reduce((a,b)=>a+b,0);
+                  const supPct = monthRevenue>0 ? (supMonthTotal/monthRevenue)*100 : 0;
                   const delivDays = Array.from({length:smDays},(_,i)=>{
                     const day=i+1;
                     const date=`${smY}-${String(smM).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
@@ -3212,7 +3258,12 @@ function PilotDashboard() {
                           <span style={{fontSize:11,color:"#9CA3AF"}}>{sup.days.map(d=>DOW_NAMES[d]).join(" ")}</span>
                         </div>
                         <div style={{display:"flex",alignItems:"center",gap:10}}>
-                          {supMonthTotal>0 && <span style={{fontWeight:700,color:"#111827",fontSize:14}}>{fmt(supMonthTotal)}</span>}
+                          {supMonthTotal>0 && (
+                            <>
+                              <span style={{fontWeight:700,color:"#111827",fontSize:14}}>{fmt(supMonthTotal)}</span>
+                              {supPct>0&&<span style={{fontSize:11,fontWeight:600,color:"#818CF8",background:"#EEF2FF",padding:"2px 7px",borderRadius:999}}>{supPct.toFixed(1)}%</span>}
+                            </>
+                          )}
                           <span style={{fontSize:16,color:"#9CA3AF",display:"inline-block",transition:"transform 0.2s",transform:isOpen?"rotate(180deg)":"none"}}>▾</span>
                         </div>
                       </div>
@@ -3916,7 +3967,10 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, persist,
         <button onClick={prevMonth} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:"#6B7280",padding:"0 8px"}}>‹</button>
         <div style={{textAlign:"center"}}>
           <div style={{fontWeight:700,color:"#111827",fontSize:15}}>{emLabel}</div>
-          <div style={{fontSize:12,color:"#9CA3AF",marginTop:1}}>סה״כ: {monthTotal.toLocaleString()} ₪</div>
+          <div style={{fontSize:12,color:"#9CA3AF",marginTop:1}}>
+                    סה״כ: {monthTotal.toLocaleString()} ₪
+                    {(()=>{const monthRev=entries.filter(e=>e.date.startsWith(`${emY}-${String(emM).padStart(2,"0")}`)).reduce((a,e)=>a+(Number(e.sales)||0)+(Number(e.deliveries)||0),0);return monthRev>0?<span style={{marginRight:6,color:"#6366F1",fontWeight:600}}> · {((monthTotal/monthRev)*100).toFixed(1)}%</span>:null;})()}
+                  </div>
         </div>
         <button onClick={nextMonth} disabled={!canNext} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:canNext?"#6B7280":"#D1D5DB",padding:"0 8px"}}>›</button>
       </div>
@@ -3956,7 +4010,10 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, persist,
                 onChange={e=>setDailyLabor(date,e.target.value)}
                 style={{flex:1,border:"1px solid #D1D5DB",borderRadius:6,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:"#111827",background:"#FFFFFF",outline:"none"}}/>
               {(hasVal||globalDailyTotal>0) && (
-                <div style={{minWidth:70,textAlign:"left",fontSize:12,fontWeight:700,color:"#6B7280"}}>{total.toLocaleString()} ₪</div>
+                <div style={{textAlign:"left",flexShrink:0}}>
+                <div style={{fontSize:12,fontWeight:700,color:"#374151"}}>{total.toLocaleString()} ₪</div>
+                {(()=>{const dayEntry=entries.find(e=>e.date===date);const dayRev=(Number(dayEntry?.sales)||0)+(Number(dayEntry?.deliveries)||0);return dayRev>0?<div style={{fontSize:10,color:"#94A3B8",marginTop:1}}>{((total/dayRev)*100).toFixed(1)}%</div>:null;})()}
+              </div>
               )}
             </div>
           );
