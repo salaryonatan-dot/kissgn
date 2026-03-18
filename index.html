@@ -46,39 +46,36 @@
 
     /* ══ App shell ══════════════════════════════════════════════════════════ */
     .app { min-height:100vh; background:var(--bg); width:100%; overflow-x:hidden; }
-    .app-header {
-      display:flex; align-items:center; justify-content:space-between;
-      height:52px; padding:0 14px; gap:8px;
-      background:var(--surface); border-bottom:1px solid var(--border);
-      position:sticky; top:0; z-index:50;
-      width:100%; max-width:100%; overflow:hidden;
-    }
-    .app-logo  { width:30px; height:30px; background:var(--ink); border-radius:6px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
-    .app-logo span { color:#fff; font-size:13px; font-weight:700; letter-spacing:-.5px; }
-    .app-title { font-size:14px; font-weight:700; color:var(--ink); letter-spacing:-.3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:140px; }
-    .app-sub   { font-size:11px; color:var(--ink-muted); white-space:nowrap; }
-    .app-nav   {
-      background:var(--surface); border-bottom:1px solid var(--border);
-      position:sticky; top:52px; z-index:40;
-      width:100%; max-width:100%; overflow:hidden;
-      display:block;
-    }
-    .app-nav-inner {
-      display:flex; padding:0 14px;
-      overflow-x:auto; -webkit-overflow-scrolling:touch;
-      scrollbar-width:none; max-width:100%;
-    }
-    .app-nav-inner::-webkit-scrollbar { display:none; }
-    .nav-tab {
-      height:40px; padding:0 12px; display:inline-flex; align-items:center;
-      font-size:12px; font-weight:500; color:var(--ink-muted);
-      background:transparent; border:none; border-bottom:2px solid transparent;
-      cursor:pointer; white-space:nowrap; flex-shrink:0; transition:color .1s;
-    }
-    .nav-tab:hover   { color:var(--ink-sub); }
+
+    /* ── Mobile header: 3 stacked rows ── */
+    .mhd              { background:#FFFFFF; width:100%; position:sticky; top:0; z-index:50; }
+    .mhd-row1         { display:flex; align-items:center; justify-content:space-between; padding:10px 16px 0; }
+    .mhd-biz          { min-width:0; flex:1; }
+    .mhd-name         { font-size:17px; font-weight:700; color:#0F172A; letter-spacing:-.4px; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .mhd-sub          { font-size:11px; color:#94A3B8; margin-top:2px; white-space:nowrap; }
+    .mhd-icons        { display:flex; align-items:center; gap:8px; flex-shrink:0; margin-right:12px; }
+    .mhd-icon-btn     { width:34px; height:34px; background:#F8FAFC; border:1px solid #E5E7EB; border-radius:10px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:#6B7280; flex-shrink:0; }
+    .mhd-avatar       { width:34px; height:34px; background:#6366F1; border-radius:10px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:12px; font-weight:700; flex-shrink:0; cursor:pointer; }
+    .mhd-row2         { display:flex; align-items:center; gap:8px; padding:10px 16px 0; }
+    .mhd-cta          { flex:1; height:38px; background:#6366F1; color:#fff; border:none; border-radius:10px; font-size:13px; font-weight:600; cursor:pointer; font-family:inherit; letter-spacing:-.2px; }
+    .mhd-switch       { height:38px; padding:0 14px; background:#F8FAFC; border:1px solid #E5E7EB; border-radius:10px; font-size:12px; font-weight:500; color:#6B7280; cursor:pointer; font-family:inherit; white-space:nowrap; flex-shrink:0; }
+    .mhd-logout       { height:38px; padding:0 14px; background:#F8FAFC; border:1px solid #E5E7EB; border-radius:10px; font-size:12px; font-weight:500; color:#6B7280; cursor:pointer; font-family:inherit; white-space:nowrap; flex-shrink:0; }
+    .mhd-nav          { margin-top:6px; border-top:1px solid #F1F5F9; }
+    .mhd-nav-inner    { display:flex; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; padding:0 12px; }
+    .mhd-nav-inner::-webkit-scrollbar { display:none; }
+    .mhd-tab          { height:38px; padding:0 12px; background:transparent; border:none; border-bottom:2px solid transparent; font-size:12px; font-weight:500; color:#94A3B8; white-space:nowrap; flex-shrink:0; cursor:pointer; font-family:inherit; transition:color .15s, border-color .15s; }
+    .mhd-tab.active   { color:#0F172A; font-weight:700; border-bottom-color:#6366F1; }
+    .mhd-tab.shift-active { color:#6366F1; font-weight:700; border-bottom-color:#6366F1; }
+
+    /* Keep legacy classes for non-header parts */
+    .app-title { font-size:14px; font-weight:700; color:var(--ink); }
+    .app-sub   { font-size:11px; color:var(--ink-muted); }
+    .app-nav   { display:none; } /* replaced by mhd-nav */
+    .app-nav-inner { display:flex; }
+    .nav-tab   { height:40px; padding:0 12px; display:inline-flex; align-items:center; font-size:12px; font-weight:500; color:var(--ink-muted); background:transparent; border:none; border-bottom:2px solid transparent; cursor:pointer; white-space:nowrap; flex-shrink:0; }
     .nav-tab.is-active { color:var(--ink); font-weight:600; border-bottom-color:var(--ink); }
     .nav-tab.is-red    { color:var(--accent); font-weight:600; border-bottom-color:var(--accent); }
-    .screen { padding:14px 14px 80px; background:var(--bg); min-height:calc(100vh - 92px); width:100%; max-width:100%; overflow-x:hidden; }
+    .screen { padding:14px 14px 80px; background:var(--bg); min-height:calc(100vh - 120px); width:100%; max-width:100%; overflow-x:hidden; }
 
     /* ══ Cards ══════════════════════════════════════════════════════════════ */
     .card       { background:var(--surface); border:1px solid var(--border); border-radius:var(--r); box-shadow:var(--shadow); }
@@ -2723,82 +2720,87 @@ function PilotDashboard() {
         </div>
       )}
 
-      {/* Header */}
-      <header className="app-header">
-        <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <div style={{width:28,height:28,background:"#111827",borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-            <span style={{color:"#fff",fontSize:13,fontWeight:700,letterSpacing:-0.5}}>M</span>
-          </div>
-          <div>
-            <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <h1 className="app-title">{businessConfig.businessName||"Marjin"}</h1>
-              {businesses.length > 1 && <button onClick={(e)=>{ e.stopPropagation(); setShowBizSelect(true); }} style={{fontSize:11,padding:"2px 8px",background:"#F3F4F6",border:"1px solid #E5E7EB",borderRadius:4,cursor:"pointer",fontFamily:"inherit",color:"#6B7280",fontWeight:500}}>החלף</button>}
-            </div>
-            <p className="app-sub">{monthLabel} · {DOW_NAMES[TODAY_DOW]}, {DAY_OF_MONTH}/{DAYS_IN_MONTH}</p>
-          </div>
-        </div>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
-          {!currentUser && (
-            <>
-              <button style={{...S.shiftBtn}} onClick={()=>setShowSetup(true)} title="הגדרות">
-                <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
-              </button>
-              <button className="btn btn-primary" onClick={()=>{setForm({...EMPTY_ENTRY,date:YESTERDAY_STR,security_event:false});setEditingId(null);setEntryStep('revenue');setScreen("entry");}}>
-                + הזנת יום
-              </button>
-            </>
-          )}
-          {loggedInUser && !currentUser && (
-            <div style={{display:"flex",alignItems:"center",gap:8,paddingRight:8,borderRight:"1px solid #E5E7EB"}}>
-              <div style={{textAlign:"left"}}>
-                <div style={{fontSize:12,color:"#111827",fontWeight:600}}>{loggedInUser.name}</div>
-                <div style={{fontSize:11,color:"#9CA3AF"}}>{ROLES[loggedInUser.role]?.label||loggedInUser.role}</div>
-              </div>
-              <button style={{padding:"6px 10px",background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:6,color:"#6B7280",cursor:"pointer",fontFamily:"inherit",fontSize:12,fontWeight:500}}
-                onClick={()=>{setLoggedInUser(null);try{localStorage.removeItem("marjin-session");}catch(_){}}}>יציאה</button>
-            </div>
-          )}
-        </div>
-      </header>
+      {/* ── Mobile Header: 3 rows ──────────────────────────────────────────── */}
+      <div className="mhd">
 
-      {/* Nav */}
-      {loggedInUser?.role==="staff" && screen!=="shifts" && (() => { setTimeout(()=>setScreen("shifts"),0); return null; })()}
-      <nav style={{borderBottom:"1px solid #E5E7EB",background:"#FFFFFF",position:"sticky",top:52,zIndex:40}}>
-        <div className="app-nav-inner">
-          {[
-            {key:"shifts",   label:"משמרות"},
-            {key:"dashboard",label:"סקירה"},
-            {key:"forecast", label:"תחזית"},
-            {key:"foodcost", label:"פוד קוסט"},
-            {key:"history",  label:"היסטוריה"},
-            {key:"fixed",    label:"קבועות"},
-            {key:"users",    label:"משתמשים"},
-            {key:"tasks",    label:"משימות"},
-            {key:"pettycash",label:"קופה"},
-            {key:"employees",label:"כ״א"},
-          ].map(({key,label})=>{
-            if(key==="dashboard"||key==="forecast"||key==="foodcost") {
-              if(loggedInUser?.role==="staff") return null;
-              const allowed = !currentUser || (currentUser.permissions||[]).includes(key);
-              if(!allowed) return null;
-            }
-            if(["history","fixed","users","tasks","pettycash","employees"].includes(key)) {
-              if(currentUser || loggedInUser?.role==="staff") return null;
-              if(key==="users"||key==="tasks"||key==="pettycash"||key==="employees") {
-                if(loggedInUser?.role!=="super_owner"&&loggedInUser?.role!=="owner") return null;
-              }
-            }
-            const isActive = screen===key;
-            const isShift = key==="shifts";
-            return (
-              <button key={key} style={{
-                ...S.navBtn,
-                ...(isActive ? (isShift ? S.navShift : S.navActive) : {}),
-              }} onClick={()=>setScreen(key)}>{label}</button>
-            );
-          })}
+        {/* Row 1: Business name + icons */}
+        <div className="mhd-row1">
+          <div className="mhd-biz">
+            <div className="mhd-name">{businessConfig.businessName||"Marjin"}</div>
+            <div className="mhd-sub">{monthLabel} · {DAY_OF_MONTH}/{DAYS_IN_MONTH}</div>
+          </div>
+          <div className="mhd-icons">
+            {!currentUser && (
+              <button className="mhd-icon-btn" onClick={()=>setShowSetup(true)} title="הגדרות">
+                <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="3"/>
+                  <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+                </svg>
+              </button>
+            )}
+            {loggedInUser && (
+              <div className="mhd-avatar" onClick={()=>{setLoggedInUser(null);try{localStorage.removeItem("marjin-session");}catch(_){}}} title={`${loggedInUser.name} · יציאה`}>
+                {(loggedInUser.name||"U").charAt(0).toUpperCase()}
+              </div>
+            )}
+          </div>
         </div>
-      </nav>
+
+        {/* Row 2: CTA + secondary action */}
+        {!currentUser && (
+          <div className="mhd-row2">
+            <button className="mhd-cta" onClick={()=>{setForm({...EMPTY_ENTRY,date:YESTERDAY_STR,security_event:false});setEditingId(null);setEntryStep('revenue');setScreen("entry");}}>
+              + הזנת יום
+            </button>
+            {businesses.length>1 && (
+              <button className="mhd-switch" onClick={(e)=>{e.stopPropagation();setShowBizSelect(true);}}>
+                החלף סניף
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Row 3: Navigation tabs */}
+        {loggedInUser?.role==="staff" && screen!=="shifts" && (() => { setTimeout(()=>setScreen("shifts"),0); return null; })()}
+        <div className="mhd-nav">
+          <div className="mhd-nav-inner">
+            {[
+              {key:"shifts",    label:"משמרות"},
+              {key:"dashboard", label:"סקירה"},
+              {key:"forecast",  label:"תחזית"},
+              {key:"foodcost",  label:"פוד קוסט"},
+              {key:"history",   label:"היסטוריה"},
+              {key:"fixed",     label:"קבועות"},
+              {key:"users",     label:"משתמשים"},
+              {key:"tasks",     label:"משימות"},
+              {key:"pettycash", label:"קופה"},
+              {key:"employees", label:"כ״א"},
+            ].map(({key,label})=>{
+              if(key==="dashboard"||key==="forecast"||key==="foodcost") {
+                if(loggedInUser?.role==="staff") return null;
+                const allowed = !currentUser || (currentUser.permissions||[]).includes(key);
+                if(!allowed) return null;
+              }
+              if(["history","fixed","users","tasks","pettycash","employees"].includes(key)) {
+                if(currentUser || loggedInUser?.role==="staff") return null;
+                if(["users","tasks","pettycash","employees"].includes(key)) {
+                  if(loggedInUser?.role!=="super_owner"&&loggedInUser?.role!=="owner") return null;
+                }
+              }
+              const isActive = screen===key;
+              const isShift  = key==="shifts";
+              return (
+                <button key={key}
+                  className={`mhd-tab${isActive?(isShift?" shift-active":" active"):""}`}
+                  onClick={()=>setScreen(key)}>
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
 
       {/* ═══ DASHBOARD ═══ */}
       {screen==="dashboard" && (
