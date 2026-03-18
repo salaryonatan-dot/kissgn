@@ -282,6 +282,8 @@
       transition:transform .2s ease, box-shadow .2s ease; cursor:default;
     }
     .kpi-card:hover { transform:translateY(-2px); box-shadow:0 6px 20px rgba(0,0,0,.09); border-color:rgba(0,0,0,.06); }
+    .kpi-card-link  { cursor:pointer; }
+    .kpi-card-link:active { transform:translateY(0); box-shadow:0 1px 3px rgba(0,0,0,.05); background:#FAFBFF; }
     .kpi-label { font-size:10px; font-weight:400; color:#94A3B8; letter-spacing:.5px; text-transform:uppercase; margin-bottom:9px; display:block; line-height:1.4; }
     .kpi-val   { font-size:21px; font-weight:600; color:#64748B; letter-spacing:-.8px; line-height:1; }
     .kpi-val.s-warn { color:#D97706; }
@@ -470,7 +472,7 @@
     import { getDatabase, ref, get, set, remove, onValue, forceWebSockets } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
     import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
              sendPasswordResetEmail, onAuthStateChanged, signOut, updateProfile,
-             updateEmail, updatePassword }
+             updateEmail, updatePassword, browserLocalPersistence, setPersistence }
              from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
     import { initializeAppCheck, ReCaptchaV3Provider } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app-check.js";
 
@@ -573,12 +575,21 @@
       }
     };
 
-    // Wait for auth state to settle (user may already be signed in from previous session)
+    // Ensure Firebase persists session across page reloads (browserLocalPersistence = IndexedDB/localStorage)
+    try { await setPersistence(auth, browserLocalPersistence); } catch(_) {}
+
+    // Wait for auth state to settle (fires immediately if session already exists)
+    let _authUser = null;
     const authReady = new Promise(resolve => {
-      onAuthStateChanged(auth, user => {
+      const unsub = onAuthStateChanged(auth, user => {
+        _authUser = user;
         if (user) { _uid = user.uid; _user = user; }
-        resolve(user); // resolve with user or null -- app decides what to do
+        else { _uid = null; _user = null; }
+        resolve(user);
+        // Keep listener alive — updates _uid/_user on login/logout events after app load
+        // but do not call resolve again (Promise already settled)
       });
+      window._unsubAuthListener = unsub; // store for cleanup if needed
     });
     await authReady;
 
@@ -2676,7 +2687,7 @@ function PilotDashboard() {
           <div className="app-nav-inner">
             <button className="nav-tab is-red" onClick={()=>setScreen("shifts")}>משמרות</button>
             {(currentUser.permissions||[]).map(s=>{
-              const lbl={"dashboard":"סקירה","forecast":"תחזית","foodcost":"פוד קוסט","history":"היסטוריה","fixed":"קבועות"}[s];
+              const lbl={"dashboard":"סקירה","forecast":"תחזית","foodcost":"פוד קוסט","history":"פדיון יומי","fixed":"קבועות"}[s];
               return lbl ? <button key={s} className={`nav-tab ${screen===s?"is-active":""}`} onClick={()=>setScreen(s)}>{lbl}</button> : null;
             })}
           </div>
@@ -2739,7 +2750,15 @@ function PilotDashboard() {
               </button>
             )}
             {loggedInUser && (
-              <div className="mhd-avatar" onClick={()=>{setLoggedInUser(null);try{localStorage.removeItem("marjin-session");}catch(_){}}} title={`${loggedInUser.name} · יציאה`}>
+              <div className="mhd-avatar" onClick={async()=>{
+                  try { await window.firebaseSignOut(); } catch(_){}
+                  setLoggedInUser(null);
+                  // Clear all local caches so next load shows login
+                  const uid = window.storage?.getUid?.();
+                  try { localStorage.removeItem("marjin-session"); } catch(_){}
+                  try { if(uid) localStorage.removeItem("marjin_tid_"+uid); } catch(_){}
+                  try { if(uid) localStorage.removeItem("marjin_biz_"+uid); } catch(_){}
+              }} title={`${loggedInUser.name} · יציאה`}>
                 {(loggedInUser.name||"U").charAt(0).toUpperCase()}
               </div>
             )}
@@ -2769,7 +2788,7 @@ function PilotDashboard() {
               {key:"dashboard", label:"סקירה"},
               {key:"forecast",  label:"תחזית"},
               {key:"foodcost",  label:"פוד קוסט"},
-              {key:"history",   label:"היסטוריה"},
+              {key:"history",   label:"פדיון יומי"},
               {key:"fixed",     label:"קבועות"},
               {key:"users",     label:"משתמשים"},
               {key:"tasks",     label:"משימות"},
@@ -2852,13 +2871,19 @@ function PilotDashboard() {
                 {/* ── 1. KPI row ── */}
                 <div className="dash-section kpi-row">
                   {[
-                    {label:"הכנסות",    val:fmt(metrics.totalSales),  ctx:salesPct>0?`${salesPct}% מהיעד`:null,      cls:salesBad?"s-bad":salesWarn?"s-warn":""},
-                    {label:"יתרת קופה", val:fmt(metrics.lc),           ctx:DAY_OF_MONTH>0?`${fmt(Math.round(metrics.dailyAvg))}/יום`:null, cls:metrics.lc<0?"s-bad":""},
-                    {label:"פוד קוסט",  val:metrics.foodCostPct>0?fmtPct(metrics.foodCostPct):"—", ctx:`יעד ${tFood}%`, cls:foodBad?"s-bad":foodWarn?"s-warn":""},
-                    {label:"לייבור",    val:laborPct>0?fmtPct(laborPct):"—", ctx:`יעד ${tLabor}%`, cls:lbrBad?"s-bad":lbrWarn?"s-warn":""},
-                  ].map(({label,val,ctx,cls},i)=>(
-                    <div key={i} className="kpi-card">
-                      <div className="kpi-label">{label}</div>
+                    {label:"הכנסות",    val:fmt(metrics.totalSales),  ctx:salesPct>0?`${salesPct}% מהיעד`:null,      cls:salesBad?"s-bad":salesWarn?"s-warn":"", nav:"history"},
+                    {label:"יתרת קופה", val:fmt(metrics.lc),           ctx:DAY_OF_MONTH>0?`${fmt(Math.round(metrics.dailyAvg))}/יום`:null, cls:metrics.lc<0?"s-bad":"", nav:"history"},
+                    {label:"פוד קוסט",  val:metrics.foodCostPct>0?fmtPct(metrics.foodCostPct):"—", ctx:`יעד ${tFood}%`, cls:foodBad?"s-bad":foodWarn?"s-warn":"", nav:"foodcost"},
+                    {label:"לייבור",    val:laborPct>0?fmtPct(laborPct):"—", ctx:`יעד ${tLabor}%`, cls:lbrBad?"s-bad":lbrWarn?"s-warn":"", nav:"shifts"},
+                  ].map(({label,val,ctx,cls,nav},i)=>(
+                    <div key={i} className="kpi-card kpi-card-link" onClick={()=>setScreen(nav)} role="button" tabIndex={0}
+                      onKeyDown={e=>{if(e.key==="Enter"||e.key===" ")setScreen(nav);}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                        <div className="kpi-label">{label}</div>
+                        <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{color:"#CBD5E1",marginTop:1,flexShrink:0}}>
+                          <polyline points="15 18 9 12 15 6"/>
+                        </svg>
+                      </div>
                       <div className={`kpi-val ${cls}`}>{val}</div>
                       {ctx&&<div className="kpi-ctx">{ctx}</div>}
                     </div>
@@ -2918,7 +2943,7 @@ function PilotDashboard() {
                 {/* ── 3. Alerts (conditional) ── */}
                 {hasAlerts&&(
                   <div className="dash-section">
-                    <div className="alert-card">
+                    <div className="alert-card" onClick={()=>setScreen("history")} style={{cursor:"pointer"}} role="button" tabIndex={0}>
                       {[
                         orefAlert&&{dot:"#EF4444",pulse:true,
                           ttl:"אזעקה פעילה — פיקוד העורף",
@@ -3433,7 +3458,7 @@ function PilotDashboard() {
           {/* Header */}
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
             <div>
-              <div style={{fontSize:15,fontWeight:700,color:"#0F172A",letterSpacing:"-.3px"}}>היסטוריה יומית</div>
+              <div style={{fontSize:15,fontWeight:700,color:"#0F172A",letterSpacing:"-.3px"}}>פדיון יומי יומית</div>
               <div style={{fontSize:12,color:"#94A3B8",marginTop:3}}>{entries.length} ימים מוזנים · {MONTH_NAMES[MONTH]}</div>
             </div>
             {entries.length>0&&(
