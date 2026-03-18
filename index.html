@@ -546,6 +546,11 @@
 // storage handled by Firebase above
 
 const { useState, useEffect, useRef } = React;
+const { AreaChart, BarChart, LineChart, XAxis, YAxis, CartesianGrid, Tooltip,
+        Area, Bar, Line, ResponsiveContainer, Legend, PieChart, Pie, Cell } = Recharts;
+
+// KPI alias — the dashboard uses <KPI>, pointing to the <Kpi> component defined below
+const KPI = (props) => <Kpi {...props}/>;
 // ─── Design tokens ──────────────────────────────────────────────────────────
 // ─── Design constants (JS-side, for dynamic color logic) ──────────────────
 const COLOR = {
@@ -561,12 +566,27 @@ const statusColor = (v, target, tolerance=3) =>
 
 // ─── Minimal S (only truly-dynamic inline styles) ─────────────────────────
 const S = {
-  navActive: {color:'#111827',fontWeight:600,borderBottom:'2px solid #111827'},
-  navShift:  {color:'#B91C1C',fontWeight:600,borderBottom:'2px solid #B91C1C'},
-  navTasks:  {color:'#111827',fontWeight:600,borderBottom:'2px solid #111827'},
+  // Nav
+  navActive:    {color:'#111827',fontWeight:600,borderBottom:'2px solid #111827'},
+  navShift:     {color:'#B91C1C',fontWeight:600,borderBottom:'2px solid #B91C1C'},
+  navTasks:     {color:'#111827',fontWeight:600,borderBottom:'2px solid #111827'},
+  navBtn:       {height:40,padding:'0 12px',display:'inline-flex',alignItems:'center',fontSize:12,fontWeight:500,color:'#9CA3AF',background:'transparent',border:'none',borderBottom:'2px solid transparent',cursor:'pointer',whiteSpace:'nowrap',flexShrink:0,fontFamily:'inherit'},
+  shiftBtn:     {background:'#FFFFFF',border:'1px solid #E5E7EB',color:'#6B7280',padding:'7px 10px',borderRadius:5,cursor:'pointer',fontFamily:'inherit',fontSize:12,display:'flex',alignItems:'center',justifyContent:'center'},
+  // Filters / tabs
   subBtnActive: {color:'#111827',background:'#F3F4F6',border:'1px solid #D1D5DB',fontWeight:600},
-  badge2: {position:'absolute',top:-4,left:-4,background:'#B91C1C',color:'#fff',fontSize:9,fontWeight:700,borderRadius:'50%',width:14,height:14,display:'flex',alignItems:'center',justifyContent:'center'},
-  pr:     {display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:5,color:'#6B7280'},
+  // Misc
+  badge2:   {position:'absolute',top:-4,left:-4,background:'#B91C1C',color:'#fff',fontSize:9,fontWeight:700,borderRadius:'50%',width:14,height:14,display:'flex',alignItems:'center',justifyContent:'center'},
+  pr:       {display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:5,color:'#6B7280'},
+  // Forms
+  lbl:      {fontSize:12,color:'#6B7280',marginBottom:4,display:'block',fontWeight:500},
+  preview:  {background:'#F9FAFB',border:'1px solid #E5E7EB',borderRadius:5,padding:'11px 13px',margin:'2px 0 9px'},
+  // History / list rows
+  histRow:  {display:'flex',alignItems:'center',gap:10,padding:'10px 14px',borderBottom:'1px solid #F3F4F6',background:'#FFFFFF'},
+  // Icon buttons
+  iconBtn:  {background:'transparent',border:'none',padding:'4px 6px',cursor:'pointer',color:'#9CA3AF',borderRadius:3,fontFamily:'inherit',lineHeight:1},
+  // Buttons
+  addBtn:   {background:'#111827',border:'none',color:'#FFFFFF',padding:'7px 14px',borderRadius:5,cursor:'pointer',fontFamily:'inherit',fontWeight:600,fontSize:12},
+  cancelBtn:{padding:'9px 13px',background:'#FFFFFF',border:'1px solid #E5E7EB',borderRadius:5,color:'#6B7280',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:500},
 };
 
 // ─── Recharts tooltip ─────────────────────────────────────────────────────
@@ -4433,70 +4453,7 @@ function ForecastScreen({ metrics, lastYear, saveLastYear, currentMonth, entries
   );
 }
 
-function MetricBox({ label, value, color, sub }) {
-  return (
-    <div style={{background:"#FFFFFF",borderRadius:6,padding:"13px 14px",border:"1px solid #E5E7EB"}}>
-      <div style={{fontSize:10,color:"#9CA3AF",marginBottom:6,fontWeight:600,textTransform:"uppercase",letterSpacing:1}}>{label}</div>
-      <div style={{fontSize:20,fontWeight:700,color,letterSpacing:-0.5,lineHeight:1}}>{value}</div>
-      {sub && <div style={{fontSize:11,color:"#9CA3AF",marginTop:4}}>{sub}</div>}
-    </div>
-  );
-}
 
-function ProgressBar({ label, current, target, color }) {
-  const pct    = target > 0 ? Math.min((current/target)*100, 100) : 0;
-  const dayPct = Math.round((DAY_OF_MONTH/DAYS_IN_MONTH)*100);
-  return (
-    <div style={{marginBottom:14}}>
-      <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
-        <span style={{fontSize:12,color:"#6B7280"}}>{label}</span>
-        <span style={{fontSize:12,color:"#111827",fontWeight:500}}>{fmt(current)} <span style={{color:"#9CA3AF",fontWeight:400}}>/ {fmt(Math.round(target))}</span></span>
-      </div>
-      <div style={{height:3,background:"#F3F4F6",borderRadius:2,position:"relative",overflow:"hidden"}}>
-        <div style={{width:`${pct}%`,height:"100%",background:color,borderRadius:2,transition:"width 0.4s ease"}}/>
-        <div style={{position:"absolute",top:0,bottom:0,left:`${Math.min(dayPct,99)}%`,width:1,background:"#9CA3AF",opacity:0.4}}/>
-      </div>
-      <div style={{fontSize:10,color:"#9CA3AF",marginTop:3}}>{Math.round(pct)}% מהיעד · יום {DAY_OF_MONTH}/{DAYS_IN_MONTH}</div>
-    </div>
-  );
-}
-
-function CompRow({ label, lyVal, fVal, d }) {
-  return (
-    <div style={{display:"flex",alignItems:"center",gap:8,padding:"9px 0",borderBottom:"1px solid #F3F4F6"}}>
-      <span style={{width:96,fontSize:12,color:"#6B7280",flexShrink:0}}>{label}</span>
-      <span style={{flex:1,fontSize:12,color:"#9CA3AF",textAlign:"center"}}>{lyVal}</span>
-      <span style={{fontSize:10,color:"#D1D5DB"}}>→</span>
-      <span style={{flex:1,fontSize:12,fontWeight:600,color:"#111827",textAlign:"center"}}>{fVal}</span>
-      {d && <span style={{fontSize:11,fontWeight:600,color:d.good?"#16A34A":"#DC2626",flexShrink:0,minWidth:48,textAlign:"left"}}>{d.str}</span>}
-    </div>
-  );
-}
-
-
-function KPI({ label, value, sub, status }) {
-  return (
-    <div className="kpi-item">
-      <div className="kpi-item-label">{label}</div>
-      <div className={`kpi-item-value${status?" "+status:""}`}>{value}</div>
-      {sub && <div className="kpi-item-sub">{sub}</div>}
-    </div>
-  );
-}
-function ExpRow({ label, value, total, color='#111827' }) {
-  const pct = total>0 ? Math.min((value/total)*100, 100) : 0;
-  return (
-    <div style={{marginBottom:11}}>
-      <div className="flex jbet mb1">
-        <span className="t-sm c-sub">{label}</span>
-        <span className="t-sm fw6 c-ink">{fmt(value)}</span>
-      </div>
-      <div className="progress">
-        <div className="progress-fill" style={{width:`${pct}%`,background:color}}/>
-      </div>
-    </div>
-  );
-}
 
 ReactDOM.createRoot(document.getElementById("root")).render(<PilotDashboard />);
   
