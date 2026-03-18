@@ -2150,98 +2150,6 @@ function PilotDashboard() {
   });
   const [suppliers, setSuppliers] = useState([]);
 
-  const sendAI = React.useCallback(async (query) => {
-    const q = (typeof query === "string" ? query : aiQuery).trim();
-    console.log("[Marjin AI] sendAI called, query:", q, "| loading:", aiLoading);
-
-    if (!q) { console.warn("[Marjin AI] empty query — aborted"); return; }
-    if (aiLoading) { console.warn("[Marjin AI] already loading — aborted"); return; }
-    if (typeof window.apiFetch !== "function") {
-      console.error("[Marjin AI] window.apiFetch is not defined");
-      setAiAnswer({ text: "שגיאה: apiFetch לא נמצא. רענן את הדף.", loading: false });
-      return;
-    }
-
-    setAiLoading(true);
-    setAiAnswer({ text: "", loading: true });
-    setAiQuery("");
-
-    // Build context snapshot (values captured at call time via closure over component state)
-    const snap = {
-      biz: businessConfig.businessName || "המסעדה",
-      sales: metrics.totalSales,
-      foodPct: metrics.foodCostPct,
-      payroll: metrics.totalPayroll,
-      fixed: metrics.TOTAL_FIXED,
-      lc: metrics.lc,
-      avg: metrics.dailyAvg,
-      day: DAY_OF_MONTH,
-      days: DAYS_IN_MONTH,
-      month: MONTH_NAMES[MONTH],
-      year: YEAR,
-      tFood: cfgTarget(businessConfig, "foodCostPct", TARGETS.foodCostPct),
-      tLabor: cfgTarget(businessConfig, "laborCostPct", TARGETS.laborCostPct),
-      tSales: Math.round((lastYear[MONTH]?.sales || 650000) * (1 + (cfgTarget(businessConfig, "salesGrowthPct", TARGETS.salesGrowthPct) / 100))),
-    };
-    const suppTotals = suppliers.map(s => {
-      const tot = entries.reduce((a, e) => a + (Number(e.supplier_payments?.[s.id]) || 0), 0);
-      return `${s.name}: ${fmt(tot)}`;
-    }).join(", ");
-    const recent = [...entries].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 7).map(e => {
-      const inc = (Number(e.sales) || 0) + (Number(e.deliveries) || 0);
-      const sup = e.supplier_payments ? Object.values(e.supplier_payments).reduce((a, b) => a + (Number(b) || 0), 0) : 0;
-      return `  ${e.date}: הכנסות ${fmt(inc)}, קניות ${fmt(sup)}, שכר ${fmt(Number(e.payroll) || 0)}`;
-    }).join("\n");
-
-    const prompt = `אתה יועץ עסקי של מסעדה בישראל. ענה בעברית, קצר וישיר (2-4 שורות מקסימום).
-
-נתוני העסק — ${snap.biz}, ${snap.month} ${snap.year}:
-• הכנסות: ${fmt(snap.sales)} (יעד: ${fmt(snap.tSales)})
-• פוד קוסט: ${snap.foodPct.toFixed(1)}% (יעד: ${snap.tFood}%)
-• עלות עובדים: ${fmt(snap.payroll)} (${snap.sales > 0 ? ((snap.payroll / snap.sales) * 100).toFixed(1) : 0}% ממחזור, יעד: ${snap.tLabor}%)
-• הוצאות קבועות: ${fmt(snap.fixed)}
-• יתרת קופה: ${fmt(snap.lc)}
-• ממוצע יומי: ${fmt(Math.round(snap.avg))}
-• יום ${snap.day} מתוך ${snap.days}
-• קניות לפי ספק: ${suppTotals || "אין נתונים"}
-${recent}
-
-שאלת המשתמש: ${q}`;
-
-    console.log("[Marjin AI] sending request, prompt chars:", prompt.length);
-    try {
-      const resp = await window.apiFetch("/api/ai-chat", {
-        method: "POST",
-        body: JSON.stringify({ prompt }),
-      });
-      console.log("[Marjin AI] response status:", resp.status);
-      if (!resp.ok) {
-        let msg = `שגיאת שרת (${resp.status})`;
-        try {
-          const d = await resp.json();
-          if (d.error === "ANTHROPIC_API_KEY not configured")
-            msg = "מפתח AI חסר ב-Vercel — הוסף ANTHROPIC_API_KEY ב-Environment Variables";
-          else if (d.error) msg = d.error + (d.detail ? ` (${d.detail})` : "");
-        } catch (_) {}
-        setAiAnswer({ text: msg, loading: false });
-      } else {
-        const d = await resp.json();
-        console.log("[Marjin AI] success, reply:", d.text?.slice(0, 60));
-        setAiAnswer({ text: d.text || "לא הצלחתי לעבד את הבקשה.", loading: false });
-      }
-    } catch (err) {
-      console.error("[Marjin AI] fetch error:", err.message);
-      setAiAnswer({
-        text: err.message?.includes("Failed to fetch")
-          ? "לא ניתן להגיע ל-/api/ai-chat — בדוק שהקובץ קיים ב-Vercel"
-          : `שגיאה: ${err.message}`,
-        loading: false
-      });
-    }
-    setAiLoading(false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiQuery, aiLoading, entries, suppliers, metrics, businessConfig, lastYear]);
-
   const sg = async (key, shared=false) => { try { return await window.storage.get(key, shared); } catch(_){ return null; } };
 
   // useEffect 1: global data (users, businesses)
@@ -2694,6 +2602,98 @@ ${recent}
   const animatedSales = useCountUp(metrics.totalSales, 900);
   const chart = buildChart(monthEntries);
   const todayEntry = entries.find(e=>e.date===TODAY_STR);
+
+  const sendAI = React.useCallback(async (query) => {
+    const q = (typeof query === "string" ? query : aiQuery).trim();
+    console.log("[Marjin AI] sendAI called, query:", q, "| loading:", aiLoading);
+
+    if (!q) { console.warn("[Marjin AI] empty query — aborted"); return; }
+    if (aiLoading) { console.warn("[Marjin AI] already loading — aborted"); return; }
+    if (typeof window.apiFetch !== "function") {
+      console.error("[Marjin AI] window.apiFetch is not defined");
+      setAiAnswer({ text: "שגיאה: apiFetch לא נמצא. רענן את הדף.", loading: false });
+      return;
+    }
+
+    setAiLoading(true);
+    setAiAnswer({ text: "", loading: true });
+    setAiQuery("");
+
+    // Build context snapshot (values captured at call time via closure over component state)
+    const snap = {
+      biz: businessConfig.businessName || "המסעדה",
+      sales: metrics.totalSales,
+      foodPct: metrics.foodCostPct,
+      payroll: metrics.totalPayroll,
+      fixed: metrics.TOTAL_FIXED,
+      lc: metrics.lc,
+      avg: metrics.dailyAvg,
+      day: DAY_OF_MONTH,
+      days: DAYS_IN_MONTH,
+      month: MONTH_NAMES[MONTH],
+      year: YEAR,
+      tFood: cfgTarget(businessConfig, "foodCostPct", TARGETS.foodCostPct),
+      tLabor: cfgTarget(businessConfig, "laborCostPct", TARGETS.laborCostPct),
+      tSales: Math.round((lastYear[MONTH]?.sales || 650000) * (1 + (cfgTarget(businessConfig, "salesGrowthPct", TARGETS.salesGrowthPct) / 100))),
+    };
+    const suppTotals = suppliers.map(s => {
+      const tot = entries.reduce((a, e) => a + (Number(e.supplier_payments?.[s.id]) || 0), 0);
+      return `${s.name}: ${fmt(tot)}`;
+    }).join(", ");
+    const recent = [...entries].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 7).map(e => {
+      const inc = (Number(e.sales) || 0) + (Number(e.deliveries) || 0);
+      const sup = e.supplier_payments ? Object.values(e.supplier_payments).reduce((a, b) => a + (Number(b) || 0), 0) : 0;
+      return `  ${e.date}: הכנסות ${fmt(inc)}, קניות ${fmt(sup)}, שכר ${fmt(Number(e.payroll) || 0)}`;
+    }).join("\n");
+
+    const prompt = `אתה יועץ עסקי של מסעדה בישראל. ענה בעברית, קצר וישיר (2-4 שורות מקסימום).
+
+נתוני העסק — ${snap.biz}, ${snap.month} ${snap.year}:
+• הכנסות: ${fmt(snap.sales)} (יעד: ${fmt(snap.tSales)})
+• פוד קוסט: ${snap.foodPct.toFixed(1)}% (יעד: ${snap.tFood}%)
+• עלות עובדים: ${fmt(snap.payroll)} (${snap.sales > 0 ? ((snap.payroll / snap.sales) * 100).toFixed(1) : 0}% ממחזור, יעד: ${snap.tLabor}%)
+• הוצאות קבועות: ${fmt(snap.fixed)}
+• יתרת קופה: ${fmt(snap.lc)}
+• ממוצע יומי: ${fmt(Math.round(snap.avg))}
+• יום ${snap.day} מתוך ${snap.days}
+• קניות לפי ספק: ${suppTotals || "אין נתונים"}
+${recent}
+
+שאלת המשתמש: ${q}`;
+
+    console.log("[Marjin AI] sending request, prompt chars:", prompt.length);
+    try {
+      const resp = await window.apiFetch("/api/ai-chat", {
+        method: "POST",
+        body: JSON.stringify({ prompt }),
+      });
+      console.log("[Marjin AI] response status:", resp.status);
+      if (!resp.ok) {
+        let msg = `שגיאת שרת (${resp.status})`;
+        try {
+          const d = await resp.json();
+          if (d.error === "ANTHROPIC_API_KEY not configured")
+            msg = "מפתח AI חסר ב-Vercel — הוסף ANTHROPIC_API_KEY ב-Environment Variables";
+          else if (d.error) msg = d.error + (d.detail ? ` (${d.detail})` : "");
+        } catch (_) {}
+        setAiAnswer({ text: msg, loading: false });
+      } else {
+        const d = await resp.json();
+        console.log("[Marjin AI] success, reply:", d.text?.slice(0, 60));
+        setAiAnswer({ text: d.text || "לא הצלחתי לעבד את הבקשה.", loading: false });
+      }
+    } catch (err) {
+      console.error("[Marjin AI] fetch error:", err.message);
+      setAiAnswer({
+        text: err.message?.includes("Failed to fetch")
+          ? "לא ניתן להגיע ל-/api/ai-chat — בדוק שהקובץ קיים ב-Vercel"
+          : `שגיאה: ${err.message}`,
+        loading: false
+      });
+    }
+    setAiLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiQuery, aiLoading, entries, suppliers, metrics, businessConfig, lastYear]);
 
   // Calculate missing supplier data per supplier this month
   const supplierMissingDays = {};
