@@ -36,7 +36,8 @@
 
     /* ══ Reset ══════════════════════════════════════════════════════════════ */
     *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
-    html, body, #root { width:100%; min-height:100vh; font-family:'Heebo',sans-serif; background:var(--bg); color:var(--ink); }
+    html                   { overflow-x:hidden; }
+    html, body, #root      { width:100%; max-width:100vw; min-height:100vh; font-family:'Heebo',sans-serif; background:var(--bg); color:var(--ink); overflow-x:hidden; }
     input, button, select, textarea { font-family:inherit; font-size:inherit; }
     ::-webkit-scrollbar { display:none; } * { scrollbar-width:none; }
     input:focus, select:focus, textarea:focus { outline:none; border-color:var(--ink) !important; }
@@ -44,23 +45,30 @@
     a { color:inherit; text-decoration:none; }
 
     /* ══ App shell ══════════════════════════════════════════════════════════ */
-    .app { min-height:100vh; background:var(--bg); }
+    .app { min-height:100vh; background:var(--bg); width:100%; overflow-x:hidden; }
     .app-header {
       display:flex; align-items:center; justify-content:space-between;
-      height:52px; padding:0 20px; gap:12px;
+      height:52px; padding:0 14px; gap:8px;
       background:var(--surface); border-bottom:1px solid var(--border);
       position:sticky; top:0; z-index:50;
+      width:100%; max-width:100%; overflow:hidden;
     }
     .app-logo  { width:30px; height:30px; background:var(--ink); border-radius:6px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
     .app-logo span { color:#fff; font-size:13px; font-weight:700; letter-spacing:-.5px; }
-    .app-title { font-size:14px; font-weight:700; color:var(--ink); letter-spacing:-.3px; }
-    .app-sub   { font-size:11px; color:var(--ink-muted); }
+    .app-title { font-size:14px; font-weight:700; color:var(--ink); letter-spacing:-.3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:140px; }
+    .app-sub   { font-size:11px; color:var(--ink-muted); white-space:nowrap; }
     .app-nav   {
       background:var(--surface); border-bottom:1px solid var(--border);
       position:sticky; top:52px; z-index:40;
-      display:flex; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none;
+      width:100%; max-width:100%; overflow:hidden;
+      display:block;
     }
-    .app-nav-inner { display:flex; padding:0 20px; }
+    .app-nav-inner {
+      display:flex; padding:0 14px;
+      overflow-x:auto; -webkit-overflow-scrolling:touch;
+      scrollbar-width:none; max-width:100%;
+    }
+    .app-nav-inner::-webkit-scrollbar { display:none; }
     .nav-tab {
       height:40px; padding:0 12px; display:inline-flex; align-items:center;
       font-size:12px; font-weight:500; color:var(--ink-muted);
@@ -70,7 +78,7 @@
     .nav-tab:hover   { color:var(--ink-sub); }
     .nav-tab.is-active { color:var(--ink); font-weight:600; border-bottom-color:var(--ink); }
     .nav-tab.is-red    { color:var(--accent); font-weight:600; border-bottom-color:var(--accent); }
-    .screen { padding:16px 20px 80px; background:var(--bg); min-height:calc(100vh - 92px); }
+    .screen { padding:14px 14px 80px; background:var(--bg); min-height:calc(100vh - 92px); width:100%; max-width:100%; overflow-x:hidden; }
 
     /* ══ Cards ══════════════════════════════════════════════════════════════ */
     .card       { background:var(--surface); border:1px solid var(--border); border-radius:var(--r); box-shadow:var(--shadow); }
@@ -261,8 +269,8 @@
     .shadow-md { box-shadow:var(--shadow-md); }
 
     /* ══ Dashboard ══════════════════════════════════════════════════════════ */
-    .dash            { padding:0 0 96px; background:linear-gradient(180deg,#F8FAFC 0%,#EEF2F7 100%); min-height:100vh; }
-    .dash-wrap       { max-width:980px; margin:0 auto; padding:0 24px; }
+    .dash            { padding:0 0 96px; background:linear-gradient(180deg,#F8FAFC 0%,#EEF2F7 100%); min-height:100vh; width:100%; overflow-x:hidden; }
+    .dash-wrap       { max-width:980px; width:100%; margin:0 auto; padding:0 14px; box-sizing:border-box; }
     .dash-section    { margin-top:36px; }
 
     /* Status strip */
@@ -270,7 +278,7 @@
     .dash-dot    { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
 
     /* ── KPI row — flat, secondary ── */
-    .kpi-row  { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; }
+    .kpi-row  { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; width:100%; }
     .kpi-card {
       background:#FFFFFF; border-radius:16px; padding:20px 20px 17px;
       box-shadow:0 1px 3px rgba(0,0,0,.05); border:1px solid rgba(0,0,0,.04);
@@ -286,7 +294,8 @@
     /* ── HERO — a section, not a card ── */
     .hero-card {
       background:#EEF2FF;
-      border-radius:20px; padding:56px 44px 48px;
+      border-radius:20px; padding:56px 20px 48px;
+      width:100%; overflow:hidden;
       box-shadow:0 2px 4px rgba(99,102,241,.04),
                  0 8px 20px rgba(99,102,241,.06),
                  0 20px 50px rgba(0,0,0,.08);
@@ -298,9 +307,9 @@
       border-radius:20px 20px 0 0;
     }
     .hero-card::after {
-      content:''; position:absolute; top:-80px; right:-80px;
-      width:280px; height:280px;
-      background:radial-gradient(circle, rgba(129,140,248,.1) 0%, transparent 65%);
+      content:''; position:absolute; top:-60px; right:-60px;
+      width:200px; height:200px;
+      background:radial-gradient(circle, rgba(129,140,248,.08) 0%, transparent 65%);
       pointer-events:none;
     }
     .hero-header  { margin-bottom:22px; position:relative; z-index:1; }
@@ -331,13 +340,13 @@
     .hm-sub   { font-size:11px; color:#94A3B8; margin-top:5px; line-height:1.4; }
 
     /* ── 2-col grid ── */
-    .dash-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .dash-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; width:100%; }
 
-    .chart-card  { background:#FFFFFF; border-radius:16px; padding:28px 24px 22px; box-shadow:0 1px 3px rgba(0,0,0,.05); border:1px solid rgba(0,0,0,.04); transition:transform .2s ease, box-shadow .2s ease; }
+    .chart-card  { background:#FFFFFF; border-radius:16px; padding:24px 16px 18px; box-shadow:0 1px 3px rgba(0,0,0,.05); border:1px solid rgba(0,0,0,.04); transition:transform .2s ease, box-shadow .2s ease; width:100%; overflow:hidden; }
     .chart-card:hover { transform:translateY(-2px); box-shadow:0 6px 20px rgba(0,0,0,.09); border-color:rgba(0,0,0,.06); }
     .chart-label { font-size:10px; font-weight:400; color:#94A3B8; letter-spacing:.5px; text-transform:uppercase; margin-bottom:20px; line-height:1.4; }
 
-    .bd-card  { background:#FFFFFF; border-radius:16px; padding:28px 24px; box-shadow:0 1px 3px rgba(0,0,0,.05); border:1px solid rgba(0,0,0,.04); transition:transform .2s ease, box-shadow .2s ease; }
+    .bd-card  { background:#FFFFFF; border-radius:16px; padding:24px 16px; box-shadow:0 1px 3px rgba(0,0,0,.05); border:1px solid rgba(0,0,0,.04); transition:transform .2s ease, box-shadow .2s ease; width:100%; overflow:hidden; }
     .bd-card:hover { transform:translateY(-2px); box-shadow:0 6px 20px rgba(0,0,0,.09); border-color:rgba(0,0,0,.06); }
     .bd-label { font-size:10px; font-weight:400; color:#94A3B8; letter-spacing:.5px; text-transform:uppercase; margin-bottom:22px; line-height:1.4; }
     .bd-row   { margin-bottom:16px; }
@@ -369,10 +378,16 @@
     /* ══ Mobile-first responsive overrides ══════════════════════════════════ */
     @media (max-width: 640px) {
 
+      /* ── Overflow containment ── */
+      .app, .dash, .screen { overflow-x:hidden !important; }
+      .app-header  { padding:0 10px; gap:6px; }
+      .app-nav     { overflow:hidden; }
+      .app-nav-inner { padding:0 10px; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+
       /* ── Page & container ── */
-      .dash-wrap       { padding:0 14px; }
-      .dash-section    { margin-top:20px; }
-      .screen          { padding:12px 14px 80px; }
+      .dash-wrap       { padding:0 12px; }
+      .dash-section    { margin-top:18px; }
+      .screen          { padding:10px 12px 80px; }
 
       /* ── Status strip ── */
       .dash-status { font-size:11px; padding:12px 0 4px; gap:8px; }
@@ -388,7 +403,7 @@
       .hero-card    { padding:24px 18px 20px; border-radius:16px; }
       .hero-header  { margin-bottom:14px; }
       .hero-eyebrow { font-size:10px; margin-bottom:8px; }
-      .hero-amount  { font-size:36px; letter-spacing:-2px; }
+      .hero-amount  { font-size:36px; letter-spacing:-2px; word-break:break-all; }
       .hero-target  { font-size:11px; margin-top:6px; }
       .hero-badge   { font-size:11px; padding:5px 12px; }
       .hero-main    { align-items:center; }
@@ -2649,7 +2664,7 @@ function PilotDashboard() {
     // use effect-like redirect without hooks violation: just render shifts
     return (
         <div className="app">
-        <header className="app-header">
+        <header className="app-header" style={{minWidth:0}}>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <div style={{width:24,height:24,background:"#111827",borderRadius:5,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
               <span style={{color:"#fff",fontSize:11,fontWeight:700}}>M</span>
@@ -2748,7 +2763,7 @@ function PilotDashboard() {
 
       {/* Nav */}
       {loggedInUser?.role==="staff" && screen!=="shifts" && (() => { setTimeout(()=>setScreen("shifts"),0); return null; })()}
-      <nav style={{borderBottom:"1px solid #E5E7EB",background:"#FFFFFF",position:"sticky",top:65,zIndex:40}}>
+      <nav style={{borderBottom:"1px solid #E5E7EB",background:"#FFFFFF",position:"sticky",top:52,zIndex:40}}>
         <div className="app-nav-inner">
           {[
             {key:"shifts",   label:"משמרות"},
