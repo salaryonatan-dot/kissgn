@@ -2744,75 +2744,77 @@ function PilotDashboard() {
           </div>
           <div className="mhd-icons">
             {!currentUser && (
-              <button className="mhd-icon-btn" onClick={()=>setShowSetup(true)} title="הגדרות">
-                <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                  <circle cx="12" cy="12" r="3"/>
-                  <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
-                </svg>
-              </button>
-              <button className="mhd-icon-btn" onClick={()=>setShowFixed(true)} title="הוצאות קבועות">
-                <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                  <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
-                  <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
-                </svg>
-              </button>
-              {showFixed && (
-                <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.35)",zIndex:9999,display:"flex",alignItems:"flex-end"}} onClick={()=>setShowFixed(false)}>
-                  <div style={{background:"#FFFFFF",width:"100%",maxHeight:"85vh",overflowY:"auto",borderRadius:"20px 20px 0 0",padding:"24px 20px 40px"}} onClick={e=>e.stopPropagation()}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-                      <div>
-                        <div style={{fontSize:16,fontWeight:700,color:"#0F172A",letterSpacing:"-.3px"}}>הוצאות קבועות</div>
-                        <div style={{fontSize:12,color:"#94A3B8",marginTop:3}}>סה״כ חודשי: <strong style={{color:"#1E293B"}}>{fmt(metrics.TOTAL_FIXED)}</strong></div>
-                      </div>
-                      <button onClick={()=>setShowFixed(false)} style={{width:30,height:30,background:"#F1F5F9",border:"none",borderRadius:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#64748B"}}>
-                        <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                      </button>
+              <>
+                <button className="mhd-icon-btn" onClick={()=>setShowSetup(true)} title="הגדרות">
+                  <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/>
+                  </svg>
+                </button>
+                <button className="mhd-icon-btn" onClick={()=>setShowFixed(true)} title="הוצאות קבועות">
+                  <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                    <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
+                    <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+                  </svg>
+                </button>
+              </>
+            )}
+            {showFixed && (
+              <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.35)",zIndex:9999,display:"flex",alignItems:"flex-end"}} onClick={()=>setShowFixed(false)}>
+                <div style={{background:"#FFFFFF",width:"100%",maxHeight:"85vh",overflowY:"auto",borderRadius:"20px 20px 0 0",padding:"24px 20px 40px"}} onClick={e=>e.stopPropagation()}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+                    <div>
+                      <div style={{fontSize:16,fontWeight:700,color:"#0F172A",letterSpacing:"-.3px"}}>הוצאות קבועות</div>
+                      <div style={{fontSize:12,color:"#94A3B8",marginTop:3}}>סה״כ חודשי: <strong style={{color:"#1E293B"}}>{fmt(metrics.TOTAL_FIXED)}</strong></div>
                     </div>
-                    {fixedList.map((f,i)=>(
-                      <div key={f.id} style={{marginBottom:10,padding:"12px 14px",background:f.disabled?"#F9FAFB":"#FFFFFF",borderRadius:12,border:"1px solid #E5E7EB",opacity:f.disabled?0.55:1}}>
-                        <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:f.rentPct||f.royaltyPct?0:8}}>
-                          <input style={{flex:1,border:"1px solid #E5E7EB",borderRadius:8,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:"#111827",background:"transparent",textDecoration:f.disabled?"line-through":"none"}}
-                            value={f.name}
-                            onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,name:e.target.value}:x);setFixedList(u);persist(entries,u);}}/>
-                          <button onClick={()=>{const u=fixedList.map((x,j)=>j===i?{...x,disabled:!x.disabled}:x);setFixedList(u);persist(entries,u);}}
-                            style={{padding:"6px 10px",background:"#F1F5F9",border:"none",borderRadius:7,fontSize:11,cursor:"pointer",color:"#64748B",fontFamily:"inherit",flexShrink:0,fontWeight:500}}>
-                            {f.disabled?"הפעל":"בטל"}
-                          </button>
-                          {!f.rentPct&&!f.royaltyPct&&(
-                            <button onClick={()=>{if(window.confirm(`למחוק "${f.name}"?`)){const u=fixedList.filter((_,j)=>j!==i);setFixedList(u);persist(entries,u);}}}
-                              style={{padding:"6px 8px",background:"#FEF2F2",border:"none",borderRadius:7,cursor:"pointer",color:"#EF4444",flexShrink:0}}>
-                              <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
-                            </button>
-                          )}
-                        </div>
-                        {!f.rentPct&&!f.royaltyPct&&(
-                          <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                            <input style={{flex:1,border:"1px solid #E5E7EB",borderRadius:8,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:"#111827",background:"transparent"}}
-                              type="number" inputMode="decimal" placeholder="₪ סכום" value={f.amount||""}
-                              onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,amount:Number(e.target.value)}:x);setFixedList(u);persist(entries,u);}}/>
-                            <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0}}>
-                              <span style={{fontSize:11,color:"#94A3B8"}}>יום</span>
-                              <input style={{width:44,border:"1px solid #E5E7EB",borderRadius:8,padding:"7px 6px",fontSize:13,fontFamily:"inherit",textAlign:"center",color:"#111827",background:"transparent"}}
-                                type="number" min={1} max={31} value={f.dueDay}
-                                onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,dueDay:Number(e.target.value)}:x);setFixedList(u);persist(entries,u);}}/>
-                            </div>
-                          </div>
-                        )}
-                        {(f.rentPct||f.royaltyPct)&&(
-                          <div style={{fontSize:12,color:"#94A3B8",marginTop:4}}>
-                            {f.rentPct&&`שכ״ד: ${businessConfig.rentType==="fixed"?fmt(businessConfig.rentFixed||0):(businessConfig.rentPct||0)+"%"}`}
-                            {f.royaltyPct&&businessConfig.hasRoyalty&&` · תמלוגים: ${businessConfig.royaltyPct||0}%`}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                    <button onClick={()=>{const u=[...fixedList,{id:Date.now(),name:"הוצאה חדשה",amount:0,dueDay:1,rentPct:false}];setFixedList(u);persist(entries,u);}}
-                      style={{width:"100%",padding:"12px",background:"#F8FAFC",border:"1px dashed #CBD5E1",borderRadius:12,color:"#64748B",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit",marginTop:8}}>
-                      + הוסף הוצאה קבועה
+                    <button onClick={()=>setShowFixed(false)} style={{width:30,height:30,background:"#F1F5F9",border:"none",borderRadius:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#64748B"}}>
+                      <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                     </button>
                   </div>
+                  {fixedList.map((f,i)=>(
+                    <div key={f.id} style={{marginBottom:10,padding:"12px 14px",background:f.disabled?"#F9FAFB":"#FFFFFF",borderRadius:12,border:"1px solid #E5E7EB",opacity:f.disabled?0.55:1}}>
+                      <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:f.rentPct||f.royaltyPct?0:8}}>
+                        <input style={{flex:1,border:"1px solid #E5E7EB",borderRadius:8,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:"#111827",background:"transparent",textDecoration:f.disabled?"line-through":"none"}}
+                          value={f.name}
+                          onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,name:e.target.value}:x);setFixedList(u);persist(entries,u);}}/>
+                        <button onClick={()=>{const u=fixedList.map((x,j)=>j===i?{...x,disabled:!x.disabled}:x);setFixedList(u);persist(entries,u);}}
+                          style={{padding:"6px 10px",background:"#F1F5F9",border:"none",borderRadius:7,fontSize:11,cursor:"pointer",color:"#64748B",fontFamily:"inherit",flexShrink:0,fontWeight:500}}>
+                          {f.disabled?"הפעל":"בטל"}
+                        </button>
+                        {!f.rentPct&&!f.royaltyPct&&(
+                          <button onClick={()=>{if(window.confirm(`למחוק "${f.name}"?`)){const u=fixedList.filter((_,j)=>j!==i);setFixedList(u);persist(entries,u);}}}
+                            style={{padding:"6px 8px",background:"#FEF2F2",border:"none",borderRadius:7,cursor:"pointer",color:"#EF4444",flexShrink:0}}>
+                            <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+                          </button>
+                        )}
+                      </div>
+                      {!f.rentPct&&!f.royaltyPct&&(
+                        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                          <input style={{flex:1,border:"1px solid #E5E7EB",borderRadius:8,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:"#111827",background:"transparent"}}
+                            type="number" inputMode="decimal" placeholder="₪ סכום" value={f.amount||""}
+                            onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,amount:Number(e.target.value)}:x);setFixedList(u);persist(entries,u);}}/>
+                          <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0}}>
+                            <span style={{fontSize:11,color:"#94A3B8"}}>יום</span>
+                            <input style={{width:44,border:"1px solid #E5E7EB",borderRadius:8,padding:"7px 6px",fontSize:13,fontFamily:"inherit",textAlign:"center",color:"#111827",background:"transparent"}}
+                              type="number" min={1} max={31} value={f.dueDay}
+                              onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,dueDay:Number(e.target.value)}:x);setFixedList(u);persist(entries,u);}}/>
+                          </div>
+                        </div>
+                      )}
+                      {(f.rentPct||f.royaltyPct)&&(
+                        <div style={{fontSize:12,color:"#94A3B8",marginTop:4}}>
+                          {f.rentPct&&`שכ״ד: ${businessConfig.rentType==="fixed"?fmt(businessConfig.rentFixed||0):(businessConfig.rentPct||0)+"%"}`}
+                          {f.royaltyPct&&businessConfig.hasRoyalty&&` · תמלוגים: ${businessConfig.royaltyPct||0}%`}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  <button onClick={()=>{const u=[...fixedList,{id:Date.now(),name:"הוצאה חדשה",amount:0,dueDay:1,rentPct:false}];setFixedList(u);persist(entries,u);}}
+                    style={{width:"100%",padding:"12px",background:"#F8FAFC",border:"1px dashed #CBD5E1",borderRadius:12,color:"#64748B",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit",marginTop:8}}>
+                    + הוסף הוצאה קבועה
+                  </button>
                 </div>
-              )}
+              </div>
             )}
             {loggedInUser && (
               <div className="mhd-avatar" onClick={async()=>{
