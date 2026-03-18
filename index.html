@@ -261,87 +261,82 @@
     .shadow-md { box-shadow:var(--shadow-md); }
 
     /* ══ Dashboard ══════════════════════════════════════════════════════════ */
-    .dash               { padding:0 0 88px; background:#F7F8FA; }
-    .dash-inner         { max-width:1280px; margin:0 auto; padding:0 24px; }
+    .dash          { padding:0 0 96px; background:#F9FAFB; }
+    .dash-container{ max-width:960px; margin:0 auto; padding:20px 20px 0; }
+    .dash-gap      { height:20px; }
 
-    /* Status strip */
-    .dash-status        { display:flex; align-items:center; gap:10px; padding:11px 0; font-size:12px; color:#6B7280; }
+    /* ── KPI row ── */
+    .kpi-row  { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
+    .kpi-card {
+      background:#fff; border-radius:16px; padding:22px 20px 18px;
+      box-shadow:0 1px 3px rgba(0,0,0,.05),0 4px 16px rgba(0,0,0,.03);
+    }
+    .kpi-label { font-size:11px; font-weight:500; color:#94A3B8; text-transform:uppercase; letter-spacing:.7px; margin-bottom:10px; }
+    .kpi-val   { font-size:26px; font-weight:700; color:#0F172A; letter-spacing:-1.2px; line-height:1; }
+    .kpi-val.s-warn { color:#F59E0B; }
+    .kpi-val.s-bad  { color:#3B82F6; }   /* blue, not red */
+    .kpi-ctx   { font-size:11px; color:#94A3B8; margin-top:7px; line-height:1.4; }
 
-    /* KPI row */
-    .kpi-row            { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; padding:0; margin-bottom:0; }
-    .kpi-item           { background:#FFFFFF; border-radius:14px; padding:22px 20px 18px;
-                          box-shadow:0 1px 4px rgba(0,0,0,0.05); border:1px solid rgba(0,0,0,0.04); }
-    .kpi-item-label     { font-size:11px; font-weight:500; color:#9CA3AF; text-transform:uppercase;
-                          letter-spacing:.7px; margin-bottom:12px; }
-    .kpi-item-value     { font-size:28px; font-weight:700; letter-spacing:-1.4px; line-height:1; color:#111827; }
-    .kpi-item-value.warn   { color:#F59E0B; }
-    .kpi-item-value.danger { color:#EF4444; }
-    .kpi-item-sub       { font-size:11px; color:#9CA3AF; margin-top:8px; line-height:1.4; }
+    /* ── HERO card ── */
+    .hero-card {
+      background:#fff; border-radius:20px; padding:32px;
+      box-shadow:0 2px 8px rgba(0,0,0,.06),0 8px 32px rgba(0,0,0,.04);
+    }
+    .hero-top      { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:28px; }
+    .hero-title    { font-size:12px; font-weight:600; color:#94A3B8; text-transform:uppercase; letter-spacing:.8px; margin-bottom:6px; }
+    .hero-amount   { font-size:42px; font-weight:800; color:#0F172A; letter-spacing:-2px; line-height:1; }
+    .hero-target   { font-size:13px; color:#94A3B8; margin-top:5px; }
+    .hero-badge    { font-size:13px; font-weight:600; padding:6px 14px; border-radius:24px; }
+    .hero-badge.ok { background:#EFF6FF; color:#3B82F6; }
+    .hero-badge.warn { background:#FFFBEB; color:#F59E0B; }
 
-    /* Main forecast card — dominant */
-    .forecast-card      { background:#FFFFFF; border-radius:16px; padding:28px;
-                          box-shadow:0 2px 12px rgba(0,0,0,0.06),0 1px 3px rgba(0,0,0,0.04);
-                          border:1px solid rgba(0,0,0,0.04); }
-    .forecast-header    { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:22px; }
-    .forecast-title     { font-size:15px; font-weight:600; color:#111827; letter-spacing:-.2px; }
-    .forecast-subtitle  { font-size:12px; color:#9CA3AF; }
+    /* Progress bar */
+    .progress-track { height:6px; background:#F1F5F9; border-radius:6px; position:relative; overflow:hidden; margin-bottom:6px; }
+    .progress-fill  { height:100%; border-radius:6px; transition:width .7s cubic-bezier(.4,0,.2,1); }
+    .progress-today { position:absolute; top:0; bottom:0; width:2px; background:rgba(0,0,0,.08); }
+    .progress-labels{ display:flex; justify-content:space-between; font-size:10px; color:#CBD5E1; }
 
-    /* Revenue progress */
-    .rev-progress-wrap  { margin-bottom:24px; }
-    .rev-row            { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
-    .rev-label          { font-size:12px; color:#6B7280; font-weight:500; }
-    .rev-vals           { font-size:14px; font-weight:600; color:#111827; }
-    .rev-vals span      { font-weight:400; color:#9CA3AF; }
-    .rev-pct-badge      { font-size:11px; font-weight:600; padding:3px 9px; border-radius:20px; }
-    .rev-pct-badge.ok   { color:#3B82F6; background:#EFF6FF; }
-    .rev-pct-badge.warn { color:#F59E0B; background:#FFFBEB; }
-    .rev-pct-badge.dn   { color:#EF4444; background:#FEF2F2; }
-    .rev-bar-track      { height:8px; background:#F1F5F9; border-radius:6px; overflow:hidden; position:relative; }
-    .rev-bar-fill       { height:100%; border-radius:6px; transition:width .7s cubic-bezier(.4,0,.2,1); }
-    .rev-bar-today      { position:absolute; top:-1px; bottom:-1px; width:2px;
-                          background:rgba(0,0,0,0.08); border-radius:2px; pointer-events:none; }
+    /* Hero forecast row */
+    .hero-metrics   { display:grid; grid-template-columns:repeat(3,1fr); border-top:1px solid #F8FAFC; padding-top:24px; margin-top:24px; gap:0; }
+    .hm-cell        { }
+    .hm-cell:not(:last-child) { padding-left:24px; border-left:1px solid #F1F5F9; margin-left:24px; }
+    .hm-label       { font-size:10px; font-weight:600; color:#94A3B8; text-transform:uppercase; letter-spacing:.8px; margin-bottom:5px; }
+    .hm-val         { font-size:22px; font-weight:700; color:#0F172A; letter-spacing:-.7px; line-height:1; }
+    .hm-val.neg     { color:#3B82F6; }   /* use blue for negative forecasts, less aggressive */
+    .hm-sub         { font-size:11px; color:#94A3B8; margin-top:4px; }
 
-    /* Forecast metrics row */
-    .forecast-text-row  { display:grid; grid-template-columns:repeat(3,1fr); gap:0;
-                          border-top:1px solid #F3F4F6; padding-top:22px; margin-top:22px; }
-    .ftc               { }
-    .ftc:not(:last-child){ padding-left:22px; border-left:1px solid #F3F4F6; margin-left:22px; }
-    .ftc-label         { font-size:10px; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:.8px; margin-bottom:6px; }
-    .ftc-value         { font-size:22px; font-weight:700; color:#111827; letter-spacing:-.7px; line-height:1; }
-    .ftc-value.dn      { color:#EF4444; }
-    .ftc-sub           { font-size:11px; color:#9CA3AF; margin-top:5px; }
+    /* ── 2-col grid ── */
+    .dash-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
 
     /* Chart card */
-    .chart-card         { background:#FFFFFF; border-radius:14px; padding:24px 20px 18px;
-                          box-shadow:0 1px 4px rgba(0,0,0,0.05); border:1px solid rgba(0,0,0,0.04); }
-    .chart-card-title   { font-size:12px; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:.7px; margin-bottom:16px; }
+    .chart-card   { background:#fff; border-radius:16px; padding:24px;
+                    box-shadow:0 1px 3px rgba(0,0,0,.05),0 4px 16px rgba(0,0,0,.03); }
+    .chart-title  { font-size:11px; font-weight:600; color:#94A3B8; text-transform:uppercase; letter-spacing:.7px; margin-bottom:18px; }
+
+    /* Breakdown card */
+    .bd-card  { background:#fff; border-radius:16px; padding:24px;
+                box-shadow:0 1px 3px rgba(0,0,0,.05),0 4px 16px rgba(0,0,0,.03); }
+    .bd-title { font-size:11px; font-weight:600; color:#94A3B8; text-transform:uppercase; letter-spacing:.7px; margin-bottom:20px; }
+    .bd-row   { margin-bottom:15px; }
+    .bd-row:last-child { margin-bottom:0; }
+    .bd-hdr   { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px; }
+    .bd-lbl   { font-size:12px; font-weight:500; color:#475569; }
+    .bd-val   { font-size:12px; font-weight:600; color:#0F172A; }
+    .bd-pct   { font-size:10px; color:#94A3B8; margin-right:8px; }
+    .bd-track { height:5px; background:#F1F5F9; border-radius:4px; overflow:hidden; }
+    .bd-fill  { height:100%; border-radius:4px; transition:width .5s ease; }
 
     /* Alerts card */
-    .alerts-card        { background:#FFFBEB; border-radius:12px; padding:16px 18px; border:1px solid #FDE68A; }
-    .alert-row-item     { display:flex; align-items:flex-start; gap:10px; }
-    .alert-row-item + .alert-row-item { margin-top:11px; padding-top:11px; border-top:1px solid rgba(0,0,0,0.05); }
-    .alert-dot-sm       { width:7px; height:7px; border-radius:50%; flex-shrink:0; margin-top:3px; }
-    .alert-row-title    { font-size:12px; font-weight:600; color:#111827; margin-bottom:2px; }
-    .alert-row-body     { font-size:11px; color:#6B7280; }
+    .alert-card { background:#FFFBEB; border-radius:14px; padding:16px 18px; border:1px solid #FDE68A; }
+    .alert-item { display:flex; align-items:flex-start; gap:10px; }
+    .alert-item + .alert-item { margin-top:10px; padding-top:10px; border-top:1px solid rgba(253,230,138,.4); }
+    .alert-dot  { width:7px; height:7px; border-radius:50%; flex-shrink:0; margin-top:3px; }
+    .alert-ttl  { font-size:12px; font-weight:600; color:#111827; margin-bottom:2px; }
+    .alert-body { font-size:11px; color:#6B7280; }
 
-    /* Expense breakdown card */
-    .breakdown-card     { background:#FFFFFF; border-radius:14px; padding:24px;
-                          box-shadow:0 1px 4px rgba(0,0,0,0.05); border:1px solid rgba(0,0,0,0.04); }
-    .breakdown-title    { font-size:12px; font-weight:600; color:#9CA3AF; text-transform:uppercase; letter-spacing:.7px; margin-bottom:20px; }
-    .breakdown-row      { margin-bottom:16px; }
-    .breakdown-row:last-child { margin-bottom:0; }
-    .breakdown-row-hdr  { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px; }
-    .breakdown-row-lbl  { font-size:13px; color:#374151; font-weight:500; }
-    .breakdown-row-val  { font-size:13px; font-weight:600; color:#111827; }
-    .breakdown-row-pct  { font-size:11px; color:#9CA3AF; margin-right:8px; }
-    .breakdown-bar      { height:6px; background:#F1F5F9; border-radius:4px; overflow:hidden; }
-    .breakdown-fill     { height:100%; border-radius:4px; transition:width .5s ease; }
-
-    /* Section spacing helper */
-    .dash-section       { margin-top:24px; }
-
-    /* Weather strip */
-    .weather-strip      { font-size:11px; color:#9CA3AF; display:flex; gap:6px; align-items:center; }
+    /* Status strip */
+    .dash-status { display:flex; align-items:center; gap:10px; font-size:12px; color:#94A3B8; padding:12px 0 4px; }
+    .dash-dot    { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
 
   </style>
 </head>
@@ -2665,241 +2660,229 @@ function PilotDashboard() {
       {screen==="dashboard" && (
         <div className="dash">
           {(()=>{
-            const tSales    = Math.round((lastYear[MONTH]?.sales||650000)*(1+(cfgTarget(businessConfig,"salesGrowthPct",TARGETS.salesGrowthPct)/100)));
-            const tFood     = cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct);
-            const tLabor    = cfgTarget(businessConfig,"laborCostPct",TARGETS.laborCostPct);
-            const tFixed    = metrics.TOTAL_FIXED;
-            const salesPct  = tSales>0 ? Math.min(Math.round((metrics.totalSales/tSales)*100),100) : 0;
-            const laborPct  = metrics.totalSales>0 ? (metrics.totalPayroll/metrics.totalSales)*100 : 0;
-            const dayPct    = DAYS_IN_MONTH>0 ? Math.round((DAY_OF_MONTH/DAYS_IN_MONTH)*100) : 0;
-            const fSalesFull= metrics.totalSales+(DAY_OF_MONTH>0?(metrics.totalSales/DAY_OF_MONTH)*(DAYS_IN_MONTH-DAY_OF_MONTH):0);
-            const estProfit = fSalesFull*(1-tFood/100-tLabor/100-((businessConfig.rentPct||0)+(businessConfig.hasRoyalty?businessConfig.royaltyPct||0:0))/100)-tFixed;
-            const daysLeft  = DAYS_IN_MONTH-DAY_OF_MONTH;
+            // ── Derived values ────────────────────────────────────────
+            const tSales   = Math.round((lastYear[MONTH]?.sales||650000)*(1+(cfgTarget(businessConfig,"salesGrowthPct",TARGETS.salesGrowthPct)/100)));
+            const tFood    = cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct);
+            const tLabor   = cfgTarget(businessConfig,"laborCostPct",TARGETS.laborCostPct);
+            const laborPct = metrics.totalSales>0 ? (metrics.totalPayroll/metrics.totalSales)*100 : 0;
+            const salesPct = tSales>0 ? Math.min(Math.round((metrics.totalSales/tSales)*100),100) : 0;
+            const dayPct   = DAYS_IN_MONTH>0 ? Math.round((DAY_OF_MONTH/DAYS_IN_MONTH)*100) : 0;
+            const daysLeft = DAYS_IN_MONTH - DAY_OF_MONTH;
+            const fSales   = metrics.totalSales + (DAY_OF_MONTH>0 ? (metrics.totalSales/DAY_OF_MONTH)*daysLeft : 0);
+            const fProfit  = fSales*(1-tFood/100-tLabor/100-((businessConfig.rentPct||0)+(businessConfig.hasRoyalty?businessConfig.royaltyPct||0:0))/100)-metrics.TOTAL_FIXED;
+            const gap      = fSales - tSales;
 
-            // Status logic — minimal coloring
-            const salesGood = salesPct >= 90;
-            const salesWarn = !salesGood && salesPct >= 70;
-            const salesBad  = salesPct < 70 && salesPct > 0;
-            const barColor  = salesBad ? "#EF4444" : salesWarn ? "#F59E0B" : "#3B82F6";
-            const pctClass  = salesBad ? "dn" : salesWarn ? "warn" : "ok";
-            const lcStatus  = metrics.lc < 0 ? "danger" : null;
-            const foodStatus= metrics.foodCostPct>tFood+3?"danger":metrics.foodCostPct>tFood?"warn":null;
-            const laborStatus=laborPct>tLabor+3?"danger":laborPct>tLabor?"warn":null;
-            const hasAlerts = todayMissing.length>0||orefAlert||weather?.alert;
+            const foodBad  = metrics.foodCostPct > tFood + 3;
+            const foodWarn = !foodBad && metrics.foodCostPct > tFood;
+            const lbrBad   = laborPct > tLabor + 3;
+            const lbrWarn  = !lbrBad && laborPct > tLabor;
+            const salesWarn= salesPct < 80 && salesPct >= 60;
+            const salesBad = salesPct < 60 && salesPct > 0;
+            const pctBadge = salesPct < 60 ? "warn" : "ok";
+            const barColor = salesBad ? "#3B82F6" : salesWarn ? "#3B82F6" : "#3B82F6"; // always blue
 
-            // For chart: build cumulative revenue data
-            const revChart = chart.map(pt=>({...pt}));
+            const hasAlerts = todayMissing.length>0 || orefAlert || weather?.alert;
+            const revChart  = chart.map(p=>({...p}));
 
-            return (<>
+            return (
+              <div className="dash-container">
 
-              {/* ── Status + weather inline ──────────────────────── */}
-              <div className="dash-inner">
-                <div className="dash-status" style={{paddingTop:16,paddingBottom:8}}>
-                  <div className="dash-status-dot" style={{background:todayEntry?"#D1D5DB":"#F59E0B"}}/>
-                  <span style={{color:todayEntry?"#6B7280":"#F59E0B"}}>
+                {/* ── Status strip ──────────────────────────────────── */}
+                <div className="dash-status">
+                  <div className="dash-dot" style={{background:todayEntry?"#CBD5E1":"#F59E0B"}}/>
+                  <span style={{color:todayEntry?"#94A3B8":"#F59E0B"}}>
                     {todayEntry
-                      ? `הוזן — ${fmt((Number(todayEntry.sales)||0)+(Number(todayEntry.deliveries)||0))}`
+                      ? `הוזן היום — ${fmt((Number(todayEntry.sales)||0)+(Number(todayEntry.deliveries)||0))}`
                       : `נתוני ${DOW_NAMES[TODAY_DOW]} טרם הוזנו`}
                   </span>
-                  {orefAlert && <>
-                    <span style={{color:"#E5E7EB",margin:"0 2px"}}>·</span>
-                    <span style={{color:"#EF4444",fontWeight:600,display:"flex",alignItems:"center",gap:5}}>
-                      <span className="dash-status-dot" style={{background:"#EF4444",animation:"pulse 1s infinite"}}/>
-                      אזעקה פעילה
+                  {weather&&!weather.alert&&(
+                    <span style={{marginRight:"auto",color:"#CBD5E1"}}>
+                      {weather.temp}° · {weather.desc}
                     </span>
-                  </>}
-                  {weather && !weather.alert && (
-                    <span className="weather-strip" style={{marginRight:"auto"}}>
-                      <span>{weather.temp}°</span><span>·</span><span>{weather.desc}</span>
+                  )}
+                  {orefAlert&&(
+                    <span style={{color:"#EF4444",fontWeight:600,display:"flex",alignItems:"center",gap:5,marginRight:"auto"}}>
+                      <div className="dash-dot" style={{background:"#EF4444",animation:"pulse 1s infinite"}}/>
+                      אזעקה פעילה
                     </span>
                   )}
                 </div>
-              </div>
 
-              {/* ── 1. KPI row ───────────────────────────────────── */}
-              <div className="dash-inner">
+                <div className="dash-gap"/>
+
+                {/* ── 1. KPI row ─────────────────────────────────────── */}
                 <div className="kpi-row">
-                  <div className="kpi-item">
-                    <div className="kpi-item-label">הכנסות חודש</div>
-                    <div className="kpi-item-value" style={{color:salesBad?"#EF4444":salesWarn?"#F59E0B":"#111827"}}>
-                      {fmt(metrics.totalSales)}
-                    </div>
-                    <div className="kpi-item-sub">
-                      {salesPct>0 ? `${salesPct}% מיעד` : `יעד ${fmt(tSales)}`}
-                    </div>
-                  </div>
-
-                  <div className="kpi-item">
-                    <div className="kpi-item-label">יתרת קופה</div>
-                    <div className="kpi-item-value" style={{color:metrics.lc<0?"#EF4444":"#111827"}}>
-                      {fmt(metrics.lc)}
-                    </div>
-                    <div className="kpi-item-sub">
-                      {DAY_OF_MONTH>0 ? `${fmt(Math.round(metrics.dailyAvg))} / יום` : `יום ${DAY_OF_MONTH}`}
-                    </div>
-                  </div>
-
-                  <div className="kpi-item">
-                    <div className="kpi-item-label">פוד קוסט</div>
-                    <div className="kpi-item-value" style={{color:foodStatus==="danger"?"#EF4444":foodStatus==="warn"?"#F59E0B":"#111827"}}>
-                      {metrics.foodCostPct>0 ? fmtPct(metrics.foodCostPct) : "—"}
-                    </div>
-                    <div className="kpi-item-sub">יעד {tFood}%</div>
-                  </div>
-
-                  <div className="kpi-item">
-                    <div className="kpi-item-label">לייבור קוסט</div>
-                    <div className="kpi-item-value" style={{color:laborStatus==="danger"?"#EF4444":laborStatus==="warn"?"#F59E0B":"#111827"}}>
-                      {laborPct>0 ? fmtPct(laborPct) : "—"}
-                    </div>
-                    <div className="kpi-item-sub">יעד {tLabor}%</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* ── 2. Forecast — primary dominant card ──────────── */}
-              <div className="dash-inner dash-section">
-                <div className="forecast-card">
-                  <div className="forecast-header">
-                    <span className="forecast-title">הכנסות ותחזית</span>
-                    <span className="forecast-subtitle">{daysLeft} ימים נותרו · {MONTH_NAMES[MONTH]}</span>
-                  </div>
-
-                  <div className="rev-progress-wrap">
-                    <div className="rev-row">
-                      <span className="rev-label">עד כה</span>
-                      <div style={{display:"flex",alignItems:"center",gap:10}}>
-                        <span className={`rev-pct-badge ${pctClass}`}>{salesPct}%</span>
-                        <span className="rev-vals">
-                          {fmt(metrics.totalSales)}
-                          <span> / {fmt(tSales)}</span>
-                        </span>
-                      </div>
-                    </div>
-                    <div className="rev-bar-track">
-                      <div className="rev-bar-fill" style={{width:`${salesPct}%`,background:barColor}}/>
-                      <div className="rev-bar-today" style={{left:`${Math.min(dayPct,99)}%`}}/>
-                    </div>
-                    <div style={{display:"flex",justifyContent:"space-between",marginTop:6,fontSize:10,color:"#C0C8D4"}}>
-                      <span>יום 1</span>
-                      <span style={{position:"relative",left:`${Math.min(dayPct,99)}%`,transform:"translateX(50%)",color:"#9CA3AF"}}>
-                        היום
-                      </span>
-                      <span>יום {DAYS_IN_MONTH}</span>
-                    </div>
-                  </div>
-
-                  <div className="forecast-text-row">
-                    {[
-                      {label:"מחזור חזוי", value:fmt(Math.round(fSalesFull)), sub:`יעד ${fmt(tSales)}`},
-                      {label:"תחזית קופה", value:fmt(Math.round(metrics.forecast)), sub:`${fmt(Math.round(metrics.dailyAvg))} / יום`},
-                      {label:"רווח חזוי",  value:fmt(Math.round(estProfit)),
-                        sub:fSalesFull>0 ? fmtPct((estProfit/fSalesFull)*100)+" מהמחזור" : "—",
-                        dn:estProfit<0},
-                    ].map(({label,value,sub,dn},i)=>(
-                      <div key={i} className="ftc">
-                        <div className="ftc-label">{label}</div>
-                        <div className={`ftc-value${dn?" dn":""}`}>{value}</div>
-                        {sub && <div className="ftc-sub">{sub}</div>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* ── 3. Chart ─────────────────────────────────────── */}
-              {revChart.length>0 && (
-                <div className="dash-inner dash-section">
-                  <div className="chart-card">
-                    <div className="chart-card-title">הכנסות מצטברות</div>
-                    <ResponsiveContainer width="100%" height={130}>
-                      <AreaChart data={revChart} margin={{top:6,right:6,left:0,bottom:0}}>
-                        <defs>
-                          <linearGradient id="revGrad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#3B82F6" stopOpacity={0.12}/>
-                            <stop offset="100%" stopColor="#3B82F6" stopOpacity={0}/>
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 4" stroke="#F1F5F9" vertical={false}/>
-                        <XAxis dataKey="day" stroke="none" tick={{fill:"#C0C8D4",fontSize:10}} axisLine={false} tickLine={false}/>
-                        <YAxis stroke="none" tick={{fill:"#C0C8D4",fontSize:10}} axisLine={false} tickLine={false}
-                          tickFormatter={v=>`${(v/1000).toFixed(0)}k`} width={32}/>
-                        <Tooltip contentStyle={{...TT,borderColor:"#F1F5F9"}} formatter={v=>[fmt(v),""]}
-                          cursor={{stroke:"#E5E7EB",strokeWidth:1}}/>
-                        <Area type="monotone" dataKey="הכנסות" stroke="#3B82F6" strokeWidth={2}
-                          fill="url(#revGrad)" dot={false}
-                          activeDot={{r:4,fill:"#3B82F6",stroke:"#fff",strokeWidth:2}}/>
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              )}
-
-              {/* ── 4. Alerts ────────────────────────────────────── */}
-              {hasAlerts && (
-                <div className="dash-inner dash-section">
-                  <div className="alerts-card">
-                    {[
-                      orefAlert && {color:"#EF4444",pulse:true,
-                        title:"אזעקה פעילה — פיקוד העורף",
-                        body:orefAlert.cities.slice(0,4).join(" · ")+(orefAlert.cities.length>4?` +${orefAlert.cities.length-4}`:"")},
-                      weather?.alert && {color:"#F59E0B",pulse:false,
-                        title:weather.isRain?"גשם — השפעה צפויה על הפדיון":weather.isHeat?"חום קיצוני":"קור קיצוני",
-                        body:`${weather.temp}°C · ${weather.desc}`},
-                      todayMissing.length>0 && {color:"#F59E0B",pulse:false,
-                        title:`${todayMissing.length} ספקים לא הוזנו היום`,
-                        body:todayMissing.map(s=>s.name).join(", ")},
-                    ].filter(Boolean).map((item,i)=>(
-                      <div key={i} className="alert-row-item">
-                        <div className="alert-dot-sm" style={{background:item.color,...(item.pulse?{animation:"pulse 1s infinite"}:{})}}/>
-                        <div>
-                          <div className="alert-row-title">{item.title}</div>
-                          <div className="alert-row-body">{item.body}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* ── 5. Expense breakdown ─────────────────────────── */}
-              <div className="dash-inner dash-section">
-                <div className="breakdown-card">
-                  <div className="breakdown-title">פירוט הוצאות</div>
                   {[
-                    {label:"רכש ספקים",  val:metrics.totalFood,       color:"#3B82F6"},
-                    {label:"שכר עובדים", val:metrics.totalPayroll,     color:"#818CF8"},
-                    ...(businessConfig.hasRoyalty?[{label:`תמלוגים ${businessConfig.royaltyPct}%`,val:Math.round(metrics.totalSales*(businessConfig.royaltyPct||0)/100),color:"#94A3B8"}]:[]),
-                    ...(businessConfig.rentPct>0?[{label:`שכ״ד ${businessConfig.rentPct}%`,val:Math.round(metrics.totalSales*(businessConfig.rentPct||0)/100),color:"#94A3B8"}]:[]),
-                    ...(businessConfig.rentType==="fixed"&&businessConfig.rentFixed>0?[{label:"שכ״ד קבוע",val:businessConfig.rentFixed,color:"#94A3B8"}]:[]),
-                    {label:"הוצאות קבועות", val:metrics.fixedSoFar,   color:"#CBD5E1"},
-                    {label:"שונות",          val:metrics.totalOtherExpense, color:"#E2E8F0"},
-                  ].filter(r=>r.val>0).map(({label,val,color},i)=>{
-                    const pct = metrics.totalExpenses>0 ? Math.min((val/metrics.totalExpenses)*100,100) : 0;
-                    return (
-                      <div key={i} className="breakdown-row">
-                        <div className="breakdown-row-hdr">
-                          <span className="breakdown-row-lbl">{label}</span>
+                    {label:"הכנסות חודש", val:fmt(metrics.totalSales),
+                      ctx:salesPct>0?`${salesPct}% מהיעד`:null,
+                      cls:salesBad?"s-bad":salesWarn?"s-warn":""},
+                    {label:"יתרת קופה",   val:fmt(metrics.lc),
+                      ctx:DAY_OF_MONTH>0?`${fmt(Math.round(metrics.dailyAvg))}/יום`:null,
+                      cls:metrics.lc<0?"s-bad":""},
+                    {label:"פוד קוסט",    val:metrics.foodCostPct>0?fmtPct(metrics.foodCostPct):"—",
+                      ctx:`יעד ${tFood}%`, cls:foodBad?"s-bad":foodWarn?"s-warn":""},
+                    {label:"לייבור",      val:laborPct>0?fmtPct(laborPct):"—",
+                      ctx:`יעד ${tLabor}%`, cls:lbrBad?"s-bad":lbrWarn?"s-warn":""},
+                  ].map(({label,val,ctx,cls},i)=>(
+                    <div key={i} className="kpi-card">
+                      <div className="kpi-label">{label}</div>
+                      <div className={`kpi-val ${cls}`}>{val}</div>
+                      {ctx && <div className="kpi-ctx">{ctx}</div>}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="dash-gap"/>
+
+                {/* ── 2. HERO card — dominant ────────────────────────── */}
+                <div className="hero-card">
+                  <div className="hero-top">
+                    <div>
+                      <div className="hero-title">הכנסות מול יעד · {MONTH_NAMES[MONTH]}</div>
+                      <div className="hero-amount">{fmt(metrics.totalSales)}</div>
+                      <div className="hero-target">יעד חודשי: {fmt(tSales)}</div>
+                    </div>
+                    <div style={{textAlign:"left"}}>
+                      <span className={`hero-badge ${pctBadge}`}>{salesPct}%</span>
+                      <div style={{fontSize:11,color:"#CBD5E1",marginTop:8}}>
+                        {daysLeft} ימים נותרו
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Progress bar */}
+                  <div className="progress-track">
+                    <div className="progress-fill" style={{width:`${salesPct}%`,background:"#3B82F6"}}/>
+                    <div className="progress-today" style={{left:`${Math.min(dayPct,99)}%`}}/>
+                  </div>
+                  <div className="progress-labels">
+                    <span>₪0</span>
+                    <span style={{position:"relative",right:`${100-Math.min(dayPct,99)}%`,color:"#94A3B8"}}>היום</span>
+                    <span>{fmt(tSales)}</span>
+                  </div>
+
+                  {/* Forecast row */}
+                  <div className="hero-metrics">
+                    {[
+                      {label:"מחזור חזוי",  val:fmt(Math.round(fSales)),
+                        sub:gap>=0?`+${fmt(gap)} מעל יעד`:`${fmt(gap)} מתחת ליעד`},
+                      {label:"תחזית קופה",  val:fmt(Math.round(metrics.forecast)),
+                        sub:`${fmt(Math.round(metrics.dailyAvg))} / יום`},
+                      {label:"רווח חזוי",   val:fmt(Math.round(fProfit)),
+                        sub:fSales>0?fmtPct((fProfit/fSales)*100)+" מהמחזור":"—",
+                        neg:fProfit<0},
+                    ].map(({label,val,sub,neg},i)=>(
+                      <div key={i} className="hm-cell">
+                        <div className="hm-label">{label}</div>
+                        <div className={`hm-val${neg?" neg":""}`}>{val}</div>
+                        {sub&&<div className="hm-sub">{sub}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="dash-gap"/>
+
+                {/* ── 4. Alerts (when needed) ────────────────────────── */}
+                {hasAlerts&&(
+                  <>
+                    <div className="alert-card">
+                      {[
+                        orefAlert&&{dot:"#EF4444",pulse:true,
+                          ttl:"אזעקה פעילה — פיקוד העורף",
+                          body:orefAlert.cities.slice(0,4).join(" · ")+(orefAlert.cities.length>4?` +${orefAlert.cities.length-4}`:"")},
+                        weather?.alert&&{dot:"#F59E0B",pulse:false,
+                          ttl:weather.isRain?"גשם — השפעה על הפדיון":weather.isHeat?"חום קיצוני":"קור קיצוני",
+                          body:`${weather.temp}°C · ${weather.desc}`},
+                        todayMissing.length>0&&{dot:"#F59E0B",pulse:false,
+                          ttl:`${todayMissing.length} ספקים לא הוזנו`,
+                          body:todayMissing.map(s=>s.name).join(", ")},
+                      ].filter(Boolean).map((item,i)=>(
+                        <div key={i} className="alert-item">
+                          <div className="alert-dot" style={{background:item.dot,...(item.pulse?{animation:"pulse 1s infinite"}:{})}}/>
                           <div>
-                            <span className="breakdown-row-pct">{Math.round(pct)}%</span>
-                            <span className="breakdown-row-val">{fmt(val)}</span>
+                            <div className="alert-ttl">{item.ttl}</div>
+                            <div className="alert-body">{item.body}</div>
                           </div>
                         </div>
-                        <div className="breakdown-bar">
-                          <div className="breakdown-fill" style={{width:`${pct}%`,background:color}}/>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+                      ))}
+                    </div>
+                    <div className="dash-gap"/>
+                  </>
+                )}
 
-            </>);
+                {/* ── 3. Two-column: chart + breakdown ───────────────── */}
+                <div className="dash-grid">
+
+                  {/* Chart */}
+                  {revChart.length>0 ? (
+                    <div className="chart-card">
+                      <div className="chart-title">הכנסות מצטברות</div>
+                      <ResponsiveContainer width="100%" height={180}>
+                        <AreaChart data={revChart} margin={{top:4,right:4,left:0,bottom:0}}>
+                          <defs>
+                            <linearGradient id="rg" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#3B82F6" stopOpacity={0.1}/>
+                              <stop offset="100%" stopColor="#3B82F6" stopOpacity={0}/>
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 4" stroke="#F1F5F9" vertical={false}/>
+                          <XAxis dataKey="day" stroke="none" tick={{fill:"#CBD5E1",fontSize:10}} axisLine={false} tickLine={false}/>
+                          <YAxis stroke="none" tick={{fill:"#CBD5E1",fontSize:10}} axisLine={false} tickLine={false}
+                            tickFormatter={v=>`${(v/1000).toFixed(0)}k`} width={30}/>
+                          <Tooltip contentStyle={{...TT,borderColor:"#F1F5F9",borderRadius:8}}
+                            formatter={v=>[fmt(v),""]} cursor={{stroke:"#E2E8F0",strokeWidth:1}}/>
+                          <Area type="monotone" dataKey="הכנסות" stroke="#3B82F6" strokeWidth={2}
+                            fill="url(#rg)" dot={false}
+                            activeDot={{r:4,fill:"#3B82F6",stroke:"#fff",strokeWidth:2}}/>
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : (
+                    <div className="chart-card" style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:180}}>
+                      <span style={{fontSize:12,color:"#CBD5E1"}}>אין נתוני גרף עדיין</span>
+                    </div>
+                  )}
+
+                  {/* Expense breakdown */}
+                  <div className="bd-card">
+                    <div className="bd-title">פירוט הוצאות</div>
+                    {[
+                      {lbl:"רכש ספקים",      val:metrics.totalFood,        color:"#3B82F6"},
+                      {lbl:"שכר עובדים",     val:metrics.totalPayroll,      color:"#818CF8"},
+                      ...(businessConfig.hasRoyalty?[{lbl:`תמלוגים ${businessConfig.royaltyPct}%`,val:Math.round(metrics.totalSales*(businessConfig.royaltyPct||0)/100),color:"#A5B4FC"}]:[]),
+                      ...(businessConfig.rentPct>0?[{lbl:`שכ״ד ${businessConfig.rentPct}%`,val:Math.round(metrics.totalSales*(businessConfig.rentPct||0)/100),color:"#BAC8F3"}]:[]),
+                      ...(businessConfig.rentType==="fixed"&&businessConfig.rentFixed>0?[{lbl:"שכ״ד קבוע",val:businessConfig.rentFixed,color:"#CBD5E1"}]:[]),
+                      {lbl:"קבועות",          val:metrics.fixedSoFar,       color:"#CBD5E1"},
+                      {lbl:"שונות",            val:metrics.totalOtherExpense,color:"#E2E8F0"},
+                    ].filter(r=>r.val>0).map(({lbl,val,color},i)=>{
+                      const pct = metrics.totalExpenses>0?Math.min((val/metrics.totalExpenses)*100,100):0;
+                      return (
+                        <div key={i} className="bd-row">
+                          <div className="bd-hdr">
+                            <span className="bd-lbl">{lbl}</span>
+                            <div>
+                              <span className="bd-pct">{Math.round(pct)}%</span>
+                              <span className="bd-val">{fmt(val)}</span>
+                            </div>
+                          </div>
+                          <div className="bd-track">
+                            <div className="bd-fill" style={{width:`${pct}%`,background:color}}/>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="dash-gap"/>
+              </div>
+            );
           })()}
         </div>
       )}
 
-                  {/* ═══ FOOD COST ═══ */}
+                        {/* ═══ FOOD COST ═══ */}
       {screen==="foodcost" && (
         <div className="screen">
           <div style={{display:"flex",gap:6,marginBottom:16}}>
