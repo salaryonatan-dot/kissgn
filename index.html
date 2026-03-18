@@ -366,8 +366,83 @@
     .kpi-card:nth-child(4){ animation-delay:.16s; }
     .hero-card          { animation:fadeUp .4s .1s ease both; }
 
-  </style>
-</head>
+    /* ══ Mobile-first responsive overrides ══════════════════════════════════ */
+    @media (max-width: 640px) {
+
+      /* ── Page & container ── */
+      .dash-wrap       { padding:0 14px; }
+      .dash-section    { margin-top:20px; }
+      .screen          { padding:12px 14px 80px; }
+
+      /* ── Status strip ── */
+      .dash-status { font-size:11px; padding:12px 0 4px; gap:8px; }
+
+      /* ── KPI: 2-column grid on mobile ── */
+      .kpi-row  { grid-template-columns:repeat(2,1fr); gap:10px; }
+      .kpi-card { padding:14px 14px 12px; border-radius:14px; }
+      .kpi-label{ font-size:10px; margin-bottom:7px; }
+      .kpi-val  { font-size:20px; letter-spacing:-.6px; }
+      .kpi-ctx  { font-size:10px; margin-top:4px; }
+
+      /* ── Hero: compact, not dominant ── */
+      .hero-card    { padding:24px 18px 20px; border-radius:16px; }
+      .hero-header  { margin-bottom:14px; }
+      .hero-eyebrow { font-size:10px; margin-bottom:8px; }
+      .hero-amount  { font-size:36px; letter-spacing:-2px; }
+      .hero-target  { font-size:11px; margin-top:6px; }
+      .hero-badge   { font-size:11px; padding:5px 12px; }
+      .hero-main    { align-items:center; }
+
+      /* ── Progress bar: thinner ── */
+      .prog-wrap  { margin-top:16px; margin-bottom:6px; }
+      .prog-track { height:4px; }
+      .prog-labels{ font-size:9px; margin-top:5px; }
+
+      /* ── Hero metrics footer: tighter ── */
+      .hm-row   { padding-top:16px; margin-top:16px; }
+      .hm-cell:not(:last-child) { padding-left:16px; margin-left:16px; }
+      .hm-label { font-size:9px; margin-bottom:5px; }
+      .hm-val   { font-size:17px; letter-spacing:-.5px; }
+      .hm-sub   { font-size:10px; margin-top:3px; }
+
+      /* ── Chart & breakdown: single column ── */
+      .dash-grid { grid-template-columns:1fr; gap:10px; }
+      .chart-card{ padding:18px 16px 14px; border-radius:14px; }
+      .bd-card   { padding:18px 16px; border-radius:14px; }
+      .bd-row    { margin-bottom:13px; }
+      .bd-lbl    { font-size:12px; }
+      .bd-val    { font-size:12px; }
+      .bd-track  { height:4px; }
+
+      /* ── Alerts: tighter ── */
+      .alert-card { padding:13px 14px; border-radius:14px; }
+      .alert-ttl  { font-size:12px; }
+      .alert-body { font-size:11px; }
+
+      /* ── App header ── */
+      .app-header { padding:0 14px; height:48px; }
+      .app-nav    { padding:0 14px; }
+
+      /* ── Disable hover animations on touch ── */
+      .kpi-card:hover,
+      .chart-card:hover,
+      .bd-card:hover,
+      .alert-card:hover { transform:none; box-shadow:0 1px 3px rgba(0,0,0,.05); }
+
+      /* ── Tighten animation delays ── */
+      .kpi-card:nth-child(3){ animation-delay:.06s; }
+      .kpi-card:nth-child(4){ animation-delay:.1s; }
+    }
+
+    /* Slightly bigger phones / small tablets */
+    @media (min-width: 641px) and (max-width: 768px) {
+      .dash-wrap  { padding:0 18px; }
+      .kpi-row    { grid-template-columns:repeat(2,1fr); gap:12px; }
+      .hero-amount{ font-size:52px; }
+      .dash-grid  { grid-template-columns:1fr; }
+    }
+
+
 <body>
   <div id="root"></div>
   <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
