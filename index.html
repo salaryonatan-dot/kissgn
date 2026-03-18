@@ -261,83 +261,101 @@
     .shadow-md { box-shadow:var(--shadow-md); }
 
     /* ══ Dashboard ══════════════════════════════════════════════════════════ */
-    .dash          { padding:0 0 96px; background:#F9FAFB; }
-    .dash-container{ max-width:960px; margin:0 auto; padding:20px 20px 0; }
-    .dash-gap      { height:20px; }
+    .dash            { padding:0 0 96px; background:#F8FAFC; }
+    .dash-wrap       { max-width:980px; margin:0 auto; padding:0 24px; }
+    .dash-section    { margin-top:36px; }
 
-    /* ── KPI row ── */
-    .kpi-row  { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; }
+    /* Status strip */
+    .dash-status { display:flex; align-items:center; gap:10px; font-size:12px; color:#94A3B8; padding:16px 0 6px; line-height:1.5; }
+    .dash-dot    { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+
+    /* ── KPI row — flat, secondary ── */
+    .kpi-row  { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; }
     .kpi-card {
-      background:#fff; border-radius:16px; padding:22px 20px 18px;
-      box-shadow:0 1px 3px rgba(0,0,0,.05),0 4px 16px rgba(0,0,0,.03);
+      background:#FFFFFF; border-radius:16px; padding:20px 20px 17px;
+      box-shadow:0 1px 3px rgba(0,0,0,.05);
+      transition:transform .2s ease, box-shadow .2s ease; cursor:default;
     }
-    .kpi-label { font-size:11px; font-weight:500; color:#94A3B8; text-transform:uppercase; letter-spacing:.7px; margin-bottom:10px; }
-    .kpi-val   { font-size:26px; font-weight:700; color:#0F172A; letter-spacing:-1.2px; line-height:1; }
-    .kpi-val.s-warn { color:#F59E0B; }
-    .kpi-val.s-bad  { color:#3B82F6; }   /* blue, not red */
-    .kpi-ctx   { font-size:11px; color:#94A3B8; margin-top:7px; line-height:1.4; }
+    .kpi-card:hover { transform:translateY(-2px); box-shadow:0 4px 14px rgba(0,0,0,.07); }
+    .kpi-label { font-size:10px; font-weight:400; color:#94A3B8; letter-spacing:.5px; text-transform:uppercase; margin-bottom:9px; display:block; line-height:1.4; }
+    .kpi-val   { font-size:21px; font-weight:600; color:#64748B; letter-spacing:-.8px; line-height:1; }
+    .kpi-val.s-warn { color:#D97706; }
+    .kpi-val.s-bad  { color:#818CF8; }
+    .kpi-ctx   { font-size:11px; color:#CBD5E1; margin-top:5px; font-weight:400; line-height:1.4; }
 
-    /* ── HERO card ── */
+    /* ── HERO — a section, not a card ── */
     .hero-card {
-      background:#fff; border-radius:20px; padding:32px;
-      box-shadow:0 2px 8px rgba(0,0,0,.06),0 8px 32px rgba(0,0,0,.04);
+      background:#EEF2FF;
+      border-radius:20px; padding:56px 44px 48px;
+      box-shadow:0 2px 4px rgba(99,102,241,.04),
+                 0 8px 20px rgba(99,102,241,.06),
+                 0 20px 50px rgba(0,0,0,.08);
+      position:relative; overflow:hidden; border:none;
     }
-    .hero-top      { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:28px; }
-    .hero-title    { font-size:12px; font-weight:600; color:#94A3B8; text-transform:uppercase; letter-spacing:.8px; margin-bottom:6px; }
-    .hero-amount   { font-size:42px; font-weight:800; color:#0F172A; letter-spacing:-2px; line-height:1; }
-    .hero-target   { font-size:13px; color:#94A3B8; margin-top:5px; }
-    .hero-badge    { font-size:13px; font-weight:600; padding:6px 14px; border-radius:24px; }
-    .hero-badge.ok { background:#EFF6FF; color:#3B82F6; }
-    .hero-badge.warn { background:#FFFBEB; color:#F59E0B; }
+    .hero-card::before {
+      content:''; position:absolute; top:0; left:0; right:0; height:3px;
+      background:linear-gradient(90deg,#818CF8 0%,#6366F1 50%,#A5B4FC 100%);
+      border-radius:20px 20px 0 0;
+    }
+    .hero-card::after {
+      content:''; position:absolute; top:-80px; right:-80px;
+      width:280px; height:280px;
+      background:radial-gradient(circle, rgba(129,140,248,.1) 0%, transparent 65%);
+      pointer-events:none;
+    }
+    .hero-header  { margin-bottom:22px; position:relative; z-index:1; }
+    .hero-eyebrow { font-size:11px; font-weight:500; color:#818CF8; letter-spacing:.6px; text-transform:uppercase; margin-bottom:12px; line-height:1.4; display:flex; align-items:center; gap:8px; }
+    .hero-eyebrow::before { content:''; width:6px; height:6px; border-radius:50%; background:#818CF8; flex-shrink:0; }
+    .hero-main    { display:flex; justify-content:space-between; align-items:flex-end; position:relative; z-index:1; }
+    .hero-left    { }
+    .hero-amount  { font-size:76px; font-weight:800; color:#0F172A; letter-spacing:-4.5px; line-height:1; }
+    .hero-target  { font-size:12px; color:#94A3B8; font-weight:400; margin-top:10px; line-height:1.5; }
+    .hero-badge   { font-size:12px; font-weight:600; padding:6px 16px; border-radius:999px; align-self:flex-start; margin-top:4px; }
+    .hero-badge.ok   { background:rgba(129,140,248,.18); color:#4F46E5; }
+    .hero-badge.warn { background:rgba(253,230,138,.4); color:#B45309; }
 
-    /* Progress bar */
-    .progress-track { height:6px; background:#F1F5F9; border-radius:6px; position:relative; overflow:hidden; margin-bottom:6px; }
-    .progress-fill  { height:100%; border-radius:6px; transition:width .7s cubic-bezier(.4,0,.2,1); }
-    .progress-today { position:absolute; top:0; bottom:0; width:2px; background:rgba(0,0,0,.08); }
-    .progress-labels{ display:flex; justify-content:space-between; font-size:10px; color:#CBD5E1; }
+    /* Progress bar — 6px, premium */
+    .prog-wrap   { margin-top:22px; margin-bottom:8px; position:relative; z-index:1; }
+    .prog-track  { height:6px; background:rgba(15,23,42,.08); border-radius:999px; position:relative; overflow:hidden; }
+    .prog-fill   { height:100%; border-radius:999px; background:linear-gradient(90deg,#6366F1 0%,#818CF8 60%,#A5B4FC 100%); transition:width 1s cubic-bezier(.4,0,.2,1); box-shadow:0 0 10px rgba(99,102,241,.25); }
+    .prog-marker { position:absolute; top:0; bottom:0; width:1.5px; background:rgba(15,23,42,.2); border-radius:2px; }
+    .prog-labels { display:flex; justify-content:space-between; font-size:10px; color:#94A3B8; margin-top:8px; line-height:1.4; }
 
-    /* Hero forecast row */
-    .hero-metrics   { display:grid; grid-template-columns:repeat(3,1fr); border-top:1px solid #F8FAFC; padding-top:24px; margin-top:24px; gap:0; }
-    .hm-cell        { }
-    .hm-cell:not(:last-child) { padding-left:24px; border-left:1px solid #F1F5F9; margin-left:24px; }
-    .hm-label       { font-size:10px; font-weight:600; color:#94A3B8; text-transform:uppercase; letter-spacing:.8px; margin-bottom:5px; }
-    .hm-val         { font-size:22px; font-weight:700; color:#0F172A; letter-spacing:-.7px; line-height:1; }
-    .hm-val.neg     { color:#3B82F6; }   /* use blue for negative forecasts, less aggressive */
-    .hm-sub         { font-size:11px; color:#94A3B8; margin-top:4px; }
+    /* Hero forecast footer */
+    .hm-row  { display:grid; grid-template-columns:repeat(3,1fr); padding-top:26px; margin-top:26px; border-top:1px solid rgba(99,102,241,.1); position:relative; z-index:1; }
+    .hm-cell { }
+    .hm-cell:not(:last-child) { padding-left:28px; border-left:1px solid rgba(99,102,241,.1); margin-left:28px; }
+    .hm-label { font-size:10px; font-weight:400; color:#94A3B8; letter-spacing:.5px; text-transform:uppercase; margin-bottom:7px; line-height:1.4; }
+    .hm-val   { font-size:21px; font-weight:700; color:#1E293B; letter-spacing:-.7px; line-height:1; }
+    .hm-val.neg { color:#818CF8; }
+    .hm-sub   { font-size:11px; color:#94A3B8; margin-top:5px; line-height:1.4; }
 
     /* ── 2-col grid ── */
     .dash-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
 
-    /* Chart card */
-    .chart-card   { background:#fff; border-radius:16px; padding:24px;
-                    box-shadow:0 1px 3px rgba(0,0,0,.05),0 4px 16px rgba(0,0,0,.03); }
-    .chart-title  { font-size:11px; font-weight:600; color:#94A3B8; text-transform:uppercase; letter-spacing:.7px; margin-bottom:18px; }
+    .chart-card  { background:#FFFFFF; border-radius:16px; padding:28px 24px 22px; box-shadow:0 1px 3px rgba(0,0,0,.05); transition:box-shadow .2s ease; }
+    .chart-card:hover { box-shadow:0 4px 14px rgba(0,0,0,.07); }
+    .chart-label { font-size:10px; font-weight:400; color:#94A3B8; letter-spacing:.5px; text-transform:uppercase; margin-bottom:20px; line-height:1.4; }
 
-    /* Breakdown card */
-    .bd-card  { background:#fff; border-radius:16px; padding:24px;
-                box-shadow:0 1px 3px rgba(0,0,0,.05),0 4px 16px rgba(0,0,0,.03); }
-    .bd-title { font-size:11px; font-weight:600; color:#94A3B8; text-transform:uppercase; letter-spacing:.7px; margin-bottom:20px; }
-    .bd-row   { margin-bottom:15px; }
+    .bd-card  { background:#FFFFFF; border-radius:16px; padding:28px 24px; box-shadow:0 1px 3px rgba(0,0,0,.05); transition:box-shadow .2s ease; }
+    .bd-card:hover { box-shadow:0 4px 14px rgba(0,0,0,.07); }
+    .bd-label { font-size:10px; font-weight:400; color:#94A3B8; letter-spacing:.5px; text-transform:uppercase; margin-bottom:22px; line-height:1.4; }
+    .bd-row   { margin-bottom:16px; }
     .bd-row:last-child { margin-bottom:0; }
     .bd-hdr   { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px; }
-    .bd-lbl   { font-size:12px; font-weight:500; color:#475569; }
-    .bd-val   { font-size:12px; font-weight:600; color:#0F172A; }
-    .bd-pct   { font-size:10px; color:#94A3B8; margin-right:8px; }
-    .bd-track { height:5px; background:#F1F5F9; border-radius:4px; overflow:hidden; }
-    .bd-fill  { height:100%; border-radius:4px; transition:width .5s ease; }
+    .bd-lbl   { font-size:13px; font-weight:500; color:#64748B; line-height:1.4; }
+    .bd-val   { font-size:13px; font-weight:600; color:#334155; }
+    .bd-pct   { font-size:10px; color:#CBD5E1; margin-right:10px; }
+    .bd-track { height:4px; background:#F1F5F9; border-radius:999px; overflow:hidden; }
+    .bd-fill  { height:100%; border-radius:999px; transition:width .6s ease; }
 
-    /* Alerts card */
-    .alert-card { background:#FFFBEB; border-radius:14px; padding:16px 18px; border:1px solid #FDE68A; }
+    .alert-card { background:#FEFCE8; border-radius:16px; padding:16px 20px; border:1px solid #FDE68A; box-shadow:none; transition:box-shadow .2s ease; }
+    .alert-card:hover { box-shadow:0 4px 12px rgba(251,191,36,.1); }
     .alert-item { display:flex; align-items:flex-start; gap:10px; }
-    .alert-item + .alert-item { margin-top:10px; padding-top:10px; border-top:1px solid rgba(253,230,138,.4); }
-    .alert-dot  { width:7px; height:7px; border-radius:50%; flex-shrink:0; margin-top:3px; }
-    .alert-ttl  { font-size:12px; font-weight:600; color:#111827; margin-bottom:2px; }
-    .alert-body { font-size:11px; color:#6B7280; }
-
-    /* Status strip */
-    .dash-status { display:flex; align-items:center; gap:10px; font-size:12px; color:#94A3B8; padding:12px 0 4px; }
-    .dash-dot    { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
-
+    .alert-item + .alert-item { margin-top:11px; padding-top:11px; border-top:1px solid rgba(253,230,138,.5); }
+    .alert-dot  { width:6px; height:6px; border-radius:50%; flex-shrink:0; margin-top:4px; }
+    .alert-ttl  { font-size:12px; font-weight:600; color:#374151; margin-bottom:2px; line-height:1.4; }
+    .alert-body { font-size:11px; color:#9CA3AF; line-height:1.5; }
   </style>
 </head>
 <body>
@@ -2660,7 +2678,6 @@ function PilotDashboard() {
       {screen==="dashboard" && (
         <div className="dash">
           {(()=>{
-            // ── Derived values ────────────────────────────────────────
             const tSales   = Math.round((lastYear[MONTH]?.sales||650000)*(1+(cfgTarget(businessConfig,"salesGrowthPct",TARGETS.salesGrowthPct)/100)));
             const tFood    = cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct);
             const tLabor   = cfgTarget(businessConfig,"laborCostPct",TARGETS.laborCostPct);
@@ -2670,7 +2687,7 @@ function PilotDashboard() {
             const daysLeft = DAYS_IN_MONTH - DAY_OF_MONTH;
             const fSales   = metrics.totalSales + (DAY_OF_MONTH>0 ? (metrics.totalSales/DAY_OF_MONTH)*daysLeft : 0);
             const fProfit  = fSales*(1-tFood/100-tLabor/100-((businessConfig.rentPct||0)+(businessConfig.hasRoyalty?businessConfig.royaltyPct||0:0))/100)-metrics.TOTAL_FIXED;
-            const gap      = fSales - tSales;
+            const gap      = Math.round(fSales - tSales);
 
             const foodBad  = metrics.foodCostPct > tFood + 3;
             const foodWarn = !foodBad && metrics.foodCostPct > tFood;
@@ -2678,27 +2695,23 @@ function PilotDashboard() {
             const lbrWarn  = !lbrBad && laborPct > tLabor;
             const salesWarn= salesPct < 80 && salesPct >= 60;
             const salesBad = salesPct < 60 && salesPct > 0;
-            const pctBadge = salesPct < 60 ? "warn" : "ok";
-            const barColor = salesBad ? "#3B82F6" : salesWarn ? "#3B82F6" : "#3B82F6"; // always blue
-
+            const badgeCls = salesPct < 60 ? "warn" : "ok";
             const hasAlerts = todayMissing.length>0 || orefAlert || weather?.alert;
             const revChart  = chart.map(p=>({...p}));
 
             return (
-              <div className="dash-container">
+              <div className="dash-wrap">
 
-                {/* ── Status strip ──────────────────────────────────── */}
+                {/* Status strip */}
                 <div className="dash-status">
-                  <div className="dash-dot" style={{background:todayEntry?"#CBD5E1":"#F59E0B"}}/>
-                  <span style={{color:todayEntry?"#94A3B8":"#F59E0B"}}>
+                  <div className="dash-dot" style={{background:todayEntry?"#D1D5DB":"#F59E0B"}}/>
+                  <span style={{color:todayEntry?"#9CA3AF":"#F59E0B"}}>
                     {todayEntry
-                      ? `הוזן היום — ${fmt((Number(todayEntry.sales)||0)+(Number(todayEntry.deliveries)||0))}`
+                      ? `הוזן — ${fmt((Number(todayEntry.sales)||0)+(Number(todayEntry.deliveries)||0))}`
                       : `נתוני ${DOW_NAMES[TODAY_DOW]} טרם הוזנו`}
                   </span>
                   {weather&&!weather.alert&&(
-                    <span style={{marginRight:"auto",color:"#CBD5E1"}}>
-                      {weather.temp}° · {weather.desc}
-                    </span>
+                    <span style={{marginRight:"auto",color:"#D1D5DB"}}>{weather.temp}° · {weather.desc}</span>
                   )}
                   {orefAlert&&(
                     <span style={{color:"#EF4444",fontWeight:600,display:"flex",alignItems:"center",gap:5,marginRight:"auto"}}>
@@ -2708,84 +2721,75 @@ function PilotDashboard() {
                   )}
                 </div>
 
-                <div className="dash-gap"/>
-
-                {/* ── 1. KPI row ─────────────────────────────────────── */}
-                <div className="kpi-row">
+                {/* ── 1. KPI row ── */}
+                <div className="dash-section kpi-row">
                   {[
-                    {label:"הכנסות חודש", val:fmt(metrics.totalSales),
-                      ctx:salesPct>0?`${salesPct}% מהיעד`:null,
-                      cls:salesBad?"s-bad":salesWarn?"s-warn":""},
-                    {label:"יתרת קופה",   val:fmt(metrics.lc),
-                      ctx:DAY_OF_MONTH>0?`${fmt(Math.round(metrics.dailyAvg))}/יום`:null,
-                      cls:metrics.lc<0?"s-bad":""},
-                    {label:"פוד קוסט",    val:metrics.foodCostPct>0?fmtPct(metrics.foodCostPct):"—",
-                      ctx:`יעד ${tFood}%`, cls:foodBad?"s-bad":foodWarn?"s-warn":""},
-                    {label:"לייבור",      val:laborPct>0?fmtPct(laborPct):"—",
-                      ctx:`יעד ${tLabor}%`, cls:lbrBad?"s-bad":lbrWarn?"s-warn":""},
+                    {label:"הכנסות",    val:fmt(metrics.totalSales),  ctx:salesPct>0?`${salesPct}% מהיעד`:null,      cls:salesBad?"s-bad":salesWarn?"s-warn":""},
+                    {label:"יתרת קופה", val:fmt(metrics.lc),           ctx:DAY_OF_MONTH>0?`${fmt(Math.round(metrics.dailyAvg))}/יום`:null, cls:metrics.lc<0?"s-bad":""},
+                    {label:"פוד קוסט",  val:metrics.foodCostPct>0?fmtPct(metrics.foodCostPct):"—", ctx:`יעד ${tFood}%`, cls:foodBad?"s-bad":foodWarn?"s-warn":""},
+                    {label:"לייבור",    val:laborPct>0?fmtPct(laborPct):"—", ctx:`יעד ${tLabor}%`, cls:lbrBad?"s-bad":lbrWarn?"s-warn":""},
                   ].map(({label,val,ctx,cls},i)=>(
                     <div key={i} className="kpi-card">
                       <div className="kpi-label">{label}</div>
                       <div className={`kpi-val ${cls}`}>{val}</div>
-                      {ctx && <div className="kpi-ctx">{ctx}</div>}
+                      {ctx&&<div className="kpi-ctx">{ctx}</div>}
                     </div>
                   ))}
                 </div>
 
-                <div className="dash-gap"/>
+                {/* ── 2. HERO card ── */}
+                <div className="dash-section">
+                  <div className="hero-card">
 
-                {/* ── 2. HERO card — dominant ────────────────────────── */}
-                <div className="hero-card">
-                  <div className="hero-top">
-                    <div>
-                      <div className="hero-title">הכנסות מול יעד · {MONTH_NAMES[MONTH]}</div>
-                      <div className="hero-amount">{fmt(metrics.totalSales)}</div>
-                      <div className="hero-target">יעד חודשי: {fmt(tSales)}</div>
-                    </div>
-                    <div style={{textAlign:"left"}}>
-                      <span className={`hero-badge ${pctBadge}`}>{salesPct}%</span>
-                      <div style={{fontSize:11,color:"#CBD5E1",marginTop:8}}>
-                        {daysLeft} ימים נותרו
+                    {/* Top: label + big number + badge */}
+                    <div className="hero-header">
+                      <div className="hero-eyebrow">הכנסות · {MONTH_NAMES[MONTH]}</div>
+                      <div className="hero-main">
+                        <div className="hero-left">
+                          <div className="hero-amount">{fmt(metrics.totalSales)}</div>
+                          <div className="hero-target">מתוך יעד {fmt(tSales)} · {daysLeft} ימים נותרו</div>
+                        </div>
+                        <span className={`hero-badge ${badgeCls}`}>{salesPct}%</span>
                       </div>
                     </div>
-                  </div>
 
-                  {/* Progress bar */}
-                  <div className="progress-track">
-                    <div className="progress-fill" style={{width:`${salesPct}%`,background:"#3B82F6"}}/>
-                    <div className="progress-today" style={{left:`${Math.min(dayPct,99)}%`}}/>
-                  </div>
-                  <div className="progress-labels">
-                    <span>₪0</span>
-                    <span style={{position:"relative",right:`${100-Math.min(dayPct,99)}%`,color:"#94A3B8"}}>היום</span>
-                    <span>{fmt(tSales)}</span>
-                  </div>
-
-                  {/* Forecast row */}
-                  <div className="hero-metrics">
-                    {[
-                      {label:"מחזור חזוי",  val:fmt(Math.round(fSales)),
-                        sub:gap>=0?`+${fmt(gap)} מעל יעד`:`${fmt(gap)} מתחת ליעד`},
-                      {label:"תחזית קופה",  val:fmt(Math.round(metrics.forecast)),
-                        sub:`${fmt(Math.round(metrics.dailyAvg))} / יום`},
-                      {label:"רווח חזוי",   val:fmt(Math.round(fProfit)),
-                        sub:fSales>0?fmtPct((fProfit/fSales)*100)+" מהמחזור":"—",
-                        neg:fProfit<0},
-                    ].map(({label,val,sub,neg},i)=>(
-                      <div key={i} className="hm-cell">
-                        <div className="hm-label">{label}</div>
-                        <div className={`hm-val${neg?" neg":""}`}>{val}</div>
-                        {sub&&<div className="hm-sub">{sub}</div>}
+                    {/* Progress bar — full width */}
+                    <div className="prog-wrap">
+                      <div className="prog-track">
+                        <div className="prog-fill" style={{width:`${salesPct}%`}}/>
+                        <div className="prog-marker" style={{left:`${Math.min(dayPct,99)}%`}}/>
                       </div>
-                    ))}
+                      <div className="prog-labels">
+                        <span>₪0</span>
+                        <span>יום {DAY_OF_MONTH} / {DAYS_IN_MONTH}</span>
+                        <span>{fmt(tSales)}</span>
+                      </div>
+                    </div>
+
+                    {/* 3-metric forecast row */}
+                    <div className="hm-row">
+                      {[
+                        {label:"מחזור חזוי", val:fmt(Math.round(fSales)),
+                          sub:gap>=0?`+${fmt(gap)} מעל יעד`:`${fmt(Math.abs(gap))} מתחת ליעד`},
+                        {label:"תחזית קופה", val:fmt(Math.round(metrics.forecast)),
+                          sub:`${fmt(Math.round(metrics.dailyAvg))} / יום ממוצע`},
+                        {label:"רווח חזוי",  val:fmt(Math.round(fProfit)),
+                          sub:fSales>0?fmtPct((fProfit/fSales)*100)+" מהמחזור":"—",
+                          neg:fProfit<0},
+                      ].map(({label,val,sub,neg},i)=>(
+                        <div key={i} className="hm-cell">
+                          <div className="hm-label">{label}</div>
+                          <div className={`hm-val${neg?" neg":""}`}>{val}</div>
+                          {sub&&<div className="hm-sub">{sub}</div>}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
-                <div className="dash-gap"/>
-
-                {/* ── 4. Alerts (when needed) ────────────────────────── */}
+                {/* ── 3. Alerts (conditional) ── */}
                 {hasAlerts&&(
-                  <>
+                  <div className="dash-section">
                     <div className="alert-card">
                       {[
                         orefAlert&&{dot:"#EF4444",pulse:true,
@@ -2795,7 +2799,7 @@ function PilotDashboard() {
                           ttl:weather.isRain?"גשם — השפעה על הפדיון":weather.isHeat?"חום קיצוני":"קור קיצוני",
                           body:`${weather.temp}°C · ${weather.desc}`},
                         todayMissing.length>0&&{dot:"#F59E0B",pulse:false,
-                          ttl:`${todayMissing.length} ספקים לא הוזנו`,
+                          ttl:`${todayMissing.length} ספקים לא הוזנו היום`,
                           body:todayMissing.map(s=>s.name).join(", ")},
                       ].filter(Boolean).map((item,i)=>(
                         <div key={i} className="alert-item">
@@ -2807,18 +2811,17 @@ function PilotDashboard() {
                         </div>
                       ))}
                     </div>
-                    <div className="dash-gap"/>
-                  </>
+                  </div>
                 )}
 
-                {/* ── 3. Two-column: chart + breakdown ───────────────── */}
-                <div className="dash-grid">
+                {/* ── 4. 2-col grid: chart + breakdown ── */}
+                <div className="dash-section dash-grid">
 
                   {/* Chart */}
                   {revChart.length>0 ? (
                     <div className="chart-card">
-                      <div className="chart-title">הכנסות מצטברות</div>
-                      <ResponsiveContainer width="100%" height={180}>
+                      <div className="chart-label">הכנסות מצטברות</div>
+                      <ResponsiveContainer width="100%" height={190}>
                         <AreaChart data={revChart} margin={{top:4,right:4,left:0,bottom:0}}>
                           <defs>
                             <linearGradient id="rg" x1="0" y1="0" x2="0" y2="1">
@@ -2826,35 +2829,35 @@ function PilotDashboard() {
                               <stop offset="100%" stopColor="#3B82F6" stopOpacity={0}/>
                             </linearGradient>
                           </defs>
-                          <CartesianGrid strokeDasharray="3 4" stroke="#F1F5F9" vertical={false}/>
-                          <XAxis dataKey="day" stroke="none" tick={{fill:"#CBD5E1",fontSize:10}} axisLine={false} tickLine={false}/>
-                          <YAxis stroke="none" tick={{fill:"#CBD5E1",fontSize:10}} axisLine={false} tickLine={false}
-                            tickFormatter={v=>`${(v/1000).toFixed(0)}k`} width={30}/>
-                          <Tooltip contentStyle={{...TT,borderColor:"#F1F5F9",borderRadius:8}}
-                            formatter={v=>[fmt(v),""]} cursor={{stroke:"#E2E8F0",strokeWidth:1}}/>
-                          <Area type="monotone" dataKey="הכנסות" stroke="#3B82F6" strokeWidth={2}
+                          <CartesianGrid strokeDasharray="2 4" stroke="#F1F5F9" vertical={false}/>
+                          <XAxis dataKey="day" stroke="none" tick={{fill:"#D1D5DB",fontSize:10}} axisLine={false} tickLine={false}/>
+                          <YAxis stroke="none" tick={{fill:"#D1D5DB",fontSize:10}} axisLine={false} tickLine={false}
+                            tickFormatter={v=>`${(v/1000).toFixed(0)}k`} width={28}/>
+                          <Tooltip contentStyle={{...TT,borderColor:"#F1F5F9",borderRadius:10,boxShadow:"0 4px 16px rgba(0,0,0,0.08)"}}
+                            formatter={v=>[fmt(v),""]} cursor={{stroke:"#EEF2F7",strokeWidth:1}}/>
+                          <Area type="monotone" dataKey="הכנסות" stroke="#3B82F6" strokeWidth={2.5}
                             fill="url(#rg)" dot={false}
-                            activeDot={{r:4,fill:"#3B82F6",stroke:"#fff",strokeWidth:2}}/>
+                            activeDot={{r:5,fill:"#3B82F6",stroke:"#fff",strokeWidth:2.5}}/>
                         </AreaChart>
                       </ResponsiveContainer>
                     </div>
                   ) : (
-                    <div className="chart-card" style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:180}}>
-                      <span style={{fontSize:12,color:"#CBD5E1"}}>אין נתוני גרף עדיין</span>
+                    <div className="chart-card" style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:190}}>
+                      <span style={{fontSize:12,color:"#D1D5DB"}}>אין נתוני גרף עדיין</span>
                     </div>
                   )}
 
                   {/* Expense breakdown */}
                   <div className="bd-card">
-                    <div className="bd-title">פירוט הוצאות</div>
+                    <div className="bd-label">פירוט הוצאות</div>
                     {[
-                      {lbl:"רכש ספקים",      val:metrics.totalFood,        color:"#3B82F6"},
-                      {lbl:"שכר עובדים",     val:metrics.totalPayroll,      color:"#818CF8"},
+                      {lbl:"רכש ספקים",  val:metrics.totalFood,         color:"#3B82F6"},
+                      {lbl:"שכר עובדים", val:metrics.totalPayroll,       color:"#818CF8"},
                       ...(businessConfig.hasRoyalty?[{lbl:`תמלוגים ${businessConfig.royaltyPct}%`,val:Math.round(metrics.totalSales*(businessConfig.royaltyPct||0)/100),color:"#A5B4FC"}]:[]),
                       ...(businessConfig.rentPct>0?[{lbl:`שכ״ד ${businessConfig.rentPct}%`,val:Math.round(metrics.totalSales*(businessConfig.rentPct||0)/100),color:"#BAC8F3"}]:[]),
                       ...(businessConfig.rentType==="fixed"&&businessConfig.rentFixed>0?[{lbl:"שכ״ד קבוע",val:businessConfig.rentFixed,color:"#CBD5E1"}]:[]),
-                      {lbl:"קבועות",          val:metrics.fixedSoFar,       color:"#CBD5E1"},
-                      {lbl:"שונות",            val:metrics.totalOtherExpense,color:"#E2E8F0"},
+                      {lbl:"קבועות",      val:metrics.fixedSoFar,        color:"#D1D5DB"},
+                      {lbl:"שונות",        val:metrics.totalOtherExpense, color:"#E5E7EB"},
                     ].filter(r=>r.val>0).map(({lbl,val,color},i)=>{
                       const pct = metrics.totalExpenses>0?Math.min((val/metrics.totalExpenses)*100,100):0;
                       return (
@@ -2875,7 +2878,7 @@ function PilotDashboard() {
                   </div>
                 </div>
 
-                <div className="dash-gap"/>
+                <div style={{height:8}}/>
               </div>
             );
           })()}
