@@ -3152,14 +3152,17 @@ ${recent}
         <div className="mhd-nav">
           <div className="mhd-nav-inner">
             {[
-              {key:"dashboard",  label:"Dashboard",      ownerOnly:false},
-              {key:"history",    label:"פדיון יומי",    ownerOnly:false},
-              {key:"pettycash",  label:"קופה קטנה",     ownerOnly:true},
-              {key:"foodcost",   label:"קניות",         ownerOnly:false},
-              {key:"employees",  label:"עלות עובדים",   ownerOnly:true},
-              {key:"tasks",      label:"משימות",        ownerOnly:true},
-              {key:"users",      label:"משתמשים",       ownerOnly:true},
-            ].map(({key,label,ownerOnly})=>{
+              {key:"dashboard",  label:"Dashboard",      ownerOnly:false, superOnly:false},
+              {key:"history",    label:"פדיון יומי",    ownerOnly:false, superOnly:false},
+              {key:"pettycash",  label:"קופה קטנה",     ownerOnly:true,  superOnly:false},
+              {key:"foodcost",   label:"קניות",         ownerOnly:false, superOnly:false},
+              {key:"employees",  label:"עלות עובדים",   ownerOnly:true,  superOnly:false},
+              {key:"tasks",      label:"משימות",        ownerOnly:true,  superOnly:false},
+              {key:"users",      label:"משתמשים",       ownerOnly:true,  superOnly:false},
+              {key:"admin",      label:"⚙ אדמין",       ownerOnly:true,  superOnly:true},
+            ].map(({key,label,ownerOnly,superOnly})=>{
+              // Super-only tabs
+              if(superOnly && loggedInUser?.role!=="super_owner") return null;
               // Staff: only dashboard + permitted screens
               if(loggedInUser?.role==="staff") {
                 if(ownerOnly) return null;
@@ -4195,6 +4198,11 @@ ${recent}
             </button>
           </div>
         </div>
+      )}
+
+      {/* ═══ ADMIN PANEL (super_owner only) ═══ */}
+      {screen==="admin" && loggedInUser?.role==="super_owner" && (
+        <AdminPanel apiFetch={window.apiFetch} loggedInUser={loggedInUser}/>
       )}
 
       {/* ═══ DEMO BANNER ═══ */}
@@ -5618,6 +5626,168 @@ function ForecastScreen({ metrics, lastYear, saveLastYear, currentMonth, entries
 }
 
 
+
+// ─── Admin Panel ──────────────────────────────────────────────────────────────
+function AdminPanel({ loggedInUser }) {
+  const [clients, setClients]     = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [err, setErr]             = useState(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [creating, setCreating]   = useState(false);
+  const [createErr, setCreateErr] = useState("");
+  const [createOk, setCreateOk]  = useState(null);
+  const [form, setForm]           = useState({bizName:"", ownerName:"", ownerEmail:"", ownerUsername:""});
+
+  const load = async () => {
+    setLoading(true); setErr(null);
+    try {
+      const resp = await window.apiFetch("/api/admin/list-clients");
+      if(!resp.ok) throw new Error(`שגיאת שרת ${resp.status}`);
+      const data = await resp.json();
+      setClients(data.clients || []);
+    } catch(e) { setErr(e.message); }
+    setLoading(false);
+  };
+
+  React.useEffect(()=>{ load(); }, []);
+
+  const createClient = async () => {
+    if(!form.bizName.trim()||!form.ownerEmail.trim()||!form.ownerUsername.trim()) {
+      setCreateErr("יש למלא שם עסק, שם משתמש ואימייל"); return;
+    }
+    setCreating(true); setCreateErr("");
+    try {
+      const resp = await window.apiFetch("/api/admin/create-client", {
+        method:"POST",
+        body: JSON.stringify(form),
+      });
+      const data = await resp.json();
+      if(!resp.ok) throw new Error(data.error || "שגיאה");
+      setCreateOk(data);
+      setForm({bizName:"", ownerName:"", ownerEmail:"", ownerUsername:""});
+      load();
+    } catch(e) { setCreateErr(e.message); }
+    setCreating(false);
+  };
+
+  const inp = {width:"100%",border:"1px solid #E5E7EB",borderRadius:10,padding:"10px 12px",fontSize:14,fontFamily:"inherit",color:"#111827",background:"#fff",marginBottom:10};
+  const statusColor = s => s==="active"?"#16A34A":s==="invited"?"#D97706":"#9CA3AF";
+
+  return (
+    <div className="screen" style={{paddingBottom:80}}>
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <div>
+          <h2 style={{fontSize:18,fontWeight:800,color:"#0F172A",letterSpacing:"-.4px"}}>ניהול לקוחות</h2>
+          <p style={{fontSize:12,color:"#94A3B8",marginTop:3}}>super_owner · {clients.length} לקוחות</p>
+        </div>
+        <button
+          onClick={()=>{ setShowCreate(true); setCreateOk(null); setCreateErr(""); }}
+          style={{padding:"10px 18px",background:"#6366F1",border:"none",borderRadius:10,color:"white",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+          + לקוח חדש
+        </button>
+      </div>
+
+      {/* Error / loading */}
+      {loading && <p style={{textAlign:"center",color:"#94A3B8",padding:40}}>טוען...</p>}
+      {err && <div style={{padding:14,background:"#FEF2F2",borderRadius:10,color:"#DC2626",fontSize:13,marginBottom:16}}>{err}</div>}
+
+      {/* Client list */}
+      {!loading && clients.map(c=>(
+        <div key={c.tenantId} style={{background:"#fff",border:"1px solid #E5E7EB",borderRadius:14,padding:"16px 18px",marginBottom:10,boxShadow:"0 1px 3px rgba(0,0,0,.04)"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:8}}>
+            <div>
+              <div style={{fontSize:15,fontWeight:700,color:"#0F172A",marginBottom:4}}>{c.bizName||"—"}</div>
+              <div style={{fontSize:12,color:"#64748B"}}>👤 {c.ownerName||"—"} · {c.ownerEmail||"—"}</div>
+              <div style={{fontSize:11,color:"#94A3B8",marginTop:3}}>Tenant: {c.tenantId}</div>
+            </div>
+            <div style={{textAlign:"left",flexShrink:0}}>
+              <div style={{display:"inline-flex",alignItems:"center",gap:5,background:c.status==="active"?"#F0FDF4":"#FFFBEB",border:`1px solid ${statusColor(c.status)}33`,borderRadius:999,padding:"3px 11px",fontSize:11,fontWeight:600,color:statusColor(c.status),marginBottom:6}}>
+                <div style={{width:5,height:5,borderRadius:"50%",background:statusColor(c.status)}}/>
+                {c.status==="active"?"פעיל":c.status==="invited"?"ממתין":"לא ידוע"}
+              </div>
+              <div style={{fontSize:11,color:"#94A3B8"}}>
+                {c.createdAt ? new Date(c.createdAt).toLocaleDateString("he-IL") : "—"}
+              </div>
+            </div>
+          </div>
+          {c.inviteLink && (
+            <div style={{marginTop:10,padding:"8px 12px",background:"#F8FAFC",borderRadius:8,border:"1px solid #E5E7EB",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
+              <span style={{fontSize:11,color:"#64748B",wordBreak:"break-all"}}>{c.inviteLink}</span>
+              <button onClick={()=>{ navigator.clipboard.writeText(c.inviteLink); }}
+                style={{flexShrink:0,padding:"4px 10px",background:"#6366F1",border:"none",borderRadius:6,color:"white",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
+                העתק
+              </button>
+            </div>
+          )}
+        </div>
+      ))}
+
+      {!loading && clients.length===0 && !err && (
+        <div style={{textAlign:"center",padding:60,color:"#94A3B8"}}>
+          <div style={{fontSize:32,marginBottom:12}}>🏪</div>
+          <div style={{fontSize:14}}>אין לקוחות עדיין</div>
+        </div>
+      )}
+
+      {/* Create modal */}
+      {showCreate && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",zIndex:1000,display:"flex",alignItems:"flex-end"}} onClick={()=>setShowCreate(false)}>
+          <div style={{background:"white",width:"100%",maxHeight:"90vh",overflowY:"auto",borderRadius:"20px 20px 0 0",padding:"24px 20px 40px"}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+              <div style={{fontSize:16,fontWeight:800,color:"#0F172A"}}>לקוח חדש</div>
+              <button onClick={()=>setShowCreate(false)} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:"#94A3B8"}}>×</button>
+            </div>
+
+            {createOk ? (
+              <div>
+                <div style={{padding:18,background:"#F0FDF4",borderRadius:12,border:"1px solid #BBF7D0",marginBottom:16}}>
+                  <div style={{fontSize:14,fontWeight:700,color:"#16A34A",marginBottom:8}}>✓ לקוח נוצר בהצלחה</div>
+                  <div style={{fontSize:12,color:"#166534"}}>Tenant ID: <strong>{createOk.tenantId}</strong></div>
+                  {createOk.inviteLink && <>
+                    <div style={{fontSize:12,color:"#166534",marginTop:6}}>קישור הזמנה:</div>
+                    <div style={{fontSize:11,color:"#15803D",wordBreak:"break-all",background:"white",padding:"8px 10px",borderRadius:8,marginTop:4,border:"1px solid #BBF7D0"}}>
+                      {createOk.inviteLink}
+                    </div>
+                    <button onClick={()=>navigator.clipboard.writeText(createOk.inviteLink)}
+                      style={{marginTop:8,width:"100%",padding:"10px",background:"#25D366",border:"none",borderRadius:10,color:"white",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                      📋 העתק קישור לשליחה בוואטסאפ
+                    </button>
+                  </>}
+                </div>
+                <button onClick={()=>{ setShowCreate(false); setCreateOk(null); }}
+                  style={{width:"100%",padding:"12px",background:"#6366F1",border:"none",borderRadius:12,color:"white",fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                  סגור
+                </button>
+              </div>
+            ) : (
+              <>
+                <label style={{fontSize:12,fontWeight:600,color:"#374151",display:"block",marginBottom:6}}>שם העסק</label>
+                <input style={inp} placeholder="לדוגמה: קיס גן שמואל" value={form.bizName} onChange={e=>setForm(f=>({...f,bizName:e.target.value}))}/>
+
+                <label style={{fontSize:12,fontWeight:600,color:"#374151",display:"block",marginBottom:6}}>שם הבעלים</label>
+                <input style={inp} placeholder="שם מלא" value={form.ownerName} onChange={e=>setForm(f=>({...f,ownerName:e.target.value}))}/>
+
+                <label style={{fontSize:12,fontWeight:600,color:"#374151",display:"block",marginBottom:6}}>שם משתמש</label>
+                <input style={inp} placeholder="sagis (ללא רווחים)" value={form.ownerUsername} onChange={e=>setForm(f=>({...f,ownerUsername:e.target.value.replace(/\s/g,"").toLowerCase()}))} autoCapitalize="none"/>
+
+                <label style={{fontSize:12,fontWeight:600,color:"#374151",display:"block",marginBottom:6}}>אימייל</label>
+                <input style={{...inp,direction:"ltr"}} type="email" placeholder="owner@business.com" value={form.ownerEmail} onChange={e=>setForm(f=>({...f,ownerEmail:e.target.value.trim()}))}/>
+
+                {createErr && <div style={{color:"#DC2626",fontSize:13,marginBottom:12}}>{createErr}</div>}
+
+                <button onClick={createClient} disabled={creating}
+                  style={{width:"100%",padding:"13px",background:creating?"#C7D2FE":"#6366F1",border:"none",borderRadius:12,color:"white",fontSize:14,fontWeight:700,cursor:creating?"default":"pointer",fontFamily:"inherit"}}>
+                  {creating ? "יוצר לקוח..." : "צור לקוח ושלח הזמנה"}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 ReactDOM.createRoot(document.getElementById("root")).render(<PilotDashboard />);
   
