@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Marjin — שליטה יומית על הרווח של העסק</title>
+  <meta name="description" content="Marjin מרכזת פדיון, פוד קוסט ועלות עובדים — למסך אחד ברור."/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800;900&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html{scroll-behavior:smooth}
+    body{font-family:'Heebo',sans-serif;background:#F9FAFB;color:#111827;direction:rtl;overflow-x:hidden;-webkit-font-smoothing:antialiased}
+
+    :root{
+      --p:#4F46E5;--pl:#6366F1;
+      --plight:#EEF2FF;--pborder:#C7D2FE;
+      --ink:#111827;--sub:#4B5563;--faint:#9CA3AF;
+      --border:#E5E7EB;--surface:#FFFFFF;
+      --shadow-sm:0 1px 2px rgba(0,0,0,.05);
+      --shadow:0 1px 3px rgba(0,0,0,.08),0 8px 24px rgba(0,0,0,.06);
+    }
+
+    .c{max-width:980px;margin:0 auto;padding:0 24px}
+
+    @keyframes up{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+    .rv{opacity:0;transform:translateY(16px);transition:opacity .5s ease,transform .5s ease}
+    .rv.in{opacity:1;transform:none}
+
+    /* NAV */
+    nav{
+      position:sticky;top:0;z-index:100;
+      background:rgba(249,250,251,.95);backdrop-filter:blur(12px);
+      border-bottom:1px solid var(--border);padding:14px 0;
+    }
+    .nav-i{display:flex;align-items:center;justify-content:space-between}
+    .logo{display:flex;align-items:center;gap:9px;text-decoration:none}
+    .lmark{width:32px;height:32px;background:var(--p);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800;color:#fff}
+    .lname{font-size:16px;font-weight:800;color:var(--ink);letter-spacing:-.3px}
+    .nav-r{display:flex;gap:8px;align-items:center}
+    .n-ghost{padding:7px 16px;background:transparent;border:1px solid var(--border);border-radius:8px;color:var(--sub);font-size:13px;font-weight:500;cursor:pointer;font-family:inherit;text-decoration:none;transition:all .15s}
+    .n-ghost:hover{border-color:#9CA3AF;color:var(--ink)}
+    .n-cta{padding:8px 18px;background:var(--p);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;text-decoration:none;transition:all .15s}
+    .n-cta:hover{background:var(--pl)}
+
+    /* HERO */
+    .hero{
+      padding:88px 0 56px;
+      background:#fff;
+      border-bottom:1px solid var(--border);
+      text-align:center;
+    }
+    .hero-tag{
+      display:inline-flex;align-items:center;gap:6px;
+      background:var(--plight);border:1px solid var(--pborder);
+      border-radius:999px;padding:4px 13px;
+      font-size:11px;font-weight:600;color:var(--p);letter-spacing:.2px;
+      margin-bottom:24px;
+      animation:up .4s ease both;
+    }
+    .hero-tag-dot{width:5px;height:5px;background:var(--p);border-radius:50%}
+    h1{
+      font-size:clamp(32px,5.5vw,56px);font-weight:900;
+      line-height:1.1;letter-spacing:-1.8px;color:var(--ink);
+      margin-bottom:18px;
+      animation:up .4s .07s ease both;
+    }
+    .hero-sub{
+      font-size:clamp(15px,1.8vw,17px);color:var(--sub);
+      line-height:1.7;max-width:480px;margin:0 auto 10px;
+      animation:up .4s .13s ease both;
+    }
+    .hero-add{font-size:14px;color:#374151;font-weight:500;margin-bottom:6px;animation:up .4s .17s ease both}
+    .hero-trust{
+      font-size:12px;color:var(--faint);margin-bottom:30px;
+      animation:up .4s .17s ease both;
+    }
+    .hero-ctas{
+      display:flex;gap:10px;justify-content:center;flex-wrap:wrap;
+      animation:up .4s .21s ease both;
+    }
+    .btn-main{
+      padding:12px 28px;background:var(--p);border:none;border-radius:10px;
+      color:#fff;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;
+      text-decoration:none;box-shadow:0 2px 8px rgba(79,70,229,.3);
+      transition:all .18s;
+    }
+    .btn-main:hover{background:var(--pl);box-shadow:0 4px 16px rgba(79,70,229,.4);transform:translateY(-1px)}
+    .btn-sec{
+      padding:12px 24px;background:#fff;border:1.5px solid var(--border);
+      border-radius:10px;color:var(--sub);font-size:14px;font-weight:600;
+      cursor:pointer;font-family:inherit;text-decoration:none;transition:all .18s;
+    }
+    .btn-sec:hover{border-color:#9CA3AF;color:var(--ink)}
+
+    /* MOCK */
+    .mock-wrap{
+      margin:48px auto 0;max-width:780px;
+      animation:up .5s .28s ease both;
+    }
+    .mock{
+      background:#fff;border:1px solid var(--border);border-radius:16px;
+      overflow:hidden;
+      box-shadow:0 2px 4px rgba(0,0,0,.04),0 16px 48px rgba(0,0,0,.08);
+    }
+    .mbar{
+      background:#F9FAFB;border-bottom:1px solid var(--border);
+      padding:9px 16px;display:flex;align-items:center;gap:9px;
+    }
+    .mdots{display:flex;gap:4px}
+    .mdot{width:8px;height:8px;border-radius:50%}
+    .murl{flex:1;text-align:center;font-size:10px;color:var(--faint)}
+    .mnav{
+      background:#F9FAFB;border-bottom:1px solid var(--border);
+      padding:8px 16px;display:flex;gap:4px;justify-content:flex-end;
+    }
+    .mtab{font-size:10px;padding:3px 11px;border-radius:5px;color:var(--faint);font-weight:500}
+    .mtab.a{background:var(--p);color:#fff;font-weight:700}
+    .mbody{padding:14px}
+    .mkrow{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+    .mk{background:#fff;border:1px solid #F3F4F6;border-radius:10px;padding:11px 10px;box-shadow:var(--shadow-sm)}
+    .mkl{font-size:8px;color:var(--faint);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px}
+    .mkv{font-size:16px;font-weight:800;color:var(--ink);letter-spacing:-.6px}
+    .mks{font-size:8px;margin-top:2px}
+    .mks.p{color:var(--p)}.mks.r{color:#DC2626}.mks.g{color:#059669}
+    .mhero{
+      background:linear-gradient(135deg,#EEF2FF,#E0E7FF);
+      border:1px solid var(--pborder);border-radius:12px;
+      padding:14px 16px;margin-bottom:10px;position:relative;overflow:hidden;
+    }
+    .mhero::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--p),var(--pl))}
+    .mhe{font-size:8px;color:var(--p);font-weight:600;margin-bottom:5px;letter-spacing:.3px}
+    .mhn{font-size:24px;font-weight:900;color:var(--ink);letter-spacing:-1.2px}
+    .mhsub{font-size:9px;color:var(--sub);margin-top:2px}
+    .mprog{height:4px;background:rgba(79,70,229,.15);border-radius:999px;margin:10px 0 3px;overflow:hidden}
+    .mpf{height:100%;width:60%;background:linear-gradient(90deg,var(--p),var(--pl));border-radius:999px}
+    .mpl{display:flex;justify-content:space-between;font-size:8px;color:var(--faint)}
+    .mbadge{position:absolute;top:14px;left:14px;background:rgba(79,70,229,.1);color:var(--p);font-size:9px;font-weight:700;padding:2px 9px;border-radius:999px;border:1px solid var(--pborder)}
+    .mbot{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .mc{background:#fff;border:1px solid #F3F4F6;border-radius:10px;padding:11px;box-shadow:var(--shadow-sm)}
+    .mct{font-size:8px;color:var(--faint);text-transform:uppercase;letter-spacing:.4px;margin-bottom:7px}
+    .mbars{height:44px;display:flex;align-items:flex-end;gap:2px}
+    .mb{border-radius:2px 2px 0 0;flex:1;background:#EEF2FF}
+    .mb.h{background:var(--p)}.mb.m{background:#A5B4FC}
+    .mbdr{display:flex;justify-content:space-between;margin-bottom:5px;font-size:9px;color:var(--sub)}
+    .mbdv{font-weight:700;color:var(--ink)}
+    .mbdb{height:3px;background:#F3F4F6;border-radius:999px;overflow:hidden;margin-top:2px}
+    .mbdf{height:100%;border-radius:999px}
+
+    /* VALUE */
+    .val-sec{padding:72px 0;background:#fff;border-bottom:1px solid var(--border)}
+    .val-inner{display:grid;grid-template-columns:1fr 2fr;gap:60px;align-items:center}
+    .val-left h2{font-size:clamp(22px,3vw,32px);font-weight:800;letter-spacing:-1px;color:var(--ink);margin-bottom:10px}
+    .val-left p{font-size:14px;color:var(--sub);line-height:1.65}
+    .val-points{display:flex;flex-direction:column;gap:16px}
+    .val-pt{
+      display:flex;align-items:flex-start;gap:14px;
+      padding:18px 20px;background:#F9FAFB;
+      border:1px solid var(--border);border-radius:12px;
+      transition:all .18s;
+    }
+    .val-pt:hover{background:#fff;border-color:#9CA3AF;box-shadow:var(--shadow-sm)}
+    .val-ico{
+      width:36px;height:36px;border-radius:9px;
+      background:var(--plight);border:1px solid var(--pborder);
+      display:flex;align-items:center;justify-content:center;
+      font-size:18px;flex-shrink:0;
+    }
+    .val-pt-t{font-size:14px;font-weight:700;color:var(--ink);margin-bottom:3px;letter-spacing:-.2px}
+    .val-pt-s{font-size:13px;color:var(--sub);line-height:1.55}
+
+    /* AI */
+    .ai-sec{padding:72px 0;background:#F9FAFB;border-bottom:1px solid var(--border)}
+    .ai-inner{display:grid;grid-template-columns:1fr 1fr;gap:52px;align-items:center}
+    .ai-left h2{font-size:clamp(22px,3vw,32px);font-weight:800;letter-spacing:-1px;color:var(--ink);margin-bottom:12px}
+    .ai-left p{font-size:15px;color:var(--sub);line-height:1.7;margin-bottom:24px}
+    .ai-items{display:flex;flex-direction:column;gap:10px}
+    .ai-item{
+      background:#fff;border:1px solid var(--border);border-radius:10px;
+      padding:13px 16px;font-size:13px;color:var(--ink);line-height:1.5;
+      box-shadow:var(--shadow-sm);
+      display:flex;align-items:flex-start;gap:10px;
+    }
+    .ai-item::before{
+      content:'';width:4px;height:4px;border-radius:50%;
+      background:var(--p);flex-shrink:0;margin-top:6px;
+    }
+    .ai-mock{
+      background:#fff;border:1px solid var(--border);border-radius:14px;
+      overflow:hidden;box-shadow:var(--shadow);
+    }
+    .ai-mock-head{
+      background:#F9FAFB;border-bottom:1px solid var(--border);
+      padding:11px 14px;display:flex;align-items:center;gap:8px;
+    }
+    .ai-logo{width:22px;height:22px;background:var(--p);border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff}
+    .ai-title{font-size:12px;font-weight:600;color:var(--ink)}
+    .ai-online{display:flex;align-items:center;gap:4px;margin-right:auto;font-size:11px;color:#059669;font-weight:500}
+    .ai-online-dot{width:5px;height:5px;background:#059669;border-radius:50%}
+    .ai-body{padding:12px;display:flex;flex-direction:column;gap:8px;background:#FAFAFA}
+    .ai-q{background:var(--p);border-radius:10px 10px 3px 10px;padding:8px 12px;font-size:12px;color:#fff;align-self:flex-end;max-width:85%;line-height:1.5;font-weight:500}
+    .ai-a{background:#fff;border:1px solid var(--border);border-radius:3px 10px 10px 10px;padding:9px 12px;font-size:12px;color:var(--ink);max-width:90%;line-height:1.6;box-shadow:var(--shadow-sm)}
+    .ai-a strong{color:var(--p)}
+    .ai-chips{padding:8px 12px 10px;display:flex;gap:5px;flex-wrap:wrap;border-top:1px solid var(--border);background:#fff}
+    .ai-chip{background:#F9FAFB;border:1px solid var(--border);border-radius:999px;padding:4px 11px;font-size:10px;color:var(--sub);cursor:pointer;font-family:inherit;transition:all .15s;white-space:nowrap}
+    .ai-chip:hover{background:var(--plight);border-color:var(--pborder);color:var(--p)}
+
+    /* FINAL CTA */
+    .final{
+      padding:80px 0;text-align:center;
+      background:linear-gradient(180deg,#fff 0%,var(--plight) 100%);
+    }
+    .final h2{font-size:clamp(24px,4vw,40px);font-weight:900;letter-spacing:-1.5px;color:var(--ink);margin-bottom:28px}
+
+    /* FOOTER */
+    footer{padding:24px 0;border-top:1px solid var(--border);background:#fff}
+    .foot-i{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+    .foot-c{font-size:12px;color:var(--faint)}
+    .foot-l{display:flex;gap:20px}
+    .foot-l a{font-size:12px;color:var(--faint);text-decoration:none;transition:color .15s}
+    .foot-l a:hover{color:var(--sub)}
+
+    /* WA */
+    .wa-float{position:fixed;bottom:24px;left:20px;z-index:200;width:48px;height:48px;background:#25D366;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 12px rgba(37,211,102,.4);text-decoration:none;transition:transform .18s}
+    .wa-float:hover{transform:scale(1.08)}
+
+    /* MOBILE */
+    @media(max-width:660px){
+      .mkrow{grid-template-columns:repeat(2,1fr)}
+      .mbot,.val-inner,.ai-inner{grid-template-columns:1fr}
+      .nav-r .n-ghost{display:none}
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <div class="c nav-i">
+    <a href="/" class="logo">
+      <div class="lmark">M</div>
+      <span class="lname">Marjin</span>
+    </a>
+    <div class="nav-r">
+      <a href="/app?login=1" class="n-ghost">כניסה</a>
+      <a href="https://wa.me/972501234567?text=%D7%94%D7%99%D7%99%20%F0%9F%91%8B%20%D7%A8%D7%95%D7%A6%D7%94%20%D7%9C%D7%A9%D7%9E%D7%95%D7%A2%20%D7%A2%D7%9C%20Marjin" target="_blank" class="n-cta">דבר איתנו</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="c">
+    <div class="hero-tag"><div class="hero-tag-dot"></div>ניהול עסקי למסעדות</div>
+    <h1>שליטה יומית<br/>על הרווח של העסק</h1>
+    <p class="hero-sub">Marjin מרכזת פדיון, פוד קוסט ועלות עובדים — למסך אחד ברור.<br/>אתה יודע כל יום כמה הרווחת, ומה צריך לתקן.</p>
+    <p class="hero-add">המערכת מזהה איפה אתה מפסיד כסף — לפי ספקים, עובדים וימים חלשים.</p>
+    <p class="hero-trust">מבוסס נתונים אמיתיים מהקופה ומהמשמרות</p>
+    <div class="hero-ctas">
+      <a href="/app?demo=1" class="btn-main">כניסה לדמו</a>
+      <a href="https://wa.me/972501234567?text=%D7%94%D7%99%D7%99%20%F0%9F%91%8B%20%D7%A8%D7%95%D7%A6%D7%94%20%D7%9C%D7%A9%D7%9E%D7%95%D7%A2%20%D7%A2%D7%9C%20Marjin" target="_blank" class="btn-sec">דבר איתנו</a>
+    </div>
+
+    <div class="mock-wrap">
+      <div class="mock">
+        <div class="mbar">
+          <div class="mdots"><div class="mdot" style="background:#EF4444"></div><div class="mdot" style="background:#F59E0B"></div><div class="mdot" style="background:#10B981"></div></div>
+          <span class="murl">marjin.app — Dashboard</span>
+        </div>
+        <div class="mnav">
+          <div class="mtab">עלות עובדים</div>
+          <div class="mtab">קניות</div>
+          <div class="mtab">פדיון יומי</div>
+          <div class="mtab a">Dashboard</div>
+        </div>
+        <div class="mbody">
+          <div class="mkrow">
+            <div class="mk"><div class="mkl">הכנסות</div><div class="mkv" style="color:var(--p)">₪408k</div><div class="mks p">חזוי ₪575k</div></div>
+            <div class="mk"><div class="mkl">פוד קוסט</div><div class="mkv">34.6%</div><div class="mks r">יעד 30%</div></div>
+            <div class="mk"><div class="mkl">לייבור</div><div class="mkv">21.8%</div><div class="mks g">יעד 24%</div></div>
+            <div class="mk"><div class="mkl">קבועות</div><div class="mkv">₪49k</div><div class="mks" style="color:var(--faint)">11.9%</div></div>
+          </div>
+          <div class="mhero">
+            <div class="mbadge">60%</div>
+            <div class="mhe">הכנסות · מרץ 2026</div>
+            <div class="mhn">₪408,129</div>
+            <div class="mhsub">מתוך יעד ₪682,500 · 9 ימים נותרו</div>
+            <div class="mprog"><div class="mpf"></div></div>
+            <div class="mpl"><span>₪0</span><span>יום 22 / 31</span><span>₪682,500</span></div>
+          </div>
+          <div class="mbot">
+            <div class="mc"><div class="mct">פדיון מצטבר</div><div class="mbars" id="mockBars"></div></div>
+            <div class="mc">
+              <div class="mct">פירוט הוצאות</div>
+              <div class="mbdr"><span>רכש ספקים</span><span class="mbdv">34.6%</span></div>
+              <div class="mbdb"><div class="mbdf" style="width:70%;background:#DC2626"></div></div>
+              <div class="mbdr" style="margin-top:6px"><span>שכר עובדים</span><span class="mbdv">21.8%</span></div>
+              <div class="mbdb"><div class="mbdf" style="width:48%;background:var(--p)"></div></div>
+              <div class="mbdr" style="margin-top:6px"><span>קבועות</span><span class="mbdv">11.9%</span></div>
+              <div class="mbdb"><div class="mbdf" style="width:24%;background:#A5B4FC"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- VALUE -->
+<section class="val-sec">
+  <div class="c rv">
+    <div class="val-inner">
+      <div class="val-left">
+        <h2>מה אתה מקבל</h2>
+        <p>מספרים שכל בעל מסעדה צריך לראות כל יום.</p>
+      </div>
+      <div class="val-points">
+        <div class="val-pt">
+          <div class="val-ico">📊</div>
+          <div>
+            <div class="val-pt-t">אתה רואה בדיוק איפה הרווח נעלם — בכל יום</div>
+            <div class="val-pt-s">הזנה יומית קצרה. המערכת מחשבת הכל.</div>
+          </div>
+        </div>
+        <div class="val-pt">
+          <div class="val-ico">📐</div>
+          <div>
+            <div class="val-pt-t">פוד קוסט ולייבור מחושבים מול פדיון — בלי לנחש</div>
+            <div class="val-pt-s">אחוזים אמיתיים — לא ניחושים.</div>
+          </div>
+        </div>
+        <div class="val-pt">
+          <div class="val-ico">🗂️</div>
+          <div>
+            <div class="val-pt-t">אין צורך בדוחות חודשיים — הכל ברור כבר באמצע החודש</div>
+            <div class="val-pt-s">מסך אחד מחליף שעות עבודה.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- AI -->
+<section class="ai-sec">
+  <div class="c">
+    <div class="ai-inner">
+      <div class="ai-left rv">
+        <h2>תובנות על בסיס הנתונים שלך</h2>
+        <p>המערכת מצביעה על חריגות לפי ספקים, עובדים וימים חלשים.</p>
+        <p style="font-size:13px;color:#6B7280;margin-top:-8px">לא הערכות — נתונים אמיתיים מהקופה והספקים.</p>
+        <div class="ai-items">
+          <div class="ai-item">פוד קוסט עלה ב-4% — בעיקר מספק ירקות</div>
+          <div class="ai-item">יותר מדי עובדים בימי ערב חלשים</div>
+          <div class="ai-item">שלישי הכי רווחי — כדאי לחזק</div>
+        </div>
+      </div>
+      <div class="ai-mock rv" style="transition-delay:.1s">
+        <div class="ai-mock-head">
+          <div class="ai-logo">M</div>
+          <span class="ai-title">Marjin AI</span>
+          <div class="ai-online"><div class="ai-online-dot"></div>פעיל</div>
+        </div>
+        <div class="ai-body">
+          <div class="ai-q">מה עלה הפוד קוסט השבוע?</div>
+          <div class="ai-a">עלה ל-<strong>34.6%</strong> לעומת 29.8%. הגורם — ספק ירקות, <strong>₪3,800 מעל הממוצע</strong>.</div>
+          <div class="ai-q">באיזה יום הכי רווחי?</div>
+          <div class="ai-a"><strong>שישי</strong> — ₪28,400 ממוצע. שלישי הגרוע — ₪14,200.</div>
+        </div>
+        <div class="ai-chips">
+          <button class="ai-chip">תחזית סוף חודש</button>
+          <button class="ai-chip">עלות המשמרת אמש</button>
+          <button class="ai-chip">הספק הכי יקר</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FINAL CTA -->
+<section class="final">
+  <div class="c rv">
+    <h2>רוצה לדעת כל יום כמה באמת הרווחת?</h2>
+    <a href="/app?demo=1" class="btn-main">כניסה לדמו</a>
+  </div>
+</section>
+
+<footer>
+  <div class="c foot-i">
+    <div class="foot-c">© 2026 Marjin</div>
+    <div class="foot-l">
+      <a href="/app?login=1">כניסה</a>
+      <a href="/app?demo=1">דמו</a>
+      <a href="https://wa.me/972501234567" target="_blank">צור קשר</a>
+    </div>
+  </div>
+</footer>
+
+<a href="https://wa.me/972501234567?text=%D7%94%D7%99%D7%99%20%F0%9F%91%8B%20%D7%A8%D7%95%D7%A6%D7%94%20%D7%9C%D7%93%D7%A2%D7%AA%20%D7%99%D7%95%D7%AA%D7%A8%20%D7%A2%D7%9C%20Marjin" target="_blank" rel="noopener" class="wa-float">
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="white"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347zM12 0C5.373 0 0 5.373 0 12c0 2.123.554 4.12 1.526 5.856L0 24l6.336-1.498A11.924 11.924 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0z"/></svg>
+</a>
+
+<script>
+  const el=document.getElementById('mockBars');
+  if(el){[30,46,58,36,70,84,58,90,74,66,86,94,70,80,62,40,76,86].forEach(v=>{
+    const b=document.createElement('div');
+    b.className='mb'+(v>82?' h':v>58?' m':'');
+    b.style.height=v+'%';
+    el.appendChild(b);
+  });}
+  const obs=new IntersectionObserver(e=>e.forEach(x=>{if(x.isIntersecting)x.target.classList.add('in')}),{threshold:.1});
+  document.querySelectorAll('.rv').forEach(el=>obs.observe(el));
+</script>
+</body>
+</html>

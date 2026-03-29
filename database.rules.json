@@ -1,0 +1,180 @@
+{
+  "rules": {
+    "tenants": {
+      "$tenantId": {
+        ".read": false,
+        ".write": false,
+        "members": {
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager' || !data.exists())",
+          "$memberUid": {
+            ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && (auth.uid === $memberUid || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')"
+          }
+        },
+        "roles": {
+          ".read": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager' || !data.exists())",
+          "$roleUid": {
+            ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && (auth.uid === $roleUid || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+            ".validate": "newData.isString() && (newData.val() === 'owner' || newData.val() === 'manager' || newData.val() === 'shift_manager' || newData.val() === 'viewer')"
+          }
+        },
+        "audit": {
+          ".read": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          ".write": false
+        },
+        "entries": {
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 16384"
+        },
+        "config": {
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 4096"
+        },
+        "suppliers": {
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 16384"
+        },
+        "fixed": {
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 8192"
+        },
+        "lastyear": {
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 32768"
+        },
+        "credits": {
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 8192"
+        },
+        "tasks": {
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 16384"
+        },
+        "logs": {
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 65536"
+        },
+        "active-log": {
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 4096"
+        },
+        "pin": {
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 256"
+        },
+        "lookup": {
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          "$username": {
+            ".validate": "newData.hasChildren(['email','firebaseUid'])"
+          }
+        },
+        "analytics": {
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          "daily": {
+            "$branchId": {
+              "$date": {
+                ".validate": "newData.hasChildren(['revenue_total','tickets','meta'])"
+              }
+            }
+          },
+          "_lock": {
+            ".read": false,
+            ".write": false
+          }
+        },
+        "proactive_insights": {
+          "$bizId": {
+            ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+            ".write": false,
+            ".indexOn": ["lastDetectedAt", "fingerprint"]
+          }
+        },
+        "proactive_job_log": {
+          ".read": false,
+          ".write": false
+        },
+        "$dataKey": {
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')"
+        },
+        "app": {
+          ".read": false,
+          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')",
+          "users": {
+            ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+            ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner')",
+            ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 32768"
+          },
+          "business": {
+            ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
+            ".write": "auth !== null && (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner')",
+            ".validate": "newData.hasChildren(['_v']) && newData.child('_v').isString() && newData.child('_v').val().length < 8192"
+          }
+        }
+      }
+    },
+    "app-users": {
+      ".read": false,
+      ".write": false
+    },
+    "app-businesses": {
+      ".read": false,
+      ".write": false
+    },
+    "users": {
+      ".read": false,
+      ".write": false
+    },
+    "shared": {
+      ".read": false,
+      ".write": false
+    },
+    "marjin": {
+      ".read": false,
+      ".write": false
+    },
+    "username_index": {
+      "$username": {
+        ".read": "auth !== null",
+        ".write": "auth !== null && (!data.exists() || data.child('email').val() === auth.token.email)",
+        ".validate": "newData.hasChildren(['tenantId'])"
+      }
+    },
+    "user_tenants": {
+      "$uid": {
+        ".read": "auth !== null && auth.uid === $uid",
+        ".write": "auth !== null && auth.uid === $uid",
+        ".validate": "newData.isString() && newData.val().length < 128"
+      }
+    },
+    "user_active_biz": {
+      "$uid": {
+        ".read": "auth !== null && auth.uid === $uid",
+        ".write": "auth !== null && auth.uid === $uid",
+        ".validate": "newData.isString() && newData.val().length < 128"
+      }
+    },
+    "proactive_biz_index": {
+      ".read": false,
+      ".write": false,
+      ".indexOn": ["active"]
+    },
+    "$other": {
+      ".read": false,
+      ".write": false
+    }
+  }
+}

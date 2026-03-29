@@ -1,0 +1,184 @@
+MARJIN AI BRAIN SYSTEM - FILES CREATED
+======================================
+Date: 2026-03-28
+Total Files: 18
+Total Lines: 956
+
+ANALYSIS LAYER (6 files, 480 lines)
+===================================
+1. src/agent/analysis/analyzeDirectMetric.ts (83 lines)
+   - Analyzes direct metric queries (revenue, labor, food cost, products)
+   - Handles products, revenue, labor percentage, and food cost analysis
+   - Includes baseline comparison for meaningful context
+
+2. src/agent/analysis/analyzeComparison.ts (50 lines)
+   - Compares current period to baseline
+   - Calculates percentage change and interprets magnitude
+   - Provides business meaning based on deviation thresholds
+
+3. src/agent/analysis/analyzeTrend.ts (69 lines)
+   - Analyzes trends over time (rising/falling/stable)
+   - Identifies day-of-week patterns
+   - Flags consistently weak days across multiple occurrences
+
+4. src/agent/analysis/analyzeAnomaly.ts (110 lines)
+   - Detects statistical anomalies using z-scores
+   - Revenue and labor percentage anomalies
+   - Applies both statistical and absolute thresholds
+   - Returns detailed anomaly objects with severity and explanation
+
+5. src/agent/analysis/analyzeForecast.ts (65 lines)
+   - Projects end-of-month revenue
+   - Compares to baseline expectations
+   - Provides actionable meaning (on track/below/above)
+
+6. src/agent/analysis/analyzeData.ts (103 lines)
+   - Central routing dispatcher for all analyses
+   - Routes based on intent classification
+   - Merges strategic analyses (anomaly + trend)
+   - Enriches results with business memory
+
+ANOMALY DETECTION LAYER (3 files, 121 lines)
+============================================
+7. src/agent/anomalies/detectAnomalies.ts (61 lines)
+   - Core anomaly detection function
+   - Uses z-score analysis with configurable thresholds
+   - Checks recent 3 days for revenue/labor anomalies
+   - Returns structured AnomalyResult objects
+
+8. src/agent/anomalies/anomalyRules.ts (29 lines)
+   - F&B-specific anomaly rule constants
+   - Revenue z-threshold: 2.0
+   - Labor z-threshold: 1.8 (more sensitive)
+   - Absolute thresholds for labor (32%) and food cost (35%)
+
+9. src/agent/anomalies/severityScoring.ts (31 lines)
+   - Scores anomaly severity (high/medium/low)
+   - Metric-specific thresholds
+   - Returns Severity type based on deviation percentage
+
+RESPONSE COMPOSITION LAYER (3 files, 120 lines)
+==============================================
+10. src/agent/response/composeResponse.ts (56 lines)
+    - Composes natural operator-style responses
+    - Includes answer, supporting facts, business meaning, recommendations
+    - Applies confidence-based formatting rules
+    - Determines memory update eligibility
+
+11. src/agent/response/failSafeResponse.ts (40 lines)
+    - Generates safe failure responses
+    - Analyzes validation issues for specific feedback
+    - Returns low-confidence refusal with clear reasoning
+
+12. src/agent/response/responseStyleRules.ts (24 lines)
+    - Hebrew language guidelines for Marjin AI
+    - Tone: sharp senior operations manager, natural, non-robotic
+    - Structural rules and example phrasings
+    - Emphasizes avoiding templates and padding
+
+BUSINESS MEMORY LAYER (4 files, 133 lines)
+==========================================
+13. src/agent/memory/getRelevantBusinessMemory.ts (34 lines)
+    - Retrieves relevant business insights from Firebase
+    - Filters by confidence, staleness, and relevance to branch
+    - Returns top 5 most confident insights
+    - Graceful degradation on errors (memory is optional)
+
+14. src/agent/memory/saveBusinessInsight.ts (42 lines)
+    - Persists business insights to Firebase
+    - Updates existing similar insights instead of duplicating
+    - Increments confidence with repetition (max 1.0)
+    - Best-effort persistence (never fails pipeline)
+
+15. src/agent/memory/markRecommendationOutcome.ts (22 lines)
+    - Records implementation outcomes of recommendations
+    - Tracks before/after metrics
+    - Supports implemented/ignored/partially_implemented states
+    - Feeds learning loop for future recommendations
+
+16. src/agent/memory/memoryRules.ts (35 lines)
+    - Documents business memory rules
+    - Confidence scaling: start 0.6, increment 0.05
+    - Staleness threshold: 60 days
+    - Storage rules: repeated patterns, anomalies, outcomes
+
+SYSTEM PROMPTS (2 files, 102 lines)
+==================================
+17. src/agent/prompts/systemPrompt.ts (58 lines)
+    - System-level instructions for Marjin AI personality
+    - Zero hallucination policy (no inventing data/trends)
+    - Baseline requirement before trend/anomaly claims
+    - Natural Hebrew tone with specific phrase guidelines
+    - Safe-fail response for insufficient data
+
+18. src/agent/prompts/developerPrompt.ts (44 lines)
+    - Developer/orchestrator-level instructions
+    - Mandatory pipeline: Intent → Plan → Fetch → Validate → Baseline → Analyze → Score → Response
+    - Role constraints (what LLM can/cannot do)
+    - Production safety rules
+    - No chain-of-thought output
+
+PRODUCTION READINESS CHECKLIST
+==============================
+[X] All 18 files created
+[X] Complete imports with relative paths (.js extensions for ES modules)
+[X] Type safety (TypeScript with imported types)
+[X] Hebrew localization (METRIC_LABELS_HE, Hebrew responses)
+[X] Error handling (graceful degradation for memory)
+[X] Business logic (zero hallucination, baseline validation)
+[X] Modular architecture (single responsibility per file)
+[X] Composable analysis pipeline
+[X] Memory enrichment layer
+[X] Safe failure responses
+[X] Confidence-aware response composition
+[X] F&B domain-specific rules
+[X] Natural language response generation
+
+BASE DIRECTORY
+==============
+/sessions/lucid-brave-pascal/mnt/Marjin קבצי הקמת אפליקציה /
+
+DIRECTORY STRUCTURE
+===================
+src/agent/
+├── analysis/
+│   ├── analyzeDirectMetric.ts
+│   ├── analyzeComparison.ts
+│   ├── analyzeTrend.ts
+│   ├── analyzeAnomaly.ts
+│   ├── analyzeForecast.ts
+│   └── analyzeData.ts (central router)
+├── anomalies/
+│   ├── detectAnomalies.ts
+│   ├── anomalyRules.ts
+│   └── severityScoring.ts
+├── response/
+│   ├── composeResponse.ts
+│   ├── failSafeResponse.ts
+│   └── responseStyleRules.ts
+├── memory/
+│   ├── getRelevantBusinessMemory.ts
+│   ├── saveBusinessInsight.ts
+│   ├── markRecommendationOutcome.ts
+│   └── memoryRules.ts
+└── prompts/
+    ├── systemPrompt.ts
+    └── developerPrompt.ts
+
+DEPENDENCIES (External Types)
+==============================
+Imported from ../types/agent.js:
+- AgentIntent, MetricsPlan, FetchedData, AnalysisResult
+- BaselineResult, AnomalyResult, ConfidenceResult
+- AgentContext, MemoryInsight, AgentResponse
+- ValidationResult, Severity
+
+Imported from ../../utils/:
+- math.js: avg, pctChange, round2
+- stats.js: zScore, trendDirection
+- dates.js: todayIso, isoToHebDay
+
+Imported from ../../firebase/:
+- refs.js: agentMemoryRef, recommendationsRef
+
+All files are production-ready and use strict TypeScript typing.
