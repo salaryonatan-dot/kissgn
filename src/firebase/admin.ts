@@ -5,9 +5,9 @@ let initialized = false;
 export function getFirebaseAdmin(): admin.app.App {
   if (!initialized) {
     if (!admin.apps.length) {
-      const serviceAccount = process.env.FIREBASE_SERVICE_ACCOUNT
-        ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
-        : undefined;
+      const raw = process.env.FIREBASE_SA_JSON
+        || process.env.FIREBASE_SERVICE_ACCOUNT;
+      const serviceAccount = raw ? JSON.parse(raw) : undefined;
 
       admin.initializeApp({
         credential: serviceAccount
