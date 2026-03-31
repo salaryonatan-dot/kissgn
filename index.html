@@ -1335,11 +1335,11 @@ function LoginScreen({ onLogin, tenantId, autoDemo=false }) {
 function UserManagement({ users, saveUsers, tenantId, businesses }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editId,  setEditId]  = useState(null);
-  const [form, setForm] = useState({name:"",username:"",phone:"",role:"manager",allowedBizIds:[]});
+  const [form, setForm] = useState({name:"",username:"",email:"",phone:"",role:"manager",allowedBizIds:[]});
   const [err,  setErr]  = useState("");
   const [saving, setSaving] = useState(false);
 
-  const resetForm = () => { setForm({name:"",username:"",phone:"",role:"manager",allowedBizIds:[]}); setErr(""); setShowAdd(false); setEditId(null); };
+  const resetForm = () => { setForm({name:"",username:"",email:"",phone:"",role:"manager",allowedBizIds:[]}); setErr(""); setShowAdd(false); setEditId(null); };
 
   const toggleBiz = (bizId) => {
     setForm(f => ({
@@ -1354,7 +1354,7 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
 
   const save = async () => {
     if(!form.name.trim()||!form.username.trim()) return setErr("יש למלא שם ושם משתמש");
-    if(!editId && !form.phone.trim()) return setErr("יש להזין מספר טלפון");
+    if(!editId && !form.email.trim()) return setErr("יש להזין כתובת אימייל");
     if(users.find(u=>u.username===form.username.trim()&&u.id!==editId)) return setErr("שם משתמש כבר קיים");
     if(needsBizAccess && form.allowedBizIds.length===0 && businesses.length>1) return setErr("יש לבחור לפחות עסק אחד");
     setSaving(true); setErr("");
@@ -1367,14 +1367,14 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
           ? {...u, name:form.name, username:form.username.trim(), role:form.role, allowedBizIds}
           : u));
       } else {
-        const placeholderEmail = `${form.username.trim().toLowerCase()}@marjin-user.app`;
+        const userEmail = form.email.trim();
         const tempPass = "Marjin_" + Math.random().toString(36).slice(2, 10);
         let firebaseUid;
         try {
-          firebaseUid = await window.firebaseCreateUser(placeholderEmail, tempPass);
+          firebaseUid = await window.firebaseCreateUser(userEmail, tempPass);
         } catch(createErr) {
           if(createErr.code === "auth/email-already-in-use") {
-            setErr("שם משתמש כבר קיים במערכת — נסה שם אחר");
+            setErr("כתובת האימייל כבר קיימת במערכת — נסה כתובת אחרת");
             setSaving(false); return;
           } else throw createErr;
         }
@@ -1382,34 +1382,27 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
         const safeWrite = async (path, val) => {
           try { await window._rtdbSet(path, val); } catch(_) {}
         };
-        await safeWrite(`tenants/${tenantId}/lookup/${uLower2}`, { email: placeholderEmail, firebaseUid });
-        await safeWrite(`username_index/${uLower2}`, { tenantId, email: placeholderEmail });
+        await safeWrite(`tenants/${tenantId}/lookup/${uLower2}`, { email: userEmail, firebaseUid });
+        await safeWrite(`username_index/${uLower2}`, { tenantId, email: userEmail });
         await safeWrite(`tenants/${tenantId}/members/${firebaseUid}`, true);
         await safeWrite(`tenants/${tenantId}/roles/${firebaseUid}`, form.role);
         await safeWrite(`user_tenants/${firebaseUid}`, tenantId);
         const newUser = {id:Date.now(), name:form.name.trim(), username:form.username.trim(),
-          email: placeholderEmail, phone: form.phone.trim(), role:form.role, firebaseUid, allowedBizIds,
+          email: userEmail, phone: form.phone.trim(), role:form.role, firebaseUid, allowedBizIds,
           mustCompleteProfile: true};
         saveUsers([...users, newUser]);
 
-        // Send WhatsApp invite
-        if(form.phone.trim()) {
-          try {
-            const token = await window._fbUser?.getIdToken();
-            const bizSnap = businesses && businesses.length > 0 ? businesses[0].name : "Marjin";
-            const ph = form.phone.trim().replace(/^\+/, "");
-            const msg = "\uD83C\uDF89 *ברוך הבא ל-" + bizSnap + "!*\n\n" +
-              "שם משתמש: *" + uLower2 + "*\n" +
-              "סיסמא זמנית: *" + tempPass + "*\n\n" +
-              "\uD83D\uDD17 כניסה למערכת:\n" + (window.location.origin + "/?login=1&hint=" + encodeURIComponent(uLower2)) + "\n\n" +
-              "_נא להחליף סיסמא לאחר הכניסה הראשונה_";
-            await fetch(window.API_BASE + "/api/whatsapp?tenantId=" + encodeURIComponent(tenantId), {
-              method: "POST",
-              headers: {"Content-Type":"application/json","Authorization":"Bearer " + token},
-              body: JSON.stringify({phone: ph, message: msg})
-            });
-          } catch(waErr) { console.warn("WhatsApp invite failed:", waErr); }
-        }
+        // Send Email invite
+        try {
+          const token = await window._fbUser?.getIdToken();
+          const bizName = businesses && businesses.length > 0 ? businesses[0].name : "Marjin";
+          const inviteLink = window.location.origin + "/?login=1&hint=" + encodeURIComponent(uLower2);
+          await fetch(window.API_BASE + "/api/admin?action=send-user-invite", {
+            method: "POST",
+            headers: {"Content-Type":"application/json","Authorization":"Bearer " + token},
+            body: JSON.stringify({ email: userEmail, username: uLower2, tempPass, bizName, inviteLink })
+          });
+        } catch(emailErr) { console.warn("Email invite failed:", emailErr); }
       }
       resetForm();
     } catch(e) {
@@ -1420,7 +1413,7 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
     setSaving(false);
   };
 
-  const startEdit = (u) => { setEditId(u.id); setForm({name:u.name,username:u.username,phone:u.phone||"",role:u.role,allowedBizIds:u.allowedBizIds||[]}); setShowAdd(true); };
+  const startEdit = (u) => { setEditId(u.id); setForm({name:u.name,username:u.username,email:u.email||"",phone:u.phone||"",role:u.role,allowedBizIds:u.allowedBizIds||[]}); setShowAdd(true); };
   const deleteUser = (id) => { if(users.find(u=>u.id===id)?.role==="super_owner") return; saveUsers(users.filter(u=>u.id!==id)); };
 
   return (
@@ -1456,7 +1449,7 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
           <div style={{fontWeight:600,color:"#111827",fontSize:13,marginBottom:12}}>{editId?"עריכת משתמש":"הוספת משתמש"}</div>
           {!editId && (
             <div className="form-hint">
-              המשתמש יקבל הזמנה בוואצאפ עם סיסמא זמנית ויגדיר מייל וסיסמה אישית בכניסה הראשונה
+              המשתמש יקבל הזמנה במייל עם סיסמא זמנית ויגדיר סיסמה אישית בכניסה הראשונה
             </div>
           )}
           {err && <div className="form-err">{err}</div>}
@@ -1465,7 +1458,9 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
           <label className="label">שם משתמש</label>
           <input className="input" placeholder="username" autoCapitalize="none" value={form.username} onChange={e=>setForm(f=>({...f,username:e.target.value}))} disabled={!!editId}/>
           {!editId && <>
-            <label className="label">טלפון (חובה — לשליחת הזמנה בוואצאפ)</label>
+            <label className="label">אימייל (חובה — לשליחת הזמנה)</label>
+            <input className="input" type="email" placeholder="user@example.com" style={{direction:"ltr"}} value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value.trim()}))}/>
+            <label className="label">טלפון (אופציונלי)</label>
             <input className="input" type="tel" placeholder="972541234567" style={{direction:"ltr"}} value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value.replace(/[^0-9+]/g,"")}))}/>
           </>}
           <label className="label">תפקיד</label>
