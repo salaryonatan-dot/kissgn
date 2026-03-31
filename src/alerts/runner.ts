@@ -1,5 +1,5 @@
-// Marjin â Alert Runner
-// Runs all 7 checkers, deduplicates, saves results, sends WhatsApp.
+// Marjin — Alert Runner
+// Runs all 7 checkers, deduplicates, saves results, sends email digest.
 // Called by Vercel cron or manual trigger.
 
 import type { FiredAlert } from "./types.js";
@@ -15,21 +15,21 @@ import {
   checkPurchaseTrend,
 } from "./checkers.js";
 
-// ââ Run All Checks for a Biz ââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- Run All Checks for a Biz --
 
 export interface AlertRunResult {
   tenantId: string;
   bizId: string;
   alertsFired: number;
   alertsSkipped: number;
-  whatsappSent: number;
+  emailSent: boolean;
   errors: string[];
 }
 
 /**
  * Run all 7 checkers for a single biz.
  * Deduplicates (no duplicate alert on same day).
- * Saves to Firebase and optionally sends WhatsApp.
+ * Saves to Firebase and sends email digest.
  */
 export async function runAlertsForBiz(
   tenantId: string,
@@ -40,14 +40,11 @@ export async function runAlertsForBiz(
     bizId,
     alertsFired: 0,
     alertsSkipped: 0,
-    whatsappSent: 0,
+    emailSent: false,
     errors: [],
   };
 
-  // Load user-defined thresholds (or defaults)
   const thresholds = await getThresholds(tenantId, bizId);
-
-  // Collect all alerts from all checkers
   const candidates: FiredAlert[] = [];
 
   try {
@@ -85,7 +82,8 @@ export async function runAlertsForBiz(
     if (purchases) candidates.push(purchases);
   } catch (e: any) { result.errors.push(`purchases: ${e.message}`); }
 
-  // Deduplicate + save + notify
+  // Deduplicate + save
+  const firedAlerts: FiredAlert[] = [];
   for (const alert of candidates) {
     try {
       const exists = await alertExistsToday(tenantId, bizId, alert.id);
@@ -93,43 +91,36 @@ export async function runAlertsForBiz(
         result.alertsSkipped++;
         continue;
       }
-
       await saveAlert(alert);
       result.alertsFired++;
-
-      // WhatsApp notification
-      if (thresholds.whatsappEnabled) {
-        try {
-          const sent = await sendWhatsAppAlert(alert);
-          if (sent) {
-            alert.notifiedWhatsApp = true;
-            await saveAlert(alert); // update flag
-            result.whatsappSent++;
-          }
-        } catch (e: any) {
-          result.errors.push(`whatsapp: ${e.message}`);
-        }
-      }
+      firedAlerts.push(alert);
     } catch (e: any) {
       result.errors.push(`save: ${e.message}`);
+    }
+  }
+
+  // Send email digest (one email with all alerts)
+  if (firedAlerts.length > 0) {
+    try {
+      const sent = await sendEmailDigestForBiz(tenantId, bizId, firedAlerts);
+      result.emailSent = sent;
+    } catch (e: any) {
+      result.errors.push(`email: ${e.message}`);
     }
   }
 
   return result;
 }
 
-// ââ Run for All Businesses (Cron) âââââââââââââââââââââââââââââââââââââââââââââ
+// -- Run for All Businesses (Cron) --
 
 export async function runAlertsForAll(): Promise<AlertRunResult[]> {
   const { getDb } = await import("../firebase/admin.js");
   const db = getDb();
 
-  // Use proactive_biz_index for fast discovery
   const indexSnap = await db.ref("proactive_biz_index").once("value");
   const index = indexSnap.val();
-
   const results: AlertRunResult[] = [];
-
   if (!index) return results;
 
   for (const entry of Object.values(index) as any[]) {
@@ -143,7 +134,7 @@ export async function runAlertsForAll(): Promise<AlertRunResult[]> {
         bizId: entry.bizId,
         alertsFired: 0,
         alertsSkipped: 0,
-        whatsappSent: 0,
+        emailSent: false,
         errors: [e.message],
       });
     }
@@ -152,33 +143,53 @@ export async function runAlertsForAll(): Promise<AlertRunResult[]> {
   return results;
 }
 
-// ââ WhatsApp Notification âââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// -- Email Digest Notification --
 
-async function sendWhatsAppAlert(alert: FiredAlert): Promise<boolean> {
-  const instanceId = process.env.GREENAPI_INSTANCE_ID;
-  const token = process.env.GREENAPI_TOKEN;
-  const phone = process.env.ALERT_WHATSAPP_PHONE; // owner phone number
+async function sendEmailDigestForBiz(
+  tenantId: string,
+  bizId: string,
+  alerts: FiredAlert[]
+): Promise<boolean> {
+  const { getDb } = await import("../firebase/admin.js");
+  const db = getDb();
 
-  if (!instanceId || !token || !phone) return false;
-
-  const icon = alert.severity === "critical" ? "ð´" : alert.severity === "warning" ? "ð¡" : "ðµ";
-  const text = `${icon} *××ª×¨××ª Marjin*\n\n*${alert.title}*\n${alert.message}\n\nð ${alert.date}`;
-
+  // Look up owner email
+  let ownerEmail: string | null = null;
   try {
-    const resp = await fetch(
-      `https://api.green-api.com/waInstance${instanceId}/sendMessage/${token}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chatId: phone.replace("+", "") + "@c.us",
-          message: text,
-        }),
+    const usersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
+    const users = usersSnap.val();
+    if (users) {
+      for (const u of Object.values(users) as any[]) {
+        if (u?.email && !u.email.endsWith("@temp.marjin.app")) {
+          ownerEmail = u.email;
+          break;
+        }
       }
-    );
-    const data = await resp.json();
-    return !!data?.idMessage;
-  } catch {
-    return false;
+    }
+  } catch {}
+
+  if (!ownerEmail) {
+    ownerEmail = process.env.ALERT_FALLBACK_EMAIL || null;
   }
+  if (!ownerEmail) return false;
+
+  // Get business name
+  let bizName = bizId;
+  try {
+    const bizSnap = await db.ref(`tenants/${tenantId}/app/business`).once("value");
+    const bizData = bizSnap.val();
+    if (bizData?.name) bizName = bizData.name;
+  } catch {}
+
+  // Send digest email
+  const { sendAlertDigest } = await import("../../lib/sendEmail.js");
+  const emailAlerts = alerts.map(a => ({
+    severity: a.severity || "info",
+    title: a.title || a.type || a.id,
+    message: a.message || "",
+    type: a.type || a.id,
+  }));
+
+  await sendAlertDigest(ownerEmail, bizName, emailAlerts);
+  return true;
 }
