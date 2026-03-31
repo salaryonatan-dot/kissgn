@@ -2054,7 +2054,7 @@ function calcMetrics(entries, fixedList, cfg) {
   const rentAmount = rentType === 'pct' ? Math.round(totalSales * (rentPct/100)) : rentFixed;
   const royaltyAmount = hasRoyalty ? Math.round(totalSales * (royaltyPct/100)) : 0;
   const TOTAL_FIXED = fixedMonthly;
-  const fixedSoFar  = daysInMonth > 0 ? Math.round(TOTAL_FIXED * (daysPassed / daysInMonth)) : 0;
+  const fixedSoFar  = TOTAL_FIXED;  // הוצאות קבועות — סכום חודשי מלא, לא לפי ימים;
 
   const totalExpenses = totalFood + totalPayroll + totalOtherExpense + rentAmount + royaltyAmount + fixedSoFar;
   const lc            = totalSales - totalExpenses;
