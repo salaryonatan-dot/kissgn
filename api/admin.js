@@ -13,7 +13,7 @@ import { requireAuth } from "../lib/verifyToken.js";
 import { requireTenantAccess, isRateLimited,
   getIP, VALID_ROLES } from "../lib/helpers.js";
 import { getAdminDb, getAdminAuth } from "../lib/adminSdk.js";
-import { sendWhatsApp } from "../lib/sendWhatsApp.js";
+import { sendEmail } from "../lib/sendEmail.js";
 
 const RTDB_FORBIDDEN = /[.#$\[\]\/]/;
 const APP_BASE_URL   = process.env.APP_BASE_URL || "https://kissgn.vercel.app";
