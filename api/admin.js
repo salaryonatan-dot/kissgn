@@ -7,6 +7,7 @@
  * POST ?action=delete-client  → delete a tenant (super_owner only)
  * POST ?action=reset-password → reset user password (super_owner only)
  * POST ?action=resend-invite  → resend Email invite with new temp password (super_owner only)
+ * POST ?action=edit-client    → edit tenant details (super_owner only)
  */
 
 import { requireAuth } from "../lib/verifyToken.js";
@@ -67,6 +68,7 @@ export default async function handler(req, res) {
   const action = req.query.action || "";
   if (action === "list-clients")   return handleListClients(req, res);
   if (action === "create-client")  return handleCreateClient(req, res);
+  if (action === "edit-client")    return handleEditClient(req, res);
   if (action === "delete-client")  return handleDeleteClient(req, res);
   if (action === "reset-password") return handleResetPassword(req, res);
   if (action === "resend-invite")  return handleResendInvite(req, res);
@@ -120,7 +122,7 @@ async function handleListClients(req, res) {
       }
 
       const usersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
-      let ownerName = "", ownerEmail = "", ownerUsername = "", status = "unknown";
+      let ownerName = "", ownerEmail = "", ownerUsername = "", ownerPhone = "", status = "unknown";
       if (usersSnap.exists()) {
         try {
           const users = JSON.parse(usersSnap.val()?._v || "[]");
@@ -129,6 +131,7 @@ async function handleListClients(req, res) {
             ownerName = owner.name || "";
             ownerEmail = owner.email || "";
             ownerUsername = owner.username || "";
+            ownerPhone = owner.phone || "";
             status = owner.email ? "active" : "invited";
           }
         } catch(_) {}
@@ -137,7 +140,7 @@ async function handleListClients(req, res) {
       const inviteSnap = await db.ref(`tenants/${tenantId}/meta/inviteLink`).once("value");
       const inviteLink = inviteSnap.val() || null;
 
-      clients.push({ tenantId, bizName, ownerName, ownerEmail, ownerUsername, status, createdAt, inviteLink });
+      clients.push({ tenantId, bizName, ownerName, ownerEmail, ownerUsername, ownerPhone, status, createdAt, inviteLink });
     } catch(e) {
       console.error(`[list-clients] error reading tenant ${tenantId}:`, e.message);
     }
@@ -263,6 +266,118 @@ async function handleCreateClient(req, res) {
   } catch(e) {
     console.error("[create-client] error:", e.message, e.code);
     res.status(500).json({ error: e.message || "שגיאה ביצירת לקוח" });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST ?action=edit-client — edit tenant/owner details (super_owner only)
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleEditClient(req, res) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" }); return;
+  }
+
+  let claims;
+  try { claims = await requireAuth(req); }
+  catch (e) {
+    console.error("[edit-client] auth failed:", e.message);
+    res.status(401).json({ error: "unauthorized" }); return;
+  }
+
+  const db   = getAdminDb();
+  const auth = getAdminAuth();
+
+  // Verify super_owner
+  let isSuperOwner = false;
+  try {
+    const rolesSnap = await db.ref("tenants").once("value");
+    if (rolesSnap.exists()) {
+      isSuperOwner = Object.keys(rolesSnap.val()).some(tid =>
+        rolesSnap.val()[tid]?.roles?.[claims.uid] === "super_owner"
+      );
+    }
+  } catch(e) { console.error("[edit-client] roles check failed:", e.message); }
+
+  if (!isSuperOwner) {
+    res.status(403).json({ error: "forbidden — super_owner only" }); return;
+  }
+
+  const { tenantId, bizName, ownerName, ownerEmail, ownerPhone, ownerUsername } = req.body || {};
+
+  if (!tenantId || typeof tenantId !== "string") {
+    res.status(400).json({ error: "missing tenantId" }); return;
+  }
+
+  try {
+    // Read current tenant data
+    const usersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
+    if (!usersSnap.exists()) {
+      res.status(404).json({ error: "טנאנט לא נמצא" }); return;
+    }
+
+    let users = [];
+    try { users = JSON.parse(usersSnap.val()?._v || "[]"); } catch(_) {}
+
+    const ownerIdx = users.findIndex(u => u.role === "owner" || u.role === "super_owner");
+    if (ownerIdx === -1) {
+      res.status(404).json({ error: "לא נמצא בעלים לטנאנט" }); return;
+    }
+
+    const owner = users[ownerIdx];
+    const oldEmail = owner.email;
+    const oldUsername = owner.username;
+
+    // Apply changes to owner
+    if (ownerName?.trim())    owner.name     = ownerName.trim();
+    if (ownerEmail?.trim())   owner.email    = ownerEmail.trim();
+    if (ownerPhone !== undefined) owner.phone = ownerPhone?.trim() || "";
+    if (ownerUsername?.trim()) owner.username = ownerUsername.trim().toLowerCase();
+
+    users[ownerIdx] = owner;
+
+    const updates = {};
+
+    // Update users array
+    updates[`tenants/${tenantId}/app/users`] = { _v: JSON.stringify(users) };
+
+    // Update biz name if provided
+    if (bizName?.trim()) {
+      const bizSnap = await db.ref(`tenants/${tenantId}/app/business`).once("value");
+      let bizList = [];
+      try { bizList = JSON.parse(bizSnap.val()?._v || "[]"); } catch(_) {}
+      if (bizList.length > 0) {
+        bizList[0].name = bizName.trim();
+        updates[`tenants/${tenantId}/app/business`] = { _v: JSON.stringify(bizList) };
+      }
+    }
+
+    // Update username index if username changed
+    if (ownerUsername?.trim() && ownerUsername.trim().toLowerCase() !== oldUsername) {
+      const newUn = ownerUsername.trim().toLowerCase();
+      updates[`username_index/${oldUsername}`] = null;
+      updates[`username_index/${newUn}`] = { tenantId, email: owner.email };
+      updates[`tenants/${tenantId}/lookup/${oldUsername}`] = null;
+      updates[`tenants/${tenantId}/lookup/${newUn}`] = { email: owner.email, firebaseUid: owner.firebaseUid };
+    }
+
+    // Update Firebase Auth email if changed
+    if (ownerEmail?.trim() && ownerEmail.trim() !== oldEmail && owner.firebaseUid) {
+      try {
+        await auth.updateUser(owner.firebaseUid, { email: ownerEmail.trim() });
+      } catch(e) {
+        console.error("[edit-client] failed to update auth email:", e.message);
+        // Continue — RTDB update is still useful
+      }
+    }
+
+    await db.ref().update(updates);
+
+    console.log(`[edit-client] updated tenant ${tenantId} by ${claims.uid}`);
+    res.status(200).json({ ok: true, tenantId });
+
+  } catch(e) {
+    console.error("[edit-client] error:", e.message, e.code);
+    res.status(500).json({ error: e.message || "שגיאה בעדכון לקוח" });
   }
 }
 
