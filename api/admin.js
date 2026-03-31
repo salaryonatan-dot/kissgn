@@ -1,14 +1,15 @@
 /**
- * /api/admin.js — unified admin endpoint
+ * /api/admin.js â unified admin endpoint
  *
- * POST ?action=roles          → admin-roles (set/remove user role)
- * POST ?action=create-client  → create new tenant + owner (super_owner only)
- * GET  ?action=list-clients   → list all tenants (super_owner only)
- * POST ?action=delete-client  → delete a tenant (super_owner only)
- * POST ?action=reset-password → reset user password (super_owner only)
- * POST ?action=resend-invite  → resend Email invite with new temp password (super_owner only)
- * POST ?action=edit-client    → edit tenant details (super_owner only)
- * POST ?action=send-user-invite → send email invite to a new user (any owner)
+ * POST ?action=roles          â admin-roles (set/remove user role)
+ * POST ?action=create-client  â create new tenant + owner (super_owner only)
+ * GET  ?action=list-clients   â list all tenants (super_owner only)
+ * POST ?action=delete-client  â delete a tenant (super_owner only)
+ * POST ?action=reset-password â reset user password (super_owner only)
+ * POST ?action=resend-invite  â resend Email invite with new temp password (super_owner only)
+ * POST ?action=edit-client    â edit tenant details (super_owner only)
+ * POST ?action=send-user-invite â send email invite to a new user (any owner)
+ * POST ?action=delete-user      â delete a user + Firebase Auth (owner only)
  */
 
 import { requireAuth } from "../lib/verifyToken.js";
@@ -20,7 +21,7 @@ import { sendEmail } from "../lib/sendEmail.js";
 const RTDB_FORBIDDEN = /[.#$\[\]\/]/;
 const APP_BASE_URL   = process.env.APP_BASE_URL || "https://kissgn.vercel.app";
 
-/* ── HTML template for invite emails ───────────────────────────────────── */
+/* ââ HTML template for invite emails âââââââââââââââââââââââââââââââââââââ */
 function buildInviteEmailHtml(bizName, username, tempPass, inviteLink) {
   return `<!DOCTYPE html>
 <html dir="rtl" lang="he">
@@ -29,32 +30,32 @@ function buildInviteEmailHtml(bizName, username, tempPass, inviteLink) {
 <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:20px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.1);">
   <tr><td style="background:linear-gradient(135deg,#2563eb,#7c3aed);padding:30px;text-align:center;">
     <h1 style="color:#fff;margin:0;font-size:28px;">Marjin</h1>
-    <p style="color:rgba(255,255,255,.85);margin:8px 0 0;font-size:16px;">ברוכים הבאים למערכת</p>
+    <p style="color:rgba(255,255,255,.85);margin:8px 0 0;font-size:16px;">××¨×××× ××××× ×××¢×¨××ª</p>
   </td></tr>
   <tr><td style="padding:30px;">
-    <h2 style="color:#1e293b;margin:0 0 20px;font-size:22px;">🎉 ההרשמה הושלמה בהצלחה!</h2>
+    <h2 style="color:#1e293b;margin:0 0 20px;font-size:22px;">ð ×××¨×©×× ×××©××× ×××¦×××!</h2>
     <table width="100%" style="background:#f8fafc;border-radius:8px;padding:20px;margin-bottom:24px;" cellpadding="8">
-      <tr><td style="color:#64748b;font-size:14px;width:110px;">שם עסק</td>
+      <tr><td style="color:#64748b;font-size:14px;width:110px;">×©× ×¢×¡×§</td>
           <td style="color:#1e293b;font-weight:bold;font-size:16px;">${bizName}</td></tr>
-      <tr><td style="color:#64748b;font-size:14px;">שם משתמש</td>
+      <tr><td style="color:#64748b;font-size:14px;">×©× ××©×ª××©</td>
           <td style="color:#1e293b;font-weight:bold;font-size:16px;">${username}</td></tr>
-      <tr><td style="color:#64748b;font-size:14px;">סיסמא זמנית</td>
+      <tr><td style="color:#64748b;font-size:14px;">×¡××¡×× ××× ××ª</td>
           <td style="color:#1e293b;font-weight:bold;font-size:16px;direction:ltr;text-align:right;">${tempPass}</td></tr>
     </table>
     <div style="text-align:center;margin:24px 0;">
-      <a href="${inviteLink}" style="display:inline-block;background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;text-decoration:none;padding:14px 40px;border-radius:8px;font-size:18px;font-weight:bold;">כניסה למערכת →</a>
+      <a href="${inviteLink}" style="display:inline-block;background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;text-decoration:none;padding:14px 40px;border-radius:8px;font-size:18px;font-weight:bold;">×× ××¡× ×××¢×¨××ª â</a>
     </div>
-    <p style="color:#ef4444;font-size:14px;text-align:center;margin:16px 0 0;">⚠️ נא להחליף סיסמא לאחר הכניסה הראשונה</p>
+    <p style="color:#ef4444;font-size:14px;text-align:center;margin:16px 0 0;">â ï¸ × × ××××××£ ×¡××¡×× ××××¨ ××× ××¡× ××¨××©×× ×</p>
   </td></tr>
   <tr><td style="background:#f8fafc;padding:20px;text-align:center;border-top:1px solid #e2e8f0;">
-    <p style="color:#94a3b8;font-size:12px;margin:0;">Marjin — מערכת ניהול עסקית חכמה</p>
+    <p style="color:#94a3b8;font-size:12px;margin:0;">Marjin â ××¢×¨××ª × ×××× ×¢×¡×§××ª ××××</p>
   </td></tr>
 </table>
 </body></html>`;
 }
 
 export default async function handler(req, res) {
-  // CORS — strict origin, never wildcard with auth
+  // CORS â strict origin, never wildcard with auth
   const allowedOrigin = process.env.ALLOWED_ORIGIN || "https://kissgn.vercel.app";
   const incomingOrigin = req.headers.origin || "";
   if (incomingOrigin && incomingOrigin === allowedOrigin) {
@@ -74,13 +75,14 @@ export default async function handler(req, res) {
   if (action === "reset-password") return handleResetPassword(req, res);
   if (action === "resend-invite")  return handleResendInvite(req, res);
   if (action === "send-user-invite") return handleSendUserInvite(req, res);
+  if (action === "delete-user")    return handleDeleteUser(req, res);
   if (action === "roles")          return handleRoles(req, res);
   res.status(400).json({ error: "missing or invalid action" });
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 // GET ?action=list-clients
-// ─────────────────────────────────────────────────────────────────────────────
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 async function handleListClients(req, res) {
   if (req.method !== "GET") {
     res.status(405).json({ error: "Method not allowed" }); return;
@@ -152,9 +154,9 @@ async function handleListClients(req, res) {
   res.status(200).json({ clients });
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 // POST ?action=create-client
-// ─────────────────────────────────────────────────────────────────────────────
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 async function handleCreateClient(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" }); return;
@@ -182,19 +184,19 @@ async function handleCreateClient(req, res) {
   } catch(e) { console.error("[create-client] roles check failed:", e.message); }
 
   if (!isSuperOwner) {
-    res.status(403).json({ error: "forbidden — super_owner only" }); return;
+    res.status(403).json({ error: "forbidden â super_owner only" }); return;
   }
 
   const { bizName, ownerName, ownerEmail, ownerUsername, ownerPhone } = req.body || {};
 
   // ownerEmail is now REQUIRED and must be a real email (not temp)
   if (!bizName?.trim() || !ownerUsername?.trim() || !ownerEmail?.trim()) {
-    res.status(400).json({ error: "שדות חובה: שם עסק, שם משתמש, אימייל בעלים" });
+    res.status(400).json({ error: "×©×××ª ××××: ×©× ×¢×¡×§, ×©× ××©×ª××©, ×××××× ××¢×××" });
     return;
   }
 
   if (ownerEmail.trim().endsWith("@temp.marjin.app")) {
-    res.status(400).json({ error: "נדרש כתובת אימייל אמיתית (לא זמנית)" });
+    res.status(400).json({ error: "× ××¨×© ××ª×××ª ×××××× ××××ª××ª (×× ××× ××ª)" });
     return;
   }
 
@@ -208,11 +210,11 @@ async function handleCreateClient(req, res) {
     // Check if username already taken (tenant isolation)
     const existingUn = await db.ref(`username_index/${safeUsername}`).once("value");
     if (existingUn.exists()) {
-      res.status(409).json({ error: "שם המשתמש כבר תפוס — יש לבחור שם משתמש אחר" });
+      res.status(409).json({ error: "×©× ×××©×ª××© ×××¨ ×ª×¤××¡ â ××© ×××××¨ ×©× ××©×ª××© ×××¨" });
       return;
     }
 
-    // Check if email already exists — do NOT reuse existing accounts (tenant isolation)
+    // Check if email already exists â do NOT reuse existing accounts (tenant isolation)
     let firebaseUid;
     try {
       const userRecord = await auth.createUser({
@@ -223,7 +225,7 @@ async function handleCreateClient(req, res) {
       firebaseUid = userRecord.uid;
     } catch(e) {
       if (e.code === "auth/email-already-exists") {
-        res.status(409).json({ error: "כתובת האימייל כבר קיימת במערכת — יש להשתמש באימייל אחר" });
+        res.status(409).json({ error: "××ª×××ª ××××××× ×××¨ ×§××××ª ×××¢×¨××ª â ××© ×××©×ª××© ××××××× ×××¨" });
         return;
       }
       throw e;
@@ -262,13 +264,13 @@ async function handleCreateClient(req, res) {
     let emailSent = false;
     try {
       const html = buildInviteEmailHtml(bizName.trim(), ownerUsername.trim().toLowerCase(), tempPass, inviteLink);
-      await sendEmail(safeEmail, `ברוכים הבאים ל-Marjin — ${bizName.trim()}`, html);
+      await sendEmail(safeEmail, `××¨×××× ××××× ×-Marjin â ${bizName.trim()}`, html);
       emailSent = true;
     } catch (emailErr) {
       console.error("[create-client] Email failed:", emailErr.message);
     }
 
-    // SECURITY: tempPassword is NEVER returned in JSON — only sent via Email
+    // SECURITY: tempPassword is NEVER returned in JSON â only sent via Email
     res.status(200).json({
       ok: true, tenantId, bizName: bizName.trim(),
       ownerEmail: safeEmail, ownerPhone: ownerPhone?.trim() || "",
@@ -277,13 +279,13 @@ async function handleCreateClient(req, res) {
 
   } catch(e) {
     console.error("[create-client] error:", e.message, e.code);
-    res.status(500).json({ error: e.message || "שגיאה ביצירת לקוח" });
+    res.status(500).json({ error: e.message || "×©×××× ×××¦××¨×ª ××§××" });
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST ?action=edit-client — edit tenant/owner details (super_owner only)
-// ─────────────────────────────────────────────────────────────────────────────
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// POST ?action=edit-client â edit tenant/owner details (super_owner only)
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 async function handleEditClient(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" }); return;
@@ -311,7 +313,7 @@ async function handleEditClient(req, res) {
   } catch(e) { console.error("[edit-client] roles check failed:", e.message); }
 
   if (!isSuperOwner) {
-    res.status(403).json({ error: "forbidden — super_owner only" }); return;
+    res.status(403).json({ error: "forbidden â super_owner only" }); return;
   }
 
   const { tenantId, bizName, ownerName, ownerEmail, ownerPhone, ownerUsername } = req.body || {};
@@ -324,7 +326,7 @@ async function handleEditClient(req, res) {
     // Read current tenant data
     const usersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
     if (!usersSnap.exists()) {
-      res.status(404).json({ error: "טנאנט לא נמצא" }); return;
+      res.status(404).json({ error: "×× ×× × ×× × ××¦×" }); return;
     }
 
     let users = [];
@@ -332,7 +334,7 @@ async function handleEditClient(req, res) {
 
     const ownerIdx = users.findIndex(u => u.role === "owner" || u.role === "super_owner");
     if (ownerIdx === -1) {
-      res.status(404).json({ error: "לא נמצא בעלים לטנאנט" }); return;
+      res.status(404).json({ error: "×× × ××¦× ××¢××× ××× ×× ×" }); return;
     }
 
     const owner = users[ownerIdx];
@@ -378,7 +380,7 @@ async function handleEditClient(req, res) {
         await auth.updateUser(owner.firebaseUid, { email: ownerEmail.trim() });
       } catch(e) {
         console.error("[edit-client] failed to update auth email:", e.message);
-        // Continue — RTDB update is still useful
+        // Continue â RTDB update is still useful
       }
     }
 
@@ -389,13 +391,13 @@ async function handleEditClient(req, res) {
 
   } catch(e) {
     console.error("[edit-client] error:", e.message, e.code);
-    res.status(500).json({ error: e.message || "שגיאה בעדכון לקוח" });
+    res.status(500).json({ error: e.message || "×©×××× ××¢×××× ××§××" });
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 // POST ?action=delete-client
-// ─────────────────────────────────────────────────────────────────────────────
+// ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 async function handleDeleteClient(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" }); return;
@@ -423,7 +425,7 @@ async function handleDeleteClient(req, res) {
   } catch(e) { console.error("[delete-client] roles check failed:", e.message); }
 
   if (!isSuperOwner) {
-    res.status(403).json({ error: "forbidden — super_owner only" }); return;
+    res.status(403).json({ error: "forbidden â super_owner only" }); return;
   }
 
   const { tenantId } = req.body || {};
@@ -458,9 +460,10 @@ async function handleDeleteClient(req, res) {
 
     await db.ref().update(updates);
 
-    // Try to delete Firebase Auth users (best effort)
+    // Try to delete Firebase Auth users (best effort, skip the super_owner who called this)
     let deletedUsers = 0;
     for (const uid of Object.keys(members)) {
+      if (uid === claims.uid) continue; // don't delete the super_owner's own account
       try {
         await auth.deleteUser(uid);
         deletedUsers++;
@@ -474,13 +477,13 @@ async function handleDeleteClient(req, res) {
 
   } catch(e) {
     console.error("[delete-client] error:", e.message);
-    res.status(500).json({ error: e.message || "שגיאה במחיקת לקוח" });
+    res.status(500).json({ error: e.message || "×©×××× ×××××§×ª ××§××" });
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST ?action=reset-password — super_owner resets a user's password
-// ─────────────────────────────────────────────────────────────────────────────
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// POST ?action=reset-password â super_owner resets a user's password
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 async function handleResetPassword(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" }); return;
@@ -508,13 +511,13 @@ async function handleResetPassword(req, res) {
   } catch(e) { console.error("[reset-password] roles check failed:", e.message); }
 
   if (!isSuperOwner) {
-    res.status(403).json({ error: "forbidden — super_owner only" }); return;
+    res.status(403).json({ error: "forbidden â super_owner only" }); return;
   }
 
   const { firebaseUid, email } = req.body || {};
 
   if (!firebaseUid && !email) {
-    res.status(400).json({ error: "נדרש firebaseUid או email" }); return;
+    res.status(400).json({ error: "× ××¨×© firebaseUid ×× email" }); return;
   }
 
   try {
@@ -544,7 +547,7 @@ async function handleResetPassword(req, res) {
           newPass,
           APP_BASE_URL + "/?login=1&hint=" + encodeURIComponent(userRecord.displayName || "")
         );
-        await sendEmail(userRecord.email, "איפוס סיסמא — Marjin", html);
+        await sendEmail(userRecord.email, "×××¤××¡ ×¡××¡×× â Marjin", html);
         emailSent = true;
       } catch(emailErr) {
         console.error("[reset-password] email failed:", emailErr.message);
@@ -559,19 +562,19 @@ async function handleResetPassword(req, res) {
       tempPassword: newPass,
       emailSent,
       message: emailSent
-        ? "סיסמא אופסה ונשלחה במייל בהצלחה"
-        : "סיסמא אופסה — העבר את הסיסמא הזמנית ללקוח ידנית"
+        ? "×¡××¡×× ×××¤×¡× ×× ×©××× ××××× ×××¦×××"
+        : "×¡××¡×× ×××¤×¡× â ××¢××¨ ××ª ××¡××¡×× ×××× ××ª ×××§×× ××× ××ª"
     });
 
   } catch(e) {
     console.error("[reset-password] error:", e.message, e.code);
-    res.status(500).json({ error: e.message || "שגיאה באיפוס סיסמא" });
+    res.status(500).json({ error: e.message || "×©×××× ××××¤××¡ ×¡××¡××" });
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST ?action=resend-invite — resend Email invite with new temp password
-// ─────────────────────────────────────────────────────────────────────────────
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// POST ?action=resend-invite â resend Email invite with new temp password
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 async function handleResendInvite(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" }); return;
@@ -599,20 +602,20 @@ async function handleResendInvite(req, res) {
   } catch(e) { console.error("[resend-invite] roles check failed:", e.message); }
 
   if (!isSuperOwner) {
-    res.status(403).json({ error: "forbidden — super_owner only" }); return;
+    res.status(403).json({ error: "forbidden â super_owner only" }); return;
   }
 
   const { tenantId } = req.body || {};
 
   if (!tenantId) {
-    res.status(400).json({ error: "נדרש tenantId" }); return;
+    res.status(400).json({ error: "× ××¨×© tenantId" }); return;
   }
 
   try {
     // Read tenant data to get user info
     const usersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
     if (!usersSnap.exists()) {
-      res.status(404).json({ error: "טנאנט לא נמצא" }); return;
+      res.status(404).json({ error: "×× ×× × ×× × ××¦×" }); return;
     }
 
     let ownerUser, bizName = "";
@@ -622,12 +625,12 @@ async function handleResendInvite(req, res) {
     } catch(_) {}
 
     if (!ownerUser || !ownerUser.firebaseUid) {
-      res.status(404).json({ error: "לא נמצא בעלים לטנאנט" }); return;
+      res.status(404).json({ error: "×× × ××¦× ××¢××× ××× ×× ×" }); return;
     }
 
     // Check owner has a real email
     if (!ownerUser.email || ownerUser.email.endsWith("@temp.marjin.app")) {
-      res.status(400).json({ error: "לבעלים אין כתובת אימייל אמיתית — לא ניתן לשלוח הזמנה" }); return;
+      res.status(400).json({ error: "×××¢××× ××× ××ª×××ª ×××××× ××××ª××ª â ×× × ××ª× ××©××× ×××× ×" }); return;
     }
 
     // Get biz name
@@ -656,7 +659,7 @@ async function handleResendInvite(req, res) {
         newPass,
         inviteLink
       );
-      await sendEmail(ownerUser.email, `הזמנה חוזרת ל-Marjin — ${bizName || tenantId}`, html);
+      await sendEmail(ownerUser.email, `×××× × ××××¨×ª ×-Marjin â ${bizName || tenantId}`, html);
       emailSent = true;
     } catch (emailErr) {
       console.error("[resend-invite] Email failed:", emailErr.message);
@@ -670,19 +673,88 @@ async function handleResendInvite(req, res) {
       emailSent,
       tempPassword: newPass,
       message: emailSent
-        ? "הזמנה נשלחה מחדש בהצלחה במייל"
-        : "הסיסמא אופסה אבל שליחת אימייל נכשלה — העבר את הסיסמא ידנית"
+        ? "×××× × × ×©××× ××××© ×××¦××× ×××××"
+        : "××¡××¡×× ×××¤×¡× ××× ×©××××ª ×××××× × ××©×× â ××¢××¨ ××ª ××¡××¡×× ××× ××ª"
     });
 
   } catch(e) {
     console.error("[resend-invite] error:", e.message, e.code);
-    res.status(500).json({ error: e.message || "שגיאה בשליחת הזמנה" });
+    res.status(500).json({ error: e.message || "×©×××× ××©××××ª ×××× ×" });
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST ?action=send-user-invite — send email invite to a new user (any owner)
-// ─────────────────────────────────────────────────────────────────────────────
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// POST ?action=delete-user â fully delete a user (Firebase Auth + RTDB cleanup)
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+async function handleDeleteUser(req, res) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" }); return;
+  }
+
+  let claims;
+  try { claims = await requireAuth(req); }
+  catch (e) {
+    res.status(401).json({ error: "unauthorized" }); return;
+  }
+
+  const db   = getAdminDb();
+  const auth = getAdminAuth();
+
+  const { tenantId, firebaseUid, username } = req.body || {};
+
+  if (!tenantId || !firebaseUid) {
+    res.status(400).json({ error: "missing tenantId or firebaseUid" }); return;
+  }
+
+  // Verify caller is owner/super_owner in this tenant
+  const callerRole = await db.ref(`tenants/${tenantId}/roles/${claims.uid}`).once("value");
+  if (!callerRole.exists() || !["owner", "super_owner"].includes(callerRole.val())) {
+    res.status(403).json({ error: "forbidden â owner only" }); return;
+  }
+
+  // Prevent deleting yourself
+  if (firebaseUid === claims.uid) {
+    res.status(400).json({ error: "×× × ××ª× ×××××§ ××ª ×¢×¦××" }); return;
+  }
+
+  try {
+    const updates = {};
+
+    // Clean up tenant references
+    updates[`tenants/${tenantId}/members/${firebaseUid}`] = null;
+    updates[`tenants/${tenantId}/roles/${firebaseUid}`] = null;
+    updates[`user_tenants/${firebaseUid}`] = null;
+
+    // Clean up username lookup/index
+    if (username) {
+      const uLower = username.toLowerCase();
+      updates[`tenants/${tenantId}/lookup/${uLower}`] = null;
+      updates[`username_index/${uLower}`] = null;
+    }
+
+    await db.ref().update(updates);
+
+    // Delete Firebase Auth user (frees up the email for reuse)
+    let authDeleted = false;
+    try {
+      await auth.deleteUser(firebaseUid);
+      authDeleted = true;
+    } catch(e) {
+      console.warn(`[delete-user] could not delete auth user ${firebaseUid}:`, e.message);
+    }
+
+    console.log(`[delete-user] deleted user ${firebaseUid} (username=${username}) from tenant ${tenantId}, authDeleted=${authDeleted}`);
+    res.status(200).json({ ok: true, authDeleted });
+
+  } catch(e) {
+    console.error("[delete-user] error:", e.message);
+    res.status(500).json({ error: e.message || "×©×××× ×××××§×ª ××©×ª××©" });
+  }
+}
+
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// POST ?action=send-user-invite â send email invite to a new user (any owner)
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 async function handleSendUserInvite(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" }); return;
@@ -707,7 +779,7 @@ async function handleSendUserInvite(req, res) {
       tempPass,
       inviteLink || APP_BASE_URL
     );
-    await sendEmail(email, `הזמנה ל-${bizName || "Marjin"} — פרטי כניסה`, html);
+    await sendEmail(email, `×××× × ×-${bizName || "Marjin"} â ×¤×¨×× ×× ××¡×`, html);
     res.status(200).json({ ok: true, emailSent: true });
   } catch(e) {
     console.error("[send-user-invite] email failed:", e.message);
@@ -715,9 +787,9 @@ async function handleSendUserInvite(req, res) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 // POST ?action=roles
-// ─────────────────────────────────────────────────────────────────────────────
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 async function handleRoles(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "method not allowed" }); return;
