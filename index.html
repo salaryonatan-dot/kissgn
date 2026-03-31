@@ -2054,7 +2054,7 @@ function calcMetrics(entries, fixedList, cfg) {
   const rentAmount = rentType === 'pct' ? Math.round(totalSales * (rentPct/100)) : rentFixed;
   const royaltyAmount = hasRoyalty ? Math.round(totalSales * (royaltyPct/100)) : 0;
   const TOTAL_FIXED = fixedMonthly;
-  const fixedSoFar  = TOTAL_FIXED;  // הוצאות קבועות — סכום חודשי מלא, לא לפי ימים;
+  const fixedSoFar  = TOTAL_FIXED;  // הוצאות קבועות — סכום חודשי מלא, לא לפי ימים
 
   const totalExpenses = totalFood + totalPayroll + totalOtherExpense + rentAmount + royaltyAmount + fixedSoFar;
   const lc            = totalSales - totalExpenses;
@@ -5688,8 +5688,11 @@ function AdminPanel({ loggedInUser }) {
   React.useEffect(()=>{ load(); }, []);
 
   const createClient = async () => {
-    if(!form.bizName.trim()||!form.ownerUsername.trim()||!form.ownerPhone.trim()) {
-      setCreateErr("יש למלא שם עסק, שם משתמש וטלפון"); return;
+    if(!form.bizName.trim()||!form.ownerUsername.trim()||!form.ownerEmail.trim()) {
+      setCreateErr("יש למלא שם עסק, שם משתמש ואימייל"); return;
+    }
+    if(form.ownerEmail.trim().endsWith("@temp.marjin.app")) {
+      setCreateErr("נדרש כתובת אימייל אמיתית"); return;
     }
     setCreating(true); setCreateErr("");
     try {
@@ -5804,16 +5807,16 @@ function AdminPanel({ loggedInUser }) {
                 <div style={{padding:18,background:"#F0FDF4",borderRadius:12,border:"1px solid #BBF7D0",marginBottom:16}}>
                   <div style={{fontSize:14,fontWeight:700,color:"#16A34A",marginBottom:8}}>✓ לקוח נוצר בהצלחה</div>
                   <div style={{fontSize:12,color:"#166534"}}>Tenant ID: <strong>{createOk.tenantId}</strong></div>
-                  {createOk.waSent && <div style={{fontSize:12,color:"#16A34A",marginTop:4}}>✓ הודעת WhatsApp נשלחה</div>}
-                  {createOk.waSent===false && <div style={{fontSize:12,color:"#D97706",marginTop:4}}>⚠ הודעת WhatsApp לא נשלחה</div>}
+                  {createOk.emailSent && <div style={{fontSize:12,color:"#16A34A",marginTop:4}}>✓ הזמנה נשלחה במייל</div>}
+                  {createOk.emailSent===false && <div style={{fontSize:12,color:"#D97706",marginTop:4}}>⚠ שליחת מייל נכשלה — שלח קישור ידנית</div>}
                   {createOk.inviteLink && <>
                     <div style={{fontSize:12,color:"#166534",marginTop:6}}>קישור הזמנה:</div>
                     <div style={{fontSize:11,color:"#15803D",wordBreak:"break-all",background:"white",padding:"8px 10px",borderRadius:8,marginTop:4,border:"1px solid #BBF7D0"}}>
                       {createOk.inviteLink}
                     </div>
                     <button onClick={()=>navigator.clipboard.writeText(createOk.inviteLink)}
-                      style={{marginTop:8,width:"100%",padding:"10px",background:"#25D366",border:"none",borderRadius:10,color:"white",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-                      📋 העתק קישור לשליחה בוואטסאפ
+                      style={{marginTop:8,width:"100%",padding:"10px",background:"#6366F1",border:"none",borderRadius:10,color:"white",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                      📋 העתק קישור הזמנה
                     </button>
                   </>}
                 </div>
@@ -5833,11 +5836,12 @@ function AdminPanel({ loggedInUser }) {
                 <label style={{fontSize:12,fontWeight:600,color:"#374151",display:"block",marginBottom:6}}>שם משתמש</label>
                 <input style={inp} placeholder="sagis (ללא רווחים)" value={form.ownerUsername} onChange={e=>setForm(f=>({...f,ownerUsername:e.target.value.replace(/\s/g,"").toLowerCase()}))} autoCapitalize="none"/>
 
-                <label style={{fontSize:12,fontWeight:600,color:"#374151",display:"block",marginBottom:6}}>טלפון (חובה)</label>
+                <label style={{fontSize:12,fontWeight:600,color:"#374151",display:"block",marginBottom:6}}>אימייל (חובה)</label>
+                <input style={{...inp,direction:"ltr"}} type="email" placeholder="owner@business.com" value={form.ownerEmail} onChange={e=>setForm(f=>({...f,ownerEmail:e.target.value.trim()}))}/>
+
+                <label style={{fontSize:12,fontWeight:600,color:"#374151",display:"block",marginBottom:6}}>טלפון (אופציונלי)</label>
                 <input style={{...inp,direction:"ltr"}} type="tel" placeholder="972541234567" value={form.ownerPhone} onChange={e=>setForm(f=>({...f,ownerPhone:e.target.value.replace(/[^0-9+]/g,"")}))}/>
 
-                <label style={{fontSize:12,fontWeight:600,color:"#374151",display:"block",marginBottom:6}}>אימייל (אופציונלי)</label>
-                <input style={{...inp,direction:"ltr"}} type="email" placeholder="owner@business.com" value={form.ownerEmail} onChange={e=>setForm(f=>({...f,ownerEmail:e.target.value.trim()}))}/>
 
                 {createErr && <div style={{color:"#DC2626",fontSize:13,marginBottom:12}}>{createErr}</div>}
 
