@@ -197,11 +197,20 @@ async function handleCreateClient(req, res) {
   }
 
   const safeEmail = ownerEmail.trim();
+  const safeUsername = ownerUsername.trim().toLowerCase();
   const tenantId = "biz_" + Date.now();
   const tempPass = "Marjin_" + Math.random().toString(36).slice(2, 10);
   const now      = Date.now();
 
   try {
+    // Check if username already taken (tenant isolation)
+    const existingUn = await db.ref(`username_index/${safeUsername}`).once("value");
+    if (existingUn.exists()) {
+      res.status(409).json({ error: "שם המשתמש כבר תפוס — יש לבחור שם משתמש אחר" });
+      return;
+    }
+
+    // Check if email already exists — do NOT reuse existing accounts (tenant isolation)
     let firebaseUid;
     try {
       const userRecord = await auth.createUser({
@@ -212,9 +221,10 @@ async function handleCreateClient(req, res) {
       firebaseUid = userRecord.uid;
     } catch(e) {
       if (e.code === "auth/email-already-exists") {
-        const existing = await auth.getUserByEmail(safeEmail);
-        firebaseUid = existing.uid;
-      } else { throw e; }
+        res.status(409).json({ error: "כתובת האימייל כבר קיימת במערכת — יש להשתמש באימייל אחר" });
+        return;
+      }
+      throw e;
     }
 
     const ownerUser = {
