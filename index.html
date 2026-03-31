@@ -5670,6 +5670,32 @@ function AdminPanel({ loggedInUser }) {
   const [createOk, setCreateOk]  = useState(null);
   const [form, setForm]           = useState({bizName:"", ownerName:"", ownerEmail:"", ownerUsername:"", ownerPhone:""});
   const [deleting, setDeleting]   = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm]   = useState({bizName:"", ownerName:"", ownerEmail:"", ownerPhone:"", ownerUsername:""});
+  const [editErr, setEditErr]     = useState("");
+  const [saving, setSaving]       = useState(false);
+
+  const startEdit = (c) => {
+    setEditingId(c.tenantId);
+    setEditForm({bizName:c.bizName||"", ownerName:c.ownerName||"", ownerEmail:c.ownerEmail||"", ownerPhone:c.ownerPhone||"", ownerUsername:c.ownerUsername||""});
+    setEditErr("");
+  };
+
+  const saveEdit = async () => {
+    if(!editForm.ownerEmail?.trim()) { setEditErr("אימייל הוא שדה חובה"); return; }
+    setSaving(true); setEditErr("");
+    try {
+      const resp = await window.apiFetch("/api/admin?action=edit-client", {
+        method:"POST",
+        body: JSON.stringify({ tenantId: editingId, ...editForm }),
+      });
+      const data = await resp.json();
+      if(!resp.ok) throw new Error(data.error || `שגיאה ${resp.status}`);
+      setEditingId(null);
+      load();
+    } catch(e) { setEditErr(e.message); }
+    setSaving(false);
+  };
 
   const load = async () => {
     setLoading(true); setErr(null);
@@ -5777,7 +5803,38 @@ function AdminPanel({ loggedInUser }) {
               </button>
             </div>
           )}
-          <div style={{marginTop:10,display:"flex",justifyContent:"flex-end"}}>
+          {/* Edit form (inline) */}
+          {editingId===c.tenantId && (
+            <div style={{marginTop:12,padding:14,background:"#F8FAFC",borderRadius:10,border:"1px solid #E2E8F0"}}>
+              <div style={{fontSize:13,fontWeight:700,color:"#0F172A",marginBottom:10}}>עריכת לקוח</div>
+              <label style={{fontSize:11,fontWeight:600,color:"#374151",display:"block",marginBottom:4}}>שם העסק</label>
+              <input style={inp} value={editForm.bizName} onChange={e=>setEditForm(f=>({...f,bizName:e.target.value}))}/>
+              <label style={{fontSize:11,fontWeight:600,color:"#374151",display:"block",marginBottom:4}}>שם הבעלים</label>
+              <input style={inp} value={editForm.ownerName} onChange={e=>setEditForm(f=>({...f,ownerName:e.target.value}))}/>
+              <label style={{fontSize:11,fontWeight:600,color:"#374151",display:"block",marginBottom:4}}>שם משתמש</label>
+              <input style={inp} value={editForm.ownerUsername} onChange={e=>setEditForm(f=>({...f,ownerUsername:e.target.value.replace(/\s/g,"").toLowerCase()}))} autoCapitalize="none"/>
+              <label style={{fontSize:11,fontWeight:600,color:"#374151",display:"block",marginBottom:4}}>אימייל (חובה)</label>
+              <input style={{...inp,direction:"ltr"}} type="email" value={editForm.ownerEmail} onChange={e=>setEditForm(f=>({...f,ownerEmail:e.target.value.trim()}))}/>
+              <label style={{fontSize:11,fontWeight:600,color:"#374151",display:"block",marginBottom:4}}>טלפון</label>
+              <input style={{...inp,direction:"ltr"}} type="tel" value={editForm.ownerPhone} onChange={e=>setEditForm(f=>({...f,ownerPhone:e.target.value.replace(/[^0-9+]/g,"")}))}/>
+              {editErr && <div style={{color:"#DC2626",fontSize:12,marginBottom:8}}>{editErr}</div>}
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={saveEdit} disabled={saving}
+                  style={{flex:1,padding:"9px",background:saving?"#C7D2FE":"#6366F1",border:"none",borderRadius:8,color:"white",fontSize:12,fontWeight:700,cursor:saving?"default":"pointer",fontFamily:"inherit"}}>
+                  {saving ? "שומר..." : "שמור שינויים"}
+                </button>
+                <button onClick={()=>setEditingId(null)}
+                  style={{padding:"9px 16px",background:"#F1F5F9",border:"1px solid #E2E8F0",borderRadius:8,color:"#64748B",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
+                  ביטול
+                </button>
+              </div>
+            </div>
+          )}
+          <div style={{marginTop:10,display:"flex",justifyContent:"flex-end",gap:8}}>
+            <button onClick={()=>editingId===c.tenantId ? setEditingId(null) : startEdit(c)}
+              style={{padding:"5px 14px",background:"#F0F9FF",border:"1px solid #BAE6FD",borderRadius:8,color:"#0284C7",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
+              {editingId===c.tenantId ? "סגור עריכה" : "✏️ ערוך"}
+            </button>
             <button onClick={()=>deleteClient(c.tenantId, c.bizName)} disabled={deleting===c.tenantId}
               style={{padding:"5px 14px",background:deleting===c.tenantId?"#FCA5A5":"#FEF2F2",border:"1px solid #FECACA",borderRadius:8,color:"#DC2626",fontSize:11,fontWeight:600,cursor:deleting===c.tenantId?"default":"pointer",fontFamily:"inherit"}}>
               {deleting===c.tenantId ? "מוחק..." : "🗑 מחק לקוח"}
