@@ -534,14 +534,33 @@ async function handleResetPassword(req, res) {
 
     console.log(`[reset-password] password reset for ${userRecord.email} by ${claims.uid}`);
 
-    // Return temp password to super_owner so they can share it
+    // Send email with new password
+    let emailSent = false;
+    if (userRecord.email && !userRecord.email.endsWith("@temp.marjin.app") && !userRecord.email.endsWith("@marjin-user.app")) {
+      try {
+        const html = buildInviteEmailHtml(
+          "Marjin",
+          userRecord.displayName || userRecord.email,
+          newPass,
+          APP_BASE_URL + "/?login=1&hint=" + encodeURIComponent(userRecord.displayName || "")
+        );
+        await sendEmail(userRecord.email, "איפוס סיסמא — Marjin", html);
+        emailSent = true;
+      } catch(emailErr) {
+        console.error("[reset-password] email failed:", emailErr.message);
+      }
+    }
+
     res.status(200).json({
       ok: true,
       uid: userRecord.uid,
       email: userRecord.email,
       displayName: userRecord.displayName || "",
       tempPassword: newPass,
-      message: "סיסמא אופסה בהצלחה — העבר את הסיסמא הזמנית ללקוח"
+      emailSent,
+      message: emailSent
+        ? "סיסמא אופסה ונשלחה במייל בהצלחה"
+        : "סיסמא אופסה — העבר את הסיסמא הזמנית ללקוח ידנית"
     });
 
   } catch(e) {
