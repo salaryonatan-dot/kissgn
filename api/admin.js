@@ -8,6 +8,7 @@
  * POST ?action=reset-password → reset user password (super_owner only)
  * POST ?action=resend-invite  → resend Email invite with new temp password (super_owner only)
  * POST ?action=edit-client    → edit tenant details (super_owner only)
+ * POST ?action=send-user-invite → send email invite to a new user (any owner)
  */
 
 import { requireAuth } from "../lib/verifyToken.js";
@@ -72,6 +73,7 @@ export default async function handler(req, res) {
   if (action === "delete-client")  return handleDeleteClient(req, res);
   if (action === "reset-password") return handleResetPassword(req, res);
   if (action === "resend-invite")  return handleResendInvite(req, res);
+  if (action === "send-user-invite") return handleSendUserInvite(req, res);
   if (action === "roles")          return handleRoles(req, res);
   res.status(400).json({ error: "missing or invalid action" });
 }
@@ -656,6 +658,41 @@ async function handleResendInvite(req, res) {
   } catch(e) {
     console.error("[resend-invite] error:", e.message, e.code);
     res.status(500).json({ error: e.message || "שגיאה בשליחת הזמנה" });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST ?action=send-user-invite — send email invite to a new user (any owner)
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleSendUserInvite(req, res) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" }); return;
+  }
+
+  let claims;
+  try { claims = await requireAuth(req); }
+  catch (e) {
+    res.status(401).json({ error: "unauthorized" }); return;
+  }
+
+  const { email, username, tempPass, bizName, inviteLink } = req.body || {};
+
+  if (!email || !username || !tempPass) {
+    res.status(400).json({ error: "missing required fields" }); return;
+  }
+
+  try {
+    const html = buildInviteEmailHtml(
+      bizName || "Marjin",
+      username,
+      tempPass,
+      inviteLink || APP_BASE_URL
+    );
+    await sendEmail(email, `הזמנה ל-${bizName || "Marjin"} — פרטי כניסה`, html);
+    res.status(200).json({ ok: true, emailSent: true });
+  } catch(e) {
+    console.error("[send-user-invite] email failed:", e.message);
+    res.status(200).json({ ok: true, emailSent: false, error: e.message });
   }
 }
 
