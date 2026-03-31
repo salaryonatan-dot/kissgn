@@ -6,7 +6,7 @@
  * GET  ?action=list-clients   → list all tenants (super_owner only)
  * POST ?action=delete-client  → delete a tenant (super_owner only)
  * POST ?action=reset-password → reset user password (super_owner only)
- * POST ?action=resend-invite  → resend WhatsApp invite with new temp password (super_owner only)
+ * POST ?action=resend-invite  → resend Email invite with new temp password (super_owner only)
  */
 
 import { requireAuth } from "../lib/verifyToken.js";
@@ -17,6 +17,39 @@ import { sendEmail } from "../lib/sendEmail.js";
 
 const RTDB_FORBIDDEN = /[.#$\[\]\/]/;
 const APP_BASE_URL   = process.env.APP_BASE_URL || "https://kissgn.vercel.app";
+
+/* ── HTML template for invite emails ───────────────────────────────────── */
+function buildInviteEmailHtml(bizName, username, tempPass, inviteLink) {
+  return `<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f4f4f4;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:20px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.1);">
+  <tr><td style="background:linear-gradient(135deg,#2563eb,#7c3aed);padding:30px;text-align:center;">
+    <h1 style="color:#fff;margin:0;font-size:28px;">Marjin</h1>
+    <p style="color:rgba(255,255,255,.85);margin:8px 0 0;font-size:16px;">ברוכים הבאים למערכת</p>
+  </td></tr>
+  <tr><td style="padding:30px;">
+    <h2 style="color:#1e293b;margin:0 0 20px;font-size:22px;">🎉 ההרשמה הושלמה בהצלחה!</h2>
+    <table width="100%" style="background:#f8fafc;border-radius:8px;padding:20px;margin-bottom:24px;" cellpadding="8">
+      <tr><td style="color:#64748b;font-size:14px;width:110px;">שם עסק</td>
+          <td style="color:#1e293b;font-weight:bold;font-size:16px;">${bizName}</td></tr>
+      <tr><td style="color:#64748b;font-size:14px;">שם משתמש</td>
+          <td style="color:#1e293b;font-weight:bold;font-size:16px;">${username}</td></tr>
+      <tr><td style="color:#64748b;font-size:14px;">סיסמא זמנית</td>
+          <td style="color:#1e293b;font-weight:bold;font-size:16px;direction:ltr;text-align:right;">${tempPass}</td></tr>
+    </table>
+    <div style="text-align:center;margin:24px 0;">
+      <a href="${inviteLink}" style="display:inline-block;background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;text-decoration:none;padding:14px 40px;border-radius:8px;font-size:18px;font-weight:bold;">כניסה למערכת →</a>
+    </div>
+    <p style="color:#ef4444;font-size:14px;text-align:center;margin:16px 0 0;">⚠️ נא להחליף סיסמא לאחר הכניסה הראשונה</p>
+  </td></tr>
+  <tr><td style="background:#f8fafc;padding:20px;text-align:center;border-top:1px solid #e2e8f0;">
+    <p style="color:#94a3b8;font-size:12px;margin:0;">Marjin — מערכת ניהול עסקית חכמה</p>
+  </td></tr>
+</table>
+</body></html>`;
+}
 
 export default async function handler(req, res) {
   // CORS — strict origin, never wildcard with auth
@@ -149,12 +182,18 @@ async function handleCreateClient(req, res) {
 
   const { bizName, ownerName, ownerEmail, ownerUsername, ownerPhone } = req.body || {};
 
-  if (!bizName?.trim() || !ownerUsername?.trim() || !ownerPhone?.trim()) {
-    res.status(400).json({ error: "שדות חובה: שם עסק, שם משתמש, טלפון" });
+  // ownerEmail is now REQUIRED and must be a real email (not temp)
+  if (!bizName?.trim() || !ownerUsername?.trim() || !ownerEmail?.trim()) {
+    res.status(400).json({ error: "שדות חובה: שם עסק, שם משתמש, אימייל בעלים" });
     return;
   }
 
-  const safeEmail = ownerEmail?.trim() || (ownerUsername.trim().toLowerCase() + "@temp.marjin.app");
+  if (ownerEmail.trim().endsWith("@temp.marjin.app")) {
+    res.status(400).json({ error: "נדרש כתובת אימייל אמיתית (לא זמנית)" });
+    return;
+  }
+
+  const safeEmail = ownerEmail.trim();
   const tenantId = "biz_" + Date.now();
   const tempPass = "Marjin_" + Math.random().toString(36).slice(2, 10);
   const now      = Date.now();
@@ -204,29 +243,21 @@ async function handleCreateClient(req, res) {
 
     await db.ref().update(updates);
 
-    // Send WhatsApp invite
-    let waSent = false;
-    if (ownerPhone?.trim()) {
-      try {
-        const ph = ownerPhone.trim().replace(/^\+/, "");
-        const msg = "\uD83C\uDF89 *ברוך הבא ל-Marjin!*\n\n" +
-          "שם עסק: *" + bizName.trim() + "*\n" +
-          "שם משתמש: *" + ownerUsername.trim().toLowerCase() + "*\n" +
-          "סיסמא זמנית: *" + tempPass + "*\n\n" +
-          "\uD83D\uDD17 כניסה למערכת:\n" + inviteLink + "\n\n" +
-          "_נא להחליף סיסמא לאחר הכניסה הראשונה_";
-        await sendWhatsApp(ph, msg);
-        waSent = true;
-      } catch (waErr) {
-        console.error("[create-client] WhatsApp failed:", waErr.message);
-      }
+    // Send Email invite (instead of WhatsApp)
+    let emailSent = false;
+    try {
+      const html = buildInviteEmailHtml(bizName.trim(), ownerUsername.trim().toLowerCase(), tempPass, inviteLink);
+      await sendEmail(safeEmail, `ברוכים הבאים ל-Marjin — ${bizName.trim()}`, html);
+      emailSent = true;
+    } catch (emailErr) {
+      console.error("[create-client] Email failed:", emailErr.message);
     }
 
-    // SECURITY: tempPassword is NEVER returned in JSON — only sent via WhatsApp
+    // SECURITY: tempPassword is NEVER returned in JSON — only sent via Email
     res.status(200).json({
       ok: true, tenantId, bizName: bizName.trim(),
       ownerEmail: safeEmail, ownerPhone: ownerPhone?.trim() || "",
-      inviteLink, waSent
+      inviteLink, emailSent
     });
 
   } catch(e) {
@@ -393,7 +424,7 @@ async function handleResetPassword(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST ?action=resend-invite — resend WhatsApp invite with new temp password
+// POST ?action=resend-invite — resend Email invite with new temp password
 // ─────────────────────────────────────────────────────────────────────────────
 async function handleResendInvite(req, res) {
   if (req.method !== "POST") {
@@ -425,10 +456,10 @@ async function handleResendInvite(req, res) {
     res.status(403).json({ error: "forbidden — super_owner only" }); return;
   }
 
-  const { tenantId, phone } = req.body || {};
+  const { tenantId } = req.body || {};
 
-  if (!tenantId || !phone?.trim()) {
-    res.status(400).json({ error: "נדרש tenantId ומספר טלפון" }); return;
+  if (!tenantId) {
+    res.status(400).json({ error: "נדרש tenantId" }); return;
   }
 
   try {
@@ -448,6 +479,11 @@ async function handleResendInvite(req, res) {
       res.status(404).json({ error: "לא נמצא בעלים לטנאנט" }); return;
     }
 
+    // Check owner has a real email
+    if (!ownerUser.email || ownerUser.email.endsWith("@temp.marjin.app")) {
+      res.status(400).json({ error: "לבעלים אין כתובת אימייל אמיתית — לא ניתן לשלוח הזמנה" }); return;
+    }
+
     // Get biz name
     try {
       const bizSnap = await db.ref(`tenants/${tenantId}/app/business`).once("value");
@@ -465,32 +501,31 @@ async function handleResendInvite(req, res) {
     const inviteLinkSnap = await db.ref(`tenants/${tenantId}/meta/inviteLink`).once("value");
     const inviteLink = inviteLinkSnap.val() || `${APP_BASE_URL}/?login=1&hint=${encodeURIComponent(ownerUser.username || "")}`;
 
-    // Send WhatsApp
-    let waSent = false;
+    // Send Email invite (instead of WhatsApp)
+    let emailSent = false;
     try {
-      const ph = phone.trim().replace(/^\+/, "");
-      const msg = "\uD83C\uDF89 *ברוך הבא ל-Marjin!*\n\n" +
-        "שם עסק: *" + (bizName || tenantId) + "*\n" +
-        "שם משתמש: *" + (ownerUser.username || ownerUser.email) + "*\n" +
-        "סיסמא זמנית: *" + newPass + "*\n\n" +
-        "\uD83D\uDD17 כניסה למערכת:\n" + inviteLink + "\n\n" +
-        "_נא להחליף סיסמא לאחר הכניסה הראשונה_";
-      await sendWhatsApp(ph, msg);
-      waSent = true;
-    } catch (waErr) {
-      console.error("[resend-invite] WhatsApp failed:", waErr.message);
+      const html = buildInviteEmailHtml(
+        bizName || tenantId,
+        ownerUser.username || ownerUser.email,
+        newPass,
+        inviteLink
+      );
+      await sendEmail(ownerUser.email, `הזמנה חוזרת ל-Marjin — ${bizName || tenantId}`, html);
+      emailSent = true;
+    } catch (emailErr) {
+      console.error("[resend-invite] Email failed:", emailErr.message);
     }
 
-    console.log(`[resend-invite] invite resent for tenant ${tenantId}, waSent=${waSent}`);
+    console.log(`[resend-invite] invite resent for tenant ${tenantId}, emailSent=${emailSent}`);
 
     res.status(200).json({
       ok: true,
       tenantId,
-      waSent,
+      emailSent,
       tempPassword: newPass,
-      message: waSent
-        ? "הזמנה נשלחה מחדש בהצלחה ב-WhatsApp"
-        : "הסיסמא אופסה אבל שליחת WhatsApp נכשלה — העבר את הסיסמא ידנית"
+      message: emailSent
+        ? "הזמנה נשלחה מחדש בהצלחה במייל"
+        : "הסיסמא אופסה אבל שליחת אימייל נכשלה — העבר את הסיסמא ידנית"
     });
 
   } catch(e) {
