@@ -15,7 +15,7 @@ import {
   checkPurchaseTrend,
 } from "./checkers.js";
 
-// -- Run All Checks for a Biz --
+// ── Run All Checks for a Biz ──────────────────────────────────────────────────
 
 export interface AlertRunResult {
   tenantId: string;
@@ -29,7 +29,7 @@ export interface AlertRunResult {
 /**
  * Run all 7 checkers for a single biz.
  * Deduplicates (no duplicate alert on same day).
- * Saves to Firebase and sends email digest.
+ * Saves to Firebase and collects alerts for email digest.
  */
 export async function runAlertsForBiz(
   tenantId: string,
@@ -44,7 +44,10 @@ export async function runAlertsForBiz(
     errors: [],
   };
 
+  // Load user-defined thresholds (or defaults)
   const thresholds = await getThresholds(tenantId, bizId);
+
+  // Collect all alerts from all checkers
   const candidates: FiredAlert[] = [];
 
   try {
@@ -99,7 +102,7 @@ export async function runAlertsForBiz(
     }
   }
 
-  // Send email digest (one email with all alerts)
+  // Send email digest if there are alerts
   if (firedAlerts.length > 0) {
     try {
       const sent = await sendEmailDigestForBiz(tenantId, bizId, firedAlerts);
@@ -112,26 +115,69 @@ export async function runAlertsForBiz(
   return result;
 }
 
-// -- Run for All Businesses (Cron) --
+// ── Run for All Businesses (Cron) ─────────────────────────────────────────────
 
 export async function runAlertsForAll(): Promise<AlertRunResult[]> {
   const { getDb } = await import("../firebase/admin.js");
   const db = getDb();
 
+  const results: AlertRunResult[] = [];
+
+  // Try proactive_biz_index first (fast path)
+  let entries: { tenantId: string; bizId: string }[] = [];
+
   const indexSnap = await db.ref("proactive_biz_index").once("value");
   const index = indexSnap.val();
-  const results: AlertRunResult[] = [];
-  if (!index) return results;
 
-  for (const entry of Object.values(index) as any[]) {
-    if (!entry?.tenantId || !entry?.bizId || !entry?.active) continue;
+  if (index) {
+    for (const entry of Object.values(index) as any[]) {
+      if (entry?.tenantId && entry?.bizId && entry?.active) {
+        entries.push({ tenantId: entry.tenantId, bizId: entry.bizId });
+      }
+    }
+  }
+
+  // Fallback: discover businesses directly from tenants/ if index is empty
+  if (entries.length === 0) {
+    console.log("[alerts] proactive_biz_index empty — discovering from tenants/");
     try {
-      const r = await runAlertsForBiz(entry.tenantId, entry.bizId);
+      const tenantsSnap = await db.ref("tenants").once("value");
+      const tenants = tenantsSnap.val();
+      if (tenants) {
+        for (const [tenantId, tenantData] of Object.entries(tenants) as any[]) {
+          // Look for business list in app/business
+          try {
+            const bizRaw = tenantData?.app?.business?._v;
+            if (bizRaw) {
+              const bizList = JSON.parse(bizRaw);
+              if (Array.isArray(bizList) && bizList.length > 0) {
+                const bizId = bizList[0]?.id || "0";
+                entries.push({ tenantId, bizId: String(bizId) });
+              }
+            }
+          } catch (_) {
+            // If biz has data at all, try with bizId "0"
+            if (tenantData?.app?.daily || tenantData?.app?.monthly) {
+              entries.push({ tenantId, bizId: "0" });
+            }
+          }
+        }
+      }
+    } catch (e: any) {
+      console.error("[alerts] fallback discovery failed:", e.message);
+    }
+  }
+
+  console.log(`[alerts] running for ${entries.length} businesses`);
+
+  for (const { tenantId, bizId } of entries) {
+    try {
+      const r = await runAlertsForBiz(tenantId, bizId);
       results.push(r);
     } catch (e: any) {
       results.push({
-        tenantId: entry.tenantId,
-        bizId: entry.bizId,
+        tenantId,
+        bizId,
         alertsFired: 0,
         alertsSkipped: 0,
         emailSent: false,
@@ -143,8 +189,11 @@ export async function runAlertsForAll(): Promise<AlertRunResult[]> {
   return results;
 }
 
-// -- Email Digest Notification --
+// ── Email Digest ──────────────────────────────────────────────────────────────
 
+/**
+ * Look up the business owner's email from Firebase and send the digest.
+ */
 async function sendEmailDigestForBiz(
   tenantId: string,
   bizId: string,
@@ -153,43 +202,44 @@ async function sendEmailDigestForBiz(
   const { getDb } = await import("../firebase/admin.js");
   const db = getDb();
 
-  // Look up owner email
-  let ownerEmail: string | null = null;
+  // Get owner email from tenant users
+  let ownerEmail = "";
+  let bizName = tenantId;
+
   try {
     const usersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
-    const users = usersSnap.val();
-    if (users) {
-      for (const u of Object.values(users) as any[]) {
-        if (u?.email && !u.email.endsWith("@temp.marjin.app")) {
-          ownerEmail = u.email;
-          break;
-        }
+    if (usersSnap.exists()) {
+      const users = JSON.parse(usersSnap.val()?._v || "[]");
+      const owner = users.find((u: any) => u.role === "owner" || u.role === "super_owner") || users[0];
+      if (owner?.email && !owner.email.endsWith("@temp.marjin.app")) {
+        ownerEmail = owner.email;
       }
     }
-  } catch {}
-
-  if (!ownerEmail) {
-    ownerEmail = process.env.ALERT_FALLBACK_EMAIL || null;
+  } catch (e: any) {
+    console.error(`[email-digest] failed to get owner email for ${tenantId}:`, e.message);
   }
-  if (!ownerEmail) return false;
 
-  // Get business name
-  let bizName = bizId;
+  // Get biz name
   try {
     const bizSnap = await db.ref(`tenants/${tenantId}/app/business`).once("value");
-    const bizData = bizSnap.val();
-    if (bizData?.name) bizName = bizData.name;
-  } catch {}
+    if (bizSnap.exists()) {
+      const bizList = JSON.parse(bizSnap.val()?._v || "[]");
+      bizName = bizList[0]?.name || tenantId;
+    }
+  } catch (_) {}
 
-  // Send digest email
+  // If no real email, try ALERT_FALLBACK_EMAIL env var
+  if (!ownerEmail) {
+    ownerEmail = process.env.ALERT_FALLBACK_EMAIL || "";
+  }
+
+  if (!ownerEmail) {
+    console.warn(`[email-digest] no email found for ${tenantId}/${bizId}, skipping`);
+    return false;
+  }
+
+  // Dynamic import of sendAlertDigest to keep it in lib/ (JS)
   const { sendAlertDigest } = await import("../../lib/sendEmail.js");
-  const emailAlerts = alerts.map(a => ({
-    severity: a.severity || "info",
-    title: a.title || a.type || a.id,
-    message: a.message || "",
-    type: a.type || a.id,
-  }));
-
-  await sendAlertDigest(ownerEmail, bizName, emailAlerts);
-  return true;
+  const result = await sendAlertDigest(ownerEmail, bizName, alerts);
+  return !!result?.messageId;
 }
