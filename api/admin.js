@@ -6,17 +6,53 @@
  * GET  ?action=list-clients   â list all tenants (super_owner only)
  * POST ?action=delete-client  â delete a tenant (super_owner only)
  * POST ?action=reset-password â reset user password (super_owner only)
- * POST ?action=resend-invite  â resend WhatsApp invite with new temp password (super_owner only)
+ * POST ?action=resend-invite  â resend Email invite with new temp password (super_owner only)
+ * POST ?action=edit-client    â edit tenant details (super_owner only)
+ * POST ?action=send-user-invite â send email invite to a new user (any owner)
+ * POST ?action=delete-user      â delete a user + Firebase Auth (owner only)
  */
 
 import { requireAuth } from "../lib/verifyToken.js";
 import { requireTenantAccess, isRateLimited,
   getIP, VALID_ROLES } from "../lib/helpers.js";
 import { getAdminDb, getAdminAuth } from "../lib/adminSdk.js";
-import { sendWhatsApp } from "../lib/sendWhatsApp.js";
+import { sendEmail } from "../lib/sendEmail.js";
 
 const RTDB_FORBIDDEN = /[.#$\[\]\/]/;
 const APP_BASE_URL   = process.env.APP_BASE_URL || "https://kissgn.vercel.app";
+
+/* ââ HTML template for invite emails âââââââââââââââââââââââââââââââââââââ */
+function buildInviteEmailHtml(bizName, username, tempPass, inviteLink) {
+  return `<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f4f4f4;font-family:Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:20px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.1);">
+  <tr><td style="background:linear-gradient(135deg,#2563eb,#7c3aed);padding:30px;text-align:center;">
+    <h1 style="color:#fff;margin:0;font-size:28px;">Marjin</h1>
+    <p style="color:rgba(255,255,255,.85);margin:8px 0 0;font-size:16px;">××¨×××× ××××× ×××¢×¨××ª</p>
+  </td></tr>
+  <tr><td style="padding:30px;">
+    <h2 style="color:#1e293b;margin:0 0 20px;font-size:22px;">ð ×××¨×©×× ×××©××× ×××¦×××!</h2>
+    <table width="100%" style="background:#f8fafc;border-radius:8px;padding:20px;margin-bottom:24px;" cellpadding="8">
+      <tr><td style="color:#64748b;font-size:14px;width:110px;">×©× ×¢×¡×§</td>
+          <td style="color:#1e293b;font-weight:bold;font-size:16px;">${bizName}</td></tr>
+      <tr><td style="color:#64748b;font-size:14px;">×©× ××©×ª××©</td>
+          <td style="color:#1e293b;font-weight:bold;font-size:16px;">${username}</td></tr>
+      <tr><td style="color:#64748b;font-size:14px;">×¡××¡×× ××× ××ª</td>
+          <td style="color:#1e293b;font-weight:bold;font-size:16px;direction:ltr;text-align:right;">${tempPass}</td></tr>
+    </table>
+    <div style="text-align:center;margin:24px 0;">
+      <a href="${inviteLink}" style="display:inline-block;background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;text-decoration:none;padding:14px 40px;border-radius:8px;font-size:18px;font-weight:bold;">×× ××¡× ×××¢×¨××ª â</a>
+    </div>
+    <p style="color:#ef4444;font-size:14px;text-align:center;margin:16px 0 0;">â ï¸ × × ××××××£ ×¡××¡×× ××××¨ ××× ××¡× ××¨××©×× ×</p>
+  </td></tr>
+  <tr><td style="background:#f8fafc;padding:20px;text-align:center;border-top:1px solid #e2e8f0;">
+    <p style="color:#94a3b8;font-size:12px;margin:0;">Marjin â ××¢×¨××ª × ×××× ×¢×¡×§××ª ××××</p>
+  </td></tr>
+</table>
+</body></html>`;
+}
 
 export default async function handler(req, res) {
   // CORS â strict origin, never wildcard with auth
@@ -32,13 +68,15 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") { res.status(204).end(); return; }
 
   const action = req.query.action || "";
-  if (action === "list-clients")      return handleListClients(req, res);
-  if (action === "create-client")     return handleCreateClient(req, res);
-  if (action === "delete-client")     return handleDeleteClient(req, res);
-  if (action === "reset-password")    return handleResetPassword(req, res);
-  if (action === "resend-invite")     return handleResendInvite(req, res);
-  if (action === "complete-profile")  return handleCompleteProfile(req, res);
-  if (action === "roles")             return handleRoles(req, res);
+  if (action === "list-clients")   return handleListClients(req, res);
+  if (action === "create-client")  return handleCreateClient(req, res);
+  if (action === "edit-client")    return handleEditClient(req, res);
+  if (action === "delete-client")  return handleDeleteClient(req, res);
+  if (action === "reset-password") return handleResetPassword(req, res);
+  if (action === "resend-invite")  return handleResendInvite(req, res);
+  if (action === "send-user-invite") return handleSendUserInvite(req, res);
+  if (action === "delete-user")    return handleDeleteUser(req, res);
+  if (action === "roles")          return handleRoles(req, res);
   res.status(400).json({ error: "missing or invalid action" });
 }
 
@@ -88,7 +126,7 @@ async function handleListClients(req, res) {
       }
 
       const usersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
-      let ownerName = "", ownerEmail = "", ownerUsername = "", status = "unknown";
+      let ownerName = "", ownerEmail = "", ownerUsername = "", ownerPhone = "", status = "unknown";
       if (usersSnap.exists()) {
         try {
           const users = JSON.parse(usersSnap.val()?._v || "[]");
@@ -97,6 +135,7 @@ async function handleListClients(req, res) {
             ownerName = owner.name || "";
             ownerEmail = owner.email || "";
             ownerUsername = owner.username || "";
+            ownerPhone = owner.phone || "";
             status = owner.email ? "active" : "invited";
           }
         } catch(_) {}
@@ -105,7 +144,7 @@ async function handleListClients(req, res) {
       const inviteSnap = await db.ref(`tenants/${tenantId}/meta/inviteLink`).once("value");
       const inviteLink = inviteSnap.val() || null;
 
-      clients.push({ tenantId, bizName, ownerName, ownerEmail, ownerUsername, status, createdAt, inviteLink });
+      clients.push({ tenantId, bizName, ownerName, ownerEmail, ownerUsername, ownerPhone, status, createdAt, inviteLink });
     } catch(e) {
       console.error(`[list-clients] error reading tenant ${tenantId}:`, e.message);
     }
@@ -150,17 +189,32 @@ async function handleCreateClient(req, res) {
 
   const { bizName, ownerName, ownerEmail, ownerUsername, ownerPhone } = req.body || {};
 
-  if (!bizName?.trim() || !ownerUsername?.trim() || !ownerPhone?.trim()) {
-    res.status(400).json({ error: "×©×××ª ××××: ×©× ×¢×¡×§, ×©× ××©×ª××©, ×××¤××" });
+  // ownerEmail is now REQUIRED and must be a real email (not temp)
+  if (!bizName?.trim() || !ownerUsername?.trim() || !ownerEmail?.trim()) {
+    res.status(400).json({ error: "×©×××ª ××××: ×©× ×¢×¡×§, ×©× ××©×ª××©, ×××××× ××¢×××" });
     return;
   }
 
-  const safeEmail = ownerEmail?.trim() || (ownerUsername.trim().toLowerCase() + "@temp.marjin.app");
+  if (ownerEmail.trim().endsWith("@temp.marjin.app")) {
+    res.status(400).json({ error: "× ××¨×© ××ª×××ª ×××××× ××××ª××ª (×× ××× ××ª)" });
+    return;
+  }
+
+  const safeEmail = ownerEmail.trim();
+  const safeUsername = ownerUsername.trim().toLowerCase();
   const tenantId = "biz_" + Date.now();
   const tempPass = "Marjin_" + Math.random().toString(36).slice(2, 10);
   const now      = Date.now();
 
   try {
+    // Check if username already taken (tenant isolation)
+    const existingUn = await db.ref(`username_index/${safeUsername}`).once("value");
+    if (existingUn.exists()) {
+      res.status(409).json({ error: "×©× ×××©×ª××© ×××¨ ×ª×¤××¡ â ××© ×××××¨ ×©× ××©×ª××© ×××¨" });
+      return;
+    }
+
+    // Check if email already exists â do NOT reuse existing accounts (tenant isolation)
     let firebaseUid;
     try {
       const userRecord = await auth.createUser({
@@ -171,9 +225,10 @@ async function handleCreateClient(req, res) {
       firebaseUid = userRecord.uid;
     } catch(e) {
       if (e.code === "auth/email-already-exists") {
-        const existing = await auth.getUserByEmail(safeEmail);
-        firebaseUid = existing.uid;
-      } else { throw e; }
+        res.status(409).json({ error: "××ª×××ª ××××××× ×××¨ ×§××××ª ×××¢×¨××ª â ××© ×××©×ª××© ××××××× ×××¨" });
+        return;
+      }
+      throw e;
     }
 
     const ownerUser = {
@@ -205,29 +260,21 @@ async function handleCreateClient(req, res) {
 
     await db.ref().update(updates);
 
-    // Send WhatsApp invite
-    let waSent = false;
-    if (ownerPhone?.trim()) {
-      try {
-        const ph = ownerPhone.trim().replace(/^\+/, "");
-        const msg = "\uD83C\uDF89 *××¨×× ××× ×-Marjin!*\n\n" +
-          "×©× ×¢×¡×§: *" + bizName.trim() + "*\n" +
-          "×©× ××©×ª××©: *" + ownerUsername.trim().toLowerCase() + "*\n" +
-          "×¡××¡×× ××× ××ª: *" + tempPass + "*\n\n" +
-          "\uD83D\uDD17 ×× ××¡× ×××¢×¨××ª:\n" + inviteLink + "\n\n" +
-          "_× × ××××××£ ×¡××¡×× ××××¨ ××× ××¡× ××¨××©×× ×_";
-        await sendWhatsApp(ph, msg);
-        waSent = true;
-      } catch (waErr) {
-        console.error("[create-client] WhatsApp failed:", waErr.message);
-      }
+    // Send Email invite (instead of WhatsApp)
+    let emailSent = false;
+    try {
+      const html = buildInviteEmailHtml(bizName.trim(), ownerUsername.trim().toLowerCase(), tempPass, inviteLink);
+      await sendEmail(safeEmail, `××¨×××× ××××× ×-Marjin â ${bizName.trim()}`, html);
+      emailSent = true;
+    } catch (emailErr) {
+      console.error("[create-client] Email failed:", emailErr.message);
     }
 
-    // SECURITY: tempPassword is NEVER returned in JSON â only sent via WhatsApp
+    // SECURITY: tempPassword is NEVER returned in JSON â only sent via Email
     res.status(200).json({
       ok: true, tenantId, bizName: bizName.trim(),
       ownerEmail: safeEmail, ownerPhone: ownerPhone?.trim() || "",
-      inviteLink, waSent
+      inviteLink, emailSent
     });
 
   } catch(e) {
@@ -237,10 +284,9 @@ async function handleCreateClient(req, res) {
 }
 
 // âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
-// POST ?action=complete-profile â update email + password via Admin SDK
-// (bypasses auth/requires-recent-login for first-time profile setup)
+// POST ?action=edit-client â edit tenant/owner details (super_owner only)
 // âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
-async function handleCompleteProfile(req, res) {
+async function handleEditClient(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" }); return;
   }
@@ -248,60 +294,104 @@ async function handleCompleteProfile(req, res) {
   let claims;
   try { claims = await requireAuth(req); }
   catch (e) {
-    console.error("[complete-profile] auth failed:", e.message);
+    console.error("[edit-client] auth failed:", e.message);
     res.status(401).json({ error: "unauthorized" }); return;
   }
 
+  const db   = getAdminDb();
   const auth = getAdminAuth();
-  const { newEmail, newPassword } = req.body || {};
 
-  if (!newEmail?.trim() || !newPassword) {
-    res.status(400).json({ error: "Missing newEmail or newPassword" }); return;
+  // Verify super_owner
+  let isSuperOwner = false;
+  try {
+    const rolesSnap = await db.ref("tenants").once("value");
+    if (rolesSnap.exists()) {
+      isSuperOwner = Object.keys(rolesSnap.val()).some(tid =>
+        rolesSnap.val()[tid]?.roles?.[claims.uid] === "super_owner"
+      );
+    }
+  } catch(e) { console.error("[edit-client] roles check failed:", e.message); }
+
+  if (!isSuperOwner) {
+    res.status(403).json({ error: "forbidden â super_owner only" }); return;
   }
-  if (newPassword.length < 6) {
-    res.status(400).json({ error: "Password must be at least 6 characters" }); return;
+
+  const { tenantId, bizName, ownerName, ownerEmail, ownerPhone, ownerUsername } = req.body || {};
+
+  if (!tenantId || typeof tenantId !== "string") {
+    res.status(400).json({ error: "missing tenantId" }); return;
   }
 
   try {
-    // Update the user's email and password via Admin SDK (no re-auth needed)
-    await auth.updateUser(claims.uid, {
-      email: newEmail.trim(),
-      password: newPassword,
-    });
+    // Read current tenant data
+    const usersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
+    if (!usersSnap.exists()) {
+      res.status(404).json({ error: "×× ×× × ×× × ××¦×" }); return;
+    }
 
-    // Also update username_index and lookup with the new email
-    const db = getAdminDb();
-    const tenantSnap = await db.ref(`user_tenants/${claims.uid}`).once("value");
-    const tenantId = tenantSnap.val();
+    let users = [];
+    try { users = JSON.parse(usersSnap.val()?._v || "[]"); } catch(_) {}
 
-    if (tenantId) {
-      // Find the username for this user
-      const usersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
-      if (usersSnap.exists()) {
-        try {
-          const users = JSON.parse(usersSnap.val()?._v || "[]");
-          const user = users.find(u => u.firebaseUid === claims.uid);
-          if (user?.username) {
-            const uname = user.username.toLowerCase();
-            await db.ref(`username_index/${uname}`).update({ email: newEmail.trim() });
-            await db.ref(`tenants/${tenantId}/lookup/${uname}`).update({ email: newEmail.trim() });
-          }
-          // Update the user record â set mustCompleteProfile to false and new email
-          const updatedUsers = users.map(u =>
-            u.firebaseUid === claims.uid
-              ? { ...u, email: newEmail.trim(), mustCompleteProfile: false }
-              : u
-          );
-          await db.ref(`tenants/${tenantId}/app/users`).set({ _v: JSON.stringify(updatedUsers) });
-        } catch (_) {}
+    const ownerIdx = users.findIndex(u => u.role === "owner" || u.role === "super_owner");
+    if (ownerIdx === -1) {
+      res.status(404).json({ error: "×× × ××¦× ××¢××× ××× ×× ×" }); return;
+    }
+
+    const owner = users[ownerIdx];
+    const oldEmail = owner.email;
+    const oldUsername = owner.username;
+
+    // Apply changes to owner
+    if (ownerName?.trim())    owner.name     = ownerName.trim();
+    if (ownerEmail?.trim())   owner.email    = ownerEmail.trim();
+    if (ownerPhone !== undefined) owner.phone = ownerPhone?.trim() || "";
+    if (ownerUsername?.trim()) owner.username = ownerUsername.trim().toLowerCase();
+
+    users[ownerIdx] = owner;
+
+    const updates = {};
+
+    // Update users array
+    updates[`tenants/${tenantId}/app/users`] = { _v: JSON.stringify(users) };
+
+    // Update biz name if provided
+    if (bizName?.trim()) {
+      const bizSnap = await db.ref(`tenants/${tenantId}/app/business`).once("value");
+      let bizList = [];
+      try { bizList = JSON.parse(bizSnap.val()?._v || "[]"); } catch(_) {}
+      if (bizList.length > 0) {
+        bizList[0].name = bizName.trim();
+        updates[`tenants/${tenantId}/app/business`] = { _v: JSON.stringify(bizList) };
       }
     }
 
-    console.log("[complete-profile] updated email+password for uid:", claims.uid);
-    res.status(200).json({ ok: true });
-  } catch (e) {
-    console.error("[complete-profile] error:", e.message, e.code);
-    res.status(500).json({ error: e.message || "Failed to update profile" });
+    // Update username index if username changed
+    if (ownerUsername?.trim() && ownerUsername.trim().toLowerCase() !== oldUsername) {
+      const newUn = ownerUsername.trim().toLowerCase();
+      updates[`username_index/${oldUsername}`] = null;
+      updates[`username_index/${newUn}`] = { tenantId, email: owner.email };
+      updates[`tenants/${tenantId}/lookup/${oldUsername}`] = null;
+      updates[`tenants/${tenantId}/lookup/${newUn}`] = { email: owner.email, firebaseUid: owner.firebaseUid };
+    }
+
+    // Update Firebase Auth email if changed
+    if (ownerEmail?.trim() && ownerEmail.trim() !== oldEmail && owner.firebaseUid) {
+      try {
+        await auth.updateUser(owner.firebaseUid, { email: ownerEmail.trim() });
+      } catch(e) {
+        console.error("[edit-client] failed to update auth email:", e.message);
+        // Continue â RTDB update is still useful
+      }
+    }
+
+    await db.ref().update(updates);
+
+    console.log(`[edit-client] updated tenant ${tenantId} by ${claims.uid}`);
+    res.status(200).json({ ok: true, tenantId });
+
+  } catch(e) {
+    console.error("[edit-client] error:", e.message, e.code);
+    res.status(500).json({ error: e.message || "×©×××× ××¢×××× ××§××" });
   }
 }
 
@@ -370,9 +460,10 @@ async function handleDeleteClient(req, res) {
 
     await db.ref().update(updates);
 
-    // Try to delete Firebase Auth users (best effort)
+    // Try to delete Firebase Auth users (best effort, skip the super_owner who called this)
     let deletedUsers = 0;
     for (const uid of Object.keys(members)) {
+      if (uid === claims.uid) continue; // don't delete the super_owner's own account
       try {
         await auth.deleteUser(uid);
         deletedUsers++;
@@ -446,14 +537,33 @@ async function handleResetPassword(req, res) {
 
     console.log(`[reset-password] password reset for ${userRecord.email} by ${claims.uid}`);
 
-    // Return temp password to super_owner so they can share it
+    // Send email with new password
+    let emailSent = false;
+    if (userRecord.email && !userRecord.email.endsWith("@temp.marjin.app") && !userRecord.email.endsWith("@marjin-user.app")) {
+      try {
+        const html = buildInviteEmailHtml(
+          "Marjin",
+          userRecord.displayName || userRecord.email,
+          newPass,
+          APP_BASE_URL + "/?login=1&hint=" + encodeURIComponent(userRecord.displayName || "")
+        );
+        await sendEmail(userRecord.email, "×××¤××¡ ×¡××¡×× â Marjin", html);
+        emailSent = true;
+      } catch(emailErr) {
+        console.error("[reset-password] email failed:", emailErr.message);
+      }
+    }
+
     res.status(200).json({
       ok: true,
       uid: userRecord.uid,
       email: userRecord.email,
       displayName: userRecord.displayName || "",
       tempPassword: newPass,
-      message: "×¡××¡×× ×××¤×¡× ×××¦××× â ××¢××¨ ××ª ××¡××¡×× ×××× ××ª ×××§××"
+      emailSent,
+      message: emailSent
+        ? "×¡××¡×× ×××¤×¡× ×× ×©××× ××××× ×××¦×××"
+        : "×¡××¡×× ×××¤×¡× â ××¢××¨ ××ª ××¡××¡×× ×××× ××ª ×××§×× ××× ××ª"
     });
 
   } catch(e) {
@@ -463,7 +573,7 @@ async function handleResetPassword(req, res) {
 }
 
 // âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
-// POST ?action=resend-invite â resend WhatsApp invite with new temp password
+// POST ?action=resend-invite â resend Email invite with new temp password
 // âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 async function handleResendInvite(req, res) {
   if (req.method !== "POST") {
@@ -495,10 +605,10 @@ async function handleResendInvite(req, res) {
     res.status(403).json({ error: "forbidden â super_owner only" }); return;
   }
 
-  const { tenantId, phone } = req.body || {};
+  const { tenantId } = req.body || {};
 
-  if (!tenantId || !phone?.trim()) {
-    res.status(400).json({ error: "× ××¨×© tenantId ×××¡×¤×¨ ×××¤××" }); return;
+  if (!tenantId) {
+    res.status(400).json({ error: "× ××¨×© tenantId" }); return;
   }
 
   try {
@@ -518,6 +628,11 @@ async function handleResendInvite(req, res) {
       res.status(404).json({ error: "×× × ××¦× ××¢××× ××× ×× ×" }); return;
     }
 
+    // Check owner has a real email
+    if (!ownerUser.email || ownerUser.email.endsWith("@temp.marjin.app")) {
+      res.status(400).json({ error: "×××¢××× ××× ××ª×××ª ×××××× ××××ª××ª â ×× × ××ª× ××©××× ×××× ×" }); return;
+    }
+
     // Get biz name
     try {
       const bizSnap = await db.ref(`tenants/${tenantId}/app/business`).once("value");
@@ -535,37 +650,140 @@ async function handleResendInvite(req, res) {
     const inviteLinkSnap = await db.ref(`tenants/${tenantId}/meta/inviteLink`).once("value");
     const inviteLink = inviteLinkSnap.val() || `${APP_BASE_URL}/?login=1&hint=${encodeURIComponent(ownerUser.username || "")}`;
 
-    // Send WhatsApp
-    let waSent = false;
+    // Send Email invite (instead of WhatsApp)
+    let emailSent = false;
     try {
-      const ph = phone.trim().replace(/^\+/, "");
-      const msg = "\uD83C\uDF89 *××¨×× ××× ×-Marjin!*\n\n" +
-        "×©× ×¢×¡×§: *" + (bizName || tenantId) + "*\n" +
-        "×©× ××©×ª××©: *" + (ownerUser.username || ownerUser.email) + "*\n" +
-        "×¡××¡×× ××× ××ª: *" + newPass + "*\n\n" +
-        "\uD83D\uDD17 ×× ××¡× ×××¢×¨××ª:\n" + inviteLink + "\n\n" +
-        "_× × ××××××£ ×¡××¡×× ××××¨ ××× ××¡× ××¨××©×× ×_";
-      await sendWhatsApp(ph, msg);
-      waSent = true;
-    } catch (waErr) {
-      console.error("[resend-invite] WhatsApp failed:", waErr.message);
+      const html = buildInviteEmailHtml(
+        bizName || tenantId,
+        ownerUser.username || ownerUser.email,
+        newPass,
+        inviteLink
+      );
+      await sendEmail(ownerUser.email, `×××× × ××××¨×ª ×-Marjin â ${bizName || tenantId}`, html);
+      emailSent = true;
+    } catch (emailErr) {
+      console.error("[resend-invite] Email failed:", emailErr.message);
     }
 
-    console.log(`[resend-invite] invite resent for tenant ${tenantId}, waSent=${waSent}`);
+    console.log(`[resend-invite] invite resent for tenant ${tenantId}, emailSent=${emailSent}`);
 
     res.status(200).json({
       ok: true,
       tenantId,
-      waSent,
+      emailSent,
       tempPassword: newPass,
-      message: waSent
-        ? "×××× × × ×©××× ××××© ×××¦××× ×-WhatsApp"
-        : "××¡××¡×× ×××¤×¡× ××× ×©××××ª WhatsApp × ××©×× â ××¢××¨ ××ª ××¡××¡×× ××× ××ª"
+      message: emailSent
+        ? "×××× × × ×©××× ××××© ×××¦××× ×××××"
+        : "××¡××¡×× ×××¤×¡× ××× ×©××××ª ×××××× × ××©×× â ××¢××¨ ××ª ××¡××¡×× ××× ××ª"
     });
 
   } catch(e) {
     console.error("[resend-invite] error:", e.message, e.code);
     res.status(500).json({ error: e.message || "×©×××× ××©××××ª ×××× ×" });
+  }
+}
+
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// POST ?action=delete-user â fully delete a user (Firebase Auth + RTDB cleanup)
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+async function handleDeleteUser(req, res) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" }); return;
+  }
+
+  let claims;
+  try { claims = await requireAuth(req); }
+  catch (e) {
+    res.status(401).json({ error: "unauthorized" }); return;
+  }
+
+  const db   = getAdminDb();
+  const auth = getAdminAuth();
+
+  const { tenantId, firebaseUid, username } = req.body || {};
+
+  if (!tenantId || !firebaseUid) {
+    res.status(400).json({ error: "missing tenantId or firebaseUid" }); return;
+  }
+
+  // Verify caller is owner/super_owner in this tenant
+  const callerRole = await db.ref(`tenants/${tenantId}/roles/${claims.uid}`).once("value");
+  if (!callerRole.exists() || !["owner", "super_owner"].includes(callerRole.val())) {
+    res.status(403).json({ error: "forbidden â owner only" }); return;
+  }
+
+  // Prevent deleting yourself
+  if (firebaseUid === claims.uid) {
+    res.status(400).json({ error: "×× × ××ª× ×××××§ ××ª ×¢×¦××" }); return;
+  }
+
+  try {
+    const updates = {};
+
+    // Clean up tenant references
+    updates[`tenants/${tenantId}/members/${firebaseUid}`] = null;
+    updates[`tenants/${tenantId}/roles/${firebaseUid}`] = null;
+    updates[`user_tenants/${firebaseUid}`] = null;
+
+    // Clean up username lookup/index
+    if (username) {
+      const uLower = username.toLowerCase();
+      updates[`tenants/${tenantId}/lookup/${uLower}`] = null;
+      updates[`username_index/${uLower}`] = null;
+    }
+
+    await db.ref().update(updates);
+
+    // Delete Firebase Auth user (frees up the email for reuse)
+    let authDeleted = false;
+    try {
+      await auth.deleteUser(firebaseUid);
+      authDeleted = true;
+    } catch(e) {
+      console.warn(`[delete-user] could not delete auth user ${firebaseUid}:`, e.message);
+    }
+
+    console.log(`[delete-user] deleted user ${firebaseUid} (username=${username}) from tenant ${tenantId}, authDeleted=${authDeleted}`);
+    res.status(200).json({ ok: true, authDeleted });
+
+  } catch(e) {
+    console.error("[delete-user] error:", e.message);
+    res.status(500).json({ error: e.message || "×©×××× ×××××§×ª ××©×ª××©" });
+  }
+}
+
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// POST ?action=send-user-invite â send email invite to a new user (any owner)
+// âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+async function handleSendUserInvite(req, res) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" }); return;
+  }
+
+  let claims;
+  try { claims = await requireAuth(req); }
+  catch (e) {
+    res.status(401).json({ error: "unauthorized" }); return;
+  }
+
+  const { email, username, tempPass, bizName, inviteLink } = req.body || {};
+
+  if (!email || !username || !tempPass) {
+    res.status(400).json({ error: "missing required fields" }); return;
+  }
+
+  try {
+    const html = buildInviteEmailHtml(
+      bizName || "Marjin",
+      username,
+      tempPass,
+      inviteLink || APP_BASE_URL
+    );
+    await sendEmail(email, `×××× × ×-${bizName || "Marjin"} â ×¤×¨×× ×× ××¡×`, html);
+    res.status(200).json({ ok: true, emailSent: true });
+  } catch(e) {
+    console.error("[send-user-invite] email failed:", e.message);
+    res.status(200).json({ ok: true, emailSent: false, error: e.message });
   }
 }
 
