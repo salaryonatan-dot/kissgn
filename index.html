@@ -1517,15 +1517,23 @@ function ProfileCompletionScreen({ user, onComplete }) {
     if(pass !== pass2) return setErr("הסיסמאות אינן תואמות");
     setLoading(true); setErr("");
     try {
-      // Update Firebase Auth email + password
-      await window.firebaseUpdateEmail(email.trim());
-      await window.firebaseUpdatePassword(pass);
+      // Use Admin SDK server-side to update email + password (avoids auth/requires-recent-login)
+      const token = await window._auth?.currentUser?.getIdToken();
+      const resp = await fetch("/api/admin?action=complete-profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+        body: JSON.stringify({ newEmail: email.trim(), newPassword: pass })
+      });
+      const result = await resp.json();
+      if (!resp.ok) throw new Error(result.error || "שגיאה בשמירת הפרטים");
+      // Re-sign in with new credentials so Firebase Auth session uses the new email
+      try { await window.firebaseSignIn(email.trim(), pass); } catch(_){}
       // Update user record
       onComplete({ email: email.trim() });
     } catch(e) {
-      const msg = e.code === "auth/email-already-in-use"
+      const msg = e.message?.includes("email-already-exists")
         ? "כתובת המייל כבר בשימוש -- נסה כתובת אחרת"
-        : e.code === "auth/invalid-email"
+        : e.message?.includes("invalid-email")
         ? "כתובת מייל לא תקינה"
         : e.message || "שגיאה בשמירת הפרטים";
       setErr(msg);
