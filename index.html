@@ -1197,7 +1197,7 @@ function LoginScreen({ onLogin, tenantId, autoDemo=false }) {
       dbg.push("u=" + (u ? u.username : "null"));
       if(!u) { setErr("debug: " + dbg.join(" | ")); setLoading(false); return; }
 
-      // Cache tenant + biz to localStorage + RTDB on every login
+      // Cache tenant + biz to sessionStorage + RTDB on every login
       try {
         sessionStorage.setItem("marjin_tid_" + fbUser.uid, foundTenantId);
         sessionStorage.setItem("marjin_biz_" + fbUser.uid, foundTenantId);
@@ -2174,7 +2174,7 @@ function PilotDashboard() {
       if(uid) {
         let tid = null;
 
-        // Layer 1: localStorage cache (survives page reloads instantly)
+        // Layer 1: sessionStorage cache (per-tab, avoids cross-tenant leaks)
         try {
           const cached = sessionStorage.getItem("marjin_tid_" + uid);
           if(cached) tid = cached;
