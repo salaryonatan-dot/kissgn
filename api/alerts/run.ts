@@ -1,11 +1,11 @@
-// Marjin â Alerts API Endpoint
+// Marjin — Alerts API Endpoint
 // Routes:
-//   GET  /api/alerts/run?tenantId=X&bizId=Y          â get active alerts
-//   GET  /api/alerts/run?tenantId=X&bizId=Y&config=1  â get current thresholds
-//   POST /api/alerts/run { action: "run", tenantId, bizId }     â manual trigger
-//   POST /api/alerts/run { action: "config", tenantId, bizId, thresholds: {...} }  â update config
-//   POST /api/alerts/run { action: "dismiss", tenantId, bizId, alertId }  â dismiss alert
-//   GET  /api/alerts/run  (Vercel cron / no params)  â run all businesses
+//   GET  /api/alerts/run?tenantId=X&bizId=Y          → get active alerts
+//   GET  /api/alerts/run?tenantId=X&bizId=Y&config=1  → get current thresholds
+//   POST /api/alerts/run { action: "run", tenantId, bizId }     → manual trigger
+//   POST /api/alerts/run { action: "config", tenantId, bizId, thresholds: {...} }  → update config
+//   POST /api/alerts/run { action: "dismiss", tenantId, bizId, alertId }  → dismiss alert
+//   GET  /api/alerts/run  (Vercel cron / no params)  → run all businesses
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { runAlertsForBiz, runAlertsForAll } from "../../src/alerts/runner.js";
@@ -33,7 +33,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   return res.status(405).json({ error: "Method not allowed" });
 }
 
-// ââ GET âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── GET ───────────────────────────────────────────────────────────────────────────
 
 async function handleGet(req: VercelRequest, res: VercelResponse) {
   const tenantId = req.query.tenantId as string;
@@ -71,7 +71,7 @@ async function handleGet(req: VercelRequest, res: VercelResponse) {
   }
 }
 
-// ââ POST ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── POST ──────────────────────────────────────────────────────────────────────────
 
 async function handlePost(req: VercelRequest, res: VercelResponse) {
   const { action, tenantId, bizId, alertId, thresholds } = req.body || {};
@@ -123,7 +123,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
   }
 }
 
-// ââ Cron Handler ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// ── Cron Handler ──────────────────────────────────────────────────────────────────
 
 async function handleCron(req: VercelRequest, res: VercelResponse) {
   const vercelCron = req.headers["x-vercel-cron"];
@@ -136,12 +136,12 @@ async function handleCron(req: VercelRequest, res: VercelResponse) {
   try {
     const results = await runAlertsForAll();
     const totalFired = results.reduce((s, r) => s + r.alertsFired, 0);
-    const totalWhatsapp = results.reduce((s, r) => s + r.whatsappSent, 0);
+    const totalEmails = results.filter(r => r.emailSent).length;
     return res.status(200).json({
       ok: true,
       businessesChecked: results.length,
       totalAlertsFired: totalFired,
-      totalWhatsappSent: totalWhatsapp,
+      totalEmailsSent: totalEmails,
       results,
     });
   } catch (err: any) {
