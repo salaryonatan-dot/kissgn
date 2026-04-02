@@ -1386,7 +1386,7 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
           const token = await window._fbUser?.getIdToken();
           const bizName = businesses && businesses.length > 0 ? businesses[0].name : "Marjin";
           const inviteLink = window.location.origin + "/?login=1&hint=" + encodeURIComponent(uLower2);
-          await fetch(window.API_BASE + "/api/admin?action=send-user-invite", {
+          await fetch("/api/admin?action=send-user-invite", {
             method: "POST",
             headers: {"Content-Type":"application/json","Authorization":"Bearer " + token},
             body: JSON.stringify({ email: userEmail, username: uLower2, tempPass, bizName, inviteLink })
@@ -1411,7 +1411,7 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
     if(u.firebaseUid) {
       try {
         const token = await window._fbUser?.getIdToken();
-        await fetch(window.API_BASE + "/api/admin?action=delete-user", {
+        await fetch("/api/admin?action=delete-user", {
           method:"POST",
           headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
           body: JSON.stringify({ tenantId, firebaseUid: u.firebaseUid, username: u.username })
