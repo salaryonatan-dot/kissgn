@@ -30,25 +30,25 @@ function buildInviteEmailHtml(bizName, username, tempPass, inviteLink) {
 <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;margin:20px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.1);">
   <tr><td style="background:linear-gradient(135deg,#2563eb,#7c3aed);padding:30px;text-align:center;">
     <h1 style="color:#fff;margin:0;font-size:28px;">Marjin</h1>
-    <p style="color:rgba(255,255,255,.85);margin:8px 0 0;font-size:16px;">××¨×××× ××××× ×××¢×¨××ª</p>
+    <p style="color:rgba(255,255,255,.85);margin:8px 0 0;font-size:16px;">ברוכים הבאים למערכת</p>
   </td></tr>
   <tr><td style="padding:30px;">
-    <h2 style="color:#1e293b;margin:0 0 20px;font-size:22px;">ð ×××¨×©×× ×××©××× ×××¦×××!</h2>
+    <h2 style="color:#1e293b;margin:0 0 20px;font-size:22px;">🎉 ההרשמה הושלמה בהצלחה!</h2>
     <table width="100%" style="background:#f8fafc;border-radius:8px;padding:20px;margin-bottom:24px;" cellpadding="8">
-      <tr><td style="color:#64748b;font-size:14px;width:110px;">×©× ×¢×¡×§</td>
+      <tr><td style="color:#64748b;font-size:14px;width:110px;">שם עסק</td>
           <td style="color:#1e293b;font-weight:bold;font-size:16px;">${bizName}</td></tr>
-      <tr><td style="color:#64748b;font-size:14px;">×©× ××©×ª××©</td>
+      <tr><td style="color:#64748b;font-size:14px;">שם משתמש</td>
           <td style="color:#1e293b;font-weight:bold;font-size:16px;">${username}</td></tr>
-      <tr><td style="color:#64748b;font-size:14px;">×¡××¡×× ××× ××ª</td>
+      <tr><td style="color:#64748b;font-size:14px;">סיסמא זמנית</td>
           <td style="color:#1e293b;font-weight:bold;font-size:16px;direction:ltr;text-align:right;">${tempPass}</td></tr>
     </table>
     <div style="text-align:center;margin:24px 0;">
-      <a href="${inviteLink}" style="display:inline-block;background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;text-decoration:none;padding:14px 40px;border-radius:8px;font-size:18px;font-weight:bold;">×× ××¡× ×××¢×¨××ª â</a>
+      <a href="${inviteLink}" style="display:inline-block;background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;text-decoration:none;padding:14px 40px;border-radius:8px;font-size:18px;font-weight:bold;">כניסה למערכת →</a>
     </div>
-    <p style="color:#ef4444;font-size:14px;text-align:center;margin:16px 0 0;">â ï¸ × × ××××××£ ×¡××¡×× ××××¨ ××× ××¡× ××¨××©×× ×</p>
+    <p style="color:#ef4444;font-size:14px;text-align:center;margin:16px 0 0;">⚠️ נא להחליף סיסמא לאחר הכניסה הראשונה</p>
   </td></tr>
   <tr><td style="background:#f8fafc;padding:20px;text-align:center;border-top:1px solid #e2e8f0;">
-    <p style="color:#94a3b8;font-size:12px;margin:0;">Marjin â ××¢×¨××ª × ×××× ×¢×¡×§××ª ××××</p>
+    <p style="color:#94a3b8;font-size:12px;margin:0;">Marjin — מערכת ניהול עסקית חכמה</p>
   </td></tr>
 </table>
 </body></html>`;
