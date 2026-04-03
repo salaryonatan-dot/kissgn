@@ -7,6 +7,7 @@ import { getProductMetrics, getTopProducts } from "../repositories/analytics/pro
 import { getPurchaseMetrics } from "../repositories/analytics/purchasesRepo.js";
 import { isWithinDays } from "../utils/guards.js";
 import { logger } from "../utils/logging.js";
+import { withTimeout, TIMEOUT_CRITICAL_MS, TIMEOUT_SECONDARY_MS } from "../utils/async.js";
 
 export async function fetchPlannedData(
   plan: MetricsPlan,
@@ -14,54 +15,110 @@ export async function fetchPlannedData(
 ): Promise<FetchedData> {
   const { tenantId, branchId } = context;
   const { start, end } = plan.timeRange;
+
   const metrics: Record<string, unknown> = {};
   const sources: string[] = [];
   const evidenceRefs: string[] = [];
+  const fetchStatus: Record<string, "ok" | "failed" | "skipped"> = {};
   let totalRecords = 0;
 
+  // --- Daily: always fetch (critical source) ---
   try {
-    // Always fetch daily — it's the backbone
-    const daily = await getDailyMetrics(tenantId, start, end, context.bizId, branchId);
+    const daily = await withTimeout(
+      getDailyMetrics(tenantId, start, end, context.bizId, branchId),
+      TIMEOUT_CRITICAL_MS,
+      "getDailyMetrics"
+    );
     metrics["daily"] = daily;
     totalRecords += daily.length;
     sources.push("analytics/daily");
+    fetchStatus["daily"] = "ok";
     if (daily.length > 0) {
       evidenceRefs.push(`daily:${daily[0].date}..${daily[daily.length - 1].date}`);
     }
+  } catch (err) {
+    logger.error("Failed to fetch daily metrics:", err);
+    fetchStatus["daily"] = "failed";
+  }
 
-    // Hourly if needed
-    if (plan.metrics.some((m) => m.includes("hourly"))) {
-      const hourly = await getHourlyMetrics(tenantId, start, end, branchId);
+  // --- Hourly: if needed ---
+  if (plan.metrics.some((m) => m.includes("hourly"))) {
+    try {
+      const hourly = await withTimeout(
+        getHourlyMetrics(tenantId, start, end, branchId),
+        TIMEOUT_SECONDARY_MS,
+        "getHourlyMetrics"
+      );
       metrics["hourly"] = hourly;
       totalRecords += hourly.length;
       sources.push("analytics/hourly");
+      fetchStatus["hourly"] = "ok";
+    } catch (err) {
+      logger.error("Failed to fetch hourly metrics:", err);
+      fetchStatus["hourly"] = "failed";
     }
+  } else {
+    fetchStatus["hourly"] = "skipped";
+  }
 
-    // Labor if needed
-    if (plan.metrics.some((m) => m.includes("labor"))) {
-      const labor = await getLaborMetrics(tenantId, start, end, context.bizId, branchId);
+  // --- Labor: if needed ---
+  if (plan.metrics.some((m) => m.includes("labor"))) {
+    try {
+      const labor = await withTimeout(
+        getLaborMetrics(tenantId, start, end, context.bizId, branchId),
+        TIMEOUT_SECONDARY_MS,
+        "getLaborMetrics"
+      );
       metrics["labor"] = labor;
       totalRecords += labor.length;
       sources.push("analytics/labor");
+      fetchStatus["labor"] = "ok";
+    } catch (err) {
+      logger.error("Failed to fetch labor metrics:", err);
+      fetchStatus["labor"] = "failed";
     }
+  } else {
+    fetchStatus["labor"] = "skipped";
+  }
 
-    // Products if needed
-    if (plan.metrics.some((m) => m.includes("product"))) {
-      const products = await getTopProducts(tenantId, start, end, context.bizId);
+  // --- Products: if needed ---
+  if (plan.metrics.some((m) => m.includes("product"))) {
+    try {
+      const products = await withTimeout(
+        getTopProducts(tenantId, start, end, context.bizId),
+        TIMEOUT_SECONDARY_MS,
+        "getTopProducts"
+      );
       metrics["products"] = products;
       totalRecords += products.length;
       sources.push("analytics/products");
+      fetchStatus["products"] = "ok";
+    } catch (err) {
+      logger.error("Failed to fetch product metrics:", err);
+      fetchStatus["products"] = "failed";
     }
+  } else {
+    fetchStatus["products"] = "skipped";
+  }
 
-    // Purchases if needed
-    if (plan.metrics.some((m) => m.includes("supplier") || m.includes("purchase"))) {
-      const purchases = await getPurchaseMetrics(tenantId, start, end, context.bizId, branchId);
+  // --- Purchases: if needed ---
+  if (plan.metrics.some((m) => m.includes("supplier") || m.includes("purchase"))) {
+    try {
+      const purchases = await withTimeout(
+        getPurchaseMetrics(tenantId, start, end, context.bizId, branchId),
+        TIMEOUT_SECONDARY_MS,
+        "getPurchaseMetrics"
+      );
       metrics["purchases"] = purchases;
       totalRecords += purchases.length;
       sources.push("analytics/purchases");
+      fetchStatus["purchases"] = "ok";
+    } catch (err) {
+      logger.error("Failed to fetch purchase metrics:", err);
+      fetchStatus["purchases"] = "failed";
     }
-  } catch (err) {
-    logger.error("Failed to fetch planned data:", err);
+  } else {
+    fetchStatus["purchases"] = "skipped";
   }
 
   // Compute quality scores
@@ -95,6 +152,7 @@ export async function fetchPlannedData(
     sources,
     evidenceRefs,
     rawRecordCount: totalRecords,
+    fetchStatus,
   };
 }
 
@@ -114,7 +172,6 @@ function computeConsistencyScore(
 ): number {
   if (totalRecords === 0) return 0.0;
   if (daily.length === 0) return 0.5;
-
   let score = 1.0;
   let checks = 0;
   let failures = 0;
