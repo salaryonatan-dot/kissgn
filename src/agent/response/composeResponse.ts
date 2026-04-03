@@ -17,15 +17,19 @@ export function composeResponse(input: ComposeInput): AgentResponse {
   }
 
   // Supporting facts — natural phrasing
+  // At "low" confidence: limit to at most 2 facts to keep response short
   if (analysis.supportingFacts.length > 0) {
     const nonMemoryFacts = analysis.supportingFacts.filter((f) => !f.startsWith("[זיכרון"));
-    if (nonMemoryFacts.length > 0) {
-      parts.push(`מהנתונים רואים ש${nonMemoryFacts.join(", ")}.`);
+    const factsToShow = confidence.level === "low"
+      ? nonMemoryFacts.slice(0, 2)
+      : nonMemoryFacts;
+    if (factsToShow.length > 0) {
+      parts.push(`מהנתונים רואים ש${factsToShow.join(", ")}.`);
     }
   }
 
-  // Business meaning
-  if (analysis.meaning) {
+  // Business meaning — suppress at "low" confidence
+  if (analysis.meaning && confidence.level !== "low") {
     parts.push(analysis.meaning);
   }
 
@@ -34,8 +38,10 @@ export function composeResponse(input: ComposeInput): AgentResponse {
     parts.push(`אם הייתי צריך לפעול עכשיו, הייתי ${analysis.recommendations[0]}.`);
   }
 
-  // Medium confidence hedge
-  if (confidence.level === "medium") {
+  // Confidence hedges
+  if (confidence.level === "low") {
+    parts.push("(⚠️ הנתונים מוגבלים — יש להתייחס לתשובה בזהירות רבה)");
+  } else if (confidence.level === "medium") {
     parts.push("(הנתונים חלקיים — ההערכה לא מלאה)");
   }
 
