@@ -126,7 +126,7 @@ export interface AnomalyResult {
 
 export interface ConfidenceResult {
   score: number;      // 0-1
-  level: "high" | "medium" | "low";
+  level: "high" | "medium" | "low" | "very_low";
   shouldAnswer: boolean;
   shouldRefuse: boolean;
   reasons: string[];
