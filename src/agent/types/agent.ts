@@ -185,4 +185,5 @@ export interface FetchedData {
   sources: string[];
   evidenceRefs: string[];
   rawRecordCount: number;
+  fetchStatus: Record<string, "ok" | "failed" | "skipped">;
 }
