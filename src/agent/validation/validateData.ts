@@ -72,6 +72,21 @@ export function validateData({ fetched, plan, context }: ValidateInput): Validat
     });
   }
 
+  // Partial fetch check — flag failed data sources
+  if (fetched.fetchStatus) {
+    const failedSources = Object.entries(fetched.fetchStatus)
+      .filter(([_, status]) => status === "failed")
+      .map(([source]) => source);
+
+    if (failedSources.length > 0) {
+      issues.push({
+        code: "missing_data",
+        severity: failedSources.includes("daily") ? "high" : "medium",
+        message: `מקורות נתונים שלא נטענו: ${failedSources.join(", ")}`,
+      });
+    }
+  }
+
   // Determine overall ok: high-severity issues block answer
   const hasHighSeverity = issues.some((i) => i.severity === "high");
   const ok = !hasHighSeverity;
