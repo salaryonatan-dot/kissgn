@@ -87,6 +87,20 @@ export function classifyIntent(question: string, _context: AgentContext): AgentI
   const q = question.trim();
   if (q.length < 2) return "unknown_or_insufficient";
 
+  // ── Metric-first guard ──────────────────────────────────────────────
+  // If the question clearly asks for a specific metric value, classify
+  // immediately as direct_metric_query. This prevents higher-priority
+  // patterns (comparison, trend) from stealing simple metric queries
+  // via time-expression matches like "חודש שעבר" or "שבוע שעבר".
+  const METRIC_OPENER = /מה היה|כמה היה|כמה ה|מה עלות|כמה עלה|כמה הכנסנו|כמה מכרנו|כמה הוצאנו|מה המחזור/i;
+  const METRIC_KEYWORD = /פדיון|הכנסות|הכנס|מחזור|רווח|הוצאות|עלות|פוד.?קוסט|food.?cost|עלות מזון|כוח אדם|labor|עבודה|מוצר|נמכר|ספק|רכישות|purchase/i;
+  const ANALYSIS_OVERRIDE = /מגמ[הת]|טרנד|השווא[הת]|מול |לעומת |חריג|אנומלי|צפוי|תחזית/i;
+
+  if (METRIC_OPENER.test(q) && METRIC_KEYWORD.test(q) && !ANALYSIS_OVERRIDE.test(q)) {
+    return "direct_metric_query";
+  }
+
+
   // Sort by priority descending
   const sorted = [...INTENT_PATTERNS].sort((a, b) => b.priority - a.priority);
 
@@ -101,7 +115,7 @@ export function classifyIntent(question: string, _context: AgentContext): AgentI
   // Fallback: only classify as direct_metric_query if it looks like a BUSINESS question
   // Requires both a question pattern AND at least one business keyword
   const isQuestionLike = /\?|מה|כמה|איך|למה|איפה|מתי/.test(q);
-  const hasBusinessKeyword = /הכנס|פדיון|מחזור|רווח|הוצא|עלות|מכיר|עובד|משמרת|מנה|מוצר|ספק|הזמנ|מלאי|תפריט|לקוח|שולחן|טיפ|דליבר|משלוח|קניי|ממוצע|סה״כ|סה"כ|סיכום|סכום|food.?cost|labor|revenue|sales|cost|total|average/i.test(q);
+  const hasBusinessKeyword = /הכנס|פדיון|מחזור|רווח|הוצא|עלות|מכיר|עובד|משמרת|מנה|מוצר|ספק|הזמנ|מלאי|תפריט|לקוח|שולחן|טיפ|דליבר|משלוח|קניי|ממוצע|סה״כ|סה"כ|סיכום|סכום|פוד.?קוסט|food.?cost|labor|revenue|sales|cost|total|average/i.test(q);
   if (isQuestionLike && hasBusinessKeyword) {
     return "direct_metric_query"; // safe fallback for business questions
   }
