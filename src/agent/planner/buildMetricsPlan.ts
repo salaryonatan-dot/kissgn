@@ -55,7 +55,7 @@ function planDirectMetric(base: MetricsPlan, q: string, tz: string): MetricsPlan
     dimensions.push("product_name");
   } else if (/כוח אדם|עובדים|labor/i.test(q)) {
     metrics.push("labor_cost", "labor_pct");
-  } else if (/עלות מזון|food/i.test(q)) {
+  } else if (/עלות מזון|פוד.?קוסט|food/i.test(q)) {
     metrics.push("food_cost", "food_cost_pct");
   } else if (/ספק|רכישות|purchase/i.test(q)) {
     metrics.push("supplier_purchases");
