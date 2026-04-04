@@ -146,6 +146,29 @@ function planStrategic(base: MetricsPlan, q: string, tz: string): MetricsPlan {
 }
 
 function inferTimeRange(q: string, tz: string, fallbackDays: number): TimeRange {
+  // ── Named month detection (highest priority) ──────────────────────────
+  // If the user explicitly names a month, use that full calendar month.
+  // This MUST run before any other time pattern to prevent fallback drift.
+  const HEBREW_MONTHS: Record<string, number> = {
+    "ינואר": 1, "פברואר": 2, "מרץ": 3, "מרס": 3,
+    "אפריל": 4, "מאי": 5, "יוני": 6,
+    "יולי": 7, "אוגוסט": 8, "ספטמבר": 9,
+    "אוקטובר": 10, "נובמבר": 11, "דצמבר": 12,
+  };
+  for (const [name, monthNum] of Object.entries(HEBREW_MONTHS)) {
+    if (new RegExp(name, "i").test(q)) {
+      const nowInTz = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+      const [currentYear, currentMonth] = nowInTz.split("-").map(Number);
+      // If the named month is after the current month, assume previous year
+      const year = monthNum > currentMonth ? currentYear - 1 : currentYear;
+      const start = new Date(year, monthNum - 1, 1);
+      const end = new Date(year, monthNum, 0); // last day of that month
+      return {
+        start: start.toLocaleDateString("en-CA", { timeZone: tz }),
+        end: end.toLocaleDateString("en-CA", { timeZone: tz }),
+      };
+    }
+  }
   if (/היום/i.test(q)) {
     const today = todayIso(tz);
     return { start: today, end: today };
