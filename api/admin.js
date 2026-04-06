@@ -9,6 +9,8 @@
  * POST ?action=resend-invite    → resend Email invite with new temp password (super_owner only)
  * POST ?action=edit-client      → edit tenant details (super_owner only)
  * POST ?action=send-user-invite → send email invite to a new user (any owner)
+ * POST ?action=create-user      → create a sub-user (owner only, atomic RTDB + rollback)
+ * POST ?action=complete-profile  → first-login: update own email + password (authenticated user)
  * POST ?action=delete-user      → delete a user + Firebase Auth (owner only)
  */
 
@@ -68,15 +70,17 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") { res.status(204).end(); return; }
 
   const action = req.query.action || "";
-  if (action === "list-clients")   return handleListClients(req, res);
-  if (action === "create-client")  return handleCreateClient(req, res);
-  if (action === "edit-client")    return handleEditClient(req, res);
-  if (action === "delete-client")  return handleDeleteClient(req, res);
-  if (action === "reset-password") return handleResetPassword(req, res);
-  if (action === "resend-invite")  return handleResendInvite(req, res);
-  if (action === "send-user-invite") return handleSendUserInvite(req, res);
-  if (action === "delete-user")    return handleDeleteUser(req, res);
-  if (action === "roles")          return handleRoles(req, res);
+  if (action === "list-clients")      return handleListClients(req, res);
+  if (action === "create-client")     return handleCreateClient(req, res);
+  if (action === "edit-client")       return handleEditClient(req, res);
+  if (action === "delete-client")     return handleDeleteClient(req, res);
+  if (action === "reset-password")    return handleResetPassword(req, res);
+  if (action === "resend-invite")     return handleResendInvite(req, res);
+  if (action === "send-user-invite")  return handleSendUserInvite(req, res);
+  if (action === "create-user")       return handleCreateUser(req, res);
+  if (action === "complete-profile")   return handleCompleteProfile(req, res);
+  if (action === "delete-user")       return handleDeleteUser(req, res);
+  if (action === "roles")             return handleRoles(req, res);
   res.status(400).json({ error: "missing or invalid action" });
 }
 
@@ -260,7 +264,7 @@ async function handleCreateClient(req, res) {
 
     await db.ref().update(updates);
 
-    // Send Email invite (instead of WhatsApp)
+    // Send Email invite
     let emailSent = false;
     try {
       const html = buildInviteEmailHtml(bizName.trim(), ownerUsername.trim().toLowerCase(), tempPass, inviteLink);
@@ -342,8 +346,8 @@ async function handleEditClient(req, res) {
     const oldUsername = owner.username;
 
     // Apply changes to owner
-    if (ownerName?.trim())    owner.name     = ownerName.trim();
-    if (ownerEmail?.trim())   owner.email    = ownerEmail.trim();
+    if (ownerName?.trim()) owner.name = ownerName.trim();
+    if (ownerEmail?.trim()) owner.email = ownerEmail.trim();
     if (ownerPhone !== undefined) owner.phone = ownerPhone?.trim() || "";
     if (ownerUsername?.trim()) owner.username = ownerUsername.trim().toLowerCase();
 
@@ -630,7 +634,8 @@ async function handleResendInvite(req, res) {
 
     // Check owner has a real email
     if (!ownerUser.email || ownerUser.email.endsWith("@temp.marjin.app")) {
-      res.status(400).json({ error: "לבעלים אין כתובת אימייל אמיתית — לא ניתן לשלוח הזמנה" }); return;
+      res.status(400).json({ error: "לבעלים אין כתובת אימייל אמיתית — לא ניתן לשלוח הזמנה" });
+      return;
     }
 
     // Get biz name
@@ -650,7 +655,7 @@ async function handleResendInvite(req, res) {
     const inviteLinkSnap = await db.ref(`tenants/${tenantId}/meta/inviteLink`).once("value");
     const inviteLink = inviteLinkSnap.val() || `${APP_BASE_URL}/?login=1&hint=${encodeURIComponent(ownerUser.username || "")}`;
 
-    // Send Email invite (instead of WhatsApp)
+    // Send Email invite
     let emailSent = false;
     try {
       const html = buildInviteEmailHtml(
@@ -684,6 +689,193 @@ async function handleResendInvite(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// POST ?action=create-user — create a sub-user (owner only, atomic + rollback)
+// ─────────────────────────────────────────────────────────────────────────────
+const CREATE_USER_ALLOWED_ROLES = ["viewer", "shift_manager", "manager"];
+
+async function handleCreateUser(req, res) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" }); return;
+  }
+
+  // ── Phase 0: Auth ─────────────────────────────────────────────────────────
+  let claims;
+  try { claims = await requireAuth(req); }
+  catch (e) {
+    res.status(401).json({ error: "unauthorized" }); return;
+  }
+
+  const { tenantId } = req.body || {};
+  if (!tenantId) {
+    res.status(400).json({ error: "missing tenantId" }); return;
+  }
+
+  // Caller must be owner or super_owner in this tenant
+  try {
+    await requireTenantAccess(claims.uid, tenantId, "owner");
+  } catch (e) {
+    res.status(e?.status || 403).json({ error: e?.msg || "forbidden — owner only" }); return;
+  }
+
+  // ── Phase 1: Validate input ───────────────────────────────────────────────
+  const { email: rawEmail, username: rawUsername, name, phone, role } = req.body || {};
+
+  if (!rawEmail?.trim() || !rawUsername?.trim() || !role) {
+    res.status(400).json({ error: "שדות חובה: email, username, role" }); return;
+  }
+
+  const safeEmail    = rawEmail.trim().toLowerCase();
+  const safeUsername = rawUsername.trim().toLowerCase();
+
+  // Role must be in the allowed sub-user set (never owner/super_owner)
+  if (!CREATE_USER_ALLOWED_ROLES.includes(role)) {
+    res.status(400).json({
+      error: `תפקיד לא חוקי — ערכים מותרים: ${CREATE_USER_ALLOWED_ROLES.join(", ")}`
+    }); return;
+  }
+
+  // RTDB forbidden characters in username
+  if (RTDB_FORBIDDEN.test(safeUsername)) {
+    res.status(400).json({ error: "שם משתמש מכיל תווים לא חוקיים" }); return;
+  }
+
+  // Minimal email format check
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(safeEmail)) {
+    res.status(400).json({ error: "כתובת אימייל לא תקינה" }); return;
+  }
+
+  // ── Phase 2: Create Firebase Auth user ────────────────────────────────────
+  const auth = getAdminAuth();
+  const tempPass = "Marjin_" + Math.random().toString(36).slice(2, 10);
+  let firebaseUid;
+
+  try {
+    const userRecord = await auth.createUser({
+      email: safeEmail,
+      password: tempPass,
+      displayName: safeUsername,
+    });
+    firebaseUid = userRecord.uid;
+  } catch (e) {
+    if (e.code === "auth/email-already-exists") {
+      res.status(409).json({ error: "כתובת האימייל כבר קיימת במערכת" }); return;
+    }
+    console.error("[create-user] auth.createUser failed:", e.message, e.code);
+    res.status(500).json({ error: "שגיאה ביצירת משתמש" }); return;
+  }
+
+  // ── Phase 3: Atomic RTDB write (rollback auth user on failure) ────────────
+  const db  = getAdminDb();
+  const now = Date.now();
+
+  const updates = {};
+  updates[`tenants/${tenantId}/members/${firebaseUid}`] = true;
+  updates[`tenants/${tenantId}/roles/${firebaseUid}`]   = role;
+  updates[`tenants/${tenantId}/users/${firebaseUid}`]   = {
+    username:  safeUsername,
+    name:      name?.trim() || safeUsername,
+    email:     safeEmail,
+    phone:     phone?.trim() || "",
+    role,
+    createdAt: now,
+    createdBy: claims.uid,
+  };
+  updates[`user_tenants/${firebaseUid}`] = tenantId;
+  // Lookup indexes (needed for cross-browser login discovery)
+  updates[`tenants/${tenantId}/lookup/${safeUsername}`] = { email: safeEmail, firebaseUid };
+  updates[`username_index/${safeUsername}`] = { tenantId, email: safeEmail };
+
+  try {
+    await db.ref().update(updates);
+  } catch (e) {
+    // ── Rollback: delete the Firebase Auth user we just created ──────────
+    console.error("[create-user] RTDB write failed, rolling back auth user:", e.message);
+    try { await auth.deleteUser(firebaseUid); }
+    catch (rollbackErr) {
+      console.error("[create-user] ROLLBACK FAILED — orphaned uid:", firebaseUid, rollbackErr.message);
+    }
+    res.status(500).json({ error: "שגיאה בשמירת נתוני המשתמש" }); return;
+  }
+
+  // ── Phase 4: Send invite email (non-fatal) ─────────────────────────────
+  let emailSent = false;
+  let emailAttempted = false;
+  const smtpConfigured = !!(process.env.SMTP_EMAIL && process.env.SMTP_APP_PASSWORD);
+  console.log(`[create-user][debug] Phase 4 start — smtpConfigured=${smtpConfigured}, SMTP_EMAIL exists=${!!process.env.SMTP_EMAIL}, SMTP_APP_PASSWORD exists=${!!process.env.SMTP_APP_PASSWORD}`);
+  try {
+    let bizName = "Marjin";
+    try {
+      const bizSnap = await db.ref(`tenants/${tenantId}/app/business`).once("value");
+      if (bizSnap.exists()) {
+        const bizList = JSON.parse(bizSnap.val()?._v || "[]");
+        if (bizList[0]?.name) bizName = bizList[0].name;
+      }
+    } catch(_) {}
+    const inviteLink = `${APP_BASE_URL}/?login=1&hint=${encodeURIComponent(safeUsername)}`;
+    const html = buildInviteEmailHtml(bizName, safeUsername, tempPass, inviteLink);
+    console.log(`[create-user][debug] About to call sendEmail to=${safeEmail}, subject length=${(`הזמנה להצטרף ל-${bizName} — פרטי כניסה`).length}, html length=${html.length}`);
+    emailAttempted = true;
+    await sendEmail(safeEmail, `הזמנה להצטרף ל-${bizName} — פרטי כניסה`, html);
+    emailSent = true;
+    console.log(`[create-user][debug] sendEmail succeeded for ${safeEmail}`);
+  } catch (emailErr) {
+    console.error("[create-user] Email invite failed:", emailErr.message);
+    console.error("[create-user][debug] Full email error:", emailErr.stack || emailErr);
+  }
+
+  console.log(`[create-user] created user ${firebaseUid} (${safeUsername}) in tenant ${tenantId}, role=${role}, emailSent=${emailSent}`);
+  res.status(200).json({ ok: true, firebaseUid, tenantId, emailSent, debug: { smtpConfigured, emailAttempted } });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST ?action=complete-profile — first-login: update own email + password
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleCompleteProfile(req, res) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" }); return;
+  }
+
+  let claims;
+  try { claims = await requireAuth(req); }
+  catch (e) {
+    res.status(401).json({ error: "unauthorized" }); return;
+  }
+
+  const { newEmail, newPassword } = req.body || {};
+
+  if (!newEmail?.trim()) {
+    res.status(400).json({ error: "חסרה כתובת אימייל" }); return;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail.trim())) {
+    res.status(400).json({ error: "כתובת אימייל לא תקינה" }); return;
+  }
+  if (!newPassword || newPassword.length < 6) {
+    res.status(400).json({ error: "סיסמה חייבת להיות לפחות 6 תווים" }); return;
+  }
+
+  const auth = getAdminAuth();
+
+  try {
+    await auth.updateUser(claims.uid, {
+      email: newEmail.trim(),
+      password: newPassword,
+    });
+  } catch (e) {
+    if (e.code === "auth/email-already-exists") {
+      res.status(409).json({ error: "כתובת האימייל כבר בשימוש" }); return;
+    }
+    if (e.code === "auth/invalid-email") {
+      res.status(400).json({ error: "כתובת אימייל לא תקינה" }); return;
+    }
+    console.error("[complete-profile] updateUser failed:", e.message, e.code);
+    res.status(500).json({ error: "שגיאה בעדכון הפרטים" }); return;
+  }
+
+  console.log(`[complete-profile] updated email+password for uid=${claims.uid}`);
+  res.status(200).json({ ok: true });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // POST ?action=delete-user — fully delete a user (Firebase Auth + RTDB cleanup)
 // ─────────────────────────────────────────────────────────────────────────────
 async function handleDeleteUser(req, res) {
@@ -702,12 +894,16 @@ async function handleDeleteUser(req, res) {
 
   const { tenantId, firebaseUid, username } = req.body || {};
 
+  console.log(`[delete-user][debug] incoming body:`, JSON.stringify({ tenantId, firebaseUid, username }));
+
   if (!tenantId || !firebaseUid) {
+    console.error(`[delete-user][debug] missing fields — tenantId=${tenantId}, firebaseUid=${firebaseUid}`);
     res.status(400).json({ error: "missing tenantId or firebaseUid" }); return;
   }
 
   // Verify caller is owner/super_owner in this tenant
   const callerRole = await db.ref(`tenants/${tenantId}/roles/${claims.uid}`).once("value");
+  console.log(`[delete-user][debug] callerRole=${callerRole.val()}, callerUid=${claims.uid}`);
   if (!callerRole.exists() || !["owner", "super_owner"].includes(callerRole.val())) {
     res.status(403).json({ error: "forbidden — owner only" }); return;
   }
@@ -717,38 +913,45 @@ async function handleDeleteUser(req, res) {
     res.status(400).json({ error: "לא ניתן למחוק את עצמך" }); return;
   }
 
+  // ── Phase 1: Delete Firebase Auth user FIRST (frees up the email) ─────
+  console.log(`[delete-user][debug] Phase 1: calling auth.deleteUser(${firebaseUid})`);
+  try {
+    await auth.deleteUser(firebaseUid);
+    console.log(`[delete-user][debug] auth.deleteUser SUCCEEDED for ${firebaseUid}`);
+  } catch(e) {
+    console.error(`[delete-user] auth.deleteUser FAILED for ${firebaseUid}:`, e.message, e.code);
+    console.error(`[delete-user][debug] Full auth delete error:`, e.stack || e);
+    res.status(500).json({ error: "מחיקת חשבון המשתמש נכשלה — האימייל עדיין תפוס" });
+    return;
+  }
+
+  // ── Phase 2: Clean up RTDB (only after Auth deletion succeeded) ─────
   try {
     const updates = {};
 
-    // Clean up tenant references
+    // Tenant references
     updates[`tenants/${tenantId}/members/${firebaseUid}`] = null;
     updates[`tenants/${tenantId}/roles/${firebaseUid}`] = null;
+    updates[`tenants/${tenantId}/users/${firebaseUid}`] = null;
     updates[`user_tenants/${firebaseUid}`] = null;
 
-    // Clean up username lookup/index
+    // Username lookup/index
     if (username) {
       const uLower = username.toLowerCase();
       updates[`tenants/${tenantId}/lookup/${uLower}`] = null;
       updates[`username_index/${uLower}`] = null;
     }
 
+    console.log(`[delete-user][debug] Phase 2: RTDB paths to null:`, Object.keys(updates));
     await db.ref().update(updates);
 
-    // Delete Firebase Auth user (frees up the email for reuse)
-    let authDeleted = false;
-    try {
-      await auth.deleteUser(firebaseUid);
-      authDeleted = true;
-    } catch(e) {
-      console.warn(`[delete-user] could not delete auth user ${firebaseUid}:`, e.message);
-    }
-
-    console.log(`[delete-user] deleted user ${firebaseUid} (username=${username}) from tenant ${tenantId}, authDeleted=${authDeleted}`);
-    res.status(200).json({ ok: true, authDeleted });
+    console.log(`[delete-user] deleted user ${firebaseUid} (username=${username}) from tenant ${tenantId}`);
+    res.status(200).json({ ok: true, authDeleted: true, debug: { firebaseUidReceived: firebaseUid, tenantIdReceived: tenantId } });
 
   } catch(e) {
-    console.error("[delete-user] error:", e.message);
-    res.status(500).json({ error: e.message || "שגיאה במחיקת משתמש" });
+    // Auth user is already deleted but RTDB cleanup failed — log for manual repair
+    console.error(`[delete-user] RTDB cleanup FAILED (auth already deleted) for ${firebaseUid}:`, e.message);
+    res.status(500).json({ error: "החשבון נמחק אך ניקוי הנתונים נכשל — יש לפנות לתמיכה" });
   }
 }
 
