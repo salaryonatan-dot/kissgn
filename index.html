@@ -1070,16 +1070,20 @@ const ProgressBar = ({label,current,target,color}) => {
 
 
 const ROLE_COLORS = {
-  super_owner: { color: '#111827', bg: '#F3F4F6' },
-  owner:       { color: '#374151', bg: '#F3F4F6' },
-  manager:     { color: '#374151', bg: '#F3F4F6' },
-  staff:       { color: '#6B7280', bg: '#F9FAFB' },
+  super_owner:   { color: '#111827', bg: '#F3F4F6' },
+  owner:         { color: '#374151', bg: '#F3F4F6' },
+  manager:       { color: '#374151', bg: '#F3F4F6' },
+  shift_manager: { color: '#6B7280', bg: '#F9FAFB' },
+  viewer:        { color: '#9CA3AF', bg: '#F9FAFB' },
+  staff:         { color: '#6B7280', bg: '#F9FAFB' },
 };
 const ROLES = {
-  super_owner: { label:"בעלים ראשי", color:"#111827", bg:"#F3F4F6" },
-  owner:       { label:"בעלים",       color:"#6B7280", bg:"#F3F4F6" },
-  manager:     { label:"מנהל",        color:"#6B7280", bg:"#F3F4F6" },
-  staff:       { label:"אחמש",        color:"#6B7280", bg:"#F9FAFB" },
+  super_owner:   { label:"בעלים ראשי", color:"#111827", bg:"#F3F4F6" },
+  owner:         { label:"בעלים",       color:"#6B7280", bg:"#F3F4F6" },
+  manager:       { label:"מנהל",        color:"#6B7280", bg:"#F3F4F6" },
+  shift_manager: { label:"אחמש",        color:"#6B7280", bg:"#F9FAFB" },
+  viewer:        { label:"צופה",        color:"#9CA3AF", bg:"#F9FAFB" },
+  staff:         { label:"אחמש",        color:"#6B7280", bg:"#F9FAFB" },
 };
 
 
@@ -1356,42 +1360,36 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
           ? {...u, name:form.name, username:form.username.trim(), role:form.role, allowedBizIds}
           : u));
       } else {
-        const userEmail = form.email.trim();
-        const tempPass = "Marjin_" + Math.random().toString(36).slice(2, 10);
-        let firebaseUid;
-        try {
-          firebaseUid = await window.firebaseCreateUser(userEmail, tempPass);
-        } catch(createErr) {
-          if(createErr.code === "auth/email-already-in-use") {
-            setErr("כתובת האימייל כבר קיימת במערכת — נסה כתובת אחרת");
-            setSaving(false); return;
-          } else throw createErr;
+        // ── Create user via server API (atomic + rollback) ──────────────
+        const token = await window.getIdToken().catch(() => null);
+        if (!token) {
+          setErr("שגיאה: אין חיבור למערכת — יש להתחבר מחדש");
+          setSaving(false); return;
         }
-        const uLower2 = form.username.trim().toLowerCase();
-        const safeWrite = async (path, val) => {
-          try { await window._rtdbSet(path, val); } catch(_) {}
-        };
-        await safeWrite(`tenants/${tenantId}/lookup/${uLower2}`, { email: userEmail, firebaseUid });
-        await safeWrite(`username_index/${uLower2}`, { tenantId, email: userEmail });
-        await safeWrite(`tenants/${tenantId}/members/${firebaseUid}`, true);
-        await safeWrite(`tenants/${tenantId}/roles/${firebaseUid}`, form.role);
-        await safeWrite(`user_tenants/${firebaseUid}`, tenantId);
+        const resp = await fetch("/api/admin?action=create-user", {
+          method: "POST",
+          headers: {"Content-Type":"application/json","Authorization":"Bearer " + token},
+          body: JSON.stringify({
+            tenantId,
+            email: form.email.trim(),
+            username: form.username.trim(),
+            name: form.name.trim(),
+            phone: form.phone.trim(),
+            role: form.role
+          })
+        });
+        const result = await resp.json();
+        if (!resp.ok) {
+          setErr(result.error || "שגיאה ביצירת המשתמש");
+          setSaving(false); return;
+        }
+        const firebaseUid = result.firebaseUid;
+        const userEmail = form.email.trim();
+        // lookup + username_index are now written by the create-user API (Phase 3)
         const newUser = {id:Date.now(), name:form.name.trim(), username:form.username.trim(),
           email: userEmail, phone: form.phone.trim(), role:form.role, firebaseUid, allowedBizIds,
           mustCompleteProfile: true};
         saveUsers([...users, newUser]);
-
-        // Send Email invite
-        try {
-          const token = await window._fbUser?.getIdToken();
-          const bizName = businesses && businesses.length > 0 ? businesses[0].name : "Marjin";
-          const inviteLink = window.location.origin + "/?login=1&hint=" + encodeURIComponent(uLower2);
-          await fetch("/api/admin?action=send-user-invite", {
-            method: "POST",
-            headers: {"Content-Type":"application/json","Authorization":"Bearer " + token},
-            body: JSON.stringify({ email: userEmail, username: uLower2, tempPass, bizName, inviteLink })
-          });
-        } catch(emailErr) { console.warn("Email invite failed:", emailErr); }
       }
       resetForm();
     } catch(e) {
@@ -1406,17 +1404,28 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
   const deleteUser = async (id) => {
     const u = users.find(u=>u.id===id);
     if(!u || u.role==="super_owner") return;
+    if(!u.firebaseUid) {
+      setErr("לא ניתן למחוק — חסר מזהה משתמש. יש לפנות לתמיכה.");
+      return;
+    }
     if(!confirm(`למחוק את המשתמש "${u.name}"? פעולה זו תמחק את החשבון לגמרי.`)) return;
     // Delete from Firebase Auth + RTDB via API
-    if(u.firebaseUid) {
-      try {
-        const token = await window._fbUser?.getIdToken();
-        await fetch("/api/admin?action=delete-user", {
-          method:"POST",
-          headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
-          body: JSON.stringify({ tenantId, firebaseUid: u.firebaseUid, username: u.username })
-        });
-      } catch(e) { console.warn("delete-user API failed:", e); }
+    try {
+      const token = await window.getIdToken().catch(() => null);
+      if(!token) { setErr("שגיאה: אין חיבור למערכת — יש להתחבר מחדש"); return; }
+      const resp = await fetch("/api/admin?action=delete-user", {
+        method:"POST",
+        headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
+        body: JSON.stringify({ tenantId, firebaseUid: u.firebaseUid, username: u.username })
+      });
+      const result = await resp.json();
+      if(!resp.ok) {
+        setErr(result.error || "שגיאה במחיקת המשתמש");
+        return;
+      }
+    } catch(e) {
+      setErr("שגיאה במחיקת המשתמש — יש לנסות שוב");
+      return;
     }
     saveUsers(users.filter(u=>u.id!==id));
   };
@@ -1470,9 +1479,9 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
           </>}
           <label className="label">תפקיד</label>
           <select className="select" value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value, allowedBizIds:[]}))}>
-            <option value="owner">בעלים — גישה מלאה</option>
             <option value="manager">מנהל — לוח בקרה מלא</option>
-            <option value="staff">אחמש — משמרות בלבד</option>
+            <option value="shift_manager">אחמש — משמרות וניהול</option>
+            <option value="viewer">צופה — צפייה בלבד</option>
           </select>
           {needsBizAccess && businesses && businesses.length > 1 && (
             <div style={{marginBottom:10}}>
@@ -2887,19 +2896,13 @@ function PilotDashboard() {
           );
           setAppUsers(updatedUsers);
           setLoggedInUser(updatedUser);
-          // Now the user is authenticated — repair any RTDB writes that failed during creation
-          const safeWrite = async (path, val) => {
-            try { await window._rtdbSet(path, val); } catch(_) {}
-          };
+          // Repair lookup paths on first login (members/roles/user_tenants are set by create-user API)
           if(loggedInUser.username && window._currentTenantId) {
             const uname = loggedInUser.username.toLowerCase();
             const tid   = window._currentTenantId;
             const uid   = loggedInUser.firebaseUid;
-            await safeWrite(`username_index/${uname}`, { tenantId: tid, email });
-            await safeWrite(`tenants/${tid}/lookup/${uname}`, { email, firebaseUid: uid });
-            await safeWrite(`tenants/${tid}/members/${uid}`, true);
-            await safeWrite(`tenants/${tid}/roles/${uid}`, loggedInUser.role);
-            await safeWrite(`user_tenants/${uid}`, tid);
+            try { await window._rtdbSet(`username_index/${uname}`, { tenantId: tid, email }); } catch(_) {}
+            try { await window._rtdbSet(`tenants/${tid}/lookup/${uname}`, { email, firebaseUid: uid }); } catch(_) {}
           }
           try { await window.storage.set("app-users", JSON.stringify(updatedUsers), true); } catch(_) {}
           setMustCompleteProfile(false);
