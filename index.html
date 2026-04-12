@@ -2247,8 +2247,11 @@ function PilotDashboard() {
         try {
           const users = JSON.parse(rau.value);
           setAppUsers(users);
-          // Auto-login if Firebase Auth session is active
-          if(uid) {
+          // Auto-login ONLY if session is fresh (sessionStorage has tenant cached).
+          // This prevents stale Firebase Auth sessions from auto-logging into the wrong tenant
+          // when opening the app in a browser that had a previous user's session persisted.
+          const hasSessionCache = !!sessionStorage.getItem("marjin_tid_" + uid);
+          if(uid && hasSessionCache) {
             const match = users.find(u => u.firebaseUid === uid);
             if(match) {
               setLoggedInUser({...match, _tenantId: window._currentTenantId});
@@ -2257,6 +2260,10 @@ function PilotDashboard() {
                 try { await window._rtdbSet("username_index/" + match.username.toLowerCase(), { tenantId: window._currentTenantId, email: match.email }); } catch(_){}
               }
             }
+          } else if(uid && !hasSessionCache) {
+            // Stale Firebase session from a previous login -- sign out so login screen shows
+            console.log("[init] stale Firebase session detected for uid=" + uid + ", signing out");
+            try { await window.firebaseSignOut(); } catch(_){}
           }
         } catch(_){}
       }
@@ -2850,7 +2857,9 @@ function PilotDashboard() {
             setLoggedInUser({...user, _allowedBizIds: allowed});
           }
           if(user._tenantId) {
-            // Load businesses and pick the right bizId (NOT tenantId)
+            // Always reload businesses from the correct tenant on manual login
+            // (don't trust stale in-memory state from a previous session)
+            if(window.setTenantId) window.setTenantId(user._tenantId);
             const resolveAndSet = (bizList) => {
               if(!bizList || bizList.length === 0) return;
               const uid2 = window.storage.getUid?.();
@@ -2861,19 +2870,16 @@ function PilotDashboard() {
               } catch(_){}
               setCurrentBizId(target);
             };
-            if(businesses.length > 0) {
-              resolveAndSet(businesses);
-            } else {
-              window.storage.get("app-businesses", true).then(rb => {
-                if(rb) {
-                  try {
-                    const bizList = JSON.parse(rb.value);
-                    setBusinesses(bizList);
-                    resolveAndSet(bizList);
-                  } catch(_){}
-                }
-              }).catch(()=>{});
-            }
+            // Force fresh load from RTDB (never use stale businesses state)
+            window.storage.get("app-businesses", true).then(rb => {
+              if(rb) {
+                try {
+                  const bizList = JSON.parse(rb.value);
+                  setBusinesses(bizList);
+                  resolveAndSet(bizList);
+                } catch(_){}
+              }
+            }).catch(()=>{});
           } else if(businesses.length === 1) {
             setCurrentBizId(businesses[0].id);
           }
@@ -3144,6 +3150,15 @@ function PilotDashboard() {
                   try { sessionStorage.removeItem("marjin-session"); } catch(_){}
                   try { if(uid) sessionStorage.removeItem("marjin_tid_"+uid); } catch(_){}
                   try { if(uid) sessionStorage.removeItem("marjin_biz_"+uid); } catch(_){}
+                  // Reset all app state so stale data from previous tenant doesn't persist
+                  setBusinesses([]);
+                  setCurrentBizId_(null);
+                  setEntries([]);
+                  setSuppliers([]);
+                  setAppUsers([]);
+                  setSetupDone(false);
+                  window._currentTenantId = null;
+                  if(window.setTenantId) window.setTenantId(null);
               }} title={`${loggedInUser.name} · יציאה`}>
                 {(loggedInUser.name||"U").charAt(0).toUpperCase()}
               </div>
