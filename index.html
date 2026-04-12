@@ -4575,9 +4575,40 @@ function PettyCashScreen({ items, saveItems }) {
   const monthTotal = (items||[]).filter(i=>i.date&&i.date.startsWith(`${YEAR}-${MONTH_STR}`)).reduce((s,i)=>s+(Number(i.amount)||0),0);
 
   const exportToExcel = () => {
-    const rows = [["תאריך","קטגוריה","סכום","הערה"]];
-    (items||[]).sort((a,b)=>a.date<b.date?1:-1).forEach(i=>rows.push([i.date, i.category, i.amount, i.note||""]));
-    const csv = rows.map(r=>r.join(",")).join("\n");
+    const sorted = [...(items||[])].sort((a,b)=>a.date<b.date?1:-1);
+    // Group by category
+    const byCategory = {};
+    PETTY_CATEGORIES.forEach(cat => { byCategory[cat] = []; });
+    sorted.forEach(i => {
+      const cat = i.category || "שונות";
+      if (!byCategory[cat]) byCategory[cat] = [];
+      byCategory[cat].push(i);
+    });
+    const rows = [["דוח קופה קטנה","","",""],["","","",""]];
+    let grandTotal = 0;
+    PETTY_CATEGORIES.forEach(cat => {
+      const catItems = byCategory[cat];
+      if (!catItems || !catItems.length) return;
+      // Category header
+      rows.push(["── " + cat + " ──","","",""]);
+      rows.push(["תאריך","סכום","הערה",""]);
+      let catTotal = 0;
+      catItems.forEach(i => {
+        const amt = Number(i.amount) || 0;
+        catTotal += amt;
+        rows.push([i.date, amt, i.note || "", ""]);
+      });
+      grandTotal += catTotal;
+      rows.push(["סה\"כ " + cat, catTotal, "", ""]);
+      rows.push(["","","",""]); // blank separator
+    });
+    // Grand total
+    rows.push(["════════════","","",""]);
+    rows.push(["סה\"כ קופה קטנה", grandTotal, "", ""]);
+    const csv = rows.map(r => r.map(c => {
+      const s = String(c);
+      return s.includes(",") || s.includes('"') ? '"' + s.replace(/"/g,'""') + '"' : s;
+    }).join(",")).join("\n");
     const blob = new Blob(["\uFEFF"+csv], {type:"text/csv;charset=utf-8"});
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href=url; a.download="קופה_קטנה.csv"; a.click();
