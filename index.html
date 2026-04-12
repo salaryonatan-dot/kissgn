@@ -3015,7 +3015,7 @@ function PilotDashboard() {
           <div className="app-nav-inner">
             <button className="nav-tab is-red" onClick={()=>setScreen("shifts")}>משמרות</button>
             {(currentUser.permissions||[]).map(s=>{
-              const lbl={"dashboard":"Dashboard","foodcost":"קניות","history":"פדיון יומי","pettycash":"קופה קטנה","employees":"עלות עובדים","tasks":"משימות","users":"משתמשים"}[s];
+              const lbl={"dashboard":"Dashboard","pnl":"P&L","foodcost":"קניות","history":"פדיון יומי","pettycash":"קופה קטנה","employees":"עלות עובדים","tasks":"משימות","users":"משתמשים"}[s];
               return lbl ? <button key={s} className={`nav-tab ${screen===s?"is-active":""}`} onClick={()=>setScreen(s)}>{lbl}</button> : null;
             })}
           </div>
@@ -3183,6 +3183,7 @@ function PilotDashboard() {
           <div className="mhd-nav-inner">
             {[
               {key:"dashboard",  label:"Dashboard",      roles:["super_owner","owner","manager"]},
+              {key:"pnl",        label:"P&L",            roles:["super_owner","owner"]},
               {key:"history",    label:"פדיון יומי",    roles:["super_owner","owner","manager"]},
               {key:"pettycash",  label:"קופה קטנה",     roles:["super_owner","owner","manager"]},
               {key:"foodcost",   label:"קניות",         roles:["super_owner","owner","manager"]},
@@ -4119,6 +4120,13 @@ function PilotDashboard() {
       {screen==="forecast" && (
         <div className="screen">
           <ForecastScreen entries={entries} businessConfig={businessConfig} metrics={metrics} lastYear={lastYear} saveLastYear={saveLastYear} currentMonth={MONTH} />
+        </div>
+      )}
+
+      {/* ═══ P&L ═══ */}
+      {screen==="pnl" && (
+        <div className="screen">
+          <PnLScreen entries={entries} fixedList={fixedList} businessConfig={businessConfig} lastYear={lastYear} />
         </div>
       )}
 
@@ -5228,6 +5236,198 @@ const MONTH_IDX = {
   "jul":6,"aug":7,"sep":8,"oct":9,"nov":10,"dec":11,
   "1":0,"2":1,"3":2,"4":3,"5":4,"6":5,"7":6,"8":7,"9":8,"10":9,"11":10,"12":11,
 };
+
+// âââ P&L Screen ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+// âââ P&L Screen ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[] }) {
+  const [selYear, setSelYear] = useState(YEAR);
+  const [selMonth, setSelMonth] = useState(MONTH);
+
+  // Compute metrics for the selected month
+  const monthPrefix = `${selYear}-${String(selMonth+1).padStart(2,"0")}`;
+  const monthEntries = entries.filter(e => e.date && e.date.startsWith(monthPrefix));
+  const daysInSelMonth = new Date(selYear, selMonth+1, 0).getDate();
+  const m = calcMetrics(monthEntries, fixedList, {...businessConfig, suppliers: businessConfig.suppliers||[], employees: businessConfig.employees||[]});
+
+  // Previous year same month
+  const prevYearPrefix = `${selYear-1}-${String(selMonth+1).padStart(2,"0")}`;
+  const prevEntries = entries.filter(e => e.date && e.date.startsWith(prevYearPrefix));
+  const pm = prevEntries.length > 0
+    ? calcMetrics(prevEntries, fixedList, {...businessConfig, suppliers: businessConfig.suppliers||[], employees: businessConfig.employees||[]})
+    : null;
+
+  // Also try lastYear data (manually entered) as fallback
+  const lyData = lastYear[selMonth] || {};
+  const hasPrev = pm || (lyData.sales > 0);
+
+  // Helper: previous value for a field
+  const prev = (field) => {
+    if (pm) return pm[field] || 0;
+    // Map from lastYear fields
+    const map = { totalSales:"sales", totalFood:"foodCost", totalPayroll:"laborCost", TOTAL_FIXED:"fixedExpenses" };
+    return lyData[map[field]] || 0;
+  };
+  const prevPct = (field) => {
+    const p = prev("totalSales");
+    return p > 0 ? (prev(field)/p)*100 : 0;
+  };
+
+  // Percentage of sales
+  const pct = (val) => m.totalSales > 0 ? ((val/m.totalSales)*100).toFixed(1)+"%" : "â";
+  const delta = (cur, prv) => {
+    if (!prv) return null;
+    const d = cur - prv;
+    return d;
+  };
+
+  // Month navigation
+  const goMonth = (dir) => {
+    let nm = selMonth + dir;
+    let ny = selYear;
+    if (nm < 0) { nm = 11; ny--; }
+    if (nm > 11) { nm = 0; ny++; }
+    setSelMonth(nm); setSelYear(ny);
+  };
+
+  const PnLRow = ({ label, value, prevVal, isBold, isNegative, showPct, indent }) => {
+    const d = prevVal != null && prevVal !== 0 ? value - prevVal : null;
+    const dPct = prevVal > 0 ? ((value - prevVal) / prevVal * 100) : null;
+    return (
+      <div style={{
+        display:"grid", gridTemplateColumns: hasPrev ? "1fr auto auto auto" : "1fr auto auto",
+        gap:8, padding:"10px 14px", borderBottom:"1px solid #F1F5F9",
+        background: isBold ? "#F8FAFC" : "transparent",
+        paddingRight: indent ? 28 : 14,
+      }}>
+        <span style={{fontSize:13, fontWeight:isBold?700:400, color:isBold?"#0F172A":"#334155"}}>{label}</span>
+        <span style={{fontSize:13, fontWeight:isBold?700:500, color:isNegative&&value<0?"#EF4444":"#0F172A", textAlign:"left", minWidth:75, fontVariantNumeric:"tabular-nums"}}>
+          {fmt(value)}
+        </span>
+        {showPct !== false && (
+          <span style={{fontSize:11, color:"#94A3B8", textAlign:"left", minWidth:42, fontVariantNumeric:"tabular-nums"}}>
+            {pct(Math.abs(value))}
+          </span>
+        )}
+        {hasPrev && (
+          <span style={{fontSize:11, minWidth:65, textAlign:"left", fontVariantNumeric:"tabular-nums",
+            color: d==null ? "#CBD5E1" : d > 0 ? (isNegative?"#EF4444":"#22C55E") : d < 0 ? (isNegative?"#22C55E":"#EF4444") : "#94A3B8"
+          }}>
+            {d == null ? "â" : (d>0?"+":"") + fmt(d)}
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  const SectionHeader = ({ label }) => (
+    <div style={{padding:"8px 14px", background:"#F1F5F9", fontSize:11, fontWeight:700, color:"#64748B", textTransform:"uppercase", letterSpacing:1}}>
+      {label}
+    </div>
+  );
+
+  // Net profit
+  const netProfit = m.lc;
+  const netProfitPct = m.totalSales > 0 ? (netProfit / m.totalSales * 100) : 0;
+  const prevNetProfit = hasPrev ? (prev("totalSales") - (pm ? pm.totalExpenses : (prev("totalFood") + prev("totalPayroll") + prev("TOTAL_FIXED")))) : null;
+
+  return (
+    <div>
+      {/* Month selector */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+        <button onClick={()=>goMonth(-1)} style={{background:"#F1F5F9",border:"none",borderRadius:8,width:36,height:36,cursor:"pointer",fontSize:16,color:"#64748B",display:"flex",alignItems:"center",justifyContent:"center"}}>â</button>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:18,fontWeight:700,color:"#0F172A"}}>{MONTH_NAMES[selMonth]} {selYear}</div>
+          <div style={{fontSize:11,color:"#94A3B8"}}>{monthEntries.length} ×××× ××ª×× {daysInSelMonth} Â· P&L</div>
+        </div>
+        <button onClick={()=>goMonth(1)} style={{background:"#F1F5F9",border:"none",borderRadius:8,width:36,height:36,cursor:"pointer",fontSize:16,color:"#64748B",display:"flex",alignItems:"center",justifyContent:"center"}}
+          disabled={selYear===YEAR && selMonth===MONTH}>â</button>
+      </div>
+
+      {monthEntries.length === 0 ? (
+        <div className="empty" style={{padding:40}}>
+          <div style={{fontSize:32,marginBottom:12}}>ð</div>
+          <p style={{fontSize:14,color:"#94A3B8",margin:0}}>××× × ×ª×× ×× ×¢×××¨ {MONTH_NAMES[selMonth]} {selYear}</p>
+          <p style={{fontSize:12,color:"#CBD5E1",marginTop:4}}>× ×¡× ×××××¨ ××××© ×××¨</p>
+        </div>
+      ) : (
+        <div style={{background:"#FFFFFF",borderRadius:12,border:"1px solid #E2E8F0",overflow:"hidden"}}>
+          {/* Header row */}
+          <div style={{
+            display:"grid", gridTemplateColumns: hasPrev ? "1fr auto auto auto" : "1fr auto auto",
+            gap:8, padding:"10px 14px", background:"#0F172A", color:"#94A3B8", fontSize:10, fontWeight:600, textTransform:"uppercase", letterSpacing:1
+          }}>
+            <span>×¡×¢××£</span>
+            <span style={{minWidth:75,textAlign:"left"}}>{MONTH_NAMES[selMonth].slice(0,3)} {String(selYear).slice(2)}</span>
+            <span style={{minWidth:42,textAlign:"left"}}>%</span>
+            {hasPrev && <span style={{minWidth:65,textAlign:"left"}}>×©×× ××</span>}
+          </div>
+
+          {/* Revenue */}
+          <SectionHeader label="××× ×¡××ª" />
+          <PnLRow label="××× ×¡××ª" value={m.totalSales} prevVal={prev("totalSales")} isBold showPct={false} />
+          {m.totalNetworkDelivery > 0 && <PnLRow label="××ª××× ××©×××××" value={m.totalNetworkDelivery} prevVal={null} indent />}
+
+          {/* COGS */}
+          <SectionHeader label="×¢×××××ª" />
+          <PnLRow label="×§× ×××ª (×¤×× ×§××¡×)" value={m.totalFood} prevVal={prev("totalFood")} isNegative />
+          <PnLRow label="×¢×××ª ×¢××××× (××××××¨)" value={m.totalPayroll} prevVal={prev("totalPayroll")} isNegative />
+          {m.totalOtherExpense > 0 && <PnLRow label="×××¦×××ª ×××¨××ª" value={m.totalOtherExpense} prevVal={null} isNegative />}
+
+          {/* Gross margin */}
+          {(()=>{
+            const gross = m.totalSales - m.totalFood - m.totalPayroll - m.totalOtherExpense;
+            const prevGross = hasPrev ? prev("totalSales") - prev("totalFood") - prev("totalPayroll") : null;
+            return <PnLRow label="×¨××× ×××××" value={gross} prevVal={prevGross} isBold isNegative={gross<0} />;
+          })()}
+
+          {/* Fixed */}
+          <SectionHeader label="×××¦×××ª ×§×××¢××ª" />
+          <PnLRow label="×§×××¢××ª + ×©××´×" value={m.TOTAL_FIXED} prevVal={prev("TOTAL_FIXED")} isNegative />
+          {m.royaltyAmount > 0 && <PnLRow label="×ª××××××" value={m.royaltyAmount} prevVal={null} isNegative />}
+
+          {/* Net profit */}
+          <div style={{padding:"14px",background:"linear-gradient(135deg,#0F172A,#1E293B)",display:"grid",
+            gridTemplateColumns: hasPrev ? "1fr auto auto auto" : "1fr auto auto", gap:8, alignItems:"center"}}>
+            <span style={{fontSize:14,fontWeight:700,color:"#F8FAFC"}}>×¨××× × ×§×</span>
+            <span style={{fontSize:16,fontWeight:700,color:netProfit>=0?"#4ADE80":"#F87171",minWidth:75,textAlign:"left",fontVariantNumeric:"tabular-nums"}}>
+              {fmt(netProfit)}
+            </span>
+            <span style={{fontSize:12,fontWeight:600,color:netProfitPct>=0?"#4ADE80":"#F87171",minWidth:42,textAlign:"left"}}>
+              {netProfitPct.toFixed(1)}%
+            </span>
+            {hasPrev && prevNetProfit != null && (
+              <span style={{fontSize:11,color:netProfit>prevNetProfit?"#4ADE80":"#F87171",minWidth:65,textAlign:"left",fontVariantNumeric:"tabular-nums"}}>
+                {(netProfit-prevNetProfit)>0?"+":""}{fmt(netProfit-prevNetProfit)}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Summary KPIs below */}
+      {monthEntries.length > 0 && (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginTop:14}}>
+          <div style={{background:"#F8FAFC",borderRadius:10,padding:"12px 14px",border:"1px solid #E2E8F0"}}>
+            <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>×¤×× ×§××¡×</div>
+            <div style={{fontSize:18,fontWeight:700,color:m.foodCostPct>35?"#EF4444":m.foodCostPct>33?"#F59E0B":"#0F172A"}}>{m.foodCostPct.toFixed(1)}%</div>
+          </div>
+          <div style={{background:"#F8FAFC",borderRadius:10,padding:"12px 14px",border:"1px solid #E2E8F0"}}>
+            <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>××××××¨</div>
+            <div style={{fontSize:18,fontWeight:700,color:m.totalSales>0&&(m.totalPayroll/m.totalSales*100)>30?"#EF4444":"#0F172A"}}>{m.totalSales>0?(m.totalPayroll/m.totalSales*100).toFixed(1):"0"}%</div>
+          </div>
+          <div style={{background:"#F8FAFC",borderRadius:10,padding:"12px 14px",border:"1px solid #E2E8F0"}}>
+            <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>××××¦×¢ ××××</div>
+            <div style={{fontSize:18,fontWeight:700,color:"#0F172A"}}>{fmt(Math.round(m.totalSales / Math.max(monthEntries.length,1)))}</div>
+          </div>
+          <div style={{background:"#F8FAFC",borderRadius:10,padding:"12px 14px",border:"1px solid #E2E8F0"}}>
+            <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>×¨××× × ×§× %</div>
+            <div style={{fontSize:18,fontWeight:700,color:netProfitPct>=0?"#22C55E":"#EF4444"}}>{netProfitPct.toFixed(1)}%</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ForecastScreen({ metrics, lastYear, saveLastYear, currentMonth, entries=[], businessConfig={}, TARGETS={salesGrowthPct:5,foodCostPct:33,laborCostPct:27} }) {
   const fileRef = useRef();
