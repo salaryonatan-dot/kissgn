@@ -3118,11 +3118,12 @@ function PilotDashboard() {
                           <input style={{flex:1,border:"1px solid #E5E7EB",borderRadius:8,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:"#111827",background:"transparent"}}
                             type="number" inputMode="decimal" placeholder="₪ סכום" value={f.amount||""}
                             onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,amount:Number(e.target.value)}:x);setFixedList(u);persist(entries,u);}}/>
-                          <div style={{display:"flex",alignItems:"center",gap:5,flexShrink:0}}>
-                            <span style={{fontSize:11,color:"#94A3B8"}}>יום</span>
-                            <input style={{width:44,border:"1px solid #E5E7EB",borderRadius:8,padding:"7px 6px",fontSize:13,fontFamily:"inherit",textAlign:"center",color:"#111827",background:"transparent"}}
+                          <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
+                            <span style={{fontSize:11,color:"#94A3B8"}}>ב-</span>
+                            <input style={{width:40,border:"1px solid #E5E7EB",borderRadius:8,padding:"7px 4px",fontSize:13,fontFamily:"inherit",textAlign:"center",color:"#111827",background:"transparent"}}
                               type="number" min={1} max={31} value={f.dueDay}
                               onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,dueDay:Number(e.target.value)}:x);setFixedList(u);persist(entries,u);}}/>
+                            <span style={{fontSize:11,color:"#94A3B8"}}>לחודש</span>
                           </div>
                         </div>
                       )}
