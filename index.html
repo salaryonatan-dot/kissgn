@@ -2064,7 +2064,9 @@ function calcMetrics(entries, fixedList, cfg) {
   const TOTAL_FIXED = fixedMonthly;
   const fixedSoFar  = TOTAL_FIXED;  // הוצאות קבועות — סכום חודשי מלא, לא לפי ימים
 
-  const totalExpenses = totalFood + totalPayroll + totalOtherExpense + rentAmount + royaltyAmount + fixedSoFar;
+  // NOTE: fixedSoFar already includes rent + royalty (calculated inside fixedList.reduce)
+  // so do NOT add rentAmount/royaltyAmount again — that would double-count them
+  const totalExpenses = totalFood + totalPayroll + totalOtherExpense + fixedSoFar;
   const lc            = totalSales - totalExpenses;
   const foodCostPct   = totalSales > 0 ? (totalFood / totalSales) * 100 : 0;
   const dailyAvg      = daysPassed > 0 ? lc / daysPassed : 0;
@@ -3115,16 +3117,11 @@ function PilotDashboard() {
                       </div>
                       {!f.rentPct&&!f.royaltyPct&&(
                         <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                          <span style={{fontSize:13,color:"#94A3B8",flexShrink:0}}>₪</span>
                           <input style={{flex:1,border:"1px solid #E5E7EB",borderRadius:8,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:"#111827",background:"transparent"}}
-                            type="number" inputMode="decimal" placeholder="₪ סכום" value={f.amount||""}
+                            type="number" inputMode="decimal" placeholder="סכום חודשי" value={f.amount||""}
                             onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,amount:Number(e.target.value)}:x);setFixedList(u);persist(entries,u);}}/>
-                          <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
-                            <span style={{fontSize:11,color:"#94A3B8"}}>ב-</span>
-                            <input style={{width:40,border:"1px solid #E5E7EB",borderRadius:8,padding:"7px 4px",fontSize:13,fontFamily:"inherit",textAlign:"center",color:"#111827",background:"transparent"}}
-                              type="number" min={1} max={31} value={f.dueDay}
-                              onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,dueDay:Number(e.target.value)}:x);setFixedList(u);persist(entries,u);}}/>
-                            <span style={{fontSize:11,color:"#94A3B8"}}>לחודש</span>
-                          </div>
+                          <span style={{fontSize:11,color:"#94A3B8",flexShrink:0}}>/ חודש</span>
                         </div>
                       )}
                       {(f.rentPct||f.royaltyPct)&&(
