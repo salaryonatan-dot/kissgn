@@ -2053,20 +2053,18 @@ function calcMetrics(entries, fixedList, cfg) {
     ? Math.round(globalMonthlyTotal * (daysPassed / daysInMonth))
     : 0;
   totalPayroll += globalProratedPayroll;
-  const fixedMonthly = fixedList.reduce((a,f) => {
-    if (f.rentPct)    return a + Math.round(totalSales * (rentPct/100));
-    if (f.royaltyPct) return a + (hasRoyalty ? Math.round(totalSales * (royaltyPct/100)) : 0);
+  // Split fixed expenses: regular monthly amounts vs rent/royalty (percentage-based)
+  const fixedRegular = fixedList.reduce((a,f) => {
+    if (f.rentPct || f.royaltyPct || f.disabled) return a;
     return a + (Number(f.amount) || 0);
   }, 0);
-
   const rentAmount = rentType === 'pct' ? Math.round(totalSales * (rentPct/100)) : rentFixed;
   const royaltyAmount = hasRoyalty ? Math.round(totalSales * (royaltyPct/100)) : 0;
-  const TOTAL_FIXED = fixedMonthly;
-  const fixedSoFar  = TOTAL_FIXED;  // הוצאות קבועות — סכום חודשי מלא, לא לפי ימים
+  const TOTAL_FIXED = fixedRegular;  // KPI shows only regular fixed (not rent/royalty)
+  const fixedSoFar  = fixedRegular;
+  const fixedPlusRent = fixedRegular + rentAmount + royaltyAmount; // full total for expense calc
 
-  // NOTE: fixedSoFar already includes rent + royalty (calculated inside fixedList.reduce)
-  // so do NOT add rentAmount/royaltyAmount again — that would double-count them
-  const totalExpenses = totalFood + totalPayroll + totalOtherExpense + fixedSoFar;
+  const totalExpenses = totalFood + totalPayroll + totalOtherExpense + fixedPlusRent;
   const lc            = totalSales - totalExpenses;
   const foodCostPct   = totalSales > 0 ? (totalFood / totalSales) * 100 : 0;
   const dailyAvg      = daysPassed > 0 ? lc / daysPassed : 0;
@@ -2077,6 +2075,7 @@ function calcMetrics(entries, fixedList, cfg) {
     totalSales, totalFood, totalPayroll, totalOtherExpense,
     totalNetworkDelivery, fixedSoFar, totalExpenses,
     lc, foodCostPct, dailyAvg, forecast, TOTAL_FIXED,
+    rentAmount, royaltyAmount,
   };
 }
 
@@ -3092,7 +3091,7 @@ function PilotDashboard() {
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
                     <div>
                       <div style={{fontSize:16,fontWeight:700,color:"#0F172A",letterSpacing:"-.3px"}}>הוצאות קבועות</div>
-                      <div style={{fontSize:12,color:"#94A3B8",marginTop:3}}>סה״כ חודשי: <strong style={{color:"#1E293B"}}>{fmt(metrics.TOTAL_FIXED)}</strong></div>
+                      <div style={{fontSize:12,color:"#94A3B8",marginTop:3}}>קבועות: <strong style={{color:"#1E293B"}}>{fmt(metrics.TOTAL_FIXED)}</strong>{(metrics.rentAmount>0||metrics.royaltyAmount>0)&&<span> · שכ״ד+תמלוגים: <strong style={{color:"#1E293B"}}>{fmt((metrics.rentAmount||0)+(metrics.royaltyAmount||0))}</strong></span>}</div>
                     </div>
                     <button onClick={()=>setShowFixed(false)} style={{width:30,height:30,background:"#F1F5F9",border:"none",borderRadius:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#64748B"}}>
                       <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -3294,9 +3293,14 @@ function PilotDashboard() {
                   <div className="kpi-card kpi-card-link" onClick={()=>setShowFixed(true)} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" ")setShowFixed(true);}}>
                     <div className="kpi-label">הוצאות קבועות</div>
                     <div className="kpi-val">{fmt(metrics.TOTAL_FIXED)}</div>
-                    <div className="kpi-forecast">
-                      עד עכשיו: {fmt(metrics.fixedSoFar)}
-                      {metrics.totalSales>0&&<span style={{marginRight:6,color:"#94A3B8"}}>· {fmtPct(metrics.TOTAL_FIXED/metrics.totalSales*100)}</span>}
+                    <div className="kpi-forecast" style={{lineHeight:1.6}}>
+                      {(metrics.rentAmount>0||metrics.royaltyAmount>0)&&<>
+                        {metrics.rentAmount>0&&<span>שכ״ד: {fmt(metrics.rentAmount)}</span>}
+                        {metrics.royaltyAmount>0&&<span style={{marginRight:6}}>· תמלוגים: {fmt(metrics.royaltyAmount)}</span>}
+                        <br/>
+                      </>}
+                      סה״כ: {fmt(metrics.TOTAL_FIXED + (metrics.rentAmount||0) + (metrics.royaltyAmount||0))}
+                      {metrics.totalSales>0&&<span style={{marginRight:6,color:"#94A3B8"}}>· {fmtPct((metrics.TOTAL_FIXED + (metrics.rentAmount||0) + (metrics.royaltyAmount||0))/metrics.totalSales*100)}</span>}
                     </div>
                   </div>
                 </div>
