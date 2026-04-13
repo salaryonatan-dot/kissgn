@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <style>
-    /* ══ Design Tokens ══════════════════════════════════════════════════════ */
+    /* ══ Design Tokens ═════════════════════════════════════════════════════ */
     :root {
       --bg:         #F9FAFB;
       --surface:    #FFFFFF;
@@ -5337,7 +5337,7 @@ function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[] })
         <button onClick={()=>goMonth(-1)} style={{background:"#F1F5F9",border:"none",borderRadius:8,width:36,height:36,cursor:"pointer",fontSize:16,color:"#64748B",display:"flex",alignItems:"center",justifyContent:"center"}}>â</button>
         <div style={{textAlign:"center"}}>
           <div style={{fontSize:18,fontWeight:700,color:"#0F172A"}}>{MONTH_NAMES[selMonth]} {selYear}</div>
-          <div style={{fontSize:11,color:"#94A3B8"}}>{monthEntries.length} ×××× ××ª×× {daysInSelMonth} Â· P&L</div>
+          <div style={{fontSize:11,color:"#94A3B8"}}>{monthEntries.length} ימים מתוך {daysInSelMonth} Â· P&L</div>
         </div>
         <button onClick={()=>goMonth(1)} style={{background:"#F1F5F9",border:"none",borderRadius:8,width:36,height:36,cursor:"pointer",fontSize:16,color:"#64748B",display:"flex",alignItems:"center",justifyContent:"center"}}
           disabled={selYear===YEAR && selMonth===MONTH}>â</button>
@@ -5346,8 +5346,8 @@ function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[] })
       {monthEntries.length === 0 ? (
         <div className="empty" style={{padding:40}}>
           <div style={{fontSize:32,marginBottom:12}}>ð</div>
-          <p style={{fontSize:14,color:"#94A3B8",margin:0}}>××× × ×ª×× ×× ×¢×××¨ {MONTH_NAMES[selMonth]} {selYear}</p>
-          <p style={{fontSize:12,color:"#CBD5E1",marginTop:4}}>× ×¡× ×××××¨ ××××© ×××¨</p>
+          <p style={{fontSize:14,color:"#94A3B8",margin:0}}>אין נתונים עבור {MONTH_NAMES[selMonth]} {selYear}</p>
+          <p style={{fontSize:12,color:"#CBD5E1",marginTop:4}}>נסה לבחור חודש אחר</p>
         </div>
       ) : (
         <div style={{background:"#FFFFFF",borderRadius:12,border:"1px solid #E2E8F0",overflow:"hidden"}}>
@@ -5356,39 +5356,39 @@ function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[] })
             display:"grid", gridTemplateColumns: hasPrev ? "1fr auto auto auto" : "1fr auto auto",
             gap:8, padding:"10px 14px", background:"#0F172A", color:"#94A3B8", fontSize:10, fontWeight:600, textTransform:"uppercase", letterSpacing:1
           }}>
-            <span>×¡×¢××£</span>
+            <span>סעיף</span>
             <span style={{minWidth:75,textAlign:"left"}}>{MONTH_NAMES[selMonth].slice(0,3)} {String(selYear).slice(2)}</span>
             <span style={{minWidth:42,textAlign:"left"}}>%</span>
-            {hasPrev && <span style={{minWidth:65,textAlign:"left"}}>×©×× ××</span>}
+            {hasPrev && <span style={{minWidth:65,textAlign:"left"}}>שינוי</span>}
           </div>
 
           {/* Revenue */}
-          <SectionHeader label="××× ×¡××ª" />
-          <PnLRow label="××× ×¡××ª" value={m.totalSales} prevVal={prev("totalSales")} isBold showPct={false} />
-          {m.totalNetworkDelivery > 0 && <PnLRow label="××ª××× ××©×××××" value={m.totalNetworkDelivery} prevVal={null} indent />}
+          <SectionHeader label="הכנסות" />
+          <PnLRow label="הכנסות" value={m.totalSales} prevVal={prev("totalSales")} isBold showPct={false} />
+          {m.totalNetworkDelivery > 0 && <PnLRow label="מתוכן משלוחים" value={m.totalNetworkDelivery} prevVal={null} indent />}
 
           {/* COGS */}
-          <SectionHeader label="×¢×××××ª" />
-          <PnLRow label="×§× ×××ª (×¤×× ×§××¡×)" value={m.totalFood} prevVal={prev("totalFood")} isNegative />
-          <PnLRow label="×¢×××ª ×¢××××× (××××××¨)" value={m.totalPayroll} prevVal={prev("totalPayroll")} isNegative />
-          {m.totalOtherExpense > 0 && <PnLRow label="×××¦×××ª ×××¨××ª" value={m.totalOtherExpense} prevVal={null} isNegative />}
+          <SectionHeader label="עלויות" />
+          <PnLRow label="קניות (פוד קוסט)" value={m.totalFood} prevVal={prev("totalFood")} isNegative />
+          <PnLRow label="עלות עובדים (לייבור)" value={m.totalPayroll} prevVal={prev("totalPayroll")} isNegative />
+          {m.totalOtherExpense > 0 && <PnLRow label="הוצאות אחרות" value={m.totalOtherExpense} prevVal={null} isNegative />}
 
           {/* Gross margin */}
           {(()=>{
             const gross = m.totalSales - m.totalFood - m.totalPayroll - m.totalOtherExpense;
             const prevGross = hasPrev ? prev("totalSales") - prev("totalFood") - prev("totalPayroll") : null;
-            return <PnLRow label="×¨××× ×××××" value={gross} prevVal={prevGross} isBold isNegative={gross<0} />;
+            return <PnLRow label="רווח גולמי" value={gross} prevVal={prevGross} isBold isNegative={gross<0} />;
           })()}
 
           {/* Fixed */}
-          <SectionHeader label="×××¦×××ª ×§×××¢××ª" />
-          <PnLRow label="×§×××¢××ª + ×©××´×" value={m.TOTAL_FIXED} prevVal={prev("TOTAL_FIXED")} isNegative />
-          {m.royaltyAmount > 0 && <PnLRow label="×ª××××××" value={m.royaltyAmount} prevVal={null} isNegative />}
+          <SectionHeader label="הוצאות קבועות" />
+          <PnLRow label="קבועות + שכ״ד" value={m.TOTAL_FIXED} prevVal={prev("TOTAL_FIXED")} isNegative />
+          {m.royaltyAmount > 0 && <PnLRow label="תמלוגים" value={m.royaltyAmount} prevVal={null} isNegative />}
 
           {/* Net profit */}
           <div style={{padding:"14px",background:"linear-gradient(135deg,#0F172A,#1E293B)",display:"grid",
             gridTemplateColumns: hasPrev ? "1fr auto auto auto" : "1fr auto auto", gap:8, alignItems:"center"}}>
-            <span style={{fontSize:14,fontWeight:700,color:"#F8FAFC"}}>×¨××× × ×§×</span>
+            <span style={{fontSize:14,fontWeight:700,color:"#F8FAFC"}}>רווח נקי</span>
             <span style={{fontSize:16,fontWeight:700,color:netProfit>=0?"#4ADE80":"#F87171",minWidth:75,textAlign:"left",fontVariantNumeric:"tabular-nums"}}>
               {fmt(netProfit)}
             </span>
@@ -5408,19 +5408,19 @@ function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[] })
       {monthEntries.length > 0 && (
         <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginTop:14}}>
           <div style={{background:"#F8FAFC",borderRadius:10,padding:"12px 14px",border:"1px solid #E2E8F0"}}>
-            <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>×¤×× ×§××¡×</div>
+            <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>פוד קוסט</div>
             <div style={{fontSize:18,fontWeight:700,color:m.foodCostPct>35?"#EF4444":m.foodCostPct>33?"#F59E0B":"#0F172A"}}>{m.foodCostPct.toFixed(1)}%</div>
           </div>
           <div style={{background:"#F8FAFC",borderRadius:10,padding:"12px 14px",border:"1px solid #E2E8F0"}}>
-            <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>××××××¨</div>
+            <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>לייבור</div>
             <div style={{fontSize:18,fontWeight:700,color:m.totalSales>0&&(m.totalPayroll/m.totalSales*100)>30?"#EF4444":"#0F172A"}}>{m.totalSales>0?(m.totalPayroll/m.totalSales*100).toFixed(1):"0"}%</div>
           </div>
           <div style={{background:"#F8FAFC",borderRadius:10,padding:"12px 14px",border:"1px solid #E2E8F0"}}>
-            <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>××××¦×¢ ××××</div>
+            <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>ממוצע יומי</div>
             <div style={{fontSize:18,fontWeight:700,color:"#0F172A"}}>{fmt(Math.round(m.totalSales / Math.max(monthEntries.length,1)))}</div>
           </div>
           <div style={{background:"#F8FAFC",borderRadius:10,padding:"12px 14px",border:"1px solid #E2E8F0"}}>
-            <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>×¨××× × ×§× %</div>
+            <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>רווח נקי %</div>
             <div style={{fontSize:18,fontWeight:700,color:netProfitPct>=0?"#22C55E":"#EF4444"}}>{netProfitPct.toFixed(1)}%</div>
           </div>
         </div>
