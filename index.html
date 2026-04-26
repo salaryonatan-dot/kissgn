@@ -840,8 +840,9 @@ const EMPTY_ENTRY = {
 };
 
 // ─── Formatters (module-level for use in helper components) ───────────────────
-const fmt = (n) => {
+const fmt = (n, exact=false) => {
   const num = Number(n) || 0;
+  if(exact || num !== Math.round(num)) return '₪' + num.toLocaleString('he-IL', {minimumFractionDigits:2, maximumFractionDigits:2});
   return '₪' + Math.round(num).toLocaleString('he-IL');
 };
 const fmtPct = (n) => (Number(n) || 0).toFixed(1) + '%';
@@ -2965,14 +2966,16 @@ function PilotDashboard() {
       onComplete={async (cfg, sups, fixed) => {
         // EDIT existing business — do NOT create new bizId
         const bizId = currentBizId;
-        setBusinessConfig(cfg);
+        // Merge with existing config to preserve employees and other fields not in SetupWizard
+        const mergedCfg = {...businessConfig, ...cfg};
+        setBusinessConfig(mergedCfg);
         setSuppliers(sups);
         if(fixed) setFixedList(fixed);
         // Update business name in list
-        const updatedBizList = businesses.map(b => b.id===bizId ? {...b, name:cfg.businessName||b.name} : b);
+        const updatedBizList = businesses.map(b => b.id===bizId ? {...b, name:mergedCfg.businessName||b.name} : b);
         setBusinesses(updatedBizList);
         try { await window.storage.set("app-businesses", JSON.stringify(updatedBizList), true); } catch(e){ console.error(e); }
-        try { await window.storage.set(`biz:${bizId}:config`, JSON.stringify(cfg), true); } catch(e){ console.error(e); }
+        try { await window.storage.set(`biz:${bizId}:config`, JSON.stringify(mergedCfg), true); } catch(e){ console.error(e); }
         try { await window.storage.set(`biz:${bizId}:suppliers`, JSON.stringify(sups), true); } catch(e){ console.error(e); }
         if(fixed) { try { await window.storage.set(`biz:${bizId}:fixed`, JSON.stringify(fixed), true); } catch(e){ console.error(e); } }
         setShowSetup(false);
@@ -4590,7 +4593,7 @@ function PettyCashScreen({ items, saveItems }) {
     if(!form.amount || !form.date) return;
     const list = items||[];
     if(editId) {
-      saveItems(list.map(i => i.id===editId ? {...form, id:editId} : i));
+      saveItems(list.map(i => i.id===editId ? {...form, id:editId, amount:Number(form.amount)} : i));
     } else {
       saveItems([...list, {...form, id:Date.now(), amount:Number(form.amount)}]);
     }
@@ -4654,7 +4657,7 @@ function PettyCashScreen({ items, saveItems }) {
         <button onClick={()=>goMonth(-1)} style={{background:"#F1F5F9",border:"none",borderRadius:8,width:36,height:36,cursor:"pointer",fontSize:16,color:"#64748B",display:"flex",alignItems:"center",justifyContent:"center"}}>→</button>
         <div style={{textAlign:"center"}}>
           <div style={{fontSize:18,fontWeight:700,color:"#0F172A"}}>{MONTH_NAMES[selMonth]} {selYear}</div>
-          <div style={{fontSize:11,color:"#94A3B8"}}>{monthItems.length} רשומות · {fmt(monthTotal)}</div>
+          <div style={{fontSize:11,color:"#94A3B8"}}>{monthItems.length} רשומות · {fmt(monthTotal, true)}</div>
         </div>
         <button onClick={()=>goMonth(1)} style={{background:"#F1F5F9",border:"none",borderRadius:8,width:36,height:36,cursor:"pointer",fontSize:16,color:"#64748B",display:"flex",alignItems:"center",justifyContent:"center"}}
           disabled={selYear===YEAR && selMonth===MONTH}>←</button>
@@ -4687,7 +4690,7 @@ function PettyCashScreen({ items, saveItems }) {
             </div>
             <div style={{flex:1}}>
               <label className="label">סכום (₪)</label>
-              <input type="number" inputMode="numeric" placeholder="0" className="input" style={{marginBottom:0}} value={form.amount}
+              <input type="number" inputMode="decimal" step="0.01" placeholder="0.00" className="input" style={{marginBottom:0}} value={form.amount}
                 onChange={e=>setForm(f=>({...f,amount:e.target.value}))} autoFocus/>
             </div>
           </div>
@@ -4709,7 +4712,7 @@ function PettyCashScreen({ items, saveItems }) {
       {filtered.length > 0 && (
         <div style={{background:"#F9FAFB",border:`1px solid ${"#E5E7EB"}`,borderRadius:5,padding:"10px 14px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <span style={{fontWeight:700,color:"#6B7280"}}>סה״כ {filterCat==="הכל"?"כל הרשומות":filterCat}</span>
-          <span style={{fontWeight:700,fontSize:14,color:"#111827"}}>{fmt(total)}</span>
+          <span style={{fontWeight:700,fontSize:14,color:"#111827"}}>{fmt(total, true)}</span>
         </div>
       )}
 
@@ -4722,7 +4725,7 @@ function PettyCashScreen({ items, saveItems }) {
             <div key={item.id} style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:8,padding:"12px 16px",marginBottom:8,display:"flex",alignItems:"center",gap:10}}>
               <div style={{flex:1}}>
                 <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:3}}>
-                  <span style={{fontSize:13,fontWeight:700,color:"#111827"}}>{fmt(Number(item.amount))}</span>
+                  <span style={{fontSize:13,fontWeight:700,color:"#111827"}}>{fmt(Number(item.amount), true)}</span>
                   <span style={{fontSize:11,padding:"2px 7px",background:"#F3F4F6",borderRadius:3,color:"#6B7280"}}>{item.category}</span>
                 </div>
                 <div style={{fontSize:12,color:"#9CA3AF"}}>{item.date} {item.note && <span style={{color:"#6B7280"}}>· {item.note}</span>}</div>
