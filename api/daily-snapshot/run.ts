@@ -37,6 +37,45 @@ function verifyAuth(req: VercelRequest): boolean {
   return false;
 }
 
+/**
+ * Get the snapshot recipient email for a specific business.
+ * Checks `tenants/{tenantId}/snapshot_recipients/{bizId}` first.
+ * Falls back to tenant-level owner from `tenants/{tenantId}/app/users`.
+ */
+async function getRecipientEmail(
+  tenantId: string,
+  bizId: string
+): Promise<string | null> {
+  const db = getDb();
+
+  // Priority 1: Business-specific recipient from snapshot_recipients
+  try {
+    const recipientSnap = await db
+      .ref(`tenants/${tenantId}/snapshot_recipients/${bizId}`)
+      .once("value");
+    const recipientVal = recipientSnap.val();
+
+    if (recipientVal) {
+      // Support single email string
+      if (typeof recipientVal === "string" && recipientVal.includes("@")) {
+        return recipientVal;
+      }
+      // Support object with email field
+      if (typeof recipientVal === "object" && recipientVal.email) {
+        return recipientVal.email;
+      }
+    }
+  } catch (error) {
+    console.warn(
+      `Error reading snapshot_recipients for ${tenantId}/${bizId}:`,
+      error
+    );
+  }
+
+  // Priority 2: Fall back to tenant-level owner (original behavior)
+  return getOwnerEmail(tenantId);
+}
+
 async function getOwnerEmail(tenantId: string): Promise<string | null> {
   const db = getDb();
 
@@ -107,22 +146,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       for (const snapshot of snapshots) {
         try {
-          const ownerEmail = await getOwnerEmail(snapshot.tenantId);
+          const recipientEmail = await getRecipientEmail(
+            snapshot.tenantId,
+            snapshot.bizId
+          );
 
-          if (!ownerEmail) {
+          if (!recipientEmail) {
             console.warn(
-              `No owner email found for tenant ${snapshot.tenantId}, skipping snapshot email`
+              `No recipient email found for ${snapshot.tenantId}/${snapshot.bizId}, skipping`
             );
             failureCount++;
             failures.push({
               tenantId: snapshot.tenantId,
               bizId: snapshot.bizId,
-              error: "No owner email found",
+              error: "No recipient email found",
             });
             continue;
           }
 
-          await sendSnapshotEmail(ownerEmail, snapshot);
+          await sendSnapshotEmail(recipientEmail, snapshot);
+          console.log(
+            `[daily-snapshot] Sent ${snapshot.bizName} to ${recipientEmail}`
+          );
           successCount++;
         } catch (error) {
           console.error(
@@ -156,13 +201,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       const snapshot = await buildSnapshotForBiz(tenantId, bizId);
-      const ownerEmail = await getOwnerEmail(tenantId);
+      const recipientEmail = await getRecipientEmail(tenantId, bizId);
 
-      if (!ownerEmail) {
-        return res.status(404).json({ error: "No owner email found for this tenant" });
+      if (!recipientEmail) {
+        return res.status(404).json({
+          error: "No recipient email found for this business",
+        });
       }
 
-      await sendSnapshotEmail(ownerEmail, snapshot);
+      await sendSnapshotEmail(recipientEmail, snapshot);
 
       return res.status(200).json({
         status: "success",
@@ -174,7 +221,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           netProfit: snapshot.netProfit,
           totalSales: snapshot.totalSales,
         },
-        emailSentTo: ownerEmail,
+        emailSentTo: recipientEmail,
       });
     }
 
@@ -183,7 +230,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.error("Error in daily-snapshot/run:", error);
     return res.status(500).json({
       error: "Internal server error",
-      message: String(error)
+      message: String(error),
     });
   }
 }
