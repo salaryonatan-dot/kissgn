@@ -126,6 +126,22 @@ function parseFirebaseData<T>(value: any): T {
   return value as T;
 }
 
+// Coerce a value to a finite number. Handles strings, "1,234", null, undefined.
+// Critical: form inputs and demo data store numeric fields as strings in Firebase
+// (e.target.value from <input>, plus explicit String(...) wrapping in demo data),
+// so naive `+=` causes string concatenation: 0 + "5000" + 3000 = "050003000".
+function num(value: any): number {
+  if (value === null || value === undefined || value === "") return 0;
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value === "string") {
+    const cleaned = value.replace(/,/g, "").trim();
+    const n = Number(cleaned);
+    return Number.isFinite(n) ? n : 0;
+  }
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export async function buildSnapshotForBiz(
   tenantId: string,
   bizId: string
@@ -168,25 +184,26 @@ export async function buildSnapshotForBiz(
   let totalSupplierPayments = 0;
   let totalHourlyPayroll = 0;
 
-  // Aggregate entries
+  // Aggregate entries — coerce every field via num() because Firebase stores
+  // these as strings (form inputs) and `+=` would otherwise concatenate.
   for (const entry of monthEntries) {
-    totalSales += entry.sales || 0;
-    totalSales += entry.deliveries || 0;
-    totalSales += entry.other_income || 0;
+    totalSales += num(entry.sales);
+    totalSales += num(entry.deliveries);
+    totalSales += num((entry as any).other_income);
 
-    totalFood += entry.food_cost || 0;
+    totalFood += num(entry.food_cost);
     totalSupplierPayments += Object.values(entry.supplier_payments || {}).reduce(
-      (sum, val) => sum + (val || 0),
+      (sum: number, val) => sum + num(val),
       0
     );
 
-    totalPayroll += entry.payroll || 0;
+    totalPayroll += num(entry.payroll);
     totalHourlyPayroll += Object.values(entry.hourly_payroll || {}).reduce(
-      (sum, val) => sum + (val || 0),
+      (sum: number, val) => sum + num(val),
       0
     );
 
-    totalOtherExpense += entry.other_expense || 0;
+    totalOtherExpense += num(entry.other_expense);
   }
 
   // Use supplier_payments if available, otherwise food_cost
@@ -198,7 +215,10 @@ export async function buildSnapshotForBiz(
   let globalEmployeePayroll = 0;
   const employees = config.employees || [];
   const globalEmployees = employees.filter((e) => e.type === "global");
-  const globalMonthlyTotal = globalEmployees.reduce((a, e) => a + (e.monthlySalary || 0), 0);
+  const globalMonthlyTotal = globalEmployees.reduce(
+    (a: number, e) => a + num(e.monthlySalary),
+    0
+  );
   globalEmployeePayroll = daysInCurrentMonth > 0
     ? Math.round(globalMonthlyTotal * (monthEntries.length / daysInCurrentMonth))
     : 0;
@@ -211,24 +231,24 @@ export async function buildSnapshotForBiz(
   for (const fixed of fixedExpenses) {
     if (fixed.disabled) continue;
     if (fixed.rentPct || fixed.royaltyPct) continue;
-
-    if (fixed.amount) {
-      fixedRegular += fixed.amount;
-    }
+    fixedRegular += num(fixed.amount);
   }
 
   // Calculate rent
   let rentAmount = 0;
-  if (config.rentType === "pct" && config.rentPct) {
-    rentAmount = totalSales * (config.rentPct / 100);
-  } else if (config.rentFixed) {
-    rentAmount = config.rentFixed;
+  const rentPct = num(config.rentPct);
+  const rentFixed = num(config.rentFixed);
+  if (config.rentType === "pct" && rentPct) {
+    rentAmount = totalSales * (rentPct / 100);
+  } else if (rentFixed) {
+    rentAmount = rentFixed;
   }
 
   // Calculate royalty
   let royaltyAmount = 0;
-  if (config.hasRoyalty && config.royaltyPct) {
-    royaltyAmount = totalSales * (config.royaltyPct / 100);
+  const royaltyPct = num(config.royaltyPct);
+  if (config.hasRoyalty && royaltyPct) {
+    royaltyAmount = totalSales * (royaltyPct / 100);
   }
 
   // Calculate totals
@@ -248,49 +268,57 @@ export async function buildSnapshotForBiz(
   const dailyAvg = daysPassed > 0 ? netProfit / daysPassed : 0;
   const forecast = netProfit + dailyAvg * daysLeft;
   const paceRevenue = daysPassed > 0 ? (totalSales / daysPassed) * daysInCurrentMonth : 0;
-  const paceVsTarget = config.targetSales > 0
-    ? ((paceRevenue - config.targetSales) / config.targetSales) * 100
+  const targetSales = num(config.targetSales);
+  const targetFoodCost = num(config.targetFoodCost);
+  const targetLabor = num(config.targetLabor);
+  const paceVsTarget = targetSales > 0
+    ? ((paceRevenue - targetSales) / targetSales) * 100
     : 0;
 
   // Generate insights
   const insights: Array<{ type: "positive" | "negative" | "warning"; message: string }> = [];
 
+  // Resolved targets (with defaults) for both insights and the returned snapshot.
+  const resolvedTargetSales = targetSales || 700000;
+  const resolvedTargetFood = targetFoodCost || 33;
+  const resolvedTargetLabor = targetLabor || 27;
+
   // Food cost insight
-  if (foodCostPct > (config.targetFoodCost || 33) + 3) {
+  if (foodCostPct > resolvedTargetFood + 3) {
     insights.push({
       type: "negative",
-      message: `עלות המזון גבוהה מהיעד: ${foodCostPct.toFixed(1)}% (יעד: ${config.targetFoodCost}%)`,
+      message: `עלות המזון גבוהה מהיעד: ${foodCostPct.toFixed(1)}% (יעד: ${resolvedTargetFood}%)`,
     });
-  } else if (foodCostPct < (config.targetFoodCost || 33) - 3) {
+  } else if (foodCostPct < resolvedTargetFood - 3) {
     insights.push({
       type: "positive",
-      message: `עלות המזון נמוכה מהיעד: ${foodCostPct.toFixed(1)}% (יעד: ${config.targetFoodCost}%)`,
+      message: `עלות המזון נמוכה מהיעד: ${foodCostPct.toFixed(1)}% (יעד: ${resolvedTargetFood}%)`,
     });
   }
 
   // Labor insight
-  if (laborPct > (config.targetLabor || 27) + 3) {
+  if (laborPct > resolvedTargetLabor + 3) {
     insights.push({
       type: "negative",
-      message: `עלות העובדים גבוהה מהיעד: ${laborPct.toFixed(1)}% (יעד: ${config.targetLabor}%)`,
+      message: `עלות העובדים גבוהה מהיעד: ${laborPct.toFixed(1)}% (יעד: ${resolvedTargetLabor}%)`,
     });
-  } else if (laborPct < (config.targetLabor || 27) - 3) {
+  } else if (laborPct < resolvedTargetLabor - 3) {
     insights.push({
       type: "positive",
-      message: `עלות העובדים נמוכה מהיעד: ${laborPct.toFixed(1)}% (יעד: ${config.targetLabor}%)`,
+      message: `עלות העובדים נמוכה מהיעד: ${laborPct.toFixed(1)}% (יעד: ${resolvedTargetLabor}%)`,
     });
   }
 
   // Revenue pace insight
-  if (paceRevenue < (config.targetSales || 700000) * 0.9) {
+  if (paceRevenue < resolvedTargetSales * 0.9) {
     insights.push({
       type: "negative",
-      message: `קצב ההכנסות נמוך מהיעד: ₪${Math.round(paceRevenue).toLocaleString("he-IL")} (יעד: ₪${Math.round(config.targetSales || 700000).toLocaleString("he-IL")})`,
+      message: `קצב ההכנסות נמוך מהיעד: ₪${Math.round(paceRevenue).toLocaleString("he-IL")} (יעד: ₪${Math.round(resolvedTargetSales).toLocaleString("he-IL")})`,
     });
-  } else if (paceRevenue > (config.targetSales || 700000) * 1.05) {
+  } else if (paceRevenue > resolvedTargetSales * 1.05) {
     insights.push({
       type: "positive",
-      message: `קצב ההכנסות גבוה מהיעד: ₪${Math.round(paceRevenue).toLocaleString("he-IL")} (יעד: ₪${Math.round(config.targetSales || 700000).toLocaleString("he-IL")})`,
+      message: `קצב ההכנסות גבוה מהיעד: ₪${Math.round(paceRevenue).toLocaleString("he-IL")} (יעד: ₪${Math.round(resolvedTargetSales).toLocaleString("he-IL")})`,
     });
   }
 
@@ -300,7 +328,7 @@ export async function buildSnapshotForBiz(
       type: "negative",
       message: `רווח נקי שלילי: ₪${Math.round(netProfit).toLocaleString("he-IL")}`,
     });
-  } else if (netProfit > config.targetSales * 0.15) {
+  } else if (netProfit > resolvedTargetSales * 0.15) {
     insights.push({
       type: "positive",
       message: `רווח נקי חזק: ₪${Math.round(netProfit).toLocaleString("he-IL")}`,
@@ -331,9 +359,9 @@ export async function buildSnapshotForBiz(
     forecast,
     paceRevenue,
     paceVsTarget,
-    targetSales: config.targetSales || 700000,
-    targetFoodCost: config.targetFoodCost || 33,
-    targetLabor: config.targetLabor || 27,
+    targetSales: resolvedTargetSales,
+    targetFoodCost: resolvedTargetFood,
+    targetLabor: resolvedTargetLabor,
     insights,
   };
 }
