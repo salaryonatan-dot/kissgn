@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.sheetjs.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://www.gstatic.com https://*.firebaseio.com https://*.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' https://*.firebaseio.com wss://*.firebaseio.com https://*.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://api.open-meteo.com https://www.oref.org.il https://*.cloudfunctions.net https://firestore.googleapis.com https://firebase.googleapis.com wss://*.firebaseio.com https://*.firebase.com wss://*.firebase.com https://fcmregistrations.googleapis.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com https://fonts.googleapis.com; object-src 'none'; base-uri 'self';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.sheetjs.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://www.gstatic.com https://*.firebaseio.com https://*.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; connect-src 'self' https://*.firebaseio.com wss://*.firebaseio.com https://*.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://api.open-meteo.com https://www.oref.org.il https://*.cloudfunctions.net https://firestore.googleapis.com https://firebase.googleapis.com wss://*.firebaseio.com https://*.firebase.com wss://*.firebase.com https://fcmregistrations.googleapis.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com https://fonts.googleapis.com; object-src 'none'; base-uri 'self';">
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#111827" />
@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <style>
-    /* ══ Design Tokens ═════════════════════════════════════════════════════ */
+    /* ══ Design Tokens ══════════════════════════════════════════════════════ */
     :root {
       --bg:         #F9FAFB;
       --surface:    #FFFFFF;
@@ -553,6 +553,10 @@
   <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
 
+  <!-- Leaflet (used by SetupWizard's location picker) — CDN, no API key required -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" crossorigin=""/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" crossorigin=""></script>
+
   <!-- Synchronous stub: apiFetch is available immediately, upgraded by the module once Firebase loads -->
   <script>
     window.apiFetch = async function(path, options) {
@@ -840,9 +844,8 @@ const EMPTY_ENTRY = {
 };
 
 // ─── Formatters (module-level for use in helper components) ───────────────────
-const fmt = (n, exact=false) => {
+const fmt = (n) => {
   const num = Number(n) || 0;
-  if(exact || num !== Math.round(num)) return '₪' + num.toLocaleString('he-IL', {minimumFractionDigits:2, maximumFractionDigits:2});
   return '₪' + Math.round(num).toLocaleString('he-IL');
 };
 const fmtPct = (n) => (Number(n) || 0).toFixed(1) + '%';
@@ -1616,6 +1619,277 @@ function ProfileCompletionScreen({ user, onComplete }) {
 // ─── Setup Wizard ─────────────────────────────────────────────────────────────
 const DOW_FULL   = ["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Region taxonomy (light client copy — server resolves to actual oref areas).
+// Mirror of src/analytics/regions.ts but stripped to UI-essential fields.
+// ═══════════════════════════════════════════════════════════════════════════
+const REGIONS_LIGHT = [
+  { id: "galil-golan", name: "גליל וגולן", description: "מהחרמון עד הכנרת",
+    sub: [
+      { id: "galil-golan__galil-elyon",   name: "גליל עליון",          center: { lat: 33.207, lon: 35.570 } },
+      { id: "galil-golan__galil-maaravi", name: "גליל מערבי",          center: { lat: 33.018, lon: 35.097 } },
+      { id: "galil-golan__galil-merkazi", name: "גליל מרכזי / כרמיאל", center: { lat: 32.917, lon: 35.298 } },
+      { id: "galil-golan__golan",         name: "רמת הגולן",           center: { lat: 32.992, lon: 35.690 } },
+    ]},
+  { id: "amakim", name: "עמקים", description: "עמק יזרעאל ועמק בית שאן",
+    sub: [
+      { id: "amakim__yizrael",    name: "עמק יזרעאל וגלבוע", center: { lat: 32.608, lon: 35.286 } },
+      { id: "amakim__kineret",    name: "כנרת וטבריה",       center: { lat: 32.793, lon: 35.531 } },
+      { id: "amakim__beit-shean", name: "עמק בית שאן",       center: { lat: 32.498, lon: 35.500 } },
+    ]},
+  { id: "haifa", name: "חיפה והקריות", description: "חיפה, הקריות, נשר, יוקנעם",
+    sub: [
+      { id: "haifa__haifa-city",     name: "חיפה",            center: { lat: 32.794, lon: 34.989 } },
+      { id: "haifa__krayot",         name: "הקריות",          center: { lat: 32.838, lon: 35.080 } },
+      { id: "haifa__hofei-hacarmel", name: "חופי הכרמל",      center: { lat: 32.617, lon: 34.949 } },
+      { id: "haifa__yokneam",        name: "יוקנעם והסביבה",  center: { lat: 32.658, lon: 35.108 } },
+    ]},
+  { id: "sharon-tzfoni", name: "שרון צפוני", description: "מצפון לנתניה — חדרה, פרדס חנה, בנימינה",
+    sub: [
+      { id: "sharon-tzfoni__hadera",      name: "חדרה והסביבה",      center: { lat: 32.434, lon: 34.919 } },
+      { id: "sharon-tzfoni__pardes-hana", name: "פרדס חנה ובנימינה", center: { lat: 32.475, lon: 34.972 } },
+      { id: "sharon-tzfoni__menashe",     name: "מנשה",              center: { lat: 32.480, lon: 35.025 } },
+    ]},
+  { id: "sharon-dromi", name: "שרון דרומי", description: "נתניה, כפר סבא, רעננה, הוד השרון",
+    sub: [
+      { id: "sharon-dromi__netanya",   name: "נתניה והסביבה",            center: { lat: 32.328, lon: 34.857 } },
+      { id: "sharon-dromi__kfar-saba", name: "כפר סבא, רעננה והוד השרון", center: { lat: 32.182, lon: 34.907 } },
+      { id: "sharon-dromi__herzliya",  name: "הרצליה",                    center: { lat: 32.166, lon: 34.844 } },
+    ]},
+  { id: "gush-dan", name: "גוש דן", description: "תל אביב, רמת גן, חולון, פתח תקווה",
+    sub: [
+      { id: "gush-dan__tel-aviv",     name: "תל אביב והסביבה הקרובה", center: { lat: 32.085, lon: 34.781 } },
+      { id: "gush-dan__dan-dromi",    name: "מטרופולין דן דרומי",     center: { lat: 32.018, lon: 34.778 } },
+      { id: "gush-dan__petah-tikva",  name: "מזרח גוש דן",            center: { lat: 32.087, lon: 34.887 } },
+    ]},
+  { id: "shfela", name: "שפלה", description: "רחובות, נס ציונה, רמלה, לוד, מודיעין",
+    sub: [
+      { id: "shfela__rehovot",   name: "רחובות, נס ציונה ויבנה", center: { lat: 31.892, lon: 34.811 } },
+      { id: "shfela__ramla-lod", name: "רמלה, לוד ובסביבה",        center: { lat: 31.928, lon: 34.871 } },
+    ]},
+  { id: "yerushalayim", name: "ירושלים והסביבה", description: "ירושלים, מבשרת ציון, בית שמש, גוש עציון",
+    sub: [
+      { id: "yerushalayim__city",         name: "ירושלים",            center: { lat: 31.778, lon: 35.220 } },
+      { id: "yerushalayim__beit-shemesh", name: "בית שמש והרי יהודה", center: { lat: 31.751, lon: 34.989 } },
+      { id: "yerushalayim__etzion",       name: "גוש עציון",           center: { lat: 31.660, lon: 35.139 } },
+    ]},
+  { id: "shfela-dromit", name: "שפלה דרומית", description: "אשדוד, אשקלון, קריית גת",
+    sub: [
+      { id: "shfela-dromit__ashdod",     name: "אשדוד והסביבה",        center: { lat: 31.802, lon: 34.642 } },
+      { id: "shfela-dromit__ashkelon",   name: "אשקלון והסביבה",        center: { lat: 31.668, lon: 34.572 } },
+      { id: "shfela-dromit__kiryat-gat", name: "קריית גת וקריית מלאכי", center: { lat: 31.611, lon: 34.769 } },
+    ]},
+  { id: "otef-aza", name: "עוטף עזה ונגב מערבי", description: "שדרות, נתיבות, אופקים",
+    sub: [
+      { id: "otef-aza__sderot",  name: "שדרות והקיבוצים הסמוכים", center: { lat: 31.524, lon: 34.595 } },
+      { id: "otef-aza__netivot", name: "נתיבות ואופקים",          center: { lat: 31.422, lon: 34.589 } },
+      { id: "otef-aza__eshkol",  name: "מועצה אזורית אשכול",      center: { lat: 31.296, lon: 34.421 } },
+    ]},
+  { id: "bika-yosh", name: "בקעה ויו\"ש", description: "אריאל, מעלה אדומים, בקעת הירדן, חברון",
+    sub: [
+      { id: "bika-yosh__shomron",  name: "שומרון",            center: { lat: 32.106, lon: 35.181 } },
+      { id: "bika-yosh__binyamin", name: "מטה בנימין",        center: { lat: 31.860, lon: 35.232 } },
+      { id: "bika-yosh__bika",     name: "בקעת הירדן",        center: { lat: 32.103, lon: 35.473 } },
+      { id: "bika-yosh__chevron",  name: "חברון, קריית ארבע", center: { lat: 31.532, lon: 35.097 } },
+    ]},
+  { id: "negev-eilat", name: "נגב ואילת", description: "באר שבע, דימונה, ערד, אילת והערבה",
+    sub: [
+      { id: "negev-eilat__beer-sheva",  name: "באר שבע והסביבה",      center: { lat: 31.252, lon: 34.791 } },
+      { id: "negev-eilat__dimona-arad", name: "דימונה, ערד וים המלח", center: { lat: 31.071, lon: 35.034 } },
+      { id: "negev-eilat__arava",       name: "הערבה",                center: { lat: 30.612, lon: 35.247 } },
+      { id: "negev-eilat__eilat",       name: "אילת",                 center: { lat: 29.557, lon: 34.952 } },
+    ]},
+];
+const ALL_SUBS_LIGHT = REGIONS_LIGHT.flatMap(r =>
+  r.sub.map(s => ({ ...s, regionId: r.id, regionName: r.name }))
+);
+const haversineKm = (a, b) => {
+  const R = 6371;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLon = toRad(b.lon - a.lon);
+  const lat1 = toRad(a.lat), lat2 = toRad(b.lat);
+  const h = Math.sin(dLat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)**2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+};
+const findNearestSubRegion = (point) => {
+  let best = null, bestDist = Infinity;
+  for (const s of ALL_SUBS_LIGHT) {
+    const d = haversineKm(point, s.center);
+    if (d < bestDist) { best = s; bestDist = d; }
+  }
+  return best ? { ...best, distanceKm: bestDist } : null;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LocationStep — interactive map (Leaflet) + hierarchical region checklist.
+// Used as a step in SetupWizard, but standalone enough to drop into other
+// settings screens later.
+// ═══════════════════════════════════════════════════════════════════════════
+function LocationStep({ lat, setLat, lon, setLon, regionIds, setRegionIds, subregionIds, setSubregionIds, onNext, onBack }) {
+  const mapRef = useRef(null);
+  const leafletMapRef = useRef(null);
+  const markerRef = useRef(null);
+  const [expandedRegions, setExpandedRegions] = useState({});
+  const [autoSuggested, setAutoSuggested] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const init = () => {
+      if (cancelled) return;
+      // Wait until Leaflet's CDN script has finished loading.
+      if (typeof L === "undefined" || !mapRef.current) {
+        setTimeout(init, 100);
+        return;
+      }
+      if (leafletMapRef.current) return;
+      const initialLat = lat || 32.0853;
+      const initialLon = lon || 34.7818;
+      const map = L.map(mapRef.current, { zoomControl: true }).setView([initialLat, initialLon], 9);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 18,
+        attribution: "© OpenStreetMap",
+      }).addTo(map);
+      const marker = L.marker([initialLat, initialLon], { draggable: true }).addTo(map);
+      leafletMapRef.current = map;
+      markerRef.current = marker;
+      const updatePos = (latLng) => {
+        const newLat = Number(latLng.lat.toFixed(5));
+        const newLon = Number(latLng.lng.toFixed(5));
+        setLat(newLat); setLon(newLon);
+        setAutoSuggested(findNearestSubRegion({ lat: newLat, lon: newLon }));
+      };
+      marker.on("dragend", () => updatePos(marker.getLatLng()));
+      map.on("click", (e) => {
+        marker.setLatLng(e.latlng);
+        updatePos(e.latlng);
+      });
+      if (lat && lon) setAutoSuggested(findNearestSubRegion({ lat, lon }));
+    };
+    init();
+    return () => { cancelled = true; };
+  }, []);
+
+  const useMyLocation = () => {
+    if (!navigator.geolocation) {
+      alert("הדפדפן לא תומך באיתור מיקום אוטומטי");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const newLat = Number(pos.coords.latitude.toFixed(5));
+        const newLon = Number(pos.coords.longitude.toFixed(5));
+        setLat(newLat); setLon(newLon);
+        if (markerRef.current && leafletMapRef.current) {
+          markerRef.current.setLatLng([newLat, newLon]);
+          leafletMapRef.current.setView([newLat, newLon], 12);
+        }
+        setAutoSuggested(findNearestSubRegion({ lat: newLat, lon: newLon }));
+      },
+      (err) => alert("איתור מיקום נכשל: " + err.message),
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
+
+  const acceptAutoSuggestion = () => {
+    if (!autoSuggested) return;
+    if (!subregionIds.includes(autoSuggested.id)) {
+      setSubregionIds([...subregionIds, autoSuggested.id]);
+    }
+  };
+
+  const toggleRegion = (rid) =>
+    setRegionIds(regionIds.includes(rid) ? regionIds.filter(x=>x!==rid) : [...regionIds, rid]);
+  const toggleSubregion = (sid) =>
+    setSubregionIds(subregionIds.includes(sid) ? subregionIds.filter(x=>x!==sid) : [...subregionIds, sid]);
+  const toggleExpand = (rid) =>
+    setExpandedRegions(prev => ({ ...prev, [rid]: !prev[rid] }));
+
+  const totalSelectedSubs = subregionIds.length +
+    regionIds.reduce((sum, rid) => {
+      const r = REGIONS_LIGHT.find(x => x.id === rid);
+      return sum + (r ? r.sub.length : 0);
+    }, 0);
+
+  return (
+    <>
+      <div className="card card-p">
+        <label className="label">איפה ממוקם העסק?</label>
+        <p style={{color:"#6B7280",fontSize:12,margin:"0 0 10px"}}>
+          לחץ על המפה או גרור את הסמן למיקום של העסק. זה ישמש למזג האוויר והצעת אזורי עורף.
+        </p>
+        <div ref={mapRef} style={{height:"260px",width:"100%",borderRadius:7,border:"1px solid #E5E7EB",marginBottom:10}}/>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center",fontSize:12,color:"#6B7280"}}>
+          <button className="btn btn-ghost" style={{padding:"6px 10px",fontSize:12}} onClick={useMyLocation}>
+            📍 השתמש במיקום הנוכחי
+          </button>
+          <span style={{direction:"ltr"}}>{lat ? `${Number(lat).toFixed(4)}, ${Number(lon).toFixed(4)}` : "לא נבחר עדיין"}</span>
+        </div>
+        {autoSuggested && (
+          <div style={{marginTop:10,padding:"10px 12px",background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:6,fontSize:13}}>
+            <strong>המיקום הזה תואם לתת-גוש "{autoSuggested.name}"</strong>
+            <span style={{color:"#6B7280"}}> ({autoSuggested.distanceKm.toFixed(1)} ק״מ)</span>
+            {!subregionIds.includes(autoSuggested.id) && (
+              <button className="btn btn-ghost"
+                style={{marginRight:8,padding:"4px 10px",fontSize:12,fontWeight:500,color:"#1D4ED8"}}
+                onClick={acceptAutoSuggestion}>
+                סמן אותו ↓
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="card card-p">
+        <label className="label">אזורי עורף לעקוב אחריהם</label>
+        <p style={{color:"#6B7280",fontSize:12,margin:"0 0 10px"}}>
+          סמן גושים שלמים, או הרחב ובחר תת-גושים ספציפיים. אפשר לסמן כמה גושים.
+        </p>
+        <div style={{maxHeight:"320px",overflowY:"auto",border:"1px solid #E5E7EB",borderRadius:7,padding:"4px 8px"}}>
+          {REGIONS_LIGHT.map(r => {
+            const isFullSelected = regionIds.includes(r.id);
+            const expanded = expandedRegions[r.id];
+            const subSelectedCount = r.sub.filter(s => subregionIds.includes(s.id)).length;
+            return (
+              <div key={r.id} style={{padding:"6px 0",borderBottom:"1px solid #F3F4F6"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <input type="checkbox" checked={isFullSelected} onChange={() => toggleRegion(r.id)} style={{cursor:"pointer"}}/>
+                  <button onClick={() => toggleExpand(r.id)}
+                    style={{flex:1,background:"none",border:"none",textAlign:"right",cursor:"pointer",padding:"2px 0",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <span style={{fontSize:14,fontWeight:isFullSelected?600:500,color:"#111827"}}>
+                      {r.name}
+                      {!isFullSelected && subSelectedCount > 0 && (
+                        <span style={{fontSize:11,color:"#3B82F6",marginRight:6}}>({subSelectedCount} תת-גושים)</span>
+                      )}
+                    </span>
+                    <span style={{fontSize:11,color:"#9CA3AF"}}>{expanded ? "▴" : "▾"} {r.description}</span>
+                  </button>
+                </div>
+                {expanded && !isFullSelected && (
+                  <div style={{marginTop:6,marginRight:24,paddingRight:8,borderRight:"2px solid #E5E7EB"}}>
+                    {r.sub.map(s => (
+                      <label key={s.id} style={{display:"flex",alignItems:"center",gap:6,padding:"3px 0",cursor:"pointer",fontSize:13,color:"#374151"}}>
+                        <input type="checkbox" checked={subregionIds.includes(s.id)} onChange={() => toggleSubregion(s.id)}/>
+                        {s.name}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <p style={{color:"#9CA3AF",fontSize:11,margin:"8px 0 0",textAlign:"left"}}>
+          סה״כ נבחרו: {totalSelectedSubs} תת-גושים
+        </p>
+      </div>
+
+      <button className="btn btn-primary btn-full" onClick={onNext}>המשך</button>
+      <button className="btn btn-ghost btn-full" onClick={onBack}>חזרה</button>
+    </>
+  );
+}
+
 function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCancel, isFirstSetup=true }) {
   const [step, setStep] = useState(1);
   // Step 1 -- פרטי עסק
@@ -1645,6 +1919,12 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
 
   // Step 4 -- קבועות
   const [fixedList, setFixedList] = useState(initialFixed);
+
+  // Step 5 -- מיקום ואזורי עורף (added in 2026-05 to feed the daily analytics builder)
+  const [bizLat, setBizLat] = useState(initial.lat || null);
+  const [bizLon, setBizLon] = useState(initial.lon || null);
+  const [bizRegionIds, setBizRegionIds] = useState(initial.region_ids || []);
+  const [bizSubregionIds, setBizSubregionIds] = useState(initial.subregion_ids || []);
 ;
 
   const toggleDay = (d) => setNewSupDays(prev => prev.includes(d) ? prev.filter(x=>x!==d) : [...prev, d]);
@@ -1667,7 +1947,7 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
 
   const updateFixed = (id, field, val) => setFixedList(prev => prev.map(f => f.id===id ? {...f, [field]:field==="amount"?Number(val)||0:val} : f));
 
-  // Step 5 -- owner account
+  // Step 6 -- owner account (was 5 before location step was added)
   const [ownerName,     setOwnerName]     = useState("");
   const [ownerUsername, setOwnerUsername] = useState("");
   const [ownerEmail,    setOwnerEmail]    = useState("");
@@ -1675,7 +1955,8 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
   const [ownerPass2,    setOwnerPass2]    = useState("");
   const [ownerErr,      setOwnerErr]      = useState("");
 
-  const TOTAL_STEPS = isFirstSetup ? 5 : 4;
+  // First-setup mode: 6 steps (incl. owner). Edit mode: 5 (no owner).
+  const TOTAL_STEPS = isFirstSetup ? 6 : 5;
 
   const finish = async () => {
     if(isFirstSetup) {
@@ -1692,7 +1973,15 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
       rentFixed: rentType==="fixed" ? Number(rentFixed)||0 : 0,
       hasRoyalty,
       royaltyPct: hasRoyalty ? Number(royaltyPct)||0 : 0,
-      targets: { salesGrowthPct:Number(tGrowth)||5, foodCostPct:Number(tFood)||33, laborCostPct:Number(tLabor)||27 }
+      targets: { salesGrowthPct:Number(tGrowth)||5, foodCostPct:Number(tFood)||33, laborCostPct:Number(tLabor)||27 },
+      // Location + region selection consumed by the daily analytics cron
+      // (lib/analytics/dailyBuilder.ts). Only included when actually picked,
+      // so existing businesses that don't go through the new step keep
+      // working with the Hadera defaults.
+      lat: bizLat,
+      lon: bizLon,
+      region_ids: bizRegionIds,
+      subregion_ids: bizSubregionIds,
     };
     const updatedFixed = fixedList.map(f => {
       if(f.rentPct) return {...f, name:`שכר דירה (${cfg.rentPct}% ממחזור)`};
@@ -1714,7 +2003,8 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
           {step===2 && <><h2 className="wizard-title">יעדים עסקיים</h2><p className="wizard-sub">מה אתה מכוון להשיג?</p></>}
           {step===3 && <><h2 className="wizard-title">ספקים</h2><p className="wizard-sub">הוסף ספקים וימי אספקה</p></>}
           {step===4 && <><h2 className="wizard-title">הוצאות קבועות</h2><p className="wizard-sub">סכומים חודשיים קבועים</p></>}
-          {step===5 && <><h2 className="wizard-title">יצירת חשבון</h2><p className="wizard-sub">פרטי כניסה לבעלים הראשי</p></>}
+          {step===5 && <><h2 className="wizard-title">מיקום ואזורי עורף</h2><p className="wizard-sub">למזג אוויר ואזעקות יומיות</p></>}
+          {step===6 && <><h2 className="wizard-title">יצירת חשבון</h2><p className="wizard-sub">פרטי כניסה לבעלים הראשי</p></>}
         </div>
 
         {/* ── STEP 1 ── */}
@@ -1895,12 +2185,27 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
                 </span>
               </div>
             </div>
-            <button className="btn btn-primary btn-full" onClick={isFirstSetup ? ()=>setStep(5) : finish}>{isFirstSetup ? "המשך" : "סיום"}</button>
+            <button className="btn btn-primary btn-full" onClick={()=>setStep(5)}>המשך</button>
             <button className="btn btn-ghost btn-full" onClick={()=>setStep(3)}>חזרה</button>
           </>
         )}
-        {/* ── STEP 5 (only for first setup) ── */}
-        {step===5 && isFirstSetup && (
+        {/* ── STEP 5: מיקום ואזורי עורף (always shown — both first-setup and edit) ── */}
+        {step===5 && (
+          <LocationStep
+            lat={bizLat}
+            setLat={setBizLat}
+            lon={bizLon}
+            setLon={setBizLon}
+            regionIds={bizRegionIds}
+            setRegionIds={setBizRegionIds}
+            subregionIds={bizSubregionIds}
+            setSubregionIds={setBizSubregionIds}
+            onNext={isFirstSetup ? ()=>setStep(6) : finish}
+            onBack={()=>setStep(4)}
+          />
+        )}
+        {/* ── STEP 6 (only for first setup): owner account ── */}
+        {step===6 && isFirstSetup && (
           <>
             <div className="card card-p">
               <label className="label">שם מלא של הבעלים</label>
@@ -1916,7 +2221,7 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
             </div>
             {ownerErr && <p style={{color:"#DC2626",fontSize:12,margin:"0 0 10px",fontWeight:500,padding:"7px 10px",background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:5}}>{ownerErr}</p>}
             <button className="btn btn-primary btn-full" onClick={finish}>סיום — כניסה ללוח הבקרה</button>
-            <button className="btn btn-ghost btn-full" onClick={()=>setStep(4)}>חזרה</button>
+            <button className="btn btn-ghost btn-full" onClick={()=>setStep(5)}>חזרה</button>
           </>
         )}
       </div>
@@ -2966,16 +3271,14 @@ function PilotDashboard() {
       onComplete={async (cfg, sups, fixed) => {
         // EDIT existing business — do NOT create new bizId
         const bizId = currentBizId;
-        // Merge with existing config to preserve employees and other fields not in SetupWizard
-        const mergedCfg = {...businessConfig, ...cfg};
-        setBusinessConfig(mergedCfg);
+        setBusinessConfig(cfg);
         setSuppliers(sups);
         if(fixed) setFixedList(fixed);
         // Update business name in list
-        const updatedBizList = businesses.map(b => b.id===bizId ? {...b, name:mergedCfg.businessName||b.name} : b);
+        const updatedBizList = businesses.map(b => b.id===bizId ? {...b, name:cfg.businessName||b.name} : b);
         setBusinesses(updatedBizList);
         try { await window.storage.set("app-businesses", JSON.stringify(updatedBizList), true); } catch(e){ console.error(e); }
-        try { await window.storage.set(`biz:${bizId}:config`, JSON.stringify(mergedCfg), true); } catch(e){ console.error(e); }
+        try { await window.storage.set(`biz:${bizId}:config`, JSON.stringify(cfg), true); } catch(e){ console.error(e); }
         try { await window.storage.set(`biz:${bizId}:suppliers`, JSON.stringify(sups), true); } catch(e){ console.error(e); }
         if(fixed) { try { await window.storage.set(`biz:${bizId}:fixed`, JSON.stringify(fixed), true); } catch(e){ console.error(e); } }
         setShowSetup(false);
@@ -4593,7 +4896,7 @@ function PettyCashScreen({ items, saveItems }) {
     if(!form.amount || !form.date) return;
     const list = items||[];
     if(editId) {
-      saveItems(list.map(i => i.id===editId ? {...form, id:editId, amount:Number(form.amount)} : i));
+      saveItems(list.map(i => i.id===editId ? {...form, id:editId} : i));
     } else {
       saveItems([...list, {...form, id:Date.now(), amount:Number(form.amount)}]);
     }
@@ -4634,12 +4937,12 @@ function PettyCashScreen({ items, saveItems }) {
         rows.push([i.date, amt, i.note || "", ""]);
       });
       grandTotal += catTotal;
-      rows.push(["סה\"כ " + cat, catTotal, "", ""]);
+      rows.push(["סה״כ " + cat, catTotal, "", ""]);
       rows.push(["","","",""]); // blank separator
     });
     // Grand total
     rows.push(["════════════","","",""]);
-    rows.push(["סה\"כ קופה קטנה", grandTotal, "", ""]);
+    rows.push(["סה״כ קופה קטנה", grandTotal, "", ""]);
     const csv = rows.map(r => r.map(c => {
       const s = String(c);
       return s.includes(",") || s.includes('"') ? '"' + s.replace(/"/g,'""') + '"' : s;
@@ -4657,7 +4960,7 @@ function PettyCashScreen({ items, saveItems }) {
         <button onClick={()=>goMonth(-1)} style={{background:"#F1F5F9",border:"none",borderRadius:8,width:36,height:36,cursor:"pointer",fontSize:16,color:"#64748B",display:"flex",alignItems:"center",justifyContent:"center"}}>→</button>
         <div style={{textAlign:"center"}}>
           <div style={{fontSize:18,fontWeight:700,color:"#0F172A"}}>{MONTH_NAMES[selMonth]} {selYear}</div>
-          <div style={{fontSize:11,color:"#94A3B8"}}>{monthItems.length} רשומות · {fmt(monthTotal, true)}</div>
+          <div style={{fontSize:11,color:"#94A3B8"}}>{monthItems.length} רשומות · {fmt(monthTotal)}</div>
         </div>
         <button onClick={()=>goMonth(1)} style={{background:"#F1F5F9",border:"none",borderRadius:8,width:36,height:36,cursor:"pointer",fontSize:16,color:"#64748B",display:"flex",alignItems:"center",justifyContent:"center"}}
           disabled={selYear===YEAR && selMonth===MONTH}>←</button>
@@ -4690,7 +4993,7 @@ function PettyCashScreen({ items, saveItems }) {
             </div>
             <div style={{flex:1}}>
               <label className="label">סכום (₪)</label>
-              <input type="number" inputMode="decimal" step="0.01" placeholder="0.00" className="input" style={{marginBottom:0}} value={form.amount}
+              <input type="number" inputMode="numeric" placeholder="0" className="input" style={{marginBottom:0}} value={form.amount}
                 onChange={e=>setForm(f=>({...f,amount:e.target.value}))} autoFocus/>
             </div>
           </div>
@@ -4712,7 +5015,7 @@ function PettyCashScreen({ items, saveItems }) {
       {filtered.length > 0 && (
         <div style={{background:"#F9FAFB",border:`1px solid ${"#E5E7EB"}`,borderRadius:5,padding:"10px 14px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <span style={{fontWeight:700,color:"#6B7280"}}>סה״כ {filterCat==="הכל"?"כל הרשומות":filterCat}</span>
-          <span style={{fontWeight:700,fontSize:14,color:"#111827"}}>{fmt(total, true)}</span>
+          <span style={{fontWeight:700,fontSize:14,color:"#111827"}}>{fmt(total)}</span>
         </div>
       )}
 
@@ -4725,7 +5028,7 @@ function PettyCashScreen({ items, saveItems }) {
             <div key={item.id} style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:8,padding:"12px 16px",marginBottom:8,display:"flex",alignItems:"center",gap:10}}>
               <div style={{flex:1}}>
                 <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:3}}>
-                  <span style={{fontSize:13,fontWeight:700,color:"#111827"}}>{fmt(Number(item.amount), true)}</span>
+                  <span style={{fontSize:13,fontWeight:700,color:"#111827"}}>{fmt(Number(item.amount))}</span>
                   <span style={{fontSize:11,padding:"2px 7px",background:"#F3F4F6",borderRadius:3,color:"#6B7280"}}>{item.category}</span>
                 </div>
                 <div style={{fontSize:12,color:"#9CA3AF"}}>{item.date} {item.note && <span style={{color:"#6B7280"}}>· {item.note}</span>}</div>
@@ -5268,7 +5571,7 @@ const MONTH_IDX = {
   "1":0,"2":1,"3":2,"4":3,"5":4,"6":5,"7":6,"8":7,"9":8,"10":9,"11":10,"12":11,
 };
 
-// ─── P&L Screen ───────────────────────────────────────────────────────────────────
+// ─── P&L Screen ──────────────────────────────────────────────────────────────
 function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[] }) {
   const [selYear, setSelYear] = useState(YEAR);
   const [selMonth, setSelMonth] = useState(MONTH);
