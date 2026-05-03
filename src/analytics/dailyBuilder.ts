@@ -17,6 +17,7 @@
  */
 
 import { getDb } from "../firebase/admin.js";
+import { resolveOrefAreas, type RegionSelection } from "./regionResolver.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -36,7 +37,15 @@ interface BusinessConfig {
   businessName?: string;
   lat?: number | string;
   lon?: number | string;
+  // Legacy: a flat list of Oref-area substrings. Still honored for
+  // backward compatibility with any business that pre-dated the
+  // region taxonomy.
   oref_areas?: string[];
+  // New: hierarchical region selection. The builder prefers this
+  // when present and falls back to oref_areas / Hadera defaults.
+  region_ids?: string[];
+  subregion_ids?: string[];
+  custom_oref_areas?: string[];
 }
 
 export interface AnalyticsDoc {
@@ -100,7 +109,15 @@ export interface AnalyticsDoc {
     location: {
       lat: number;
       lon: number;
+      // The flat substrings actually used for filtering — denormalized
+      // from regions for efficient querying without re-running resolver.
       oref_areas: string[];
+      // Which selection layer produced the areas, for traceability.
+      // "regions" = new hierarchical taxonomy; "legacy" = pre-existing
+      // flat oref_areas array; "default" = Hadera fallback.
+      areas_source: "regions" | "legacy" | "default";
+      region_ids?: string[];
+      subregion_ids?: string[];
     };
   };
 }
@@ -333,12 +350,39 @@ export async function buildAnalyticsForBiz(
   const todayEntry = entries.find((e) => e.date === date);
 
   // Resolve location with sane defaults (Hadera) until the user sets it
-  // explicitly through the map picker we'll add to SetupWizard.
+  // explicitly through the map picker in SetupWizard.
   const lat = num(config.lat) || 32.4342;
   const lon = num(config.lon) || 34.9194;
-  const orefAreas = Array.isArray(config.oref_areas) && config.oref_areas.length > 0
-    ? config.oref_areas
-    : ["חדרה", "בנימינה", "זכרון יעקב", "עמיקם", "עין עירון", "קציר"];
+
+  // Three layers of precedence for which Oref areas to filter alerts by:
+  //   1. NEW: hierarchical region selection (region_ids / subregion_ids /
+  //      custom_oref_areas) — resolved through the resolver, which de-dupes
+  //      and returns a flat list of substrings.
+  //   2. LEGACY: a pre-existing flat oref_areas list (config saved before
+  //      we introduced the taxonomy).
+  //   3. DEFAULT: the Hadera-area fallback, kept identical to what we had
+  //      before so a brand-new biz still gets *something* useful until the
+  //      owner picks a region.
+  const hasNewSelection =
+    (config.region_ids?.length ?? 0) > 0 ||
+    (config.subregion_ids?.length ?? 0) > 0 ||
+    (config.custom_oref_areas?.length ?? 0) > 0;
+  let orefAreas: string[];
+  let areasSource: "regions" | "legacy" | "default";
+  if (hasNewSelection) {
+    orefAreas = resolveOrefAreas({
+      region_ids: config.region_ids,
+      subregion_ids: config.subregion_ids,
+      custom_areas: config.custom_oref_areas,
+    } satisfies RegionSelection);
+    areasSource = "regions";
+  } else if (Array.isArray(config.oref_areas) && config.oref_areas.length > 0) {
+    orefAreas = config.oref_areas;
+    areasSource = "legacy";
+  } else {
+    orefAreas = ["חדרה", "בנימינה", "זכרון יעקב", "עמיקם", "עין עירון", "קציר"];
+    areasSource = "default";
+  }
 
   // Optional sources — soft-fail so one outage doesn't kill the whole doc.
   const [weather, alerts] = await Promise.all([
@@ -390,7 +434,14 @@ export async function buildAnalyticsForBiz(
         weather: weather ? "ok" : "missing",
         alerts: alerts ? "ok" : "missing",
       },
-      location: { lat, lon, oref_areas: orefAreas },
+      location: {
+        lat,
+        lon,
+        oref_areas: orefAreas,
+        areas_source: areasSource,
+        region_ids: config.region_ids,
+        subregion_ids: config.subregion_ids,
+      },
     },
   };
 }
