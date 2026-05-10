@@ -181,7 +181,11 @@ async function fetchWeather(
   try {
     const res = await fetchWithTimeout(url, { headers: { Accept: "application/json" } }, 6_000);
     if (!res.ok) return null;
-    const raw = await res.json();
+    // Cast to any: under Vercel's strict TS settings, res.json() resolves to
+    // unknown, which makes the optional-chained reads below trigger TS2339.
+    // We're already inside a try/catch and num() handles every malformed
+    // value, so the cast is safe.
+    const raw = await res.json() as any;
     const rain = num(raw?.daily?.precipitation_sum?.[0]);
     return {
       rain_mm: rain,
