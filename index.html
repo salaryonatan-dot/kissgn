@@ -4451,7 +4451,7 @@ function PilotDashboard() {
       {/* ═══ TASKS (בעלים בלבד) ═══ */}
       {screen==="pettycash" && !currentUser && (
         <div className="screen">
-          <PettyCashScreen items={pettyCash} saveItems={savePettyCash}/>
+          <PettyCashScreen items={pettyCash} saveItems={savePettyCash} businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig}/>
         </div>
       )}
 
@@ -4865,19 +4865,35 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, persist,
 // ─── Master Tasks Screen (בעלים ישיר) ────────────────────────────────────────
 
 // ─── Petty Cash Screen ────────────────────────────────────────────────────────
-const PETTY_CATEGORIES = ["מזון ושתיה","ציוד וכלים","ניקיון","תחזוקה","תחבורה","משרד","שונות"];
+// Default categories for a brand-new business. Each business can edit its own
+// list later via the petty-cash screen — the active list lives in
+// businessConfig.pettyCashCategories. We keep this constant only as a fallback
+// for businesses whose config predates the per-biz feature.
+const DEFAULT_PETTY_CATEGORIES = ["מזון","משרדיות","ביגוד","ניקיון","תחזוקה","נסיעות","דלק","חניה","שונות"];
 
-function PettyCashScreen({ items, saveItems }) {
+function PettyCashScreen({ items, saveItems, businessConfig, saveBusinessConfig }) {
+  // Categories live in businessConfig now (per-business, editable). Fallback to
+  // DEFAULT_PETTY_CATEGORIES for businesses whose config predates the feature.
+  const PETTY_CATEGORIES = (businessConfig?.pettyCashCategories && businessConfig.pettyCashCategories.length > 0)
+    ? businessConfig.pettyCashCategories
+    : DEFAULT_PETTY_CATEGORIES;
+
   const [adding, setAdding] = useState(false);
   const [editId, setEditId] = useState(null);
   const [selYear, setSelYear] = useState(YEAR);
   const [selMonth, setSelMonth] = useState(MONTH);
   const selMonthStr = String(selMonth+1).padStart(2,"0");
   const selPrefix = `${selYear}-${selMonthStr}`;
-  const defaultDate = `${selYear}-${selMonthStr}-01`;
 
-  const [form, setForm] = useState({ date: TODAY_STR, amount: "", category: "שונות", note: "" });
+  // Form no longer asks for date — we set it automatically on save (TODAY_STR)
+  // so monthly filtering still works without forcing the user to think about it.
+  const [form, setForm] = useState({ amount: "", category: PETTY_CATEGORIES[0] || "שונות", note: "" });
   const [filterCat, setFilterCat] = useState("הכל");
+
+  // Categories editor modal state
+  const [editingCats, setEditingCats] = useState(false);
+  const [catDraft, setCatDraft] = useState([]);
+  const [newCatName, setNewCatName] = useState("");
 
   // Month navigation
   const goMonth = (dir) => {
@@ -4888,61 +4904,89 @@ function PettyCashScreen({ items, saveItems }) {
     setSelMonth(nm); setSelYear(ny);
   };
 
-  const openAdd = () => { setForm({ date: (selYear===YEAR && selMonth===MONTH) ? TODAY_STR : defaultDate, amount:"", category:"שונות", note:"" }); setEditId(null); setAdding(true); };
-  const openEdit = (item) => { setForm({...item}); setEditId(item.id); setAdding(true); };
+  const openAdd = () => {
+    setForm({ amount: "", category: PETTY_CATEGORIES[0] || "שונות", note: "" });
+    setEditId(null);
+    setAdding(true);
+  };
+  const openEdit = (item) => { setForm({ amount: item.amount, category: item.category, note: item.note || "" }); setEditId(item.id); setAdding(true); };
   const cancel = () => { setAdding(false); setEditId(null); };
 
   const save = () => {
-    if(!form.amount || !form.date) return;
+    if(!form.amount) return;
     const list = items||[];
     if(editId) {
-      saveItems(list.map(i => i.id===editId ? {...form, id:editId} : i));
+      // Preserve original date when editing.
+      saveItems(list.map(i => i.id===editId ? { ...i, ...form, id: editId, amount: Number(form.amount) } : i));
     } else {
-      saveItems([...list, {...form, id:Date.now(), amount:Number(form.amount)}]);
+      saveItems([...list, { ...form, id: Date.now(), amount: Number(form.amount), date: TODAY_STR }]);
     }
     setAdding(false); setEditId(null);
   };
 
   const remove = (id) => { if(window.confirm("למחוק רשומה זו?")) saveItems((items||[]).filter(i=>i.id!==id)); };
 
-  // Filter by selected month first, then by category
-  const monthItems = (items||[]).filter(i => i.date && i.date.startsWith(selPrefix));
+  // ── Categories editor ──────────────────────────────────────────────────────
+  const openCatsEditor = () => {
+    setCatDraft([...PETTY_CATEGORIES]);
+    setNewCatName("");
+    setEditingCats(true);
+  };
+  const addCatToDraft = () => {
+    const name = newCatName.trim();
+    if (!name) return;
+    if (catDraft.includes(name)) return;
+    setCatDraft([...catDraft, name]);
+    setNewCatName("");
+  };
+  const removeCatFromDraft = (idx) => {
+    setCatDraft(catDraft.filter((_, i) => i !== idx));
+  };
+  const moveCatUp = (idx) => {
+    if (idx === 0) return;
+    const next = [...catDraft];
+    [next[idx-1], next[idx]] = [next[idx], next[idx-1]];
+    setCatDraft(next);
+  };
+  const saveCats = async () => {
+    // Persist to businessConfig — this triggers the rest of the app to re-read.
+    const cfg = { ...(businessConfig || {}), pettyCashCategories: catDraft };
+    if (saveBusinessConfig) await saveBusinessConfig(cfg);
+    setEditingCats(false);
+  };
+  const cancelCats = () => { setEditingCats(false); };
+
+  // Filter by selected month first, then by category. Legacy items without a
+  // date are kept visible (treated as the current month) to avoid orphaning.
+  const monthItems = (items||[]).filter(i => !i.date || i.date.startsWith(selPrefix));
   const filtered = monthItems.filter(i => filterCat==="הכל" || i.category===filterCat);
   const total = filtered.reduce((s,i)=>s+(Number(i.amount)||0), 0);
   const monthTotal = monthItems.reduce((s,i)=>s+(Number(i.amount)||0),0);
 
+  // ── CSV export — columnar layout, mirrors the user's sample report ─────────
   const exportToExcel = () => {
-    const sorted = [...monthItems].sort((a,b)=>a.date<b.date?1:-1);
-    // Group by category
-    const byCategory = {};
-    PETTY_CATEGORIES.forEach(cat => { byCategory[cat] = []; });
-    sorted.forEach(i => {
-      const cat = i.category || "שונות";
-      if (!byCategory[cat]) byCategory[cat] = [];
-      byCategory[cat].push(i);
-    });
+    const cats = PETTY_CATEGORIES;
     const monthLabel = MONTH_NAMES[selMonth] + " " + selYear;
-    const rows = [["דוח קופה קטנה — " + monthLabel,"","",""],["","","",""]];
-    let grandTotal = 0;
-    PETTY_CATEGORIES.forEach(cat => {
-      const catItems = byCategory[cat];
-      if (!catItems || !catItems.length) return;
-      // Category header
-      rows.push(["── " + cat + " ──","","",""]);
-      rows.push(["תאריך","סכום","הערה",""]);
-      let catTotal = 0;
-      catItems.forEach(i => {
-        const amt = Number(i.amount) || 0;
-        catTotal += amt;
-        rows.push([i.date, amt, i.note || "", ""]);
-      });
-      grandTotal += catTotal;
-      rows.push(["סה״כ " + cat, catTotal, "", ""]);
-      rows.push(["","","",""]); // blank separator
+    const bizName = (businessConfig?.businessName || "").trim();
+    const rows = [];
+    // Title row.
+    rows.push([`קופה קטנה — ${bizName || "העסק"} — ${monthLabel}`, ...new Array(cats.length).fill("")]);
+    rows.push(new Array(cats.length + 2).fill(""));
+    // Header row: # + each category + total.
+    rows.push(["#", ...cats, "סה״כ"]);
+    // One row per entry, value only in matching category column.
+    const sorted = [...monthItems].sort((a,b)=>(a.id||0)-(b.id||0));
+    sorted.forEach((item, idx) => {
+      const amt = Number(item.amount) || 0;
+      const row = [idx + 1, ...cats.map(c => c === item.category ? amt : ""), amt];
+      rows.push(row);
     });
-    // Grand total
-    rows.push(["════════════","","",""]);
-    rows.push(["סה״כ קופה קטנה", grandTotal, "", ""]);
+    // Totals row.
+    const colTotals = cats.map(c =>
+      monthItems.filter(i => i.category === c).reduce((s, i) => s + (Number(i.amount) || 0), 0)
+    );
+    const grandTotal = colTotals.reduce((s, n) => s + n, 0);
+    rows.push(["סה״כ", ...colTotals, grandTotal]);
     const csv = rows.map(r => r.map(c => {
       const s = String(c);
       return s.includes(",") || s.includes('"') ? '"' + s.replace(/"/g,'""') + '"' : s;
@@ -4971,6 +5015,7 @@ function PettyCashScreen({ items, saveItems }) {
         <div style={{flex:1}}>
           <h2 style={{margin:0,fontSize:14,fontWeight:700,color:"#111827"}}>קופה קטנה</h2>
         </div>
+        <button onClick={openCatsEditor} style={{padding:"8px 14px",background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:10,color:"#6B7280",fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>קטגוריות</button>
         <button onClick={exportToExcel} style={{padding:"8px 14px",background:"#F9FAFB",border:"1px solid #86EFAC",borderRadius:10,color:"#6B7280",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>ייצוא CSV</button>
         <button onClick={openAdd} style={{...S.addBtn}}>הוסף</button>
       </div>
@@ -4982,14 +5027,50 @@ function PettyCashScreen({ items, saveItems }) {
         ))}
       </div>
 
-      {/* Add/Edit form */}
+      {/* Categories editor modal */}
+      {editingCats && (
+        <div className="card card-p" style={{border:"1px solid #BFDBFE",marginBottom:14,background:"#EFF6FF"}}>
+          <h3 style={{margin:"0 0 8px",fontSize:14,fontWeight:700,color:"#111827"}}>עריכת קטגוריות</h3>
+          <p style={{margin:"0 0 12px",fontSize:12,color:"#6B7280"}}>הקטגוריות מתעדכנות לכל המשתמשים בעסק הזה. רשומות קיימות בקטגוריה שתימחק יישארו עם השם הישן.</p>
+          <div style={{maxHeight:"260px",overflowY:"auto",background:"#FFFFFF",borderRadius:6,padding:"4px 8px",marginBottom:10,border:"1px solid #E5E7EB"}}>
+            {catDraft.length === 0 && (
+              <p style={{margin:"8px 0",fontSize:12,color:"#9CA3AF"}}>אין קטגוריות. הוסף את הראשונה למטה.</p>
+            )}
+            {catDraft.map((cat, idx) => (
+              <div key={cat+idx} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 0",borderBottom:idx<catDraft.length-1?"1px solid #F3F4F6":"none"}}>
+                <span style={{flex:1,fontSize:13,color:"#111827"}}>{cat}</span>
+                <button onClick={()=>moveCatUp(idx)} disabled={idx===0} style={{background:"none",border:"none",cursor:idx===0?"default":"pointer",color:idx===0?"#D1D5DB":"#6B7280",fontSize:14,padding:"2px 6px"}} title="העלה">▲</button>
+                <button onClick={()=>removeCatFromDraft(idx)} style={{background:"none",border:"none",cursor:"pointer",color:"#DC2626",fontSize:13,padding:"2px 8px"}} title="מחק">✕</button>
+              </div>
+            ))}
+          </div>
+          <div style={{display:"flex",gap:6,marginBottom:10}}>
+            <input className="input" style={{marginBottom:0,flex:1}} placeholder="שם קטגוריה חדשה..." value={newCatName}
+              onChange={e=>setNewCatName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addCatToDraft()}/>
+            <button className="btn btn-secondary" style={{padding:"9px 14px"}} onClick={addCatToDraft}>הוסף</button>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button className="btn btn-primary" style={{padding:"9px 16px"}} onClick={saveCats}>שמור</button>
+            <button className="btn btn-secondary" onClick={cancelCats}>ביטול</button>
+          </div>
+        </div>
+      )}
+
+      {/* Add/Edit form — date is set automatically; only category, amount, note */}
       {adding && (
         <div className="card card-p" style={{border:"1px solid #FCD34D44",marginBottom:14}}>
           <h3 style={{margin:"0 0 12px",fontSize:14,fontWeight:700,color:"#111827"}}>{editId?"עריכת רשומה":"רשומה חדשה"}</h3>
           <div style={{display:"flex",gap:8,marginBottom:8}}>
-            <div style={{flex:1}}>
-              <label className="label">תאריך</label>
-              <input type="date" className="input" style={{marginBottom:0}} value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))}/>
+            <div style={{flex:1.4}}>
+              <label className="label">קטגוריה</label>
+              <select className="input" style={{marginBottom:0}} value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>
+                {PETTY_CATEGORIES.map(cat=><option key={cat}>{cat}</option>)}
+                {/* If editing an item whose category was removed from the list,
+                    keep it visible so the dropdown still reflects reality. */}
+                {form.category && !PETTY_CATEGORIES.includes(form.category) && (
+                  <option value={form.category}>{form.category} (לא ברשימה)</option>
+                )}
+              </select>
             </div>
             <div style={{flex:1}}>
               <label className="label">סכום (₪)</label>
@@ -4997,15 +5078,11 @@ function PettyCashScreen({ items, saveItems }) {
                 onChange={e=>setForm(f=>({...f,amount:e.target.value}))} autoFocus/>
             </div>
           </div>
-          <label className="label">קטגוריה</label>
-          <select className="input" value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}>
-            {PETTY_CATEGORIES.map(cat=><option key={cat}>{cat}</option>)}
-          </select>
-          <label className="label">הערה</label>
+          <label className="label">הערה (אופציונלי)</label>
           <input className="input" placeholder="תיאור ההוצאה..." value={form.note||""}
             onChange={e=>setForm(f=>({...f,note:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&save()}/>
           <div style={{display:"flex",gap:8,marginTop:4}}>
-            <button className="btn btn-primary btn-full" onClick={save} className="btn btn-primary" style={{flex:"none",padding:"9px 16px"}}>{editId?"עדכן":"הוסף"}</button>
+            <button onClick={save} className="btn btn-primary" style={{flex:"none",padding:"9px 16px"}}>{editId?"עדכן":"הוסף"}</button>
             <button className="btn btn-secondary" onClick={cancel}>ביטול</button>
           </div>
         </div>
@@ -5019,19 +5096,19 @@ function PettyCashScreen({ items, saveItems }) {
         </div>
       )}
 
-      {/* Items list */}
+      {/* Items list — cards, no date displayed */}
       {filtered.length === 0 && !adding ? (
         <div className="empty"><div style={{width:36,height:36,border:"1px solid #E5E7EB",borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px",color:"#9CA3AF",fontSize:14}}>₪</div><p style={{fontSize:13,margin:0}}>אין רשומות</p></div>
       ) : (
         <div>
-          {filtered.sort((a,b)=>a.date<b.date?1:-1).map(item=>(
+          {filtered.slice().sort((a,b)=>(b.id||0)-(a.id||0)).map(item=>(
             <div key={item.id} style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:8,padding:"12px 16px",marginBottom:8,display:"flex",alignItems:"center",gap:10}}>
               <div style={{flex:1}}>
-                <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:3}}>
+                <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:item.note?3:0}}>
                   <span style={{fontSize:13,fontWeight:700,color:"#111827"}}>{fmt(Number(item.amount))}</span>
                   <span style={{fontSize:11,padding:"2px 7px",background:"#F3F4F6",borderRadius:3,color:"#6B7280"}}>{item.category}</span>
                 </div>
-                <div style={{fontSize:12,color:"#9CA3AF"}}>{item.date} {item.note && <span style={{color:"#6B7280"}}>· {item.note}</span>}</div>
+                {item.note && <div style={{fontSize:12,color:"#6B7280"}}>{item.note}</div>}
               </div>
               <button onClick={()=>openEdit(item)} style={{background:"none",border:"none",cursor:"pointer",color:"#6B7280",fontSize:12,padding:"4px 6px"}}><IcoEdit/></button>
               <button onClick={()=>remove(item.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#9CA3AF",fontSize:12,padding:"4px 6px",fontFamily:"inherit"}}><IcoTrash/></button>
