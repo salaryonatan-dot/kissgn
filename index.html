@@ -4970,7 +4970,19 @@ function PettyCashScreen({ items, saveItems, businessConfig, saveBusinessConfig 
   // under a merged "רכב" sub-header when they appear contiguously.
   // Uses the global XLSX (SheetJS) which is already loaded in <head>.
   const exportToExcel = () => {
-    const cats = PETTY_CATEGORIES;
+    // Start from the user's configured categories, then append any categories
+    // that actually appear in this month's entries but aren't in the configured
+    // list (legacy categories like "תחבורה" from before the user customized
+    // their list). This keeps the export complete — the total in the export
+    // always equals the total shown on screen.
+    const orphanCats = Array.from(
+      new Set(
+        monthItems
+          .map(i => i.category)
+          .filter(c => c && !PETTY_CATEGORIES.includes(c))
+      )
+    ).sort();
+    const cats = [...PETTY_CATEGORIES, ...orphanCats];
     const monthLabel = MONTH_NAMES[selMonth] + " " + selYear;
     const bizName = (businessConfig?.businessName || "").trim();
 
@@ -5067,11 +5079,18 @@ function PettyCashScreen({ items, saveItems, businessConfig, saveBusinessConfig 
         <button onClick={openAdd} style={{...S.addBtn}}>הוסף</button>
       </div>
 
-      {/* Filter */}
+      {/* Filter — show the configured categories plus any orphans actually used
+          in this month's data so the user can still filter old records.       */}
       <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
-        {["הכל",...PETTY_CATEGORIES].map(cat=>(
-          <button key={cat} className="btn btn-ghost btn-sm" style={{...(filterCat===cat?S.subBtnActive:{})}} onClick={()=>setFilterCat(cat)}>{cat}</button>
-        ))}
+        {(() => {
+          const filterCats = [...PETTY_CATEGORIES];
+          for (const it of monthItems) {
+            if (it.category && !filterCats.includes(it.category)) filterCats.push(it.category);
+          }
+          return ["הכל", ...filterCats].map(cat => (
+            <button key={cat} className="btn btn-ghost btn-sm" style={{...(filterCat===cat?S.subBtnActive:{})}} onClick={()=>setFilterCat(cat)}>{cat}</button>
+          ));
+        })()}
       </div>
 
       {/* Categories editor modal */}
