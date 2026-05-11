@@ -4963,38 +4963,85 @@ function PettyCashScreen({ items, saveItems, businessConfig, saveBusinessConfig 
   const total = filtered.reduce((s,i)=>s+(Number(i.amount)||0), 0);
   const monthTotal = monthItems.reduce((s,i)=>s+(Number(i.amount)||0),0);
 
-  // ── CSV export — columnar layout, mirrors the user's sample report ─────────
+  // ── XLSX export — columnar "vertical fill" layout matching the user's sample ──
+  // Each category gets its own column. Entries for that category stack
+  // downward in that column; cells stay empty once a category runs out of
+  // entries. Vehicle-related categories (דלק, חניה, וכו') get auto-grouped
+  // under a merged "רכב" sub-header when they appear contiguously.
+  // Uses the global XLSX (SheetJS) which is already loaded in <head>.
   const exportToExcel = () => {
     const cats = PETTY_CATEGORIES;
     const monthLabel = MONTH_NAMES[selMonth] + " " + selYear;
     const bizName = (businessConfig?.businessName || "").trim();
-    const rows = [];
-    // Title row.
-    rows.push([`קופה קטנה — ${bizName || "העסק"} — ${monthLabel}`, ...new Array(cats.length).fill("")]);
-    rows.push(new Array(cats.length + 2).fill(""));
-    // Header row: # + each category + total.
-    rows.push(["#", ...cats, "סה״כ"]);
-    // One row per entry, value only in matching category column.
-    const sorted = [...monthItems].sort((a,b)=>(a.id||0)-(b.id||0));
-    sorted.forEach((item, idx) => {
-      const amt = Number(item.amount) || 0;
-      const row = [idx + 1, ...cats.map(c => c === item.category ? amt : ""), amt];
-      rows.push(row);
-    });
-    // Totals row.
-    const colTotals = cats.map(c =>
-      monthItems.filter(i => i.category === c).reduce((s, i) => s + (Number(i.amount) || 0), 0)
+
+    // Detect a contiguous run of vehicle-related categories to merge under "רכב".
+    const VEHICLE_KEYWORDS = ["דלק", "חניה", "כביש", "אגרה", "שטיפת רכב", "צמיג"];
+    const isVehicle = (name) => VEHICLE_KEYWORDS.some(k => name.includes(k));
+    let bestStart = -1, bestLen = 0;
+    let curStart = -1, curLen = 0;
+    for (let i = 0; i < cats.length; i++) {
+      if (isVehicle(cats[i])) {
+        if (curLen === 0) curStart = i;
+        curLen++;
+      } else {
+        if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
+        curLen = 0;
+      }
+    }
+    if (curLen > bestLen) { bestLen = curLen; bestStart = curStart; }
+    const showVehicleHeader = bestLen >= 2;
+
+    // Group amounts by category in user-defined order.
+    const entriesByCol = cats.map(c =>
+      monthItems
+        .filter(i => i.category === c)
+        .map(i => Number(i.amount) || 0)
     );
+    const maxRows = entriesByCol.reduce((m, e) => Math.max(m, e.length), 0);
+
+    // Build the sheet as an array-of-arrays.
+    const aoa = [];
+    aoa.push([]); // row 1: blank top margin
+    aoa.push([]); // row 2: blank
+    // Row 3: business name + month (placed in col B to mirror the user's sample).
+    aoa.push(["", `${bizName || "העסק"} — קופה קטנה — ${monthLabel}`]);
+    // Row 4: vehicle sub-header (single string at start of the merged range).
+    if (showVehicleHeader) {
+      const row4 = new Array(cats.length).fill("");
+      row4[bestStart] = "רכב";
+      aoa.push(row4);
+    } else {
+      aoa.push([]);
+    }
+    // Row 5: category headers.
+    aoa.push([...cats]);
+    // Rows 6..6+maxRows-1: vertical fill (one cell per entry, empties past the run).
+    for (let r = 0; r < maxRows; r++) {
+      aoa.push(cats.map((_, ci) => entriesByCol[ci][r] !== undefined ? entriesByCol[ci][r] : ""));
+    }
+    // Blank separator row + totals row at the bottom.
+    aoa.push([]);
+    const colTotals = entriesByCol.map(e => e.reduce((s, n) => s + n, 0));
     const grandTotal = colTotals.reduce((s, n) => s + n, 0);
-    rows.push(["סה״כ", ...colTotals, grandTotal]);
-    const csv = rows.map(r => r.map(c => {
-      const s = String(c);
-      return s.includes(",") || s.includes('"') ? '"' + s.replace(/"/g,'""') + '"' : s;
-    }).join(",")).join("\n");
-    const blob = new Blob(["\uFEFF"+csv], {type:"text/csv;charset=utf-8"});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href=url; a.download=`קופה_קטנה_${MONTH_NAMES[selMonth]}_${selYear}.csv`; a.click();
-    URL.revokeObjectURL(url);
+    aoa.push([...colTotals, grandTotal]);
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    // Right-to-left display for Hebrew.
+    ws["!rightToLeft"] = true;
+    // Reasonable default column widths so headers don't get cut.
+    ws["!cols"] = cats.map(() => ({ wch: 13 })).concat([{ wch: 12 }]);
+    // Merge "רכב" header across its vehicle columns.
+    if (showVehicleHeader) {
+      ws["!merges"] = ws["!merges"] || [];
+      ws["!merges"].push({
+        s: { r: 3, c: bestStart },
+        e: { r: 3, c: bestStart + bestLen - 1 },
+      });
+    }
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "קופה קטנה");
+    XLSX.writeFile(wb, `קופה_קטנה_${MONTH_NAMES[selMonth]}_${selYear}.xlsx`);
   };
 
   return (
@@ -5016,7 +5063,7 @@ function PettyCashScreen({ items, saveItems, businessConfig, saveBusinessConfig 
           <h2 style={{margin:0,fontSize:14,fontWeight:700,color:"#111827"}}>קופה קטנה</h2>
         </div>
         <button onClick={openCatsEditor} style={{padding:"8px 14px",background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:10,color:"#6B7280",fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>קטגוריות</button>
-        <button onClick={exportToExcel} style={{padding:"8px 14px",background:"#F9FAFB",border:"1px solid #86EFAC",borderRadius:10,color:"#6B7280",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>ייצוא CSV</button>
+        <button onClick={exportToExcel} style={{padding:"8px 14px",background:"#F9FAFB",border:"1px solid #86EFAC",borderRadius:10,color:"#6B7280",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>ייצוא Excel</button>
         <button onClick={openAdd} style={{...S.addBtn}}>הוסף</button>
       </div>
 
