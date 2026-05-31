@@ -3302,7 +3302,7 @@ function PilotDashboard() {
   );
 
   // אם אחמש מחובר ונמצא במסך שאין לו גישה -- הפנה למשמרות
-  if(!showBizSelect && currentUser && screen !== "shifts" && !(currentUser.permissions||[]).includes(screen)) {
+  if(!showBizSelect && currentUser && screen !== "shifts" && screen !== "checklist" && !(currentUser.permissions||[]).includes(screen)) {
     // use effect-like redirect without hooks violation: just render shifts
     return (
         <div className="app">
@@ -3320,8 +3320,9 @@ function PilotDashboard() {
         <nav className="app-nav">
           <div className="app-nav-inner">
             <button className="nav-tab is-red" onClick={()=>setScreen("shifts")}>משמרות</button>
+            <button className={`nav-tab ${screen==="checklist"?"is-active":""}`} onClick={()=>setScreen("checklist")}>📋 צ׳ק ליסט</button>
             {(currentUser.permissions||[]).map(s=>{
-              const lbl={"dashboard":"Dashboard","pnl":"P&L","foodcost":"קניות","history":"פדיון יומי","pettycash":"קופה קטנה","employees":"עלות עובדים","tasks":"משימות","users":"משתמשים"}[s];
+              const lbl={"dashboard":"Dashboard","pnl":"P&L","foodcost":"קניות","history":"פדיון יומי","pettycash":"קופה קטנה","employees":"עלות עובדים","insights":"📊 תובנות","tasks":"משימות","users":"משתמשים"}[s];
               return lbl ? <button key={s} className={`nav-tab ${screen===s?"is-active":""}`} onClick={()=>setScreen(s)}>{lbl}</button> : null;
             })}
           </div>
@@ -3494,6 +3495,8 @@ function PilotDashboard() {
               {key:"pettycash",  label:"קופה קטנה",     roles:["super_owner","owner","manager"]},
               {key:"foodcost",   label:"קניות",         roles:["super_owner","owner","manager"]},
               {key:"employees",  label:"עלות עובדים",   roles:["super_owner","owner","manager"]},
+              {key:"checklist",  label:"📋 צ׳ק ליסט",   roles:["super_owner","owner","manager","shift_manager"]},
+              {key:"insights",   label:"📊 תובנות",     roles:["super_owner","owner","manager"]},
               {key:"tasks",      label:"משימות",        roles:["super_owner","owner","manager","staff"]},
               {key:"shifts",     label:"משמרות",        roles:["super_owner","owner","manager","staff"]},
               {key:"users",      label:"משתמשים",       roles:["super_owner","owner"]},
@@ -4452,6 +4455,26 @@ function PilotDashboard() {
       {screen==="pettycash" && !currentUser && (
         <div className="screen">
           <PettyCashScreen items={pettyCash} saveItems={savePettyCash} businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig}/>
+        </div>
+      )}
+
+      {screen==="insights" && !currentUser && (
+        <div className="screen">
+          <DailyInsightsScreen tenantId={window._currentTenantId} bizId={currentBizId||""}/>
+        </div>
+      )}
+
+      {screen==="checklist" && (
+        <div className="screen">
+          <ShiftChecklistScreen
+            businessConfig={businessConfig}
+            saveBusinessConfig={saveBusinessConfig}
+            bizId={currentBizId||""}
+            businesses={businesses}
+            currentUserName={currentUser?.name || loggedInUser?.name || ""}
+            currentUserUid={(loggedInUser?.uid) || (currentUser?.uid) || ""}
+            canEdit={(loggedInUser?.role==="owner" || loggedInUser?.role==="super_owner" || loggedInUser?.role==="manager") || (!currentUser && !loggedInUser)}
+          />
         </div>
       )}
 
@@ -5903,6 +5926,1190 @@ function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[] })
       )}
     </div>
   );
+}
+
+const DOW_KEYS    = ["sun","mon","tue","wed","thu","fri","sat"];
+const DOW_HE_FULL = ["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];
+
+const PHASE_META = [
+  { key:"opening",  emoji:"🌅", label:"פתיחה",      color:"#F59E0B" },
+  { key:"handover", emoji:"🔄", label:"העברת משמרת", color:"#0EA5E9" },
+  { key:"closing",  emoji:"🌙", label:"סגירה",      color:"#6366F1" },
+];
+
+const ITEM_STATUS_META = {
+  pending:       { label:"ממתין",      bg:"#FFFFFF", fg:"#6B7280", border:"#E5E7EB", icon:""  },
+  done:          { label:"בוצע",       bg:"#F0FDF4", fg:"#15803D", border:"#BBF7D0", icon:"✓" },
+  not_done:      { label:"לא בוצע",    bg:"#FEF2F2", fg:"#991B1B", border:"#FECACA", icon:"✕" },
+  issue:         { label:"תקלה",       bg:"#FFFBEB", fg:"#92400E", border:"#FDE68A", icon:"!" },
+  not_relevant:  { label:"לא רלוונטי", bg:"#F3F4F6", fg:"#6B7280", border:"#E5E7EB", icon:"—" },
+};
+
+const PRIORITY_META = {
+  low:      { label:"נמוך",  fg:"#9CA3AF" },
+  medium:   { label:"רגיל",  fg:"#6B7280" },
+  high:     { label:"גבוה",  fg:"#D97706" },
+  critical: { label:"קריטי", fg:"#DC2626" },
+};
+
+const STARTER_AREAS = ["קופה","מטבח","בר","אולם","מקררים","שירותים","כללי"];
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+function businessDayKey(now = new Date()){
+  const ms = now.getTime() - 4*60*60*1000;
+  return new Date(ms).toLocaleDateString("en-CA",{timeZone:"Asia/Jerusalem"});
+}
+function dowForBusinessKey(key){
+  const [y,m,d] = key.split("-").map(Number);
+  return new Date(Date.UTC(y,m-1,d,9,0,0)).getUTCDay();
+}
+function newId(prefix){ return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`; }
+
+// ── Starter templates ───────────────────────────────────────────────────────
+// Each item: { _starterId, checklistType, scheduleType, dayOfWeek, area, title, isRequired, requiresPhoto, priority }
+const STARTER_TEMPLATES = {
+  cafe_bakery: {
+    label: "קפה ומאפייה",
+    items: [
+      // OPENING — daily
+      {_starterId:"cb-o-1",  checklistType:"opening", scheduleType:"daily", dayOfWeek:null, area:"מקררים", title:"בדיקת טמפ' מקררים ומקפיאים + רישום", isRequired:true,  requiresPhoto:false, priority:"high"},
+      {_starterId:"cb-o-2",  checklistType:"opening", scheduleType:"daily", dayOfWeek:null, area:"בר",      title:"הכנת מכונת קפה + טסטים ראשוניים", isRequired:true,  requiresPhoto:false, priority:"high"},
+      {_starterId:"cb-o-3",  checklistType:"opening", scheduleType:"daily", dayOfWeek:null, area:"מטבח",    title:"חימום תנור + הוצאת מאפים", isRequired:true,  requiresPhoto:false, priority:"high"},
+      {_starterId:"cb-o-4",  checklistType:"opening", scheduleType:"daily", dayOfWeek:null, area:"אולם",    title:"סידור דלפק תצוגה", isRequired:true,  requiresPhoto:false, priority:"medium"},
+      {_starterId:"cb-o-5",  checklistType:"opening", scheduleType:"daily", dayOfWeek:null, area:"קופה",    title:"ספירת קופה ראשונית", isRequired:true,  requiresPhoto:false, priority:"critical"},
+      // OPENING — weekly
+      {_starterId:"cb-o-w1", checklistType:"opening", scheduleType:"weekly", dayOfWeek:"sun", area:"כללי", title:"בדיקת תפוסה צפויה לשבוע + סידור צוות", isRequired:false, requiresPhoto:false, priority:"medium"},
+      {_starterId:"cb-o-w2", checklistType:"opening", scheduleType:"weekly", dayOfWeek:"wed", area:"מקררים", title:"ספירת מלאי חלב/שמנת/קרם", isRequired:true,  requiresPhoto:false, priority:"medium"},
+      // HANDOVER — daily
+      {_starterId:"cb-h-1",  checklistType:"handover", scheduleType:"daily", dayOfWeek:null, area:"קופה", title:"ספירת קופה ביניים + השוואה", isRequired:true,  requiresPhoto:false, priority:"high"},
+      {_starterId:"cb-h-2",  checklistType:"handover", scheduleType:"daily", dayOfWeek:null, area:"כללי", title:"רשימת חוסרים מהמשמרת היוצאת", isRequired:true,  requiresPhoto:false, priority:"medium"},
+      {_starterId:"cb-h-3",  checklistType:"handover", scheduleType:"daily", dayOfWeek:null, area:"מטבח", title:"סטטוס מאפים שנותרו", isRequired:false, requiresPhoto:false, priority:"medium"},
+      // CLOSING — daily
+      {_starterId:"cb-c-1",  checklistType:"closing", scheduleType:"daily", dayOfWeek:null, area:"קופה",    title:"ספירת קופה סופית + סגירה ב-Z", isRequired:true,  requiresPhoto:true,  priority:"critical"},
+      {_starterId:"cb-c-2",  checklistType:"closing", scheduleType:"daily", dayOfWeek:null, area:"בר",      title:"ניקוי מכונת קפה + ריקון", isRequired:true,  requiresPhoto:false, priority:"high"},
+      {_starterId:"cb-c-3",  checklistType:"closing", scheduleType:"daily", dayOfWeek:null, area:"אולם",    title:"ניקוי דלפק תצוגה + שולחנות", isRequired:true,  requiresPhoto:false, priority:"medium"},
+      {_starterId:"cb-c-4",  checklistType:"closing", scheduleType:"daily", dayOfWeek:null, area:"מקררים",  title:"סגירת מקררים + רישום טמפ' לילי", isRequired:true,  requiresPhoto:false, priority:"high"},
+      {_starterId:"cb-c-5",  checklistType:"closing", scheduleType:"daily", dayOfWeek:null, area:"כללי",    title:"פינוי אשפה + נעילה + כיבוי אורות", isRequired:true,  requiresPhoto:false, priority:"high"},
+      // CLOSING — weekly
+      {_starterId:"cb-c-w1", checklistType:"closing", scheduleType:"weekly", dayOfWeek:"sat", area:"כללי", title:"דוח שבועי לבעלים", isRequired:false, requiresPhoto:false, priority:"medium"},
+    ],
+  },
+  burger_restaurant: {
+    label: "מסעדת המבורגרים",
+    items: [
+      {_starterId:"br-o-1",  checklistType:"opening", scheduleType:"daily", dayOfWeek:null, area:"מטבח",   title:"חימום והכנת גריל + בדיקת טמפ'", isRequired:true, requiresPhoto:true,  priority:"critical"},
+      {_starterId:"br-o-2",  checklistType:"opening", scheduleType:"daily", dayOfWeek:null, area:"מטבח",   title:"חימום שמן לטיגון + בדיקת איכות שמן", isRequired:true, requiresPhoto:false, priority:"critical"},
+      {_starterId:"br-o-3",  checklistType:"opening", scheduleType:"daily", dayOfWeek:null, area:"מטבח",   title:"וידוא מלאי בשר/לחמניות/רטבים", isRequired:true, requiresPhoto:false, priority:"high"},
+      {_starterId:"br-o-4",  checklistType:"opening", scheduleType:"daily", dayOfWeek:null, area:"מקררים", title:"בדיקת טמפ' מקררים + רישום", isRequired:true, requiresPhoto:false, priority:"high"},
+      {_starterId:"br-o-5",  checklistType:"opening", scheduleType:"daily", dayOfWeek:null, area:"קופה",   title:"ספירת קופה ראשונית", isRequired:true, requiresPhoto:false, priority:"critical"},
+      {_starterId:"br-o-6",  checklistType:"opening", scheduleType:"daily", dayOfWeek:null, area:"אולם",   title:"ניקוי שולחנות + סידור אולם", isRequired:true, requiresPhoto:false, priority:"medium"},
+      {_starterId:"br-o-w1", checklistType:"opening", scheduleType:"weekly", dayOfWeek:"sun", area:"כללי", title:"בדיקת תפוסה צפויה לשבוע + סידור צוות", isRequired:false, requiresPhoto:false, priority:"medium"},
+      {_starterId:"br-o-w2", checklistType:"opening", scheduleType:"weekly", dayOfWeek:"fri", area:"מטבח", title:"וידוא הזמנות בשר ולחמניות לסוף שבוע", isRequired:true,  requiresPhoto:false, priority:"high"},
+      {_starterId:"br-h-1",  checklistType:"handover", scheduleType:"daily", dayOfWeek:null, area:"קופה",   title:"ספירת קופה ביניים", isRequired:true, requiresPhoto:false, priority:"high"},
+      {_starterId:"br-h-2",  checklistType:"handover", scheduleType:"daily", dayOfWeek:null, area:"מטבח",   title:"סטטוס הזמנות פתוחות + תור", isRequired:true, requiresPhoto:false, priority:"high"},
+      {_starterId:"br-h-3",  checklistType:"handover", scheduleType:"daily", dayOfWeek:null, area:"מטבח",   title:"חוסרים — בשר/לחמניות/רטבים", isRequired:true, requiresPhoto:false, priority:"medium"},
+      {_starterId:"br-h-4",  checklistType:"handover", scheduleType:"daily", dayOfWeek:null, area:"כללי",   title:"אירועים חריגים — לרשום בלוג", isRequired:false, requiresPhoto:false, priority:"low"},
+      {_starterId:"br-c-1",  checklistType:"closing", scheduleType:"daily", dayOfWeek:null, area:"קופה",   title:"ספירת קופה סופית + סגירה ב-Z", isRequired:true, requiresPhoto:true,  priority:"critical"},
+      {_starterId:"br-c-2",  checklistType:"closing", scheduleType:"daily", dayOfWeek:null, area:"מטבח",   title:"כיבוי גריל + ניקוי גריל", isRequired:true, requiresPhoto:false, priority:"critical"},
+      {_starterId:"br-c-3",  checklistType:"closing", scheduleType:"daily", dayOfWeek:null, area:"מטבח",   title:"סינון שמן + סגירת טיגון", isRequired:true, requiresPhoto:false, priority:"critical"},
+      {_starterId:"br-c-4",  checklistType:"closing", scheduleType:"daily", dayOfWeek:null, area:"מקררים", title:"סגירת מקררים + רישום טמפ' לילי", isRequired:true, requiresPhoto:false, priority:"high"},
+      {_starterId:"br-c-5",  checklistType:"closing", scheduleType:"daily", dayOfWeek:null, area:"כללי",   title:"פינוי אשפה + פינוי שומן", isRequired:true, requiresPhoto:false, priority:"high"},
+      {_starterId:"br-c-6",  checklistType:"closing", scheduleType:"daily", dayOfWeek:null, area:"כללי",   title:"נעילה + כיבוי אורות + הפעלת אזעקה", isRequired:true, requiresPhoto:false, priority:"high"},
+      {_starterId:"br-c-w1", checklistType:"closing", scheduleType:"weekly", dayOfWeek:"mon", area:"מטבח", title:"ניקוי מעמיק של גריל", isRequired:true,  requiresPhoto:true,  priority:"high"},
+      {_starterId:"br-c-w2", checklistType:"closing", scheduleType:"weekly", dayOfWeek:"sat", area:"כללי", title:"דוח שבועי לבעלים", isRequired:false, requiresPhoto:false, priority:"medium"},
+    ],
+  },
+  generic_food_business: {
+    label: "כללי (מסעדה/בר/קפה)",
+    items: [
+      {_starterId:"gn-o-1", checklistType:"opening", scheduleType:"daily", dayOfWeek:null, area:"קופה",    title:"ספירת קופה ראשונית", isRequired:true, requiresPhoto:false, priority:"critical"},
+      {_starterId:"gn-o-2", checklistType:"opening", scheduleType:"daily", dayOfWeek:null, area:"מקררים",  title:"בדיקת טמפ' מקררים + רישום", isRequired:true, requiresPhoto:false, priority:"high"},
+      {_starterId:"gn-o-3", checklistType:"opening", scheduleType:"daily", dayOfWeek:null, area:"אולם",    title:"ניקוי כללי וסידור", isRequired:true, requiresPhoto:false, priority:"medium"},
+      {_starterId:"gn-h-1", checklistType:"handover", scheduleType:"daily", dayOfWeek:null, area:"קופה",   title:"ספירת קופה ביניים", isRequired:true, requiresPhoto:false, priority:"high"},
+      {_starterId:"gn-h-2", checklistType:"handover", scheduleType:"daily", dayOfWeek:null, area:"כללי",   title:"חוסרים + אירועים חריגים", isRequired:false, requiresPhoto:false, priority:"medium"},
+      {_starterId:"gn-c-1", checklistType:"closing", scheduleType:"daily", dayOfWeek:null, area:"קופה",   title:"ספירת קופה סופית", isRequired:true, requiresPhoto:true,  priority:"critical"},
+      {_starterId:"gn-c-2", checklistType:"closing", scheduleType:"daily", dayOfWeek:null, area:"כללי",   title:"ניקוי + פינוי אשפה + נעילה", isRequired:true, requiresPhoto:false, priority:"high"},
+    ],
+  },
+};
+
+// ── Builders ────────────────────────────────────────────────────────────────
+function buildItemFromStarter(starterItem, ctx){
+  const now = Date.now();
+  return {
+    id: newId("ci"),
+    tenantId:    ctx.tenantId,
+    businessId:  ctx.businessId,
+    branchId:    ctx.branchId,
+    checklistType: starterItem.checklistType,
+    scheduleType:  starterItem.scheduleType,
+    dayOfWeek:     starterItem.dayOfWeek,
+    area:          starterItem.area,
+    title:         starterItem.title,
+    description:   "",
+    isRequired:    !!starterItem.isRequired,
+    requiresPhoto: !!starterItem.requiresPhoto,
+    priority:      starterItem.priority || "medium",
+    sortOrder:     0,        // assigned after the fact
+    defaultPosition: null,
+    active:        true,
+    sourceSystemTemplateItemId: starterItem._starterId,
+    createdAt: now, updatedAt: now,
+    createdBy: ctx.userId, updatedBy: ctx.userId,
+    archivedAt: null, archivedBy: null,
+  };
+}
+function buildTemplateFromStarter(starterKey, ctx){
+  const starter = STARTER_TEMPLATES[starterKey];
+  if (!starter) return null;
+  const items = starter.items.map((it,i) => ({
+    ...buildItemFromStarter(it, ctx),
+    sortOrder: i,
+  }));
+  return {
+    version: "2.0",
+    branchId: ctx.branchId,
+    sourceStarter: starterKey,
+    items,
+    updatedAt: Date.now(),
+    updatedBy: ctx.userId,
+  };
+}
+function blankTemplate(ctx){
+  return {
+    version: "2.0",
+    branchId: ctx.branchId,
+    sourceStarter: null,
+    items: [],
+    updatedAt: Date.now(),
+    updatedBy: ctx.userId,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Runtime screen — shift managers + everyone runs the checklist here
+// ═══════════════════════════════════════════════════════════════════════════
+function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, businesses, currentUserName, currentUserUid, canEdit }) {
+  const tenantId = window._currentTenantId || "";
+  const ctx = { tenantId, businessId: bizId, branchId: bizId, userId: currentUserUid || "" };
+
+  const [template, setTemplate]   = React.useState(null);
+  const [loadingTpl, setLoadingTpl] = React.useState(true);
+
+  const [todayKey, setTodayKey] = React.useState(() => businessDayKey());
+  const [runs, setRuns]         = React.useState(null);
+  const [loadingRuns, setLoadingRuns] = React.useState(true);
+
+  const [editorOpen, setEditorOpen] = React.useState(false);
+  const [editItem, setEditItem] = React.useState(null); // {runType, item, statusEdit, noteEdit, photoEdit}
+
+  const dow     = dowForBusinessKey(todayKey);
+  const weekKey = DOW_KEYS[dow];
+
+  // ── Load template (with auto-migration from legacy businessConfig.shiftChecklists) ──
+  React.useEffect(() => {
+    let cancelled = false;
+    setLoadingTpl(true);
+    (async () => {
+      try {
+        if (!bizId) { if (!cancelled){ setTemplate(null); setLoadingTpl(false);} return; }
+        const tpl = await window.storage.get(`biz:${bizId}:checklist_template`, null, false);
+        if (tpl && Array.isArray(tpl.items)) {
+          if (!cancelled){ setTemplate(tpl); setLoadingTpl(false); } return;
+        }
+        // No new-shape template yet — try to migrate the old shiftChecklists shape.
+        const legacy = businessConfig?.shiftChecklists;
+        if (legacy && (legacy.daily || legacy.weekly)) {
+          const items = [];
+          let order = 0;
+          for (const phase of ["opening","handover","closing"]) {
+            for (const it of (legacy.daily?.[phase] || [])) {
+              items.push({
+                id: newId("ci"),
+                tenantId, businessId: bizId, branchId: bizId,
+                checklistType: phase, scheduleType:"daily", dayOfWeek: null,
+                area: "כללי", title: it.label || "פריט ללא שם", description:"",
+                isRequired: true, requiresPhoto:false, priority:"medium",
+                sortOrder: order++, defaultPosition: null, active: true,
+                sourceSystemTemplateItemId: null,
+                createdAt: Date.now(), updatedAt: Date.now(),
+                createdBy: ctx.userId, updatedBy: ctx.userId,
+                archivedAt: null, archivedBy: null,
+              });
+            }
+          }
+          for (const k of DOW_KEYS) {
+            for (const phase of ["opening","handover","closing"]) {
+              for (const it of (legacy.weekly?.[k]?.[phase] || [])) {
+                items.push({
+                  id: newId("ci"),
+                  tenantId, businessId: bizId, branchId: bizId,
+                  checklistType: phase, scheduleType:"weekly", dayOfWeek: k,
+                  area:"כללי", title: it.label || "פריט ללא שם", description:"",
+                  isRequired:true, requiresPhoto:false, priority:"medium",
+                  sortOrder: order++, defaultPosition: null, active: true,
+                  sourceSystemTemplateItemId: null,
+                  createdAt: Date.now(), updatedAt: Date.now(),
+                  createdBy: ctx.userId, updatedBy: ctx.userId,
+                  archivedAt: null, archivedBy: null,
+                });
+              }
+            }
+          }
+          const migrated = { version:"2.0", branchId: bizId, sourceStarter: null, items,
+            updatedAt: Date.now(), updatedBy: ctx.userId, migratedFromLegacyAt: Date.now() };
+          await window.storage.set(`biz:${bizId}:checklist_template`, JSON.stringify(migrated), true);
+          if (!cancelled){ setTemplate(migrated); setLoadingTpl(false); } return;
+        }
+        if (!cancelled){ setTemplate(blankTemplate(ctx)); setLoadingTpl(false); }
+      } catch(e) {
+        console.error("[checklist] template load failed:", e);
+        if (!cancelled){ setTemplate(blankTemplate(ctx)); setLoadingTpl(false); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [bizId, businessConfig?.shiftChecklists]);
+
+  // ── Load today's runs ─────────────────────────────────────────────────────
+  React.useEffect(() => {
+    let cancelled = false;
+    setLoadingRuns(true);
+    (async () => {
+      try {
+        if (!bizId) { if (!cancelled){ setRuns(null); setLoadingRuns(false);} return; }
+        const doc = await window.storage.get(`biz:${bizId}:checklist_runs:${todayKey}`, null, false);
+        if (!cancelled){ setRuns(doc || null); setLoadingRuns(false); }
+      } catch(e) {
+        if (!cancelled){ setRuns(null); setLoadingRuns(false); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [bizId, todayKey]);
+
+  // ── Cross-04:00 boundary refresh ──────────────────────────────────────────
+  React.useEffect(() => {
+    const t = setInterval(() => {
+      const k = businessDayKey();
+      if (k !== todayKey) setTodayKey(k);
+    }, 60_000);
+    return () => clearInterval(t);
+  }, [todayKey]);
+
+  // ── Today's items per phase ──────────────────────────────────────────────
+  const itemsForPhase = (phaseKey) => {
+    if (!template) return [];
+    const eligible = template.items.filter(it =>
+      it.active && it.checklistType === phaseKey &&
+      (it.scheduleType === "daily" || (it.scheduleType === "weekly" && it.dayOfWeek === weekKey))
+    );
+    // Stable sort by sortOrder then created.
+    return [...eligible].sort((a,b) => (a.sortOrder - b.sortOrder) || (a.createdAt - b.createdAt));
+  };
+
+  // ── Mark item — opens the action sheet ───────────────────────────────────
+  const openItemEditor = (runType, item) => {
+    const st = runs?.runs?.[runType]?.status;
+    if (st === "locked" || st === "submitted") return; // submitted+locked = read-only
+    const existing = runs?.runs?.[runType]?.items?.[item.id];
+    setEditItem({
+      runType, item,
+      statusEdit: existing?.status || "pending",
+      noteEdit:   existing?.note || "",
+      photoEdit:  existing?.photoUrl || "",
+    });
+  };
+  const closeItemEditor = () => setEditItem(null);
+
+  // ── Persist a single item interaction ────────────────────────────────────
+  const saveItemEdit = async () => {
+    if (!editItem) return;
+    const { runType, item, statusEdit, noteEdit, photoEdit } = editItem;
+    // Validate
+    if ((statusEdit === "not_done" || statusEdit === "issue") && !noteEdit.trim()) {
+      alert("נדרשת הערה כאשר הסטטוס הוא 'לא בוצע' או 'תקלה'.");
+      return;
+    }
+    if (item.requiresPhoto && statusEdit === "done" && !photoEdit) {
+      alert("הפריט דורש צילום. צרף תמונה לפני סימון 'בוצע'.");
+      return;
+    }
+    const now = Date.now();
+    const newRuns = JSON.parse(JSON.stringify(runs || {
+      tenantId, businessId: bizId, branchId: bizId,
+      businessDate: todayKey, businessDayOfWeek: weekKey,
+      runs: {
+        opening:  { id: newId("run"), status:"draft", openedByManagerId:"", openedAt:null, submittedAt:null, completionPercent:0, items:{} },
+        handover: { id: newId("run"), status:"draft", openedByManagerId:"", openedAt:null, submittedAt:null, completionPercent:0, items:{} },
+        closing:  { id: newId("run"), status:"draft", openedByManagerId:"", openedAt:null, submittedAt:null, completionPercent:0, items:{} },
+      },
+    }));
+    const run = newRuns.runs[runType];
+    if (run.status === "draft") {
+      run.status = "in_progress";
+      run.openedByManagerId = ctx.userId;
+      run.openedAt = now;
+    }
+    run.items = run.items || {};
+    if (statusEdit === "pending") {
+      delete run.items[item.id];
+    } else {
+      run.items[item.id] = {
+        source: item.scheduleType,
+        status: statusEdit,
+        note: noteEdit,
+        photoUrl: photoEdit || null,
+        checkedByManagerId: ctx.userId,
+        checkedAt: now,
+        titleSnapshot:         item.title,
+        areaSnapshot:          item.area,
+        prioritySnapshot:      item.priority,
+        requiresPhotoSnapshot: !!item.requiresPhoto,
+      };
+    }
+    // Recompute completion %
+    const todaysItems = itemsForPhase(runType);
+    const doneCount = todaysItems.filter(it => run.items[it.id]?.status === "done").length;
+    run.completionPercent = todaysItems.length ? Math.round(doneCount * 100 / todaysItems.length) : 0;
+    setRuns(newRuns);
+    closeItemEditor();
+    try { await window.storage.set(`biz:${bizId}:checklist_runs:${todayKey}`, JSON.stringify(newRuns), true); }
+    catch (e) { alert("שמירה נכשלה — נסה שוב"); }
+  };
+
+  // ── Submit a phase run (locks it) ────────────────────────────────────────
+  const submitRun = async (runType) => {
+    if (!runs?.runs?.[runType]) return;
+    const todayItems = itemsForPhase(runType);
+    const run = runs.runs[runType];
+    const missingCritical = todayItems.filter(it =>
+      it.priority === "critical" && run.items?.[it.id]?.status !== "done"
+    );
+    if (missingCritical.length > 0) {
+      const labels = missingCritical.map(i => `• ${i.title}`).join("\n");
+      if (!confirm(`יש ${missingCritical.length} פריטי "קריטי" שלא סומנו כ-'בוצע':\n\n${labels}\n\nלשלוח את הצ׳ק ליסט בכל זאת?`)) return;
+    }
+    const requiredMissing = todayItems.filter(it =>
+      it.isRequired && (!run.items?.[it.id] || run.items[it.id].status === "pending")
+    );
+    if (requiredMissing.length > 0) {
+      if (!confirm(`${requiredMissing.length} פריטים נדרשים לא סומנו כלל. לשלוח בכל זאת?`)) return;
+    }
+    const now = Date.now();
+    const newRuns = JSON.parse(JSON.stringify(runs));
+    newRuns.runs[runType].status = "submitted";
+    newRuns.runs[runType].submittedAt = now;
+    newRuns.runs[runType].submittedBy = ctx.userId;
+    setRuns(newRuns);
+    try { await window.storage.set(`biz:${bizId}:checklist_runs:${todayKey}`, JSON.stringify(newRuns), true); }
+    catch (e) { alert("שמירה נכשלה — נסה שוב"); }
+  };
+
+  if (!bizId) {
+    return <div className="card card-p"><p style={{margin:0,fontSize:13,color:"#6B7280"}}>בחר עסק כדי לראות את הצ׳ק ליסט.</p></div>;
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────
+  const todayLabel = new Date(todayKey + "T12:00:00").toLocaleDateString("he-IL",{timeZone:"Asia/Jerusalem"});
+
+  return (
+    <div>
+      <div className="card card-p" style={{marginBottom:12}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap"}}>
+          <div>
+            <h2 style={{margin:0,fontSize:14,fontWeight:700,color:"#111827"}}>צ׳ק ליסט משמרת</h2>
+            <p style={{margin:"2px 0 0",fontSize:11,color:"#9CA3AF"}}>
+              {DOW_HE_FULL[dow]} · {todayLabel} · יום עסקי 04:00→04:00
+            </p>
+          </div>
+          {canEdit && (
+            <button onClick={() => setEditorOpen(true)}
+              style={{padding:"8px 14px",background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:10,color:"#6B7280",fontWeight:600,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+              ערוך תבנית
+            </button>
+          )}
+        </div>
+        {template?.sourceStarter && (
+          <p style={{margin:"6px 0 0",fontSize:10,color:"#9CA3AF"}}>
+            תבנית מקור: {STARTER_TEMPLATES[template.sourceStarter]?.label || template.sourceStarter}
+          </p>
+        )}
+      </div>
+
+      {loadingTpl || loadingRuns ? (
+        <div className="card card-p"><p style={{margin:0,fontSize:12,color:"#9CA3AF"}}>טוען…</p></div>
+      ) : !template || template.items.length === 0 ? (
+        <div className="card card-p">
+          <p style={{margin:0,fontSize:13,color:"#6B7280",lineHeight:1.6}}>
+            אין עדיין צ׳ק ליסט לסניף הזה.
+            {canEdit ? <><br/>פתח את העורך וצור פריטים, או אתחל מתבנית מוכנה.</> : <><br/>פנה למנהל כדי שיתחיל את התבנית.</>}
+          </p>
+        </div>
+      ) : PHASE_META.map(({key, emoji, label, color}) => {
+        const items = itemsForPhase(key);
+        const run = runs?.runs?.[key] || { status:"draft", items:{}, completionPercent: 0 };
+        const doneCount = items.filter(it => run.items?.[it.id]?.status === "done").length;
+        const total = items.length;
+        const pct = total ? Math.round(doneCount*100/total) : 0;
+        const isLocked = run.status === "locked";
+        const isSubmitted = run.status === "submitted";
+        const groups = items.reduce((m,it) => { (m[it.area || "כללי"] = m[it.area || "כללי"] || []).push(it); return m; }, {});
+
+        return (
+          <div key={key} className="card card-p" style={{marginBottom:12}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10,flexWrap:"wrap",gap:6}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:18}}>{emoji}</span>
+                <h3 style={{margin:0,fontSize:13,fontWeight:700,color:"#111827"}}>{label}</h3>
+                <span style={{fontSize:11,color:"#9CA3AF"}}>· {doneCount}/{total}</span>
+                {isSubmitted && <span style={{fontSize:10,fontWeight:700,color:"#15803D",padding:"2px 8px",background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:99}}>נשלח</span>}
+                {isLocked && <span style={{fontSize:10,fontWeight:700,color:"#6B7280",padding:"2px 8px",background:"#F3F4F6",border:"1px solid #E5E7EB",borderRadius:99}}>נעול</span>}
+              </div>
+              {total > 0 && (
+                <div style={{flex:"0 0 80px",height:6,background:"#F3F4F6",borderRadius:99,overflow:"hidden"}}>
+                  <div style={{width:`${pct}%`,height:"100%",background:color,transition:"width .2s"}}/>
+                </div>
+              )}
+            </div>
+
+            {total === 0 ? (
+              <div style={{padding:"14px",textAlign:"center",color:"#9CA3AF",fontSize:12}}>אין משימות בשלב הזה היום.</div>
+            ) : (
+              Object.entries(groups).map(([area, areaItems]) => (
+                <div key={area} style={{marginBottom:10}}>
+                  <div style={{fontSize:10,fontWeight:700,color:"#9CA3AF",textTransform:"uppercase",letterSpacing:0.5,padding:"4px 4px 6px"}}>{area}</div>
+                  {areaItems.map(it => {
+                    const cur = run.items?.[it.id];
+                    const sm = ITEM_STATUS_META[cur?.status || "pending"];
+                    return (
+                      <div key={it.id}
+                        onClick={() => openItemEditor(key, it)}
+                        style={{
+                          display:"flex",alignItems:"flex-start",gap:10,
+                          padding:"10px 12px",marginBottom:6,
+                          background: sm.bg, border:`1px solid ${sm.border}`, borderRadius:8,
+                          cursor: (isLocked || isSubmitted) ? "default" : "pointer", userSelect:"none",
+                          opacity: (isLocked || isSubmitted) ? 0.85 : 1,
+                        }}>
+                        <div style={{
+                          width:22, height:22, borderRadius:5, flexShrink:0,
+                          border:`2px solid ${cur?.status === "done" ? "#16A34A" : "#D1D5DB"}`,
+                          background: cur?.status === "done" ? "#16A34A" : sm.bg,
+                          display:"flex",alignItems:"center",justifyContent:"center",
+                          color:"#FFFFFF",fontSize:13,fontWeight:700,marginTop:1,
+                        }}>{cur?.status === "done" ? "✓" : sm.icon}</div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:13,fontWeight:600,color:sm.fg,lineHeight:1.4,
+                            textDecoration: cur?.status === "done" || cur?.status === "not_relevant" ? "line-through" : "none"}}>
+                            {it.title}
+                            {it.scheduleType === "weekly" && (
+                              <span style={{marginInlineStart:8,padding:"1px 7px",background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:99,color:"#1D4ED8",fontSize:9,fontWeight:700,letterSpacing:0.3,verticalAlign:"middle"}}>שבועי · {DOW_HE_FULL[dow]}</span>
+                            )}
+                            {it.requiresPhoto && (
+                              <span style={{marginInlineStart:6,fontSize:11,color:"#6B7280"}}>📷</span>
+                            )}
+                            {it.priority === "critical" && (
+                              <span style={{marginInlineStart:6,fontSize:10,fontWeight:700,color:"#DC2626"}}>קריטי</span>
+                            )}
+                          </div>
+                          {it.description && (
+                            <div style={{fontSize:11,color:"#9CA3AF",marginTop:2,lineHeight:1.4}}>{it.description}</div>
+                          )}
+                          {cur && cur.status !== "pending" && (
+                            <div style={{fontSize:10,color:"#6B7280",marginTop:3,lineHeight:1.4}}>
+                              {ITEM_STATUS_META[cur.status].label} · {new Date(cur.checkedAt).toLocaleTimeString("he-IL",{hour:"2-digit",minute:"2-digit",timeZone:"Asia/Jerusalem"})}
+                              {cur.note ? ` · "${cur.note}"` : ""}
+                              {cur.photoUrl ? " · 📷" : ""}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))
+            )}
+
+            {total > 0 && !isSubmitted && !isLocked && (
+              <div style={{display:"flex",justifyContent:"flex-end",marginTop:6}}>
+                <button onClick={() => submitRun(key)}
+                  style={{padding:"8px 18px",background:color,border:"none",borderRadius:8,color:"#FFFFFF",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                  שלח {label}
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {editItem && (
+        <ItemActionSheet
+          editItem={editItem}
+          setEditItem={setEditItem}
+          onClose={closeItemEditor}
+          onSave={saveItemEdit}
+        />
+      )}
+
+      {editorOpen && canEdit && (
+        <ShiftChecklistEditor
+          template={template}
+          ctx={ctx}
+          businesses={businesses}
+          onClose={() => setEditorOpen(false)}
+          onSave={async (next) => {
+            const ts = Date.now();
+            const stamped = { ...next, updatedAt: ts, updatedBy: ctx.userId };
+            setTemplate(stamped);
+            await window.storage.set(`biz:${bizId}:checklist_template`, JSON.stringify(stamped), true);
+            setEditorOpen(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Action sheet for marking an item ────────────────────────────────────────
+function ItemActionSheet({ editItem, setEditItem, onClose, onSave }){
+  const { item, statusEdit, noteEdit, photoEdit } = editItem;
+  const setField = (k,v) => setEditItem(prev => ({...prev, [k]: v}));
+
+  const handlePhoto = (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if (f.size > 800_000) {
+      if (!confirm(`התמונה גדולה (${Math.round(f.size/1024)}KB). להמשיך?`)) return;
+    }
+    const r = new FileReader();
+    r.onload = () => setField("photoEdit", r.result);
+    r.readAsDataURL(f);
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:9999}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#FFFFFF",borderRadius:"16px 16px 0 0",padding:18,width:"100%",maxWidth:560,maxHeight:"85vh",overflowY:"auto"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+          <h3 style={{margin:0,fontSize:14,fontWeight:700,color:"#111827"}}>{item.title}</h3>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#9CA3AF"}}>✕</button>
+        </div>
+        <div style={{fontSize:11,color:"#9CA3AF",marginBottom:14}}>
+          {item.area} · {PRIORITY_META[item.priority].label}{item.requiresPhoto ? " · דורש צילום" : ""}{item.isRequired ? " · נדרש" : ""}
+        </div>
+
+        <div style={{fontSize:11,fontWeight:700,color:"#6B7280",marginBottom:6}}>סטטוס</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:6,marginBottom:14}}>
+          {["done","not_done","issue","not_relevant","pending"].map(s => {
+            const sm = ITEM_STATUS_META[s];
+            const sel = statusEdit === s;
+            return (
+              <button key={s} onClick={() => setField("statusEdit", s)}
+                style={{padding:"10px 12px",border:`1.5px solid ${sel ? sm.fg : "#E5E7EB"}`,background:sel?sm.bg:"#FFFFFF",color:sel?sm.fg:"#6B7280",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",textAlign:"right"}}>
+                {sm.icon ? `${sm.icon} ` : ""}{sm.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{fontSize:11,fontWeight:700,color:"#6B7280",marginBottom:6}}>
+          הערה {(statusEdit==="not_done" || statusEdit==="issue") && <span style={{color:"#DC2626"}}>·  חובה</span>}
+        </div>
+        <textarea value={noteEdit} onChange={e=>setField("noteEdit", e.target.value)}
+          placeholder={statusEdit==="issue" ? "תיאור התקלה…" : "הערה אופציונלית"}
+          style={{width:"100%",minHeight:60,padding:"8px 10px",border:"1px solid #E5E7EB",borderRadius:8,fontSize:12,fontFamily:"inherit",resize:"vertical",marginBottom:14}}/>
+
+        {item.requiresPhoto && (
+          <>
+            <div style={{fontSize:11,fontWeight:700,color:"#6B7280",marginBottom:6}}>צילום {statusEdit==="done" && <span style={{color:"#DC2626"}}>· חובה</span>}</div>
+            {photoEdit ? (
+              <div style={{marginBottom:14}}>
+                <img src={photoEdit} alt="" style={{maxWidth:"100%",maxHeight:180,borderRadius:8,border:"1px solid #E5E7EB"}}/>
+                <button onClick={()=>setField("photoEdit","")} style={{marginTop:6,padding:"6px 12px",background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:6,color:"#991B1B",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>הסר</button>
+              </div>
+            ) : (
+              <input type="file" accept="image/*" capture="environment" onChange={handlePhoto}
+                style={{marginBottom:14,fontSize:12,fontFamily:"inherit"}}/>
+            )}
+          </>
+        )}
+
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <button onClick={onClose} style={{padding:"9px 18px",background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8,color:"#6B7280",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>ביטול</button>
+          <button onClick={onSave} style={{padding:"9px 18px",background:"#111827",border:"none",borderRadius:8,color:"#FFFFFF",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>שמור</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Template Editor — owner/manager only
+// ═══════════════════════════════════════════════════════════════════════════
+function ShiftChecklistEditor({ template, ctx, businesses, onClose, onSave }){
+  const [draft, setDraft] = React.useState(() => JSON.parse(JSON.stringify(template || blankTemplate(ctx))));
+  const [tab, setTab] = React.useState("daily"); // "daily" or DOW key
+  const [editingItem, setEditingItem] = React.useState(null); // item or "new"
+  const [dupOpen, setDupOpen] = React.useState(false);
+
+  const archivedCount = draft.items.filter(it => !it.active).length;
+
+  const persistItems = (items) => setDraft({...draft, items});
+
+  const upsertItem = (it) => {
+    const items = [...draft.items];
+    const idx = items.findIndex(x => x.id === it.id);
+    if (idx >= 0) items[idx] = { ...it, updatedAt: Date.now(), updatedBy: ctx.userId };
+    else items.push({...it, updatedAt: Date.now(), updatedBy: ctx.userId});
+    persistItems(items);
+    setEditingItem(null);
+  };
+
+  const softDelete = (itemId) => {
+    if (!confirm("להסיר את הפריט? יישמר ארכיון להיסטוריה.")) return;
+    const items = draft.items.map(x => x.id === itemId
+      ? {...x, active:false, archivedAt: Date.now(), archivedBy: ctx.userId}
+      : x);
+    persistItems(items);
+  };
+
+  const restore = (itemId) => {
+    const items = draft.items.map(x => x.id === itemId
+      ? {...x, active:true, archivedAt:null, archivedBy:null}
+      : x);
+    persistItems(items);
+  };
+
+  const move = (itemId, dir) => {
+    // Build per-phase ordered list, swap with neighbor, rewrite sortOrder.
+    const it = draft.items.find(x => x.id === itemId);
+    if (!it) return;
+    const bucket = draft.items.filter(x => x.active && x.checklistType === it.checklistType && x.scheduleType === it.scheduleType && (x.dayOfWeek||null) === (it.dayOfWeek||null))
+      .sort((a,b) => a.sortOrder - b.sortOrder);
+    const idx = bucket.findIndex(x => x.id === itemId);
+    const swap = idx + dir;
+    if (swap < 0 || swap >= bucket.length) return;
+    const newOrder = [...bucket]; [newOrder[idx], newOrder[swap]] = [newOrder[swap], newOrder[idx]];
+    const updated = draft.items.map(x => {
+      const i = newOrder.findIndex(y => y.id === x.id);
+      return i >= 0 ? {...x, sortOrder: i} : x;
+    });
+    persistItems(updated);
+  };
+
+  const initFromStarter = (key) => {
+    if (!confirm(`לאתחל מתבנית "${STARTER_TEMPLATES[key].label}"? פריטים קיימים יסומנו כארכיון (לא יימחקו).`)) return;
+    const archived = draft.items.map(x => x.active ? {...x, active:false, archivedAt: Date.now(), archivedBy: ctx.userId} : x);
+    const seeded = STARTER_TEMPLATES[key].items.map((s,i) => ({
+      ...buildItemFromStarter(s, ctx),
+      sortOrder: i,
+    }));
+    setDraft({...draft, sourceStarter: key, items: [...archived, ...seeded]});
+  };
+
+  const duplicateFromBranch = async (sourceBizId) => {
+    try {
+      const tpl = await window.storage.get(`biz:${sourceBizId}:checklist_template`, null, false);
+      if (!tpl || !Array.isArray(tpl.items)) {
+        alert("לסניף המקור אין צ׳ק ליסט להעתקה.");
+        return;
+      }
+      const activeSrc = tpl.items.filter(it => it.active);
+      if (!confirm(`להעתיק ${activeSrc.length} פריטים מהסניף הנבחר? פריטים קיימים יישארו כארכיון.`)) return;
+      const archived = draft.items.map(x => x.active ? {...x, active:false, archivedAt: Date.now(), archivedBy: ctx.userId} : x);
+      const copied = activeSrc.map((src,i) => ({
+        ...src,
+        id: newId("ci"),
+        tenantId: ctx.tenantId, businessId: ctx.businessId, branchId: ctx.branchId,
+        sortOrder: i,
+        sourceSystemTemplateItemId: src.sourceSystemTemplateItemId || null,
+        createdAt: Date.now(), updatedAt: Date.now(),
+        createdBy: ctx.userId, updatedBy: ctx.userId,
+        active: true, archivedAt: null, archivedBy: null,
+      }));
+      setDraft({...draft, items: [...archived, ...copied]});
+      setDupOpen(false);
+    } catch(e) {
+      alert("טעינה נכשלה: " + (e?.message || e));
+    }
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center",padding:"12px",zIndex:9999}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#FFFFFF",borderRadius:12,padding:16,width:"100%",maxWidth:780,maxHeight:"94vh",overflowY:"auto"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+          <h2 style={{margin:0,fontSize:15,fontWeight:700,color:"#111827"}}>עריכת תבנית צ׳ק ליסט</h2>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#9CA3AF"}}>✕</button>
+        </div>
+
+        {/* Toolbar */}
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+          <select onChange={e => { if (e.target.value) initFromStarter(e.target.value); e.target.value=""; }} defaultValue=""
+            style={{padding:"7px 10px",border:"1px solid #E5E7EB",borderRadius:8,background:"#F9FAFB",color:"#111827",fontFamily:"inherit",fontSize:11}}>
+            <option value="">↺ אתחל מתבנית מוכנה…</option>
+            {Object.entries(STARTER_TEMPLATES).map(([k,v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          {(businesses || []).filter(b => b.id !== ctx.branchId).length > 0 && (
+            <button onClick={() => setDupOpen(true)}
+              style={{padding:"7px 10px",border:"1px solid #E5E7EB",borderRadius:8,background:"#F9FAFB",color:"#111827",fontFamily:"inherit",fontSize:11,cursor:"pointer"}}>
+              📋 שכפל מסניף אחר
+            </button>
+          )}
+        </div>
+
+        {/* Day-of-week / daily tabs */}
+        <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:10,padding:6,background:"#F9FAFB",borderRadius:8}}>
+          <button onClick={()=>setTab("daily")}
+            style={{padding:"6px 12px",borderRadius:6,border:"none",background:tab==="daily"?"#111827":"transparent",color:tab==="daily"?"#FFFFFF":"#6B7280",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            יומי
+          </button>
+          {DOW_KEYS.map((k,i) => (
+            <button key={k} onClick={()=>setTab(k)}
+              style={{padding:"6px 12px",borderRadius:6,border:"none",background:tab===k?"#1D4ED8":"transparent",color:tab===k?"#FFFFFF":"#6B7280",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              {DOW_HE_FULL[i]}
+            </button>
+          ))}
+        </div>
+
+        <p style={{margin:"0 0 12px",fontSize:11,color:"#6B7280",lineHeight:1.5}}>
+          {tab === "daily"
+            ? "פריטים יומיים מופיעים בכל יום ובכל סוג משמרת."
+            : `פריטים שבועיים מופיעים רק ביום ${DOW_HE_FULL[DOW_KEYS.indexOf(tab)]} — בנוסף לפריטים היומיים.`}
+        </p>
+
+        {PHASE_META.map(({key, emoji, label}) => {
+          const bucket = draft.items
+            .filter(it => it.active && it.checklistType === key && (tab === "daily" ? it.scheduleType === "daily" : (it.scheduleType === "weekly" && it.dayOfWeek === tab)))
+            .sort((a,b) => a.sortOrder - b.sortOrder);
+          const groups = bucket.reduce((m,it) => { (m[it.area || "כללי"] = m[it.area || "כללי"] || []).push(it); return m; }, {});
+          return (
+            <div key={key} style={{marginBottom:14,border:"1px solid #E5E7EB",borderRadius:8,padding:"8px 10px"}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+                <h3 style={{margin:0,fontSize:13,fontWeight:700,color:"#111827"}}>{emoji} {label} <span style={{color:"#9CA3AF",fontWeight:400,fontSize:11}}>· {bucket.length}</span></h3>
+                <button onClick={() => setEditingItem({
+                  id: newId("ci"),
+                  tenantId: ctx.tenantId, businessId: ctx.businessId, branchId: ctx.branchId,
+                  checklistType: key, scheduleType: tab === "daily" ? "daily" : "weekly", dayOfWeek: tab === "daily" ? null : tab,
+                  area: "כללי", title: "", description: "",
+                  isRequired: false, requiresPhoto: false, priority: "medium",
+                  sortOrder: bucket.length, defaultPosition: null, active: true,
+                  sourceSystemTemplateItemId: null,
+                  createdAt: Date.now(), updatedAt: Date.now(),
+                  createdBy: ctx.userId, updatedBy: ctx.userId,
+                  archivedAt: null, archivedBy: null,
+                })}
+                  style={{padding:"5px 12px",background:"#111827",border:"none",borderRadius:6,color:"#FFFFFF",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                  + פריט
+                </button>
+              </div>
+              {bucket.length === 0 ? (
+                <p style={{margin:"6px 4px",fontSize:11,color:"#9CA3AF"}}>אין פריטים. הוסף את הראשון למעלה.</p>
+              ) : (
+                Object.entries(groups).map(([area, items]) => (
+                  <div key={area} style={{marginBottom:8}}>
+                    <div style={{fontSize:10,fontWeight:700,color:"#9CA3AF",textTransform:"uppercase",letterSpacing:0.5,padding:"4px 2px"}}>{area}</div>
+                    {items.map((it,idx) => (
+                      <div key={it.id} style={{display:"flex",alignItems:"center",gap:6,padding:"6px 8px",border:"1px solid #F3F4F6",borderRadius:6,marginBottom:4}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:12,fontWeight:600,color:"#111827"}}>{it.title || <span style={{color:"#DC2626"}}>(ללא כותרת)</span>}</div>
+                          <div style={{fontSize:10,color:"#9CA3AF",marginTop:2}}>
+                            {PRIORITY_META[it.priority].label}
+                            {it.isRequired && " · נדרש"}
+                            {it.requiresPhoto && " · 📷"}
+                          </div>
+                        </div>
+                        <button onClick={()=>move(it.id, -1)} disabled={idx===0} style={{background:"none",border:"none",cursor:idx===0?"default":"pointer",color:idx===0?"#D1D5DB":"#6B7280",fontSize:12,padding:"2px 6px"}}>▲</button>
+                        <button onClick={()=>move(it.id, +1)} disabled={idx===items.length-1} style={{background:"none",border:"none",cursor:idx===items.length-1?"default":"pointer",color:idx===items.length-1?"#D1D5DB":"#6B7280",fontSize:12,padding:"2px 6px"}}>▼</button>
+                        <button onClick={()=>setEditingItem(it)} style={{background:"none",border:"none",cursor:"pointer",color:"#1D4ED8",fontSize:11,padding:"2px 6px",fontWeight:600}}>ערוך</button>
+                        <button onClick={()=>softDelete(it.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#DC2626",fontSize:11,padding:"2px 6px",fontWeight:600}}>הסר</button>
+                      </div>
+                    ))}
+                  </div>
+                ))
+              )}
+            </div>
+          );
+        })}
+
+        {/* Archive viewer */}
+        {archivedCount > 0 && (
+          <details style={{marginBottom:10,padding:"8px 10px",background:"#F9FAFB",borderRadius:8,border:"1px solid #E5E7EB"}}>
+            <summary style={{cursor:"pointer",fontSize:11,fontWeight:700,color:"#6B7280"}}>
+              ארכיון ({archivedCount} פריטים מוסרים) — לא יופיעו במשמרת
+            </summary>
+            <div style={{marginTop:8}}>
+              {draft.items.filter(x => !x.active).map(it => (
+                <div key={it.id} style={{display:"flex",alignItems:"center",gap:6,padding:"4px 0",fontSize:11,color:"#9CA3AF"}}>
+                  <span style={{flex:1}}>{it.title} <span style={{color:"#D1D5DB"}}>· {PHASE_META.find(p=>p.key===it.checklistType)?.label} · {it.scheduleType === "weekly" ? `שבועי-${DOW_HE_FULL[DOW_KEYS.indexOf(it.dayOfWeek)]}` : "יומי"}</span></span>
+                  <button onClick={()=>restore(it.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#15803D",fontSize:11,fontWeight:600}}>שחזר</button>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
+
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:10}}>
+          <button onClick={onClose} style={{padding:"9px 16px",background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8,color:"#6B7280",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>ביטול</button>
+          <button onClick={()=>onSave(draft)} style={{padding:"9px 16px",background:"#111827",border:"none",borderRadius:8,color:"#FFFFFF",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>שמור</button>
+        </div>
+
+        {editingItem && (
+          <ItemFormModal
+            item={editingItem}
+            onClose={()=>setEditingItem(null)}
+            onSave={upsertItem}
+          />
+        )}
+
+        {dupOpen && (
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:10000,padding:12}} onClick={()=>setDupOpen(false)}>
+            <div onClick={e=>e.stopPropagation()} style={{background:"#FFFFFF",borderRadius:12,padding:18,width:"100%",maxWidth:420}}>
+              <h3 style={{margin:"0 0 10px",fontSize:14,fontWeight:700,color:"#111827"}}>שכפל מסניף</h3>
+              <p style={{margin:"0 0 12px",fontSize:11,color:"#6B7280",lineHeight:1.5}}>פריטים פעילים מהסניף הנבחר יועתקו לכאן עם IDs חדשים. הפריטים הקיימים יסומנו כארכיון.</p>
+              {(businesses || []).filter(b => b.id !== ctx.branchId).map(b => (
+                <button key={b.id} onClick={()=>duplicateFromBranch(b.id)}
+                  style={{display:"block",width:"100%",padding:"10px 12px",marginBottom:6,background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8,color:"#111827",textAlign:"right",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>
+                  {b.name || b.id}
+                </button>
+              ))}
+              <button onClick={()=>setDupOpen(false)} style={{marginTop:6,padding:"7px 14px",background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8,color:"#6B7280",fontSize:11,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>ביטול</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Item form (add/edit a single template item) ─────────────────────────────
+function ItemFormModal({ item, onClose, onSave }){
+  const [form, setForm] = React.useState({...item});
+  const set = (k,v) => setForm(prev => ({...prev, [k]: v}));
+  const save = () => {
+    if (!form.title.trim()) { alert("יש למלא כותרת"); return; }
+    onSave(form);
+  };
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:10000,padding:12}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#FFFFFF",borderRadius:12,padding:18,width:"100%",maxWidth:520,maxHeight:"90vh",overflowY:"auto"}}>
+        <h3 style={{margin:"0 0 12px",fontSize:14,fontWeight:700,color:"#111827"}}>פריט צ׳ק ליסט</h3>
+
+        <label style={{fontSize:11,fontWeight:700,color:"#6B7280"}}>כותרת *</label>
+        <input value={form.title} onChange={e=>set("title", e.target.value)}
+          style={{width:"100%",padding:"8px 10px",border:"1px solid #E5E7EB",borderRadius:8,fontSize:13,fontFamily:"inherit",marginBottom:10,marginTop:4}}/>
+
+        <label style={{fontSize:11,fontWeight:700,color:"#6B7280"}}>תיאור</label>
+        <textarea value={form.description} onChange={e=>set("description", e.target.value)}
+          style={{width:"100%",minHeight:50,padding:"8px 10px",border:"1px solid #E5E7EB",borderRadius:8,fontSize:12,fontFamily:"inherit",resize:"vertical",marginBottom:10,marginTop:4}}/>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+          <div>
+            <label style={{fontSize:11,fontWeight:700,color:"#6B7280"}}>אזור</label>
+            <input list="area-suggest" value={form.area} onChange={e=>set("area", e.target.value)}
+              style={{width:"100%",padding:"8px 10px",border:"1px solid #E5E7EB",borderRadius:8,fontSize:12,fontFamily:"inherit",marginTop:4}}/>
+            <datalist id="area-suggest">{STARTER_AREAS.map(a => <option key={a} value={a}/>)}</datalist>
+          </div>
+          <div>
+            <label style={{fontSize:11,fontWeight:700,color:"#6B7280"}}>עדיפות</label>
+            <select value={form.priority} onChange={e=>set("priority", e.target.value)}
+              style={{width:"100%",padding:"8px 10px",border:"1px solid #E5E7EB",borderRadius:8,fontSize:12,fontFamily:"inherit",marginTop:4,background:"#FFFFFF"}}>
+              {Object.entries(PRIORITY_META).map(([k,v]) => <option key={k} value={k}>{v.label}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div style={{display:"flex",gap:12,marginBottom:10,padding:"8px 10px",background:"#F9FAFB",borderRadius:8}}>
+          <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:"#111827",cursor:"pointer"}}>
+            <input type="checkbox" checked={!!form.isRequired} onChange={e=>set("isRequired", e.target.checked)}/>
+            נדרש
+          </label>
+          <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:"#111827",cursor:"pointer"}}>
+            <input type="checkbox" checked={!!form.requiresPhoto} onChange={e=>set("requiresPhoto", e.target.checked)}/>
+            דורש צילום
+          </label>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+          <div>
+            <label style={{fontSize:11,fontWeight:700,color:"#6B7280"}}>סוג צ׳ק ליסט</label>
+            <select value={form.checklistType} onChange={e=>set("checklistType", e.target.value)}
+              style={{width:"100%",padding:"8px 10px",border:"1px solid #E5E7EB",borderRadius:8,fontSize:12,fontFamily:"inherit",marginTop:4,background:"#FFFFFF"}}>
+              {PHASE_META.map(p => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{fontSize:11,fontWeight:700,color:"#6B7280"}}>תדירות</label>
+            <select value={form.scheduleType} onChange={e=>{
+              const v = e.target.value;
+              set("scheduleType", v);
+              if (v === "daily") set("dayOfWeek", null);
+              else if (!form.dayOfWeek) set("dayOfWeek", "sun");
+            }}
+              style={{width:"100%",padding:"8px 10px",border:"1px solid #E5E7EB",borderRadius:8,fontSize:12,fontFamily:"inherit",marginTop:4,background:"#FFFFFF"}}>
+              <option value="daily">יומי</option>
+              <option value="weekly">שבועי</option>
+            </select>
+          </div>
+          {form.scheduleType === "weekly" && (
+            <div style={{gridColumn:"1 / -1"}}>
+              <label style={{fontSize:11,fontWeight:700,color:"#6B7280"}}>יום בשבוע</label>
+              <select value={form.dayOfWeek || "sun"} onChange={e=>set("dayOfWeek", e.target.value)}
+                style={{width:"100%",padding:"8px 10px",border:"1px solid #E5E7EB",borderRadius:8,fontSize:12,fontFamily:"inherit",marginTop:4,background:"#FFFFFF"}}>
+                {DOW_KEYS.map((k,i) => <option key={k} value={k}>{DOW_HE_FULL[i]}</option>)}
+              </select>
+            </div>
+          )}
+        </div>
+
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+          <button onClick={onClose} style={{padding:"9px 16px",background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8,color:"#6B7280",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>ביטול</button>
+          <button onClick={save} style={{padding:"9px 16px",background:"#111827",border:"none",borderRadius:8,color:"#FFFFFF",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>שמור</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DailyInsightsScreen({ tenantId, bizId }) {
+  const [docs, setDocs] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState(null);
+  const [days, setDays] = React.useState(30); // window size
+
+  // Pull the last `days` docs from Firebase.
+  React.useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setError(null);
+    (async () => {
+      try {
+        if (!tenantId || !bizId) {
+          if (!cancelled) { setDocs([]); setLoading(false); }
+          return;
+        }
+        // Build the date keys backwards from today.
+        const keys = [];
+        const today = new Date();
+        for (let i = 1; i <= days; i++) {
+          const d = new Date(today);
+          d.setDate(d.getDate() - i);
+          const k = d.toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
+          keys.push(k);
+        }
+        // Read each in parallel via storage.get. Misses come back as null.
+        const results = await Promise.all(
+          keys.map(k =>
+            window.storage.get(`biz:${bizId}:analytics:daily:${k}`, null, /*raw=*/true)
+              .catch(() => null)
+          )
+        );
+        const filled = results
+          .map((raw, i) => {
+            if (!raw) return { date: keys[i], _missing: true };
+            // The cron writes raw JSON, not the {_v: ...} envelope.
+            return typeof raw === "string" ? JSON.parse(raw) : raw;
+          })
+          .filter(Boolean);
+        if (!cancelled) { setDocs(filled); setLoading(false); }
+      } catch (err) {
+        if (!cancelled) { setError(String(err?.message || err)); setLoading(false); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [tenantId, bizId, days]);
+
+  const present = docs.filter(d => !d._missing);
+  const presentCount = present.length;
+  const missingCount = docs.length - presentCount;
+
+  // ── Derived stats ──
+  const totalRevenue = present.reduce((s, d) => s + (d.revenue?.total || 0), 0);
+  const avgRevenue = presentCount ? Math.round(totalRevenue / presentCount) : 0;
+  const alertDays = present.filter(d => d.alerts?.is_alert_day).length;
+  const rainDays = present.filter(d => d.weather?.is_rain_day).length;
+  const warDays = present.filter(d => d.operational?.war_day === "full" || d.operational?.war_day === "partial").length;
+
+  // Chart data (oldest → newest)
+  const chartData = [...present]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map(d => ({
+      date: d.date.slice(5), // MM-DD only for axis
+      revenue: d.revenue?.total || 0,
+      rain: d.weather?.rain_mm || 0,
+      alerts: d.alerts?.alert_count || 0,
+    }));
+
+  const DOW_HE = ["א'", "ב'", "ג'", "ד'", "ה'", "ו'", "ש'"];
+  const warDayColor = {
+    regular: { bg: "#F0FDF4", fg: "#166534", label: "רגיל" },
+    partial: { bg: "#FFFBEB", fg: "#92400E", label: "חלקי" },
+    full:    { bg: "#FEF2F2", fg: "#991B1B", label: "סגור" },
+    unknown: { bg: "#F3F4F6", fg: "#6B7280", label: "—" },
+  };
+
+  return (
+    <div className="screen">
+      <div className="card card-p">
+        {/* Header */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+          <div>
+            <h2 style={{margin:0,fontSize:14,fontWeight:700,color:"#111827"}}>תובנות יומיות</h2>
+            <p style={{margin:"2px 0 0",fontSize:11,color:"#9CA3AF"}}>
+              קרון ה-analytics אוסף נתוני מזג אוויר, אזעקות ומחזור לכל יום. הצגה מהלילה האחרון.
+            </p>
+          </div>
+          <select
+            value={days}
+            onChange={e => setDays(Number(e.target.value))}
+            style={{padding:"8px 12px",border:"1px solid #E5E7EB",borderRadius:8,background:"#F9FAFB",color:"#111827",fontFamily:"inherit",fontSize:12}}>
+            <option value={7}>7 ימים אחרונים</option>
+            <option value={14}>14 ימים אחרונים</option>
+            <option value={30}>30 ימים אחרונים</option>
+            <option value={60}>60 ימים אחרונים</option>
+            <option value={90}>90 ימים אחרונים</option>
+          </select>
+        </div>
+
+        {/* Status banner */}
+        {loading && (
+          <div style={{padding:"20px",textAlign:"center",color:"#9CA3AF",fontSize:12}}>טוען…</div>
+        )}
+        {error && (
+          <div style={{padding:"12px 14px",background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:8,marginBottom:12,color:"#991B1B",fontSize:12}}>
+            שגיאה: {error}
+          </div>
+        )}
+        {!loading && !error && presentCount === 0 && (
+          <div style={{padding:"20px",textAlign:"center",color:"#9CA3AF",fontSize:12,lineHeight:1.6}}>
+            אין נתונים עדיין. הקרון רץ כל לילה ב-02:00 ושומר מסמך לכל עסק.
+            <br/>אם זה הלילה הראשון מאז שהגדרת מיקום וגושי עורף — נסה שוב מחר.
+          </div>
+        )}
+
+        {/* KPI strip */}
+        {!loading && !error && presentCount > 0 && (
+          <>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:14}}>
+              <KpiTile label="ימים זמינים" value={`${presentCount}/${docs.length}`} sub={missingCount ? `${missingCount} חסרים` : "מלא"}/>
+              <KpiTile label="מחזור ממוצע" value={fmt(avgRevenue)} sub="לכל יום שנרשם"/>
+              <KpiTile label="ימי אזעקות" value={String(alertDays)} sub={alertDays ? "ראה טבלה" : "אין"}/>
+              <KpiTile label="ימי גשם" value={String(rainDays)} sub={`> 1 מ"מ`}/>
+            </div>
+
+            {/* Chart */}
+            {chartData.length >= 2 && typeof Recharts !== "undefined" && (() => {
+              const { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ReferenceDot } = Recharts;
+              return (
+                <div style={{height:200,marginBottom:14}}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData} margin={{top:8,right:8,left:0,bottom:0}}>
+                      <CartesianGrid stroke="#F3F4F6" vertical={false}/>
+                      <XAxis dataKey="date" tick={{fontSize:10,fill:"#9CA3AF"}}/>
+                      <YAxis tick={{fontSize:10,fill:"#9CA3AF"}} width={50}/>
+                      <Tooltip
+                        contentStyle={{fontSize:11,border:"1px solid #E5E7EB",borderRadius:6}}
+                        labelStyle={{color:"#6B7280"}}
+                        formatter={(v, name) => {
+                          if (name === "revenue") return [fmt(v), "מחזור"];
+                          if (name === "rain") return [`${v} מ"מ`, "גשם"];
+                          if (name === "alerts") return [v, "אזעקות"];
+                          return [v, name];
+                        }}/>
+                      <Line type="monotone" dataKey="revenue" stroke="#0F172A" strokeWidth={2} dot={false}/>
+                      {chartData.map((d, i) =>
+                        d.alerts > 0 ? <ReferenceDot key={"a"+i} x={d.date} y={d.revenue} r={4} fill="#DC2626" stroke="none"/> : null
+                      )}
+                      {chartData.map((d, i) =>
+                        d.rain > 1 ? <ReferenceDot key={"r"+i} x={d.date} y={d.revenue} r={4} fill="#3B82F6" stroke="none"/> : null
+                      )}
+                    </LineChart>
+                  </ResponsiveContainer>
+                  <div style={{fontSize:10,color:"#9CA3AF",textAlign:"center",marginTop:4}}>
+                    קו: מחזור · נקודה אדומה: יום עם אזעקות · נקודה כחולה: יום גשם
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Table */}
+            <div style={{overflowX:"auto",border:"1px solid #E5E7EB",borderRadius:8}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"inherit"}}>
+                <thead>
+                  <tr style={{background:"#F9FAFB",borderBottom:"1px solid #E5E7EB"}}>
+                    <Th>תאריך</Th>
+                    <Th>יום</Th>
+                    <Th>חג</Th>
+                    <Th align="left">מחזור</Th>
+                    <Th align="left">מ"מ</Th>
+                    <Th align="left">טמפ׳</Th>
+                    <Th align="left">אזעקות</Th>
+                    <Th align="center">סטטוס</Th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {docs.map(d => {
+                    if (d._missing) {
+                      return (
+                        <tr key={d.date} style={{background:"#FAFAFA"}}>
+                          <Td>{d.date}</Td>
+                          <Td colSpan={7} style={{color:"#9CA3AF",textAlign:"center",fontStyle:"italic"}}>—</Td>
+                        </tr>
+                      );
+                    }
+                    const w = warDayColor[d.operational?.war_day] || warDayColor.unknown;
+                    const holidayLabel = d.calendar?.holiday_names?.[0] || (d.calendar?.holiday_eve ? "ערב חג" : "");
+                    return (
+                      <tr key={d.date} style={{borderBottom:"1px solid #F3F4F6"}}>
+                        <Td>{d.date.slice(5)}</Td>
+                        <Td>{DOW_HE[d.calendar?.dow ?? -1] || "—"}{d.calendar?.weekend ? " 🛋" : ""}</Td>
+                        <Td style={{color:holidayLabel?"#111827":"#D1D5DB",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{holidayLabel||"—"}</Td>
+                        <Td align="left" style={{fontVariantNumeric:"tabular-nums",fontWeight:d.revenue?.had_entry?700:400,color:d.revenue?.had_entry?"#111827":"#9CA3AF"}}>
+                          {d.revenue?.had_entry ? fmt(d.revenue.total) : "—"}
+                        </Td>
+                        <Td align="left" style={{color:d.weather?.is_rain_day?"#1D4ED8":"#9CA3AF"}}>
+                          {d.weather?.rain_mm == null ? "—" : d.weather.rain_mm.toFixed(1)}
+                        </Td>
+                        <Td align="left" style={{color:"#6B7280"}}>
+                          {d.weather?.temp_avg == null ? "—" : `${d.weather.temp_avg.toFixed(0)}°`}
+                        </Td>
+                        <Td align="left" style={{color:d.alerts?.alert_count?"#991B1B":"#9CA3AF",fontWeight:d.alerts?.alert_count?700:400}}>
+                          {d.alerts ? (d.alerts.alert_count > 0 ? `${d.alerts.alert_count} · ${d.alerts.alert_minutes}'` : "0") : "—"}
+                        </Td>
+                        <Td align="center">
+                          <span style={{padding:"2px 8px",borderRadius:99,background:w.bg,color:w.fg,fontSize:10,fontWeight:700}}>{w.label}</span>
+                        </Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <p style={{margin:"10px 0 0",fontSize:10,color:"#9CA3AF",lineHeight:1.5}}>
+              סטטוס "חלקי" = הייתה הזנת מכירות ביום עם אזעקות. "סגור" = יום עם אזעקות וללא הזנה. "רגיל" = יום ללא אזעקות.
+              <br/>
+              מקור הנתונים: <code style={{background:"#F3F4F6",padding:"1px 4px",borderRadius:3}}>tenants/{"{tid}"}/biz:{"{bid}"}:analytics:daily:{"{date}"}</code> — נכתב מדי לילה ב-02:00 IST.
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Tiny helpers used by DailyInsightsScreen. If these names already exist
+// in index.html (e.g. `fmt`), reuse them instead.
+function KpiTile({ label, value, sub }) {
+  return (
+    <div style={{background:"#F8FAFC",borderRadius:8,padding:"10px 12px",border:"1px solid #E2E8F0"}}>
+      <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>{label}</div>
+      <div style={{fontSize:16,fontWeight:700,color:"#0F172A",letterSpacing:-0.3}}>{value}</div>
+      <div style={{fontSize:10,color:"#9CA3AF",marginTop:2}}>{sub}</div>
+    </div>
+  );
+}
+function Th({ children, align }) {
+  return <th style={{padding:"8px 10px",textAlign:align||"right",fontSize:10,fontWeight:700,color:"#6B7280",textTransform:"uppercase",letterSpacing:0.5}}>{children}</th>;
+}
+function Td({ children, align, colSpan, style }) {
+  return <td colSpan={colSpan} style={{padding:"8px 10px",textAlign:align||"right",color:"#111827",...style}}>{children}</td>;
 }
 
 function ForecastScreen({ metrics, lastYear, saveLastYear, currentMonth, entries=[], businessConfig={}, TARGETS={salesGrowthPct:5,foodCostPct:33,laborCostPct:27} }) {
