@@ -6086,6 +6086,19 @@ function blankTemplate(ctx){
   };
 }
 
+// ── Storage envelope helper (hotfix 2026-05-31) ─────────────────────────────
+// window.storage.get returns { key, value, shared } where `value` is the
+// JSON string. Unwrap into the actual document object.
+async function readChecklistDoc(key) {
+  const env = await window.storage.get(key);
+  const raw = env && typeof env === "object" && "value" in env ? env.value : env;
+  if (raw == null) return null;
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw); } catch { return null; }
+  }
+  return raw;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Runtime screen — shift managers + everyone runs the checklist here
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6113,7 +6126,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     (async () => {
       try {
         if (!bizId) { if (!cancelled){ setTemplate(null); setLoadingTpl(false);} return; }
-        const tpl = await window.storage.get(`biz:${bizId}:checklist_template`, null, false);
+        const tpl = await readChecklistDoc(`biz:${bizId}:checklist_template`);
         if (tpl && Array.isArray(tpl.items)) {
           if (!cancelled){ setTemplate(tpl); setLoadingTpl(false); } return;
         }
@@ -6158,7 +6171,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
           }
           const migrated = { version:"2.0", branchId: bizId, sourceStarter: null, items,
             updatedAt: Date.now(), updatedBy: ctx.userId, migratedFromLegacyAt: Date.now() };
-          await window.storage.set(`biz:${bizId}:checklist_template`, JSON.stringify(migrated), true);
+          await window.storage.set(`biz:${bizId}:checklist_template`, JSON.stringify(migrated));
           if (!cancelled){ setTemplate(migrated); setLoadingTpl(false); } return;
         }
         if (!cancelled){ setTemplate(blankTemplate(ctx)); setLoadingTpl(false); }
@@ -6177,7 +6190,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     (async () => {
       try {
         if (!bizId) { if (!cancelled){ setRuns(null); setLoadingRuns(false);} return; }
-        const doc = await window.storage.get(`biz:${bizId}:checklist_runs:${todayKey}`, null, false);
+        const doc = await readChecklistDoc(`biz:${bizId}:checklist_runs:${todayKey}`);
         if (!cancelled){ setRuns(doc || null); setLoadingRuns(false); }
       } catch(e) {
         if (!cancelled){ setRuns(null); setLoadingRuns(false); }
@@ -6272,7 +6285,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     run.completionPercent = todaysItems.length ? Math.round(doneCount * 100 / todaysItems.length) : 0;
     setRuns(newRuns);
     closeItemEditor();
-    try { await window.storage.set(`biz:${bizId}:checklist_runs:${todayKey}`, JSON.stringify(newRuns), true); }
+    try { await window.storage.set(`biz:${bizId}:checklist_runs:${todayKey}`, JSON.stringify(newRuns)); }
     catch (e) { alert("שמירה נכשלה — נסה שוב"); }
   };
 
@@ -6300,7 +6313,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     newRuns.runs[runType].submittedAt = now;
     newRuns.runs[runType].submittedBy = ctx.userId;
     setRuns(newRuns);
-    try { await window.storage.set(`biz:${bizId}:checklist_runs:${todayKey}`, JSON.stringify(newRuns), true); }
+    try { await window.storage.set(`biz:${bizId}:checklist_runs:${todayKey}`, JSON.stringify(newRuns)); }
     catch (e) { alert("שמירה נכשלה — נסה שוב"); }
   };
 
@@ -6460,7 +6473,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
             const ts = Date.now();
             const stamped = { ...next, updatedAt: ts, updatedBy: ctx.userId };
             setTemplate(stamped);
-            await window.storage.set(`biz:${bizId}:checklist_template`, JSON.stringify(stamped), true);
+            await window.storage.set(`biz:${bizId}:checklist_template`, JSON.stringify(stamped));
             setEditorOpen(false);
           }}
         />
@@ -6607,7 +6620,7 @@ function ShiftChecklistEditor({ template, ctx, businesses, onClose, onSave }){
 
   const duplicateFromBranch = async (sourceBizId) => {
     try {
-      const tpl = await window.storage.get(`biz:${sourceBizId}:checklist_template`, null, false);
+      const tpl = await readChecklistDoc(`biz:${sourceBizId}:checklist_template`);
       if (!tpl || !Array.isArray(tpl.items)) {
         alert("לסניף המקור אין צ׳ק ליסט להעתקה.");
         return;
