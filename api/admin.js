@@ -992,16 +992,22 @@ async function handleUpdateUser(req, res) {
     res.status(400).json({ error: "missing tenantId or firebaseUid" }); return;
   }
 
-  // Phase 1 — caller must be owner/super_owner of this tenant
-  try {
-    await requireTenantAccess(claims.uid, tenantId, "owner");
-  } catch (e) {
-    res.status(e?.status || 403).json({ error: e?.msg || "אין הרשאה לעריכת המשתמש" });
-    return;
-  }
-
   const db   = getAdminDb();
   const auth = getAdminAuth();
+
+  // Phase 1 — caller must be owner/super_owner of this tenant.
+  //   Direct RTDB role read (same pattern as handleDeleteUser) instead of
+  //   requireTenantAccess(), because VALID_ROLES in helpers.js does not include
+  //   "super_owner" — using the helper here rejects the only owner in production.
+  try {
+    const callerRole = await db.ref(`tenants/${tenantId}/roles/${claims.uid}`).once("value");
+    if (!callerRole.exists() || !["owner", "super_owner"].includes(callerRole.val())) {
+      res.status(403).json({ error: "אין הרשאה לעריכת המשתמש" }); return;
+    }
+  } catch (e) {
+    console.error("[update-user] caller role check failed:", e.message);
+    res.status(500).json({ error: "שגיאה בבדיקת הרשאות" }); return;
+  }
 
   // Phase 2 — target user must exist under this tenant
   let currentUser;
