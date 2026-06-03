@@ -1360,9 +1360,43 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
         ? (businesses.length === 1 ? [businesses[0].id] : form.allowedBizIds)
         : null;
       if(editId) {
-        saveUsers(users.map(u=>u.id===editId
-          ? {...u, name:form.name, username:form.username.trim(), role:form.role, allowedBizIds}
-          : u));
+        // ── Layer 2: route edit through /api/admin?action=update-user ──
+        const existing = users.find(u => u.id === editId);
+        const targetUid = existing?.firebaseUid;
+        if (!targetUid) {
+          setErr("חסר מזהה משתמש — לא ניתן לערוך");
+          setSaving(false); return;
+        }
+        const token = await window.getIdToken().catch(() => null);
+        if (!token) {
+          setErr("שגיאה: אין חיבור למערכת — יש להתחבר מחדש");
+          setSaving(false); return;
+        }
+        const upResp = await fetch("/api/admin?action=update-user", {
+          method: "POST",
+          headers: {"Content-Type":"application/json","Authorization":"Bearer " + token},
+          body: JSON.stringify({
+            tenantId,
+            firebaseUid: targetUid,
+            name:  form.name.trim(),
+            email: form.email.trim(),
+            phone: form.phone.trim(),
+            role:  form.role,
+            allowedBizIds,
+          })
+        });
+        const upResult = await upResp.json().catch(() => ({}));
+        if (!upResp.ok) {
+          if      (upResp.status === 409) setErr(upResult.error || "כתובת האימייל כבר קיימת במערכת");
+          else if (upResp.status === 403) setErr(upResult.error || "אין הרשאה לעריכת המשתמש");
+          else                            setErr(upResult.error || "שגיאה בשמירת המשתמש");
+          setSaving(false); return;
+        }
+        // ── Layer 2 review: backend is the source of truth on update. Do NOT
+        //    write to RTDB from here — that would overwrite the backend's
+        //    updatedAt/updatedBy. The window.storage.subscribe on "app-users"
+        //    (parent's `sub` at startup) will refresh local state from the
+        //    backend's write within a tick.
       } else {
         // ── Create user via server API (atomic + rollback) ──────────────
         const token = await window.getIdToken().catch(() => null);
@@ -1475,12 +1509,15 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
           <input className="input" placeholder="ישראל ישראלי" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))}/>
           <label className="label">שם משתמש</label>
           <input className="input" placeholder="username" autoCapitalize="none" value={form.username} onChange={e=>setForm(f=>({...f,username:e.target.value}))} disabled={!!editId}/>
-          {!editId && <>
-            <label className="label">אימייל (חובה — לשליחת הזמנה)</label>
-            <input className="input" type="email" placeholder="user@example.com" style={{direction:"ltr"}} value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value.trim()}))}/>
-            <label className="label">טלפון (אופציונלי)</label>
-            <input className="input" type="tel" placeholder="972541234567" style={{direction:"ltr"}} value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value.replace(/[^0-9+]/g,"")}))}/>
-          </>}
+          <label className="label">אימייל{!editId ? " (חובה — לשליחת הזמנה)" : ""}</label>
+          <input className="input" type="email" placeholder="user@example.com" style={{direction:"ltr"}} value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value.trim()}))}/>
+          {editId && (
+            <div style={{fontSize:11,color:"#92400E",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:5,padding:"6px 9px",margin:"4px 0 10px"}}>
+              שינוי מייל יעדכן גם את חשבון ההתחברות
+            </div>
+          )}
+          <label className="label">טלפון (אופציונלי)</label>
+          <input className="input" type="tel" placeholder="972541234567" style={{direction:"ltr"}} value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value.replace(/[^0-9+]/g,"")}))}/>
           <label className="label">תפקיד</label>
           <select className="select" value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value, allowedBizIds:[]}))}>
             <option value="manager">מנהל — לוח בקרה מלא</option>
