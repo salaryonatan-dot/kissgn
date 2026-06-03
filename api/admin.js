@@ -1009,14 +1009,52 @@ async function handleUpdateUser(req, res) {
     res.status(500).json({ error: "שגיאה בבדיקת הרשאות" }); return;
   }
 
-  // Phase 2 — target user must exist under this tenant
+  // Phase 2 — target user must exist under this tenant.
+  //   Primary source: tenants/{tid}/users/{uid}.
+  //   Fallback for legacy users that exist only in the aggregated list:
+  //     tenants/{tid}/app/users (envelope `_v`).
+  //   If the user is found via the fallback, we mark `selfHeal = true` so
+  //   Phase 5 writes the missing per-user record (and optionally a missing
+  //   role assignment). Tenant isolation is preserved because both paths are
+  //   under tenants/{tid}/.
   let currentUser;
+  let selfHeal = false;
+  let appUsersListCache = null;   // parsed list, cached for Phase 5 reuse
+  let appUsersIdxCache  = -1;     // index of target inside cached list
   try {
     const targetSnap = await db.ref(`tenants/${tenantId}/users/${firebaseUid}`).once("value");
-    if (!targetSnap.exists()) {
-      res.status(404).json({ error: "המשתמש לא נמצא בעסק" }); return;
+    if (targetSnap.exists()) {
+      currentUser = targetSnap.val();
+    } else {
+      // Fallback: search the aggregated list.
+      const appSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
+      let list = [];
+      if (appSnap.exists()) {
+        const raw = appSnap.val();
+        let listJson = null;
+        if (raw && typeof raw === "object" && typeof raw._v === "string") listJson = raw._v;
+        else if (typeof raw === "string") listJson = raw;
+        if (listJson) {
+          try { const parsed = JSON.parse(listJson); if (Array.isArray(parsed)) list = parsed; } catch {}
+        }
+      }
+      const idx = list.findIndex(u => u && u.firebaseUid === firebaseUid);
+      if (idx < 0) {
+        res.status(404).json({ error: "המשתמש לא נמצא בעסק" }); return;
+      }
+      // Build a per-user-shaped object from the app/users entry.
+      const a = list[idx];
+      currentUser = {
+        username: a.username || "",
+        name:     a.name     || "",
+        email:    a.email    || "",
+        phone:    a.phone    || "",
+        role:     a.role     || "viewer",
+      };
+      selfHeal = true;
+      appUsersListCache = list;
+      appUsersIdxCache  = idx;
     }
-    currentUser = targetSnap.val();
   } catch (e) {
     console.error("[update-user] target load failed:", e.message);
     res.status(500).json({ error: "שגיאה בטעינת המשתמש" }); return;
@@ -1103,7 +1141,7 @@ async function handleUpdateUser(req, res) {
     }
   }
 
-  if (Object.keys(changedFields).length === 0 && allowedBizIdsResolved === undefined) {
+  if (Object.keys(changedFields).length === 0 && allowedBizIdsResolved === undefined && !selfHeal) {
     res.status(200).json({ ok: true, noop: true }); return;
   }
 
@@ -1139,9 +1177,24 @@ async function handleUpdateUser(req, res) {
   };
   updates[`tenants/${tenantId}/users/${firebaseUid}`] = newUserRecord;
 
-  // RBAC role path
+  // RBAC role path — write when role changes; also heal when self-heal mode
+  //   AND role is missing at tenants/{tid}/roles/{uid}. Do NOT touch role
+  //   if it was not requested AND a value already exists at the role path.
   if (changedFields.role) {
     updates[`tenants/${tenantId}/roles/${firebaseUid}`] = changedFields.role;
+  } else if (selfHeal && typeof currentUser.role === "string") {
+    const HEAL_VALID_ROLES = new Set(["owner", "super_owner", "manager", "shift_manager", "viewer", "staff"]);
+    if (HEAL_VALID_ROLES.has(currentUser.role)) {
+      try {
+        const roleSnap = await db.ref(`tenants/${tenantId}/roles/${firebaseUid}`).once("value");
+        if (!roleSnap.exists()) {
+          updates[`tenants/${tenantId}/roles/${firebaseUid}`] = currentUser.role;
+        }
+      } catch (e) {
+        // If the role-path read fails, skip the heal — do not block the update.
+        console.warn("[update-user] role-path heal skipped:", e.message);
+      }
+    }
   }
 
   // Email-derived secondary indexes
@@ -1160,18 +1213,24 @@ async function handleUpdateUser(req, res) {
   //   Whichever path we take, we ALWAYS write back so the aggregated list and
   //   the per-user record stay in sync.
   try {
-    const appUsersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
-    let list = [];
-    if (appUsersSnap.exists()) {
-      const raw = appUsersSnap.val();
-      let listJson = null;
-      if (raw && typeof raw === "object" && typeof raw._v === "string") listJson = raw._v;
-      else if (typeof raw === "string") listJson = raw;
-      if (listJson) {
-        try { const parsed = JSON.parse(listJson); if (Array.isArray(parsed)) list = parsed; } catch {}
+    // Reuse list parsed during Phase 2 fallback when available; otherwise read fresh.
+    let list = appUsersListCache;
+    if (list === null) {
+      const appUsersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
+      list = [];
+      if (appUsersSnap.exists()) {
+        const raw = appUsersSnap.val();
+        let listJson = null;
+        if (raw && typeof raw === "object" && typeof raw._v === "string") listJson = raw._v;
+        else if (typeof raw === "string") listJson = raw;
+        if (listJson) {
+          try { const parsed = JSON.parse(listJson); if (Array.isArray(parsed)) list = parsed; } catch {}
+        }
       }
     }
-    const idx = list.findIndex(u => u && u.firebaseUid === firebaseUid);
+    const idx = (appUsersIdxCache >= 0 && list === appUsersListCache)
+      ? appUsersIdxCache
+      : list.findIndex(u => u && u.firebaseUid === firebaseUid);
     if (idx >= 0) {
       // Case 1: merge into existing entry
       const merged = { ...list[idx], ...changedFields };
@@ -1224,6 +1283,7 @@ async function handleUpdateUser(req, res) {
     firebaseUid,
     changedFields,
     allowedBizIdsChanged: allowedBizIdsResolved !== undefined,
+    ...(selfHeal ? { selfHealed: true } : {}),
   });
 }
 
