@@ -3497,8 +3497,9 @@ function PilotDashboard() {
               {key:"employees",  label:"עלות עובדים",   roles:["super_owner","owner","manager"]},
               {key:"checklist",  label:"📋 צ׳ק ליסט",   roles:["super_owner","owner","manager","shift_manager"]},
               {key:"insights",   label:"📊 תובנות",     roles:["super_owner","owner","manager"]},
-              {key:"tasks",      label:"משימות",        roles:["super_owner","owner","manager","staff"]},
-              {key:"shifts",     label:"משמרות",        roles:["super_owner","owner","manager","staff"]},
+              // {key:"tasks", ...} — hidden from owner/admin nav (2026-06-03). MasterTasksScreen
+              // still exists; biz:{bid}:tasks RTDB path untouched. ShiftManagerEmbed uses tasks internally.
+              {key:"shifts",     label:"ניהול משמרת",   roles:["super_owner","owner","manager","staff"]},
               {key:"users",      label:"משתמשים",       roles:["super_owner","owner"]},
               {key:"admin",      label:"⚙ אדמין",       roles:["super_owner"]},
             ].map(({key,label,roles})=>{
@@ -6907,17 +6908,18 @@ function DailyInsightsScreen({ tenantId, bizId }) {
           keys.push(k);
         }
         // Read each in parallel via storage.get. Misses come back as null.
+        // readChecklistDoc unwraps the {key, value, shared} envelope returned
+        // by window.storage.get; same helper used by the checklist screen.
         const results = await Promise.all(
           keys.map(k =>
-            window.storage.get(`biz:${bizId}:analytics:daily:${k}`, null, /*raw=*/true)
+            readChecklistDoc(`biz:${bizId}:analytics:daily:${k}`)
               .catch(() => null)
           )
         );
         const filled = results
           .map((raw, i) => {
             if (!raw) return { date: keys[i], _missing: true };
-            // The cron writes raw JSON, not the {_v: ...} envelope.
-            return typeof raw === "string" ? JSON.parse(raw) : raw;
+            return raw;
           })
           .filter(Boolean);
         if (!cancelled) { setDocs(filled); setLoading(false); }
@@ -6991,8 +6993,8 @@ function DailyInsightsScreen({ tenantId, bizId }) {
         )}
         {!loading && !error && presentCount === 0 && (
           <div style={{padding:"20px",textAlign:"center",color:"#9CA3AF",fontSize:12,lineHeight:1.6}}>
-            אין נתונים עדיין. הקרון רץ כל לילה ב-02:00 ושומר מסמך לכל עסק.
-            <br/>אם זה הלילה הראשון מאז שהגדרת מיקום וגושי עורף — נסה שוב מחר.
+            אין עדיין מספיק נתונים להצגת תובנות.
+            <br/>הקרון רץ כל לילה ב-02:00 ושומר מסמך לכל עסק. נסה שוב לאחר הריצה הבאה.
           </div>
         )}
 
