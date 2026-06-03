@@ -12,6 +12,7 @@
  * POST ?action=create-user      → create a sub-user (owner only, atomic RTDB + rollback)
  * POST ?action=complete-profile  → first-login: update own email + password (authenticated user)
  * POST ?action=delete-user      → delete a user + Firebase Auth (owner only)
+ * POST ?action=update-user      → update an existing user (owner only) — Layer 2
  */
 
 import { requireAuth } from "../lib/verifyToken.js";
@@ -80,6 +81,7 @@ export default async function handler(req, res) {
   if (action === "create-user")       return handleCreateUser(req, res);
   if (action === "complete-profile")   return handleCompleteProfile(req, res);
   if (action === "delete-user")       return handleDeleteUser(req, res);
+  if (action === "update-user")       return handleUpdateUser(req, res);
   if (action === "roles")             return handleRoles(req, res);
   res.status(400).json({ error: "missing or invalid action" });
 }
@@ -664,7 +666,7 @@ async function handleResendInvite(req, res) {
         newPass,
         inviteLink
       );
-      await sendEmail(ownerUser.email, `הזמנה חוצרת ל-Marjin — ${bizName || tenantId}`, html);
+      await sendEmail(ownerUser.email, `הזמנה חוזרת ל-Marjin — ${bizName || tenantId}`, html);
       emailSent = true;
     } catch (emailErr) {
       console.error("[resend-invite] Email failed:", emailErr.message);
@@ -799,6 +801,9 @@ async function handleCreateUser(req, res) {
 
   // ── Phase 4: Send invite email (non-fatal) ─────────────────────────────
   let emailSent = false;
+  let emailAttempted = false;
+  const smtpConfigured = !!(process.env.SMTP_EMAIL && process.env.SMTP_APP_PASSWORD);
+  console.log(`[create-user][debug] Phase 4 start — smtpConfigured=${smtpConfigured}, SMTP_EMAIL exists=${!!process.env.SMTP_EMAIL}, SMTP_APP_PASSWORD exists=${!!process.env.SMTP_APP_PASSWORD}`);
   try {
     let bizName = "Marjin";
     try {
@@ -810,14 +815,18 @@ async function handleCreateUser(req, res) {
     } catch(_) {}
     const inviteLink = `${APP_BASE_URL}/?login=1&hint=${encodeURIComponent(safeUsername)}`;
     const html = buildInviteEmailHtml(bizName, safeUsername, tempPass, inviteLink);
+    console.log(`[create-user][debug] About to call sendEmail to=${safeEmail}, subject length=${(`הזמנה להצטרף ל-${bizName} — פרטי כניסה`).length}, html length=${html.length}`);
+    emailAttempted = true;
     await sendEmail(safeEmail, `הזמנה להצטרף ל-${bizName} — פרטי כניסה`, html);
     emailSent = true;
+    console.log(`[create-user][debug] sendEmail succeeded for ${safeEmail}`);
   } catch (emailErr) {
     console.error("[create-user] Email invite failed:", emailErr.message);
+    console.error("[create-user][debug] Full email error:", emailErr.stack || emailErr);
   }
 
   console.log(`[create-user] created user ${firebaseUid} (${safeUsername}) in tenant ${tenantId}, role=${role}, emailSent=${emailSent}`);
-  res.status(200).json({ ok: true, firebaseUid, tenantId, emailSent });
+  res.status(200).json({ ok: true, firebaseUid, tenantId, emailSent, debug: { smtpConfigured, emailAttempted } });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -887,12 +896,16 @@ async function handleDeleteUser(req, res) {
 
   const { tenantId, firebaseUid, username } = req.body || {};
 
+  console.log(`[delete-user][debug] incoming body:`, JSON.stringify({ tenantId, firebaseUid, username }));
+
   if (!tenantId || !firebaseUid) {
+    console.error(`[delete-user][debug] missing fields — tenantId=${tenantId}, firebaseUid=${firebaseUid}`);
     res.status(400).json({ error: "missing tenantId or firebaseUid" }); return;
   }
 
   // Verify caller is owner/super_owner in this tenant
   const callerRole = await db.ref(`tenants/${tenantId}/roles/${claims.uid}`).once("value");
+  console.log(`[delete-user][debug] callerRole=${callerRole.val()}, callerUid=${claims.uid}`);
   if (!callerRole.exists() || !["owner", "super_owner"].includes(callerRole.val())) {
     res.status(403).json({ error: "forbidden — owner only" }); return;
   }
@@ -903,10 +916,13 @@ async function handleDeleteUser(req, res) {
   }
 
   // ── Phase 1: Delete Firebase Auth user FIRST (frees up the email) ─────
+  console.log(`[delete-user][debug] Phase 1: calling auth.deleteUser(${firebaseUid})`);
   try {
     await auth.deleteUser(firebaseUid);
+    console.log(`[delete-user][debug] auth.deleteUser SUCCEEDED for ${firebaseUid}`);
   } catch(e) {
     console.error(`[delete-user] auth.deleteUser FAILED for ${firebaseUid}:`, e.message, e.code);
+    console.error(`[delete-user][debug] Full auth delete error:`, e.stack || e);
     res.status(500).json({ error: "מחיקת חשבון המשתמש נכשלה — האימייל עדיין תפוס" });
     return;
   }
@@ -928,16 +944,281 @@ async function handleDeleteUser(req, res) {
       updates[`username_index/${uLower}`] = null;
     }
 
+    console.log(`[delete-user][debug] Phase 2: RTDB paths to null:`, Object.keys(updates));
     await db.ref().update(updates);
 
     console.log(`[delete-user] deleted user ${firebaseUid} (username=${username}) from tenant ${tenantId}`);
-    res.status(200).json({ ok: true, authDeleted: true });
+    res.status(200).json({ ok: true, authDeleted: true, debug: { firebaseUidReceived: firebaseUid, tenantIdReceived: tenantId } });
 
   } catch(e) {
     // Auth user is already deleted but RTDB cleanup failed — log for manual repair
     console.error(`[delete-user] RTDB cleanup FAILED (auth already deleted) for ${firebaseUid}:`, e.message);
     res.status(500).json({ error: "החשבון נמחק אך ניקוי הנתונים נכשל — יש לפנות לתמיכה" });
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST ?action=update-user — update an existing user (owner only) — Layer 2
+//   Body: { tenantId, firebaseUid, name?, email?, phone?, role?, allowedBizIds? }
+//   Auth: caller must be owner or super_owner of `tenantId`.
+//   Email change uses Firebase Admin Auth; RTDB updates are atomic; on RTDB
+//   failure after Auth change, the email is best-effort reverted in Auth.
+//   NOT allowed via this endpoint: username, password, owner/super_owner
+//   role assignment, or changing one's own role.
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleUpdateUser(req, res) {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" }); return;
+  }
+
+  // Phase 0 — Auth
+  let claims;
+  try { claims = await requireAuth(req); }
+  catch (e) {
+    res.status(401).json({ error: "unauthorized" }); return;
+  }
+
+  const {
+    tenantId,
+    firebaseUid,
+    name,
+    email,
+    phone,
+    role,
+    allowedBizIds,
+  } = req.body || {};
+
+  if (!tenantId || !firebaseUid) {
+    res.status(400).json({ error: "missing tenantId or firebaseUid" }); return;
+  }
+
+  // Phase 1 — caller must be owner/super_owner of this tenant
+  try {
+    await requireTenantAccess(claims.uid, tenantId, "owner");
+  } catch (e) {
+    res.status(e?.status || 403).json({ error: e?.msg || "אין הרשאה לעריכת המשתמש" });
+    return;
+  }
+
+  const db   = getAdminDb();
+  const auth = getAdminAuth();
+
+  // Phase 2 — target user must exist under this tenant
+  let currentUser;
+  try {
+    const targetSnap = await db.ref(`tenants/${tenantId}/users/${firebaseUid}`).once("value");
+    if (!targetSnap.exists()) {
+      res.status(404).json({ error: "המשתמש לא נמצא בעסק" }); return;
+    }
+    currentUser = targetSnap.val();
+  } catch (e) {
+    console.error("[update-user] target load failed:", e.message);
+    res.status(500).json({ error: "שגיאה בטעינת המשתמש" }); return;
+  }
+  const username = currentUser?.username;
+
+  // Phase 3 — validate inputs and compute diff
+  const changedFields = {};
+
+  // Self-role change blocked
+  if (role !== undefined && role !== currentUser.role && claims.uid === firebaseUid) {
+    res.status(400).json({ error: "לא ניתן לשנות תפקיד של עצמך" }); return;
+  }
+
+  // Layer 2 review fix: owner/super_owner role is IMMUTABLE via update-user.
+  //   - If role unsent OR identical to current → pass through (allow editing
+  //     name/email/phone of an existing owner).
+  //   - If trying to change owner/super_owner's role to anything else → reject.
+  //   This blocks both downgrade (owner → manager) and lateral moves
+  //   (super_owner → owner). Use a dedicated admin flow for those if needed.
+  if (
+    role !== undefined &&
+    role !== currentUser.role &&
+    (currentUser.role === "owner" || currentUser.role === "super_owner")
+  ) {
+    res.status(400).json({
+      error: "לא ניתן לשנות תפקיד של בעלים דרך מסך זה"
+    });
+    return;
+  }
+
+  // Role: when set and different, must be in allowed-for-create set
+  //   (excludes owner/super_owner — those values themselves are also rejected
+  //   here because they're not in CREATE_USER_ALLOWED_ROLES).
+  if (role !== undefined && role !== currentUser.role) {
+    if (!CREATE_USER_ALLOWED_ROLES.includes(role)) {
+      res.status(400).json({
+        error: `תפקיד לא חוקי — ערכים מותרים: ${CREATE_USER_ALLOWED_ROLES.join(", ")}`
+      });
+      return;
+    }
+    changedFields.role = role;
+  }
+
+  // Email
+  let emailChanged = false;
+  let newEmail = null;
+  if (email !== undefined) {
+    const safeEmail = String(email).trim().toLowerCase();
+    const oldEmailLower = (currentUser.email || "").toLowerCase();
+    if (safeEmail && safeEmail !== oldEmailLower) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(safeEmail)) {
+        res.status(400).json({ error: "כתובת אימייל לא תקינה" }); return;
+      }
+      if (safeEmail.endsWith("@temp.marjin.app")) {
+        res.status(400).json({ error: "לא ניתן להגדיר מייל זמני" }); return;
+      }
+      emailChanged = true;
+      newEmail = safeEmail;
+      changedFields.email = safeEmail;
+    }
+  }
+
+  // Name
+  if (name !== undefined) {
+    const nm = String(name).trim();
+    if (nm && nm !== (currentUser.name || "")) changedFields.name = nm;
+  }
+
+  // Phone (allow clearing to empty)
+  if (phone !== undefined) {
+    const ph = String(phone).trim();
+    if (ph !== (currentUser.phone || "")) changedFields.phone = ph;
+  }
+
+  // allowedBizIds — for non-owner roles only
+  let allowedBizIdsResolved;
+  if (allowedBizIds !== undefined) {
+    const effectiveRole = changedFields.role || currentUser.role;
+    if (effectiveRole === "owner" || effectiveRole === "super_owner") {
+      allowedBizIdsResolved = null;
+    } else {
+      allowedBizIdsResolved = Array.isArray(allowedBizIds) ? allowedBizIds.filter(x => typeof x === "string") : [];
+    }
+  }
+
+  if (Object.keys(changedFields).length === 0 && allowedBizIdsResolved === undefined) {
+    res.status(200).json({ ok: true, noop: true }); return;
+  }
+
+  // Phase 4 — Firebase Auth update (only if email changed)
+  const oldEmail = currentUser.email;
+  if (emailChanged) {
+    try {
+      await auth.updateUser(firebaseUid, { email: newEmail });
+    } catch (e) {
+      if (e.code === "auth/email-already-exists") {
+        res.status(409).json({ error: "כתובת האימייל כבר קיימת במערכת" }); return;
+      }
+      if (e.code === "auth/invalid-email") {
+        res.status(400).json({ error: "כתובת אימייל לא תקינה" }); return;
+      }
+      if (e.code === "auth/user-not-found") {
+        res.status(404).json({ error: "משתמש לא נמצא ב-Auth — ייתכן שנמחק. פנה לתמיכה." }); return;
+      }
+      console.error("[update-user] auth.updateUser failed:", e.message, e.code);
+      res.status(500).json({ error: "שגיאה בעדכון Firebase Auth" }); return;
+    }
+  }
+
+  // Phase 5 — RTDB atomic update
+  const now = Date.now();
+  const updates = {};
+
+  const newUserRecord = {
+    ...currentUser,
+    ...changedFields,
+    updatedAt: now,
+    updatedBy: claims.uid,
+  };
+  updates[`tenants/${tenantId}/users/${firebaseUid}`] = newUserRecord;
+
+  // RBAC role path
+  if (changedFields.role) {
+    updates[`tenants/${tenantId}/roles/${firebaseUid}`] = changedFields.role;
+  }
+
+  // Email-derived secondary indexes
+  if (emailChanged && username) {
+    const safeUsername = String(username).toLowerCase();
+    updates[`tenants/${tenantId}/lookup/${safeUsername}/email`] = newEmail;
+    updates[`username_index/${safeUsername}/email`] = newEmail;
+  }
+
+  // tenants/{tid}/app/users aggregated list — read-modify-write inside _v envelope.
+  //   Cases handled:
+  //   1. path exists, user already in list → merge changedFields into existing entry
+  //   2. path exists but user not in list → append a fresh entry built from
+  //      tenants/{tid}/users/{uid} (self-healing inconsistency)
+  //   3. path does not exist at all → create list with this user as the only entry
+  //   Whichever path we take, we ALWAYS write back so the aggregated list and
+  //   the per-user record stay in sync.
+  try {
+    const appUsersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
+    let list = [];
+    if (appUsersSnap.exists()) {
+      const raw = appUsersSnap.val();
+      let listJson = null;
+      if (raw && typeof raw === "object" && typeof raw._v === "string") listJson = raw._v;
+      else if (typeof raw === "string") listJson = raw;
+      if (listJson) {
+        try { const parsed = JSON.parse(listJson); if (Array.isArray(parsed)) list = parsed; } catch {}
+      }
+    }
+    const idx = list.findIndex(u => u && u.firebaseUid === firebaseUid);
+    if (idx >= 0) {
+      // Case 1: merge into existing entry
+      const merged = { ...list[idx], ...changedFields };
+      if (allowedBizIdsResolved !== undefined) merged.allowedBizIds = allowedBizIdsResolved;
+      list[idx] = merged;
+    } else {
+      // Case 2/3: user missing from aggregated list — append a fresh entry
+      console.warn(`[update-user] user ${firebaseUid} not found in tenants/${tenantId}/app/users — appending to self-heal inconsistency`);
+      list.push({
+        id: Date.now() + Math.floor(Math.random() * 1000),
+        firebaseUid,
+        username: currentUser.username || "",
+        name:     newUserRecord.name     || "",
+        email:    newUserRecord.email    || "",
+        phone:    newUserRecord.phone    || "",
+        role:     newUserRecord.role     || "viewer",
+        allowedBizIds: (allowedBizIdsResolved !== undefined)
+          ? allowedBizIdsResolved
+          : (currentUser.allowedBizIds !== undefined ? currentUser.allowedBizIds : null),
+      });
+    }
+    updates[`tenants/${tenantId}/app/users`] = { _v: JSON.stringify(list) };
+  } catch (e) {
+    console.error("[update-user] app/users merge failed:", e.message);
+    // Best-effort revert auth email and bail
+    if (emailChanged && oldEmail) {
+      try { await auth.updateUser(firebaseUid, { email: oldEmail }); }
+      catch (revErr) { console.error("[update-user] Auth revert failed:", revErr.message); }
+    }
+    res.status(500).json({ error: "שגיאה בעיבוד רשימת המשתמשים — פנה לתמיכה" }); return;
+  }
+
+  try {
+    await db.ref().update(updates);
+  } catch (e) {
+    console.error("[update-user] RTDB write failed:", e.message);
+    if (emailChanged && oldEmail) {
+      try { await auth.updateUser(firebaseUid, { email: oldEmail }); }
+      catch (revErr) { console.error("[update-user] Auth revert FAILED — manual repair required:", revErr.message); }
+    }
+    res.status(500).json({ error: "שגיאה בשמירת המשתמש — פנה לתמיכה" }); return;
+  }
+
+  console.log(
+    `[update-user] updated user ${firebaseUid} in tenant ${tenantId}, fields=${Object.keys(changedFields).join(",") || "(none)"}` +
+    (allowedBizIdsResolved !== undefined ? ",allowedBizIds" : "")
+  );
+  res.status(200).json({
+    ok: true,
+    firebaseUid,
+    changedFields,
+    allowedBizIdsChanged: allowedBizIdsResolved !== undefined,
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
