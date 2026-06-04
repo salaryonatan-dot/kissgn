@@ -1189,6 +1189,47 @@ async function handleUpdateUser(req, res) {
   // Phase 4 — Firebase Auth update (only if email changed)
   const oldEmail = currentUser.email;
   if (emailChanged) {
+    // Pre-flight collision check against tenants/{tid}/app/users.
+    //   Firebase Auth alone is not sufficient: legacy users (e.g. those with
+    //   `mustCompleteProfile:true`) may have a public email recorded in
+    //   app/users that was never written to Firebase Auth, or whose Auth
+    //   email is a temp/`@temp.marjin.app` alias. In those cases
+    //   `auth.updateUser` succeeds and we silently steal the public email.
+    //   This check looks ONLY at the aggregated app/users list for the same
+    //   tenant — same scope as the data we'd corrupt. It must run BEFORE
+    //   auth.updateUser, and on collision we return without touching Auth
+    //   or RTDB. Self-collisions (same firebaseUid) are not blocked here:
+    //   when `emailChanged` is true the email is already different from
+    //   currentUser.email, but the duplicate-firebaseUid guard is kept for
+    //   safety in case future refactors loosen that invariant.
+    try {
+      const newEmailLower = String(newEmail).trim().toLowerCase();
+      const appUsersCollisionSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
+      if (appUsersCollisionSnap.exists()) {
+        const raw = appUsersCollisionSnap.val();
+        let listJson = null;
+        if (raw && typeof raw === "object" && typeof raw._v === "string") listJson = raw._v;
+        else if (typeof raw === "string") listJson = raw;
+        if (listJson) {
+          let list = [];
+          try { const parsed = JSON.parse(listJson); if (Array.isArray(parsed)) list = parsed; } catch {}
+          const collision = list.some(u =>
+            u &&
+            u.firebaseUid !== firebaseUid &&
+            String(u.email || "").trim().toLowerCase() === newEmailLower
+          );
+          if (collision) {
+            res.status(409).json({ error: "כתובת האימייל כבר קיימת במערכת" }); return;
+          }
+        }
+      }
+    } catch (e) {
+      // Read failure on the collision check is not fatal — fall through to
+      //   auth.updateUser, which still has its own auth/email-already-exists
+      //   guard. We log so the silent-failure mode is debuggable.
+      console.warn("[update-user] app/users collision pre-check skipped:", e.message);
+    }
+
     try {
       await auth.updateUser(firebaseUid, { email: newEmail });
     } catch (e) {
