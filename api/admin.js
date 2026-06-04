@@ -1051,6 +1051,18 @@ async function handleUpdateUser(req, res) {
         phone:    a.phone    || "",
         role:     a.role     || "viewer",
       };
+      // Carry over allowedBizIds from the legacy aggregated entry so the
+      //   per-user record created during self-heal contains the same access
+      //   set as app/users. Without this, the per-user record is missing the
+      //   field forever, and the response keeps reporting
+      //   allowedBizIdsChanged:true on every save even when the value is
+      //   unchanged. null is preserved (legitimate for owner/super_owner);
+      //   arrays are filtered to strings only.
+      if (a.allowedBizIds !== undefined) {
+        currentUser.allowedBizIds = Array.isArray(a.allowedBizIds)
+          ? a.allowedBizIds.filter(x => typeof x === "string")
+          : a.allowedBizIds;
+      }
       selfHeal = true;
       appUsersListCache = list;
       appUsersIdxCache  = idx;
@@ -1141,7 +1153,36 @@ async function handleUpdateUser(req, res) {
     }
   }
 
-  if (Object.keys(changedFields).length === 0 && allowedBizIdsResolved === undefined && !selfHeal) {
+  // Compute whether allowedBizIds actually changed (vs. just being echoed
+  //   back from the form). Previously the response set
+  //   `allowedBizIdsChanged: allowedBizIdsResolved !== undefined`, which
+  //   meant "was sent" not "was different". With the Phase-2 self-heal
+  //   copy above, currentUser.allowedBizIds is now populated for legacy
+  //   users too, so this comparison is meaningful on the first save as
+  //   well as on later ones.
+  let allowedBizIdsActuallyChanged = false;
+  if (allowedBizIdsResolved !== undefined) {
+    const prev = currentUser.allowedBizIds;
+    if (allowedBizIdsResolved === null) {
+      allowedBizIdsActuallyChanged = (prev !== null && prev !== undefined);
+    } else {
+      // resolved is an array
+      if (!Array.isArray(prev)) {
+        // null/undefined → array counts as a change (first-time write)
+        allowedBizIdsActuallyChanged = true;
+      } else if (prev.length !== allowedBizIdsResolved.length) {
+        allowedBizIdsActuallyChanged = true;
+      } else {
+        const aSorted = [...prev].slice().sort();
+        const bSorted = [...allowedBizIdsResolved].slice().sort();
+        for (let i = 0; i < aSorted.length; i++) {
+          if (aSorted[i] !== bSorted[i]) { allowedBizIdsActuallyChanged = true; break; }
+        }
+      }
+    }
+  }
+
+  if (Object.keys(changedFields).length === 0 && !allowedBizIdsActuallyChanged && !selfHeal) {
     res.status(200).json({ ok: true, noop: true }); return;
   }
 
@@ -1175,6 +1216,15 @@ async function handleUpdateUser(req, res) {
     updatedAt: now,
     updatedBy: claims.uid,
   };
+  // Mirror allowedBizIds into the per-user record whenever it was sent —
+  //   `changedFields` only tracks scalar fields (name/email/phone/role), so
+  //   without this the per-user copy of allowedBizIds would drift behind the
+  //   aggregated app/users list. We only WRITE; we don't strip the field
+  //   when it's absent from the request, which preserves whatever
+  //   currentUser already carried (including the Phase-2 self-heal copy).
+  if (allowedBizIdsResolved !== undefined) {
+    newUserRecord.allowedBizIds = allowedBizIdsResolved;
+  }
   updates[`tenants/${tenantId}/users/${firebaseUid}`] = newUserRecord;
 
   // RBAC role path — write when role changes; also heal when self-heal mode
@@ -1276,13 +1326,13 @@ async function handleUpdateUser(req, res) {
 
   console.log(
     `[update-user] updated user ${firebaseUid} in tenant ${tenantId}, fields=${Object.keys(changedFields).join(",") || "(none)"}` +
-    (allowedBizIdsResolved !== undefined ? ",allowedBizIds" : "")
+    (allowedBizIdsActuallyChanged ? ",allowedBizIds" : "")
   );
   res.status(200).json({
     ok: true,
     firebaseUid,
     changedFields,
-    allowedBizIdsChanged: allowedBizIdsResolved !== undefined,
+    allowedBizIdsChanged: allowedBizIdsActuallyChanged,
     ...(selfHeal ? { selfHealed: true } : {}),
   });
 }
