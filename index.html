@@ -6146,6 +6146,44 @@ async function readChecklistDoc(key) {
   return raw;
 }
 
+// ── Phase 1: version pinning for runs ────────────────────────────────────────
+// Build a day-scoped snapshot of the template items relevant to one business
+// day (active + daily, or weekly matching that day-of-week), keeping only the
+// minimal fields a run needs. Frozen onto a run at creation so later template
+// edits never change that run's items or completion %.
+function buildDaySnapshotItems(template, weekKey) {
+  if (!template || !Array.isArray(template.items)) return [];
+  return template.items
+    .filter(it => it.active && (it.scheduleType === "daily" || (it.scheduleType === "weekly" && it.dayOfWeek === weekKey)))
+    .map(it => ({
+      id: it.id,
+      checklistType: it.checklistType,
+      scheduleType: it.scheduleType,
+      dayOfWeek: it.dayOfWeek ?? null,
+      area: it.area || "כללי",
+      title: it.title,
+      description: it.description || "",
+      isRequired: !!it.isRequired,
+      requiresPhoto: !!it.requiresPhoto,
+      priority: it.priority || "medium",
+      sortOrder: it.sortOrder ?? 0,
+      createdAt: it.createdAt || 0, // preserve the existing sortOrder→createdAt tie-break
+      active: true, // snapshot items are pre-filtered to active; stamp explicitly
+    }));
+}
+// Filter a flat item list to one phase + day, sorted. Works uniformly for both
+// a frozen snapshot (each item carries active:true) and a live template's items.
+// Requires active === true — preserves the live-template behavior exactly and
+// never widens the list for items missing/undefined `active`.
+function phaseItemsFrom(sourceItems, phaseKey, weekKey) {
+  if (!Array.isArray(sourceItems)) return [];
+  const eligible = sourceItems.filter(it =>
+    it.active === true && it.checklistType === phaseKey &&
+    (it.scheduleType === "daily" || (it.scheduleType === "weekly" && it.dayOfWeek === weekKey))
+  );
+  return [...eligible].sort((a,b) => ((a.sortOrder||0) - (b.sortOrder||0)) || ((a.createdAt||0) - (b.createdAt||0)));
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Runtime screen — shift managers + everyone runs the checklist here
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6256,14 +6294,14 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
   }, [todayKey]);
 
   // ── Today's items per phase ──────────────────────────────────────────────
+  // Snapshot-aware: if the loaded run was created with a frozen
+  // templateSnapshotItems, use it (so template edits never change this run).
+  // Otherwise fall back to the live template — unchanged behavior for old runs.
   const itemsForPhase = (phaseKey) => {
-    if (!template) return [];
-    const eligible = template.items.filter(it =>
-      it.active && it.checklistType === phaseKey &&
-      (it.scheduleType === "daily" || (it.scheduleType === "weekly" && it.dayOfWeek === weekKey))
-    );
-    // Stable sort by sortOrder then created.
-    return [...eligible].sort((a,b) => (a.sortOrder - b.sortOrder) || (a.createdAt - b.createdAt));
+    const source = (runs && Array.isArray(runs.templateSnapshotItems))
+      ? runs.templateSnapshotItems
+      : (template ? template.items : []);
+    return phaseItemsFrom(source, phaseKey, weekKey);
   };
 
   // ── Mark item — opens the action sheet ───────────────────────────────────
@@ -6297,6 +6335,9 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     const newRuns = JSON.parse(JSON.stringify(runs || {
       tenantId, businessId: bizId, branchId: bizId,
       businessDate: todayKey, businessDayOfWeek: weekKey,
+      // Phase 1: freeze the template version + day-scoped items at run creation.
+      templateUpdatedAt: (template && template.updatedAt) || null,
+      templateSnapshotItems: buildDaySnapshotItems(template, weekKey),
       runs: {
         opening:  { id: newId("run"), status:"draft", openedByManagerId:"", openedAt:null, submittedAt:null, completionPercent:0, items:{} },
         handover: { id: newId("run"), status:"draft", openedByManagerId:"", openedAt:null, submittedAt:null, completionPercent:0, items:{} },
