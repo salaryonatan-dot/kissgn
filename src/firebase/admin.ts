@@ -1,61 +1,30 @@
 /**
- * Firebase Admin SDK initializer for TypeScript serverless modules.
+ * Firebase Admin accessor for TypeScript serverless modules.
  *
- * Matches env-var logic in lib/adminSdk.js:
- *   1. FIREBASE_SA_JSON  — full service-account JSON (preferred)
- *   2. Individual env vars: FIREBASE_SA_PROJECT_ID, FIREBASE_SA_CLIENT_EMAIL,
- *      FIREBASE_SA_PRIVATE_KEY, FIREBASE_DATABASE_URL
- *   3. Legacy: FIREBASE_SERVICE_ACCOUNT (kept for backward compat)
+ * SINGLE SOURCE OF TRUTH: this module no longer initializes Firebase Admin on
+ * its own. It delegates to lib/adminSdk.js (the same initializer used by
+ * requireAuth / requireTenantAccess), so the ENTIRE codebase shares ONE Admin
+ * app and ONE Realtime Database connection.
+ *
+ * Why: previously this file initialized a SEPARATE (namespaced) admin app. In
+ * any request that first initialized the modular app via requireAuth /
+ * requireTenantAccess (e.g. api/proactive/run.ts read paths) and then read
+ * through getDb() here, the first read would hang. Routing everything through
+ * lib/adminSdk.js removes that split.
+ *
+ * Public API is unchanged: getFirebaseAdmin() and getDb() keep the same
+ * signatures, so existing imports (all of which import only getDb) keep working.
  */
 import admin from "firebase-admin";
-
-let initialized = false;
+import { getAdminDb } from "../../lib/adminSdk.js";
 
 export function getFirebaseAdmin(): admin.app.App {
-  if (!initialized) {
-    if (!admin.apps.length) {
-      const databaseURL = process.env.FIREBASE_DATABASE_URL;
-
-      // Mode 1: full JSON blob (matches lib/adminSdk.js)
-      if (process.env.FIREBASE_SA_JSON) {
-        const sa = JSON.parse(process.env.FIREBASE_SA_JSON);
-        admin.initializeApp({
-          credential: admin.credential.cert(sa),
-          databaseURL,
-        });
-      }
-      // Mode 2: individual env vars (matches lib/adminSdk.js)
-      else if (process.env.FIREBASE_SA_PROJECT_ID && process.env.FIREBASE_SA_CLIENT_EMAIL && process.env.FIREBASE_SA_PRIVATE_KEY) {
-        admin.initializeApp({
-          credential: admin.credential.cert({
-            projectId: process.env.FIREBASE_SA_PROJECT_ID,
-            clientEmail: process.env.FIREBASE_SA_CLIENT_EMAIL,
-            privateKey: process.env.FIREBASE_SA_PRIVATE_KEY.replace(/\\n/g, "\n"),
-          }),
-          databaseURL,
-        });
-      }
-      // Mode 3: legacy FIREBASE_SERVICE_ACCOUNT (backward compat)
-      else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-        const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-        admin.initializeApp({
-          credential: admin.credential.cert(sa),
-          databaseURL,
-        });
-      }
-      // Fallback: application default credentials
-      else {
-        admin.initializeApp({
-          credential: admin.credential.applicationDefault(),
-          databaseURL,
-        });
-      }
-    }
-    initialized = true;
-  }
-  return admin.app();
+  // The shared app initialized inside lib/adminSdk.js. getAdminDb() is
+  // idempotent and guarantees the app exists before we read its handle.
+  return getAdminDb().app;
 }
 
 export function getDb(): admin.database.Database {
-  return getFirebaseAdmin().database();
+  // Delegate to the single shared Admin RTDB handle.
+  return getAdminDb();
 }
