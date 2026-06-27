@@ -8,6 +8,8 @@ import { getTopActiveInsights } from "../../src/agent/proactive/getTopActiveInsi
 import { buildWeeklySummary } from "../../src/agent/proactive/digestBuilder.js";
 import { tenantRef } from "../../src/firebase/refs.js";
 import { getDb } from "../../src/firebase/admin.js";
+import { requireAuth } from "../../lib/verifyToken.js";
+import { requireTenantAccess } from "../../lib/helpers.js";
 
 // Shared secret for cron authentication
 const CRON_SECRET = process.env.CRON_SECRET;
@@ -45,22 +47,49 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   return handleCronScan(req, res);
 }
 
+// ── Auth helper ───────────────────────────────────────────────────────────────
+
+async function verifyAccess(req: VercelRequest, res: VercelResponse, tenantId: string): Promise<boolean> {
+  let claims;
+  try {
+    claims = await requireAuth(req);
+  } catch {
+    res.status(401).json({ error: "Authentication required" });
+    return false;
+  }
+  try {
+    await requireTenantAccess(claims.uid, tenantId, "viewer");
+  } catch (e: any) {
+    res.status(e?.status || 403).json({ error: e?.msg || "Access denied" });
+    return false;
+  }
+  return true;
+}
+
 /**
  * Dashboard insights retrieval.
  * GET /api/proactive/run?action=insights&tenantId=X&bizId=Y&limit=5
  */
 async function handleInsights(req: VercelRequest, res: VercelResponse) {
-  const tenantId = req.query.tenantId as string;
-  const bizId = req.query.bizId as string;
+  const tenantId = req.body?.tenantId || (req.query?.tenantId as string);
+  const bizId = req.body?.bizId || (req.query?.bizId as string);
   const limit = Math.min(Number(req.query.limit) || 5, 10);
 
-  if (!tenantId || !bizId) {
-    return res.status(400).json({ error: "Missing tenantId or bizId" });
+  if (!tenantId) {
+    return res.status(400).json({ error: "Missing tenantId" });
   }
+  if (!bizId) {
+    return res.status(400).json({ error: "Missing bizId" });
+  }
+
+  if (!(await verifyAccess(req, res, tenantId))) return;
 
   try {
     // Verify tenant exists in Firebase
-    const tenantSnap = await tenantRef(tenantId).child("config").once("value");
+    // Existence check uses `members` (present for every real tenant). The
+    // previous `config` node is never written anywhere, so this always failed
+    // and returned a spurious 404.
+    const tenantSnap = await tenantRef(tenantId).child("members").once("value");
     if (!tenantSnap.exists()) {
       return res.status(404).json({ error: "Tenant not found" });
     }
@@ -82,17 +111,25 @@ async function handleInsights(req: VercelRequest, res: VercelResponse) {
  * GET /api/proactive/run?action=digest&tenantId=X&bizId=Y&date=2026-03-29
  */
 async function handleDigest(req: VercelRequest, res: VercelResponse) {
-  const tenantId = req.query.tenantId as string;
-  const bizId = req.query.bizId as string;
+  const tenantId = req.body?.tenantId || (req.query?.tenantId as string);
+  const bizId = req.body?.bizId || (req.query?.bizId as string);
   const date = req.query.date as string; // optional — defaults to today
 
-  if (!tenantId || !bizId) {
-    return res.status(400).json({ error: "Missing tenantId or bizId" });
+  if (!tenantId) {
+    return res.status(400).json({ error: "Missing tenantId" });
   }
+  if (!bizId) {
+    return res.status(400).json({ error: "Missing bizId" });
+  }
+
+  if (!(await verifyAccess(req, res, tenantId))) return;
 
   try {
     // Verify tenant exists
-    const tenantSnap = await tenantRef(tenantId).child("config").once("value");
+    // Existence check uses `members` (present for every real tenant). The
+    // previous `config` node is never written anywhere, so this always failed
+    // and returned a spurious 404.
+    const tenantSnap = await tenantRef(tenantId).child("members").once("value");
     if (!tenantSnap.exists()) {
       return res.status(404).json({ error: "Tenant not found" });
     }
@@ -119,16 +156,24 @@ async function handleDigest(req: VercelRequest, res: VercelResponse) {
  * GET /api/proactive/run?action=weekly&tenantId=X&bizId=Y
  */
 async function handleWeeklySummary(req: VercelRequest, res: VercelResponse) {
-  const tenantId = req.query.tenantId as string;
-  const bizId = req.query.bizId as string;
+  const tenantId = req.body?.tenantId || (req.query?.tenantId as string);
+  const bizId = req.body?.bizId || (req.query?.bizId as string);
 
-  if (!tenantId || !bizId) {
-    return res.status(400).json({ error: "Missing tenantId or bizId" });
+  if (!tenantId) {
+    return res.status(400).json({ error: "Missing tenantId" });
   }
+  if (!bizId) {
+    return res.status(400).json({ error: "Missing bizId" });
+  }
+
+  if (!(await verifyAccess(req, res, tenantId))) return;
 
   try {
     // Verify tenant exists
-    const tenantSnap = await tenantRef(tenantId).child("config").once("value");
+    // Existence check uses `members` (present for every real tenant). The
+    // previous `config` node is never written anywhere, so this always failed
+    // and returned a spurious 404.
+    const tenantSnap = await tenantRef(tenantId).child("members").once("value");
     if (!tenantSnap.exists()) {
       return res.status(404).json({ error: "Tenant not found" });
     }
