@@ -5201,7 +5201,7 @@ function PettyCashScreen({ items, saveItems, businessConfig, saveBusinessConfig 
             </div>
             <div style={{flex:1}}>
               <label className="label">סכום (₪)</label>
-              <input type="number" inputMode="numeric" placeholder="0" className="input" style={{marginBottom:0}} value={form.amount}
+              <input type="number" inputMode="decimal" placeholder="0" className="input" style={{marginBottom:0}} value={form.amount}
                 onChange={e=>setForm(f=>({...f,amount:e.target.value}))} autoFocus/>
             </div>
           </div>
