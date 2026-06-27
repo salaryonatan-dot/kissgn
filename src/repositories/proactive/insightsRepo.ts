@@ -6,12 +6,43 @@ import { proactiveInsightsRef } from "../../firebase/refs.js";
 import { logger } from "../../utils/logging.js";
 
 /**
+ * Recursively drop `undefined` from plain objects and arrays.
+ * RTDB Admin SDK `.set()` THROWS on undefined values, which previously caused
+ * full insight writes to fail silently (optional fields like `branchId` /
+ * `suppressionReason` arrive undefined), leaving empty `{writtenToMemory}` stubs.
+ *
+ * Safety: returns a clean copy and never mutates the input; only `undefined`
+ * is removed — all other values (including null, 0, "", false) are preserved
+ * unchanged. Recurses ONLY into arrays and plain objects (own-prototype check),
+ * so Dates/class instances/primitives pass through untouched. No JSON round-trip,
+ * so number/boolean/string types are never coerced.
+ */
+function stripUndefinedDeep<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value
+      .filter((v) => v !== undefined)
+      .map((v) => stripUndefinedDeep(v)) as unknown as T;
+  }
+  if (value && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v === undefined) continue;
+      out[k] = stripUndefinedDeep(v);
+    }
+    return out as T;
+  }
+  return value;
+}
+
+/**
  * Save a new proactive insight or update an existing one (by id).
  */
 export async function saveProactiveInsight(insight: ProactiveInsight): Promise<void> {
   try {
     const ref = proactiveInsightsRef(insight.tenantId, insight.bizId);
-    await ref.child(insight.id).set(insight);
+    // Strip undefined fields so RTDB Admin SDK persists the full object
+    // instead of throwing (which was swallowed below, leaving empty stubs).
+    await ref.child(insight.id).set(stripUndefinedDeep(insight));
   } catch (err) {
     logger.error("Failed to save proactive insight:", err);
   }
