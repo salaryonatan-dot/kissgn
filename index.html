@@ -6248,6 +6248,8 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
   // ── Step 2.2b: simple-template items (preview) + items editor ──────────────
   const [simpleItems, setSimpleItems] = React.useState([]);
   const [itemsEditorOpen, setItemsEditorOpen] = React.useState(false);
+  // ── Step 2.3: simple daily run (item completion states) ────────────────────
+  const [simpleRun, setSimpleRun] = React.useState(null);
 
   const dow     = dowForBusinessKey(todayKey);
   const weekKey = DOW_KEYS[dow];
@@ -6373,6 +6375,23 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     })();
     return () => { cancelled = true; };
   }, [bizId, selectedTemplateId, templates]);
+
+  // ── Step 2.3: load the simple daily run for selected template + business day ─
+  React.useEffect(() => {
+    let cancelled = false;
+    const st = templates.find(t => t.templateId === selectedTemplateId) || SHIFT_TEMPLATE_ENTRY;
+    if (!bizId || st.kind !== "simple" || !st.templateId) { setSimpleRun(null); return; }
+    setSimpleRun(null); // clear stale run before async read (template/date switch)
+    (async () => {
+      try {
+        const doc = await readChecklistDoc(`biz:${bizId}:checklist_simple_runs:${todayKey}:${st.templateId}`);
+        if (!cancelled) setSimpleRun(doc && typeof doc === "object" ? doc : null);
+      } catch (e) {
+        if (!cancelled) setSimpleRun(null); // missing/malformed → no completions yet
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [bizId, selectedTemplateId, todayKey, templates]);
 
   // ── Cross-04:00 boundary refresh ──────────────────────────────────────────
   React.useEffect(() => {
@@ -6583,6 +6602,35 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     }
   };
 
+  // ── Step 2.3: toggle one item's completion in the simple daily run.
+  // Lazily creates the run doc on first change. Writes ONLY the namespaced
+  // checklist_simple_runs path. Never touches shift / template / items docs.
+  const toggleSimpleItem = async (itemId) => {
+    const st = templates.find(t => t.templateId === selectedTemplateId) || SHIFT_TEMPLATE_ENTRY;
+    if (!bizId || st.kind !== "simple" || !st.templateId) return;
+    const tplId = st.templateId;
+    const now = Date.now();
+    const prevRun = simpleRun; // for rollback if the write fails
+    const base = simpleRun || {
+      templateId: tplId, businessDate: todayKey, kind: "simple",
+      currentVersion: (st.currentVersion || 1), itemStates: {}, createdAt: now, updatedAt: now, updatedBy: ctx.userId,
+    };
+    const prevDone = !!(base.itemStates && base.itemStates[itemId] && base.itemStates[itemId].done);
+    const next = {
+      ...base,
+      itemStates: { ...(base.itemStates || {}), [itemId]: { done: !prevDone, updatedAt: now, updatedBy: ctx.userId } },
+      updatedAt: now, updatedBy: ctx.userId,
+    };
+    setSimpleRun(next); // optimistic
+    try {
+      await window.storage.set(`biz:${bizId}:checklist_simple_runs:${todayKey}:${tplId}`, JSON.stringify(next));
+    } catch (e) {
+      console.error("[checklist] save simple run failed:", e);
+      setSimpleRun(prevRun || null); // rollback optimistic update
+      alert("שמירת הסימון נכשלה — נסה שוב.");
+    }
+  };
+
   if (!bizId) {
     return <div className="card card-p"><p style={{margin:0,fontSize:13,color:"#6B7280"}}>בחר עסק כדי לראות את הצ׳ק ליסט.</p></div>;
   }
@@ -6744,36 +6792,66 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
       ) : (
         <div className="card card-p">
           {(() => {
-            const activePreview = simpleItems.filter(i => i.active !== false)
+            // Step 2.3: real daily runtime for a simple checklist (isolated from shift).
+            const activeItems = simpleItems.filter(i => i.active !== false)
               .sort((a,b)=>((a.sortOrder||0)-(b.sortOrder||0))||((a.createdAt||0)-(b.createdAt||0)));
+            const states = (simpleRun && simpleRun.itemStates) || {};
+            const isDone = (id) => !!(states[id] && states[id].done);
+            const total = activeItems.length;
+            const doneCount = activeItems.filter(it => isDone(it.id)).length;
+            const reqItems = activeItems.filter(it => it.isRequired !== false);
+            const reqDone = reqItems.filter(it => isDone(it.id)).length;
+            const allDone = total > 0 && doneCount === total;
+            const allReqDone = reqItems.length > 0 && reqDone === reqItems.length;
+            const pct = total ? Math.round(doneCount*100/total) : 0;
             return (<>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap",marginBottom:10}}>
-                <h3 style={{margin:0,fontSize:14,fontWeight:700,color:"#111827"}}>{selectedTemplate.name}</h3>
+                <div>
+                  <h3 style={{margin:0,fontSize:14,fontWeight:700,color:"#111827"}}>{selectedTemplate.name}</h3>
+                  {total>0 && <p style={{margin:"2px 0 0",fontSize:11,color:"#9CA3AF"}}>{doneCount}/{total} הושלמו{reqItems.length?` · חובה ${reqDone}/${reqItems.length}`:""}</p>}
+                </div>
                 {canEdit && (
                   <button onClick={() => setItemsEditorOpen(true)}
-                    style={{padding:"7px 14px",background:"#111827",border:"none",borderRadius:8,color:"#FFFFFF",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>ערוך פריטים</button>
+                    style={{padding:"7px 14px",background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8,color:"#6B7280",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>ערוך פריטים</button>
                 )}
               </div>
-              {activePreview.length === 0 ? (
+              {total>0 && (
+                <div style={{height:6,background:"#F3F4F6",borderRadius:99,overflow:"hidden",marginBottom:12}}>
+                  <div style={{width:`${pct}%`,height:"100%",background:allDone?"#16A34A":"#6366F1",transition:"width .2s"}}/>
+                </div>
+              )}
+              {total === 0 ? (
                 <p style={{margin:0,fontSize:13,color:"#9CA3AF",lineHeight:1.6}}>
                   עדיין אין פריטים בצ׳ק ליסט הזה.{canEdit ? " לחץ \"ערוך פריטים\" כדי להוסיף." : " פנה למנהל כדי שיוסיף פריטים."}
                 </p>
               ) : (
                 <div>
-                  {activePreview.map(it => (
-                    <div key={it.id} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"9px 11px",marginBottom:6,background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8}}>
-                      <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:13,fontWeight:600,color:"#111827"}}>
-                          {it.title}
-                          {it.requiresPhoto && <span style={{marginInlineStart:6,fontSize:11}}>📷</span>}
-                          {it.isRequired && <span style={{marginInlineStart:6,fontSize:10,color:"#6B7280"}}>· נדרש</span>}
-                          {it.priority==="critical" && <span style={{marginInlineStart:6,fontSize:10,fontWeight:700,color:"#DC2626"}}>קריטי</span>}
+                  {activeItems.map(it => {
+                    const done = isDone(it.id);
+                    return (
+                      <div key={it.id} onClick={() => toggleSimpleItem(it.id)}
+                        style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",marginBottom:6,background:done?"#F0FDF4":"#F9FAFB",border:`1px solid ${done?"#BBF7D0":"#E5E7EB"}`,borderRadius:8,cursor:"pointer",userSelect:"none"}}>
+                        <div style={{width:22,height:22,borderRadius:5,flexShrink:0,border:`2px solid ${done?"#16A34A":"#D1D5DB"}`,background:done?"#16A34A":"#FFFFFF",display:"flex",alignItems:"center",justifyContent:"center",color:"#FFFFFF",fontSize:13,fontWeight:700,marginTop:1}}>{done?"✓":""}</div>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:13,fontWeight:600,color:done?"#15803D":"#111827",textDecoration:done?"line-through":"none"}}>
+                            {it.title}
+                            {it.requiresPhoto && <span style={{marginInlineStart:6,fontSize:11}}>📷</span>}
+                            {it.isRequired !== false && <span style={{marginInlineStart:6,fontSize:10,color:"#6B7280"}}>· נדרש</span>}
+                            {it.priority==="critical" && <span style={{marginInlineStart:6,fontSize:10,fontWeight:700,color:"#DC2626"}}>קריטי</span>}
+                          </div>
+                          {it.description && <div style={{fontSize:11,color:"#9CA3AF",marginTop:2,lineHeight:1.4}}>{it.description}</div>}
                         </div>
-                        {it.description && <div style={{fontSize:11,color:"#9CA3AF",marginTop:2,lineHeight:1.4}}>{it.description}</div>}
+                        <span style={{fontSize:10,color:"#9CA3AF",flexShrink:0,marginTop:2}}>{it.area || "כללי"}</span>
                       </div>
-                      <span style={{fontSize:10,color:"#9CA3AF",flexShrink:0,marginTop:2}}>{it.area || "כללי"}</span>
-                    </div>
-                  ))}
+                    );
+                  })}
+                  <div style={{marginTop:10,padding:"10px 12px",background:allDone?"#F0FDF4":"#F8FAFC",border:`1px solid ${allDone?"#BBF7D0":"#E5E7EB"}`,borderRadius:8,fontSize:12,color:"#374151"}}>
+                    <div style={{fontWeight:600}}>{allDone ? "✓ כל הפריטים הושלמו" : `נותרו ${total-doneCount} פריטים`}</div>
+                    {reqItems.length>0 && <div style={{marginTop:2,color:allReqDone?"#15803D":"#92400E"}}>{allReqDone ? "כל פריטי החובה הושלמו" : `חובה: ${reqDone}/${reqItems.length}`}</div>}
+                    {simpleRun && simpleRun.updatedAt && (
+                      <div style={{marginTop:4,fontSize:10,color:"#9CA3AF"}}>עודכן: {new Date(simpleRun.updatedAt).toLocaleString("he-IL",{timeZone:"Asia/Jerusalem",day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}{simpleRun.updatedBy ? ` · ${simpleRun.updatedBy}` : ""}</div>
+                    )}
+                  </div>
                 </div>
               )}
               {canEdit && (
