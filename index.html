@@ -6188,6 +6188,9 @@ function phaseItemsFrom(sourceItems, phaseKey, weekKey) {
 // Module-level constant (stable identity) — never created per-render.
 const SHIFT_TEMPLATE_ENTRY = { templateId: "shift", name: "משמרת", kind: "shift", active: true };
 
+// Step 2.2: allowed "simple" template types + Hebrew labels.
+const SIMPLE_TYPE_LABELS = { cleaning: "ניקיון", daily: "יומי", weekly: "שבועי", custom: "מותאם אישית" };
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Runtime screen — shift managers + everyone runs the checklist here
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6208,6 +6211,10 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
   // ── Step 2.0/2.1: template registry (read-only) + selector ────────────────
   const [templates, setTemplates] = React.useState([SHIFT_TEMPLATE_ENTRY]);
   const [selectedTemplateId, setSelectedTemplateId] = React.useState("shift");
+  // ── Step 2.2: create-template modal state ─────────────────────────────────
+  const [showCreate, setShowCreate] = React.useState(false);
+  const [newName, setNewName] = React.useState("");
+  const [newType, setNewType] = React.useState("cleaning");
 
   const dow     = dowForBusinessKey(todayKey);
   const weekKey = DOW_KEYS[dow];
@@ -6438,6 +6445,63 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     catch (e) { alert("שמירה נכשלה — נסה שוב"); }
   };
 
+  // ── Step 2.2: read current registry map (safe: missing key → {}) ──────────
+  const readRegistryMap = async () => {
+    let reg = null;
+    try { reg = await readChecklistDoc(`biz:${bizId}:checklist_templates`); } catch (_) { reg = null; }
+    return (reg && typeof reg === "object" && !Array.isArray(reg)) ? { ...reg } : {};
+  };
+
+  // ── Step 2.2: create a new "simple" template shell (name + type only) ─────
+  const createSimpleTemplate = async () => {
+    const name = (newName || "").trim();
+    if (!name) { alert("יש להזין שם לצ׳ק ליסט."); return; }
+    if (!SIMPLE_TYPE_LABELS[newType]) { alert("יש לבחור סוג חוקי."); return; }
+    if (!bizId) return;
+    const templateId = newId("tpl"); // never "shift"
+    const now = Date.now();
+    const entry = {
+      id: templateId, templateId, name, type: newType, kind: "simple",
+      active: true, currentVersion: 1, itemsCount: 0,
+      createdBy: ctx.userId, createdAt: now, updatedBy: ctx.userId, updatedAt: now,
+    };
+    try {
+      // Write the items doc FIRST. If the registry write below fails, this stays
+      // an orphan items doc (invisible — no chip), which is safer than a visible
+      // chip pointing at a missing items doc.
+      await window.storage.set(`biz:${bizId}:checklist_template_items:${templateId}`,
+        JSON.stringify({ templateId, currentVersion: 1, items: [], updatedAt: now, updatedBy: ctx.userId }));
+      // Only after the items doc exists, make the template visible in the registry.
+      const map = await readRegistryMap();
+      map[templateId] = entry;
+      await window.storage.set(`biz:${bizId}:checklist_templates`, JSON.stringify(map));
+      setTemplates(prev => [...prev, entry]);
+      setSelectedTemplateId(templateId);
+      setShowCreate(false); setNewName(""); setNewType("cleaning");
+    } catch (e) {
+      console.error("[checklist] create template failed:", e);
+      alert("יצירת הצ׳ק ליסט נכשלה — נסה שוב.");
+    }
+  };
+
+  // ── Step 2.2: disable (hide) a simple template — never deletes items doc ──
+  const disableTemplate = async (templateId) => {
+    if (!templateId || templateId === "shift" || !bizId) return; // shift can never be disabled
+    if (!confirm("לכבות את הצ׳ק ליסט? הוא יוסתר מהרשימה (הנתונים נשמרים).")) return;
+    try {
+      const map = await readRegistryMap();
+      if (map[templateId]) {
+        map[templateId] = { ...map[templateId], active: false, updatedBy: ctx.userId, updatedAt: Date.now() };
+        await window.storage.set(`biz:${bizId}:checklist_templates`, JSON.stringify(map));
+      }
+      setTemplates(prev => prev.filter(t => t.templateId !== templateId));
+      setSelectedTemplateId(prev => prev === templateId ? "shift" : prev);
+    } catch (e) {
+      console.error("[checklist] disable template failed:", e);
+      alert("כיבוי הצ׳ק ליסט נכשל — נסה שוב.");
+    }
+  };
+
   if (!bizId) {
     return <div className="card card-p"><p style={{margin:0,fontSize:13,color:"#6B7280"}}>בחר עסק כדי לראות את הצ׳ק ליסט.</p></div>;
   }
@@ -6482,6 +6546,12 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
             </button>
           );
         })}
+        {canEdit && (
+          <button key="__add" onClick={() => setShowCreate(true)}
+            style={{flex:"0 0 auto",padding:"7px 16px",borderRadius:99,border:"1.5px dashed #D1D5DB",background:"#FFFFFF",color:"#6B7280",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            + צ׳ק ליסט
+          </button>
+        )}
       </div>
 
       {selectedTemplate.kind === "shift" ? (
@@ -6591,7 +6661,17 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
         );
       })
       ) : (
-        <div className="card card-p"><p style={{margin:0,fontSize:12,color:"#9CA3AF"}}>תצוגת צ׳ק ליסט מסוג זה תיתמך בקרוב.</p></div>
+        <div className="card card-p">
+          <p style={{margin:0,fontSize:13,color:"#374151",lineHeight:1.6}}>
+            צ׳ק ליסט "{selectedTemplate.name}" נוצר. עדיין אין בו פריטים. עריכת פריטים תתווסף בשלב הבא.
+          </p>
+          {canEdit && (
+            <button onClick={() => disableTemplate(selectedTemplate.templateId)}
+              style={{marginTop:12,padding:"8px 14px",background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:8,color:"#991B1B",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              כבה צ׳ק ליסט
+            </button>
+          )}
+        </div>
       )}
 
       {editItem && (
@@ -6617,6 +6697,27 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
             setEditorOpen(false);
           }}
         />
+      )}
+
+      {/* Step 2.2: create-template modal (name + type only) */}
+      {showCreate && canEdit && (
+        <div onClick={() => setShowCreate(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:9999}}>
+          <div onClick={e => e.stopPropagation()} style={{background:"#FFFFFF",borderRadius:"16px 16px 0 0",padding:18,width:"100%",maxWidth:560}}>
+            <h3 style={{margin:"0 0 12px",fontSize:14,fontWeight:700,color:"#111827"}}>צ׳ק ליסט חדש</h3>
+            <div style={{fontSize:11,fontWeight:700,color:"#6B7280",marginBottom:6}}>שם</div>
+            <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="לדוגמה: ניקיון יומי"
+              style={{width:"100%",padding:"9px 11px",border:"1px solid #E5E7EB",borderRadius:8,fontSize:13,fontFamily:"inherit",marginBottom:14,boxSizing:"border-box"}}/>
+            <div style={{fontSize:11,fontWeight:700,color:"#6B7280",marginBottom:6}}>סוג</div>
+            <select value={newType} onChange={e => setNewType(e.target.value)}
+              style={{width:"100%",padding:"9px 11px",border:"1px solid #E5E7EB",borderRadius:8,fontSize:13,fontFamily:"inherit",background:"#F9FAFB",marginBottom:16,boxSizing:"border-box"}}>
+              {Object.entries(SIMPLE_TYPE_LABELS).map(([v,l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <button onClick={() => setShowCreate(false)} style={{padding:"9px 18px",background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8,color:"#6B7280",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>ביטול</button>
+              <button onClick={createSimpleTemplate} style={{padding:"9px 18px",background:"#111827",border:"none",borderRadius:8,color:"#FFFFFF",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>צור</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
