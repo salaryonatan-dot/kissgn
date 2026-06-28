@@ -3925,6 +3925,16 @@ function PilotDashboard() {
                     if(sup.days.length>0 && !sup.days.includes(dow)) return null;
                     return {day,date,dow};
                   }).filter(Boolean);
+                  // Bug fix (render-only): surface supplier payments saved on UNPLANNED
+                  // dates (Saturdays, or days not in sup.days) so they appear in the list.
+                  // Only real payments (numeric > 0) — a cleared/"0" value is not shown.
+                  const plannedDates = new Set(delivDays.map(d=>d.date));
+                  const unplannedDays = entries
+                    .filter(e => e.date.startsWith(`${smY}-${String(smM).padStart(2,"0")}`)
+                              && Number(e.supplier_payments?.[sup.id]) > 0
+                              && !plannedDates.has(e.date))
+                    .map(e => { const day=Number(e.date.slice(8,10)); return {day,date:e.date,dow:new Date(smY,smM-1,day).getDay(),unplanned:true}; });
+                  const renderDays = [...delivDays, ...unplannedDays].sort((a,b)=>a.day-b.day);
                   return (
                     <div key={sup.id} style={{marginBottom:6,background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:8,overflow:"hidden"}}>
                       <div onClick={()=>setExpandedSup(isOpen?null:sup.id)}
@@ -3946,14 +3956,15 @@ function PilotDashboard() {
                       </div>
                       {isOpen && (
                         <div style={{borderTop:"1px solid #F1F5F9",padding:"14px 16px"}}>
-                          {delivDays.length===0 && <p style={{color:"#9CA3AF",fontSize:13,margin:0}}>אין ימי אספקה בחודש זה</p>}
-                          {delivDays.map(({day,date,dow})=>{
+                          {renderDays.length===0 && <p style={{color:"#9CA3AF",fontSize:13,margin:0}}>אין ימי אספקה בחודש זה</p>}
+                          {renderDays.map(({day,date,dow,unplanned})=>{
                             const val=getSupPay(sup.id,date);
                             const paid=Number(val)>0;
                             return (
                               <div key={date} style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
                                 <div style={{minWidth:88}}>
                                   <div style={{fontSize:13,fontWeight:600,color:"#111827"}}>{DOW_NAMES[dow]} {day}/{smM}</div>
+                                  {unplanned && <span style={{display:"inline-block",marginTop:2,fontSize:9,fontWeight:700,color:"#92400E",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:99,padding:"1px 6px"}}>לא מתוכנן</span>}
                                 </div>
                                 <input type="number" inputMode="decimal" placeholder="₪"
                                   value={val==="0"||val===0?"":val||""}
