@@ -2801,6 +2801,17 @@ function PilotDashboard() {
     if(!currentBizId) return;
     try { await window.storage.set(`biz:${currentBizId}:suppliers`, JSON.stringify(sups), true); } catch(_){}
   };
+  // Reorder suppliers (up/down). The purchases screen renders suppliers in array
+  // order, so we just swap array positions and persist via saveSuppliers — no new
+  // field, no schema change. Payments are keyed by supplier id, so they don't move.
+  const canReorderSuppliers = !!loggedInUser && ["super_owner","owner","manager"].includes(loggedInUser.role);
+  const moveSupplier = (index, dir) => {
+    const j = index + dir;
+    if (index < 0 || j < 0 || index >= suppliers.length || j >= suppliers.length) return;
+    const next = [...suppliers];
+    [next[index], next[j]] = [next[j], next[index]];
+    saveSuppliers(next);
+  };
   const completeSetup = async (cfg, sups, fixed, firstOwner) => {
     // tenantId = the account/owner namespace (stays the same across all businesses)
     // bizId    = unique id for this specific business (sub-namespace within tenant)
@@ -3910,7 +3921,7 @@ function PilotDashboard() {
                   <span style={{fontWeight:700,color:"#111827",fontSize:15}}>{smLabel}</span>
                   <button onClick={nextMonth} disabled={!canNext} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:canNext?"#6B7280":"#D1D5DB",padding:"0 8px",lineHeight:1}}>›</button>
                 </div>
-                {suppliers.map(sup => {
+                {suppliers.map((sup, supIndex) => {
                   const isOpen = expandedSup === sup.id;
                   const supMonthTotal = Array.from({length:smDays},(_,i)=>{
                     const d=String(i+1).padStart(2,"0");
@@ -3945,6 +3956,14 @@ function PilotDashboard() {
                           <span style={{fontSize:11,color:"#9CA3AF"}}>{sup.days.map(d=>DOW_NAMES[d]).join(" ")}</span>
                         </div>
                         <div style={{display:"flex",alignItems:"center",gap:10}}>
+                          {canReorderSuppliers && (
+                            <div onClick={e=>e.stopPropagation()} style={{display:"flex",flexDirection:"column",gap:2,marginInlineEnd:2,flexShrink:0}}>
+                              <button onClick={()=>moveSupplier(supIndex,-1)} disabled={supIndex===0} title="העלה"
+                                style={{background:"none",border:"1px solid #E5E7EB",borderRadius:4,color:supIndex===0?"#D1D5DB":"#6B7280",cursor:supIndex===0?"default":"pointer",fontSize:10,lineHeight:1,padding:"2px 5px",fontFamily:"inherit"}}>▲</button>
+                              <button onClick={()=>moveSupplier(supIndex,1)} disabled={supIndex===suppliers.length-1} title="הורד"
+                                style={{background:"none",border:"1px solid #E5E7EB",borderRadius:4,color:supIndex===suppliers.length-1?"#D1D5DB":"#6B7280",cursor:supIndex===suppliers.length-1?"default":"pointer",fontSize:10,lineHeight:1,padding:"2px 5px",fontFamily:"inherit"}}>▼</button>
+                            </div>
+                          )}
                           {supMonthTotal>0 && (
                             <>
                               <span style={{fontWeight:700,color:"#111827",fontSize:14}}>{fmt(supMonthTotal)}</span>
