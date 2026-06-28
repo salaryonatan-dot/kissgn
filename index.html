@@ -6184,6 +6184,10 @@ function phaseItemsFrom(sourceItems, phaseKey, weekKey) {
   return [...eligible].sort((a,b) => ((a.sortOrder||0) - (b.sortOrder||0)) || ((a.createdAt||0) - (b.createdAt||0)));
 }
 
+// Step 2.0/2.1: the always-present virtual entry for the legacy shift checklist.
+// Module-level constant (stable identity) — never created per-render.
+const SHIFT_TEMPLATE_ENTRY = { templateId: "shift", name: "משמרת", kind: "shift", active: true };
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Runtime screen — shift managers + everyone runs the checklist here
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6200,6 +6204,10 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
 
   const [editorOpen, setEditorOpen] = React.useState(false);
   const [editItem, setEditItem] = React.useState(null); // {runType, item, statusEdit, noteEdit, photoEdit}
+
+  // ── Step 2.0/2.1: template registry (read-only) + selector ────────────────
+  const [templates, setTemplates] = React.useState([SHIFT_TEMPLATE_ENTRY]);
+  const [selectedTemplateId, setSelectedTemplateId] = React.useState("shift");
 
   const dow     = dowForBusinessKey(todayKey);
   const weekKey = DOW_KEYS[dow];
@@ -6283,6 +6291,31 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     })();
     return () => { cancelled = true; };
   }, [bizId, todayKey]);
+
+  // ── Step 2.0: load checklist_templates registry (READ-ONLY, no writes) ────
+  React.useEffect(() => {
+    let cancelled = false;
+    setSelectedTemplateId("shift"); // reset to default whenever the business changes
+    (async () => {
+      try {
+        let list = [];
+        if (bizId) {
+          const reg = await readChecklistDoc(`biz:${bizId}:checklist_templates`);
+          if (reg && typeof reg === "object") {
+            const raw = Array.isArray(reg) ? reg : Object.values(reg);
+            // Drop any registry entry with templateId "shift" so the virtual one is never duplicated.
+            // Treat a template missing `active` as active by default (unlike template ITEMS).
+            list = raw.filter(t => t && t.templateId && t.templateId !== "shift" && t.active !== false);
+          }
+        }
+        if (!cancelled) setTemplates([SHIFT_TEMPLATE_ENTRY, ...list]); // virtual "shift" always first
+      } catch (e) {
+        console.error("[checklist] templates registry load failed:", e);
+        if (!cancelled) setTemplates([SHIFT_TEMPLATE_ENTRY]); // fallback — never crash
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [bizId]);
 
   // ── Cross-04:00 boundary refresh ──────────────────────────────────────────
   React.useEffect(() => {
@@ -6411,6 +6444,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
 
   // ── Render ───────────────────────────────────────────────────────────────
   const todayLabel = new Date(todayKey + "T12:00:00").toLocaleDateString("he-IL",{timeZone:"Asia/Jerusalem"});
+  const selectedTemplate = templates.find(t => t.templateId === selectedTemplateId) || SHIFT_TEMPLATE_ENTRY;
 
   return (
     <div>
@@ -6436,7 +6470,22 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
         )}
       </div>
 
-      {loadingTpl || loadingRuns ? (
+      {/* Step 2.1: template selector chips — currently the single virtual "shift" entry.
+          Horizontal scroll, no wrap, so one chip never breaks mobile layout. */}
+      <div style={{display:"flex",gap:8,overflowX:"auto",whiteSpace:"nowrap",WebkitOverflowScrolling:"touch",paddingBottom:4,marginBottom:12}}>
+        {templates.map(t => {
+          const sel = t.templateId === selectedTemplateId;
+          return (
+            <button key={t.templateId} onClick={() => setSelectedTemplateId(t.templateId)}
+              style={{flex:"0 0 auto",padding:"7px 16px",borderRadius:99,border:`1.5px solid ${sel?"#111827":"#E5E7EB"}`,background:sel?"#111827":"#FFFFFF",color:sel?"#FFFFFF":"#6B7280",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              {t.name}
+            </button>
+          );
+        })}
+      </div>
+
+      {selectedTemplate.kind === "shift" ? (
+        loadingTpl || loadingRuns ? (
         <div className="card card-p"><p style={{margin:0,fontSize:12,color:"#9CA3AF"}}>טוען…</p></div>
       ) : !template || template.items.length === 0 ? (
         <div className="card card-p">
@@ -6540,7 +6589,10 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
             )}
           </div>
         );
-      })}
+      })
+      ) : (
+        <div className="card card-p"><p style={{margin:0,fontSize:12,color:"#9CA3AF"}}>תצוגת צ׳ק ליסט מסוג זה תיתמך בקרוב.</p></div>
+      )}
 
       {editItem && (
         <ItemActionSheet
