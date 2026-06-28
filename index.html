@@ -6245,6 +6245,9 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
   const [showCreate, setShowCreate] = React.useState(false);
   const [newName, setNewName] = React.useState("");
   const [newType, setNewType] = React.useState("cleaning");
+  // ── Step 2.2b: simple-template items (preview) + items editor ──────────────
+  const [simpleItems, setSimpleItems] = React.useState([]);
+  const [itemsEditorOpen, setItemsEditorOpen] = React.useState(false);
 
   const dow     = dowForBusinessKey(todayKey);
   const weekKey = DOW_KEYS[dow];
@@ -6353,6 +6356,23 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     })();
     return () => { cancelled = true; };
   }, [bizId]);
+
+  // ── Step 2.2b: load the selected simple template's items (READ-ONLY here) ──
+  React.useEffect(() => {
+    let cancelled = false;
+    const st = templates.find(t => t.templateId === selectedTemplateId) || SHIFT_TEMPLATE_ENTRY;
+    if (!bizId || st.kind !== "simple") { setSimpleItems([]); return; }
+    (async () => {
+      try {
+        const doc = await readChecklistDoc(`biz:${bizId}:checklist_template_items:${st.templateId}`);
+        const items = (doc && Array.isArray(doc.items)) ? doc.items : [];
+        if (!cancelled) setSimpleItems(items);
+      } catch (e) {
+        if (!cancelled) setSimpleItems([]); // missing/parse error → safe empty
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [bizId, selectedTemplateId, templates]);
 
   // ── Cross-04:00 boundary refresh ──────────────────────────────────────────
   React.useEffect(() => {
@@ -6532,6 +6552,37 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     }
   };
 
+  // ── Step 2.2b: persist the simple template's items + sync registry itemsCount.
+  // Writes ONLY checklist_template_items:{templateId} and the registry map.
+  // currentVersion is preserved (NOT bumped). Never touches shift paths.
+  const saveSimpleItems = async (nextItems) => {
+    const st = templates.find(t => t.templateId === selectedTemplateId) || SHIFT_TEMPLATE_ENTRY;
+    if (!bizId || st.kind !== "simple" || !st.templateId) return;
+    const tplId = st.templateId;
+    const now = Date.now();
+    try {
+      // preserve currentVersion from the existing items doc (fallback 1 if missing)
+      let doc = null;
+      try { doc = await readChecklistDoc(`biz:${bizId}:checklist_template_items:${tplId}`); } catch (_) { doc = null; }
+      const currentVersion = (doc && doc.currentVersion) || 1;
+      await window.storage.set(`biz:${bizId}:checklist_template_items:${tplId}`,
+        JSON.stringify({ templateId: tplId, currentVersion, items: nextItems, updatedAt: now, updatedBy: ctx.userId }));
+      // registry: itemsCount = active items only; bump updatedAt/By; keep currentVersion
+      const map = await readRegistryMap();
+      if (map[tplId]) {
+        const activeCount = nextItems.filter(i => i.active !== false).length;
+        map[tplId] = { ...map[tplId], itemsCount: activeCount, updatedBy: ctx.userId, updatedAt: now };
+        await window.storage.set(`biz:${bizId}:checklist_templates`, JSON.stringify(map));
+        setTemplates(prev => prev.map(t => t.templateId === tplId ? { ...t, itemsCount: activeCount } : t));
+      }
+      setSimpleItems(nextItems);
+      setItemsEditorOpen(false);
+    } catch (e) {
+      console.error("[checklist] save simple items failed:", e);
+      alert("שמירת הפריטים נכשלה — נסה שוב.");
+    }
+  };
+
   if (!bizId) {
     return <div className="card card-p"><p style={{margin:0,fontSize:13,color:"#6B7280"}}>בחר עסק כדי לראות את הצ׳ק ליסט.</p></div>;
   }
@@ -6692,15 +6743,47 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
       })
       ) : (
         <div className="card card-p">
-          <p style={{margin:0,fontSize:13,color:"#374151",lineHeight:1.6}}>
-            צ׳ק ליסט "{selectedTemplate.name}" נוצר. עדיין אין בו פריטים. עריכת פריטים תתווסף בשלב הבא.
-          </p>
-          {canEdit && (
-            <button onClick={() => disableTemplate(selectedTemplate.templateId)}
-              style={{marginTop:12,padding:"8px 14px",background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:8,color:"#991B1B",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-              כבה צ׳ק ליסט
-            </button>
-          )}
+          {(() => {
+            const activePreview = simpleItems.filter(i => i.active !== false)
+              .sort((a,b)=>((a.sortOrder||0)-(b.sortOrder||0))||((a.createdAt||0)-(b.createdAt||0)));
+            return (<>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap",marginBottom:10}}>
+                <h3 style={{margin:0,fontSize:14,fontWeight:700,color:"#111827"}}>{selectedTemplate.name}</h3>
+                {canEdit && (
+                  <button onClick={() => setItemsEditorOpen(true)}
+                    style={{padding:"7px 14px",background:"#111827",border:"none",borderRadius:8,color:"#FFFFFF",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>ערוך פריטים</button>
+                )}
+              </div>
+              {activePreview.length === 0 ? (
+                <p style={{margin:0,fontSize:13,color:"#9CA3AF",lineHeight:1.6}}>
+                  עדיין אין פריטים בצ׳ק ליסט הזה.{canEdit ? " לחץ \"ערוך פריטים\" כדי להוסיף." : " פנה למנהל כדי שיוסיף פריטים."}
+                </p>
+              ) : (
+                <div>
+                  {activePreview.map(it => (
+                    <div key={it.id} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"9px 11px",marginBottom:6,background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:600,color:"#111827"}}>
+                          {it.title}
+                          {it.requiresPhoto && <span style={{marginInlineStart:6,fontSize:11}}>📷</span>}
+                          {it.isRequired && <span style={{marginInlineStart:6,fontSize:10,color:"#6B7280"}}>· נדרש</span>}
+                          {it.priority==="critical" && <span style={{marginInlineStart:6,fontSize:10,fontWeight:700,color:"#DC2626"}}>קריטי</span>}
+                        </div>
+                        {it.description && <div style={{fontSize:11,color:"#9CA3AF",marginTop:2,lineHeight:1.4}}>{it.description}</div>}
+                      </div>
+                      <span style={{fontSize:10,color:"#9CA3AF",flexShrink:0,marginTop:2}}>{it.area || "כללי"}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {canEdit && (
+                <button onClick={() => disableTemplate(selectedTemplate.templateId)}
+                  style={{marginTop:12,padding:"8px 14px",background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:8,color:"#991B1B",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                  כבה צ׳ק ליסט
+                </button>
+              )}
+            </>);
+          })()}
         </div>
       )}
 
@@ -6749,6 +6832,127 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
           </div>
         </div>
       )}
+
+      {/* Step 2.2b: simple-template items editor (no runtime — definition only) */}
+      {itemsEditorOpen && canEdit && selectedTemplate.kind === "simple" && (
+        <SimpleItemsEditor
+          initialItems={simpleItems}
+          onClose={() => setItemsEditorOpen(false)}
+          onSave={saveSimpleItems}
+        />
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Step 2.2b: minimal editor for a SIMPLE template's items (flat, daily-only).
+// No runtime here: no checkboxes, no statuses, no submit, no run docs.
+// Shows only active items; inactive items are preserved untouched on save.
+// ═══════════════════════════════════════════════════════════════════════════
+function SimpleItemsEditor({ initialItems, onClose, onSave }){
+  const [draft, setDraft] = React.useState(() => JSON.parse(JSON.stringify(initialItems || [])));
+  const [editing, setEditing] = React.useState(null); // null | "new" | itemId
+  const [f, setF] = React.useState({ title:"", area:"כללי", description:"", isRequired:true, requiresPhoto:false, priority:"medium" });
+
+  const PRIORITIES = ["low","medium","high","critical"];
+  const PR_LABEL = { low:"נמוך", medium:"רגיל", high:"גבוה", critical:"קריטי" };
+  const active = draft.filter(i => i.active !== false)
+    .sort((a,b)=>((a.sortOrder||0)-(b.sortOrder||0))||((a.createdAt||0)-(b.createdAt||0)));
+
+  const openNew  = () => { setF({ title:"", area:"כללי", description:"", isRequired:true, requiresPhoto:false, priority:"medium" }); setEditing("new"); };
+  const openEdit = (it) => { setF({ title:it.title||"", area:it.area||"כללי", description:it.description||"", isRequired:it.isRequired!==false, requiresPhoto:!!it.requiresPhoto, priority:PRIORITIES.includes(it.priority)?it.priority:"medium" }); setEditing(it.id); };
+
+  const saveItemForm = () => {
+    const title = (f.title||"").trim();
+    if (!title) { alert("יש להזין כותרת לפריט."); return; }
+    const priority = PRIORITIES.includes(f.priority) ? f.priority : "medium";
+    const area = (f.area||"").trim() || "כללי";
+    const description = (f.description||"").trim();
+    const now = Date.now();
+    if (editing === "new") {
+      const maxSort = draft.reduce((m,i)=>Math.max(m, i.sortOrder||0), 0);
+      const item = { id:newId("ci"), area, title, description, isRequired:!!f.isRequired, requiresPhoto:!!f.requiresPhoto,
+        priority, sortOrder:maxSort+1, active:true, createdAt:now, updatedAt:now, scheduleType:"daily", dayOfWeek:null };
+      setDraft(prev => [...prev, item]);
+    } else {
+      setDraft(prev => prev.map(i => i.id===editing ? { ...i, area, title, description, isRequired:!!f.isRequired, requiresPhoto:!!f.requiresPhoto, priority, updatedAt:now } : i));
+    }
+    setEditing(null);
+  };
+
+  const disableItem = (id) => setDraft(prev => prev.map(i => i.id===id ? { ...i, active:false, updatedAt:Date.now() } : i));
+  const moveItem = (id, dir) => {
+    const idx = active.findIndex(i=>i.id===id); const j = idx+dir;
+    if (idx < 0 || j < 0 || j >= active.length) return;
+    const a = active[idx], b = active[j]; const sa = a.sortOrder||0, sb = b.sortOrder||0;
+    setDraft(prev => prev.map(i => i.id===a.id ? {...i,sortOrder:sb,updatedAt:Date.now()} : i.id===b.id ? {...i,sortOrder:sa,updatedAt:Date.now()} : i));
+  };
+
+  const setField = (k,v) => setF(prev => ({...prev,[k]:v}));
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:9999}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#FFFFFF",borderRadius:"16px 16px 0 0",padding:18,width:"100%",maxWidth:560,maxHeight:"88vh",overflowY:"auto"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+          <h3 style={{margin:0,fontSize:14,fontWeight:700,color:"#111827"}}>{editing ? (editing==="new"?"פריט חדש":"עריכת פריט") : "עריכת פריטים"}</h3>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#9CA3AF"}}>✕</button>
+        </div>
+
+        {editing ? (
+          <div>
+            <div style={{fontSize:11,fontWeight:700,color:"#6B7280",marginBottom:6}}>כותרת</div>
+            <input value={f.title} onChange={e=>setField("title",e.target.value)} placeholder="לדוגמה: ניקוי משטחי עבודה"
+              style={{width:"100%",padding:"9px 11px",border:"1px solid #E5E7EB",borderRadius:8,fontSize:13,fontFamily:"inherit",marginBottom:12,boxSizing:"border-box"}}/>
+            <div style={{fontSize:11,fontWeight:700,color:"#6B7280",marginBottom:6}}>אזור</div>
+            <input value={f.area} onChange={e=>setField("area",e.target.value)} placeholder="כללי"
+              style={{width:"100%",padding:"9px 11px",border:"1px solid #E5E7EB",borderRadius:8,fontSize:13,fontFamily:"inherit",marginBottom:12,boxSizing:"border-box"}}/>
+            <div style={{fontSize:11,fontWeight:700,color:"#6B7280",marginBottom:6}}>תיאור (אופציונלי)</div>
+            <textarea value={f.description} onChange={e=>setField("description",e.target.value)}
+              style={{width:"100%",minHeight:50,padding:"8px 11px",border:"1px solid #E5E7EB",borderRadius:8,fontSize:12,fontFamily:"inherit",resize:"vertical",marginBottom:12,boxSizing:"border-box"}}/>
+            <div style={{fontSize:11,fontWeight:700,color:"#6B7280",marginBottom:6}}>עדיפות</div>
+            <select value={f.priority} onChange={e=>setField("priority",e.target.value)}
+              style={{width:"100%",padding:"9px 11px",border:"1px solid #E5E7EB",borderRadius:8,fontSize:13,fontFamily:"inherit",background:"#F9FAFB",marginBottom:12,boxSizing:"border-box"}}>
+              {PRIORITIES.map(p => <option key={p} value={p}>{PR_LABEL[p]}</option>)}
+            </select>
+            <div style={{display:"flex",gap:16,marginBottom:16}}>
+              <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:"#374151",cursor:"pointer"}}>
+                <input type="checkbox" checked={f.isRequired} onChange={e=>setField("isRequired",e.target.checked)}/> נדרש
+              </label>
+              <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:"#374151",cursor:"pointer"}}>
+                <input type="checkbox" checked={f.requiresPhoto} onChange={e=>setField("requiresPhoto",e.target.checked)}/> דורש צילום
+              </label>
+            </div>
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+              <button onClick={()=>setEditing(null)} style={{padding:"9px 18px",background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8,color:"#6B7280",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>ביטול</button>
+              <button onClick={saveItemForm} style={{padding:"9px 18px",background:"#111827",border:"none",borderRadius:8,color:"#FFFFFF",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{editing==="new"?"הוסף":"שמור פריט"}</button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            {active.length===0 && <p style={{margin:"0 0 12px",fontSize:13,color:"#9CA3AF"}}>אין עדיין פריטים. הוסף את הראשון.</p>}
+            {active.map((it, idx) => (
+              <div key={it.id} style={{display:"flex",alignItems:"center",gap:8,padding:"9px 10px",marginBottom:6,background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8}}>
+                <div style={{display:"flex",flexDirection:"column",gap:2,flexShrink:0}}>
+                  <button onClick={()=>moveItem(it.id,-1)} disabled={idx===0} title="העלה" style={{background:"none",border:"1px solid #E5E7EB",borderRadius:4,color:idx===0?"#D1D5DB":"#6B7280",cursor:idx===0?"default":"pointer",fontSize:9,lineHeight:1,padding:"2px 5px",fontFamily:"inherit"}}>▲</button>
+                  <button onClick={()=>moveItem(it.id,1)} disabled={idx===active.length-1} title="הורד" style={{background:"none",border:"1px solid #E5E7EB",borderRadius:4,color:idx===active.length-1?"#D1D5DB":"#6B7280",cursor:idx===active.length-1?"default":"pointer",fontSize:9,lineHeight:1,padding:"2px 5px",fontFamily:"inherit"}}>▼</button>
+                </div>
+                <div style={{flex:1,minWidth:0}} onClick={()=>openEdit(it)}>
+                  <div style={{fontSize:13,fontWeight:600,color:"#111827",cursor:"pointer"}}>{it.title}{it.requiresPhoto&&<span style={{marginInlineStart:5,fontSize:11}}>📷</span>}{it.priority==="critical"&&<span style={{marginInlineStart:5,fontSize:10,fontWeight:700,color:"#DC2626"}}>קריטי</span>}</div>
+                  <div style={{fontSize:10,color:"#9CA3AF",marginTop:1}}>{it.area||"כללי"}{it.isRequired?" · נדרש":""}</div>
+                </div>
+                <button onClick={()=>openEdit(it)} title="ערוך" style={{background:"none",border:"1px solid #E5E7EB",borderRadius:5,color:"#6B7280",padding:"5px 9px",fontSize:11,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>ערוך</button>
+                <button onClick={()=>disableItem(it.id)} title="כבה" style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:5,color:"#991B1B",padding:"5px 9px",fontSize:11,cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>כבה</button>
+              </div>
+            ))}
+            <button onClick={openNew} style={{marginTop:6,padding:"8px 14px",background:"#F9FAFB",border:"1px dashed #D1D5DB",borderRadius:8,color:"#6B7280",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%"}}>+ הוסף פריט</button>
+            <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:16}}>
+              <button onClick={onClose} style={{padding:"9px 18px",background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8,color:"#6B7280",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>ביטול</button>
+              <button onClick={()=>onSave(draft)} style={{padding:"9px 18px",background:"#111827",border:"none",borderRadius:8,color:"#FFFFFF",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>שמור</button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
