@@ -2300,7 +2300,7 @@ function CreditInput({ supplierId, supplierName, date, onAdd }) {
 }
 
 // ─── Business Selector ────────────────────────────────────────────────────────
-function BusinessSelector({ businesses, onSelect, onAdd, onDelete, userName, isSuperOwner }) {
+function BusinessSelector({ businesses, onSelect, onAdd, onDelete, userName, isSuperOwner, canAddBranch }) {
   const [confirmDelete, setConfirmDelete] = React.useState(null);
   const [ready, setReady] = React.useState(false);
   React.useEffect(() => { const t = setTimeout(() => setReady(true), 250); return () => clearTimeout(t); }, []);
@@ -2341,10 +2341,12 @@ function BusinessSelector({ businesses, onSelect, onAdd, onDelete, userName, isS
             )}
           </div>
         ))}
-        <button onClick={onAdd}
-          style={{width:"100%",padding:"11px",background:"#FFFFFF",border:"1px dashed #D1D5DB",borderRadius:8,color:"#6B7280",fontWeight:500,fontSize:13,cursor:"pointer",fontFamily:"inherit",marginTop:4}}>
-          + הוסף סניף חדש
-        </button>
+        {canAddBranch && (
+          <button onClick={onAdd}
+            style={{width:"100%",padding:"11px",background:"#FFFFFF",border:"1px dashed #D1D5DB",borderRadius:8,color:"#6B7280",fontWeight:500,fontSize:13,cursor:"pointer",fontFamily:"inherit",marginTop:4}}>
+            + הוסף סניף חדש
+          </button>
+        )}
       </div>
     </div>
   );
@@ -3031,6 +3033,9 @@ function PilotDashboard() {
   // Filter entries to current month only -- dashboard always shows current month
   // Derive which businesses this user can see
   const isSuperOwner = loggedInUser?.role === "super_owner" || loggedInUser?.role === "owner";
+  // Strict gate for "+ הוסף סניף חדש" — master/super_owner only. Do NOT reuse
+  // isSuperOwner here (it also includes regular "owner").
+  const isMasterOwner = loggedInUser?.role === "super_owner";
   const allowedBusinesses = isSuperOwner
     ? businesses
     : businesses.filter(b => (loggedInUser?.allowedBizIds || []).includes(b.id));
@@ -3306,6 +3311,7 @@ function PilotDashboard() {
         businesses={allowedBusinesses}
         userName={loggedInUser.name}
         isSuperOwner={isSuperOwner}
+        canAddBranch={isMasterOwner}
         onSelect={(id) => {
           setSetupDone(true);
           setCurrentBizId(id);
@@ -3421,10 +3427,12 @@ function PilotDashboard() {
                 </div>
               </div>
             ))}
-            <button onClick={()=>{ setShowBizSelect(false); setCurrentBizId(null); setShowSetup(true); }}
-              style={{width:"100%",marginTop:8,padding:"11px",background:"#FFFFFF",border:"1px dashed #D1D5DB",borderRadius:8,color:"#6B7280",fontWeight:500,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
-              + הוסף סניף חדש
-            </button>
+            {isMasterOwner && (
+              <button onClick={()=>{ setShowBizSelect(false); setCurrentBizId(null); setShowSetup(true); }}
+                style={{width:"100%",marginTop:8,padding:"11px",background:"#FFFFFF",border:"1px dashed #D1D5DB",borderRadius:8,color:"#6B7280",fontWeight:500,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+                + הוסף סניף חדש
+              </button>
+            )}
           </div>
         </div>
       )}
