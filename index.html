@@ -2485,6 +2485,7 @@ function PilotDashboard() {
   const [orefHistory, setOrefHistory] = useState([]); // [{date, count}] for today
   const [expandedSup, setExpandedSup] = useState(null);
   const [supMonth, setSupMonth] = useState(`${YEAR}-${MONTH_STR}`);
+  const [supManageMode, setSupManageMode] = useState(false); // ניהול ספקים (reorder) — מצב inline; reset on tab change / leaving by_supplier
   // ── הרשאות: null = בעלים, { name, role:"manager", permissions:[] } = אחמש מחובר
   const [currentUser, setCurrentUser] = useState(null);
   const [masterTasks, setMasterTasks] = useState([]);
@@ -2810,6 +2811,20 @@ function PilotDashboard() {
     if (index < 0 || j < 0 || index >= suppliers.length || j >= suppliers.length) return;
     const next = [...suppliers];
     [next[index], next[j]] = [next[j], next[index]];
+    saveSuppliers(next);
+  };
+  // Toggle one delivery day (0=Sun..6=Sat) for a supplier and persist via the
+  // existing saveSuppliers. Only sup.days changes — id/category/payments untouched.
+  // Empty days = no planned delivery days (handled by delivDays + suppliersOnDay).
+  const toggleSupplierDay = (supId, dayIdx) => {
+    const next = suppliers.map(s => {
+      if (s.id !== supId) return s;
+      const days = Array.isArray(s.days) ? s.days : [];
+      const newDays = days.includes(dayIdx)
+        ? days.filter(x => x !== dayIdx)
+        : [...days, dayIdx].sort((a, b) => a - b);
+      return { ...s, days: newDays };
+    });
     saveSuppliers(next);
   };
   const completeSetup = async (cfg, sups, fixed, firstOwner) => {
@@ -3823,7 +3838,7 @@ function PilotDashboard() {
         <div className="screen">
           <div style={{display:"flex",gap:6,marginBottom:16}}>
             {[["summary","סיכום"],["by_supplier","הזנת ספקים"],["alerts","התראות"]].map(([t,l])=>(
-              <button key={t} className="btn btn-ghost btn-sm" style={{...(fcTab===t?S.subBtnActive:{}),position:"relative"}} onClick={()=>setFcTab(t)}>
+              <button key={t} className="btn btn-ghost btn-sm" style={{...(fcTab===t?S.subBtnActive:{}),position:"relative"}} onClick={()=>{ setFcTab(t); setSupManageMode(false); }}>
                 {l}
                 {t==="alerts"&&supplierAlerts.length>0&&<span className="badge-dot">{supplierAlerts.length}</span>}
               </button>
@@ -3921,6 +3936,53 @@ function PilotDashboard() {
                   <span style={{fontWeight:700,color:"#111827",fontSize:15}}>{smLabel}</span>
                   <button onClick={nextMonth} disabled={!canNext} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:canNext?"#6B7280":"#D1D5DB",padding:"0 8px",lineHeight:1}}>›</button>
                 </div>
+                {/* ── ניהול ספקים: כפתור toggle (מורשים בלבד), בשורה נפרדת מעל רשימת הספקים ── */}
+                {canReorderSuppliers && (
+                  <div style={{display:"flex",justifyContent:"flex-end",marginBottom:12}}>
+                    <button onClick={()=>setSupManageMode(m=>!m)}
+                      style={{padding:"8px 16px",background:supManageMode?"#111827":"#F9FAFB",border:`1px solid ${supManageMode?"#111827":"#E5E7EB"}`,borderRadius:8,color:supManageMode?"#FFFFFF":"#374151",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                      {supManageMode ? "סיום" : "ניהול ספקים"}
+                    </button>
+                  </div>
+                )}
+                {supManageMode ? (
+                  /* מצב ניהול: שם + קטגוריה + ▲▼ לסדר + chips לעריכת ימי אספקה (כולל שבת). ללא סכומים/inputs/expand. */
+                  <div>
+                    {suppliers.map((sup, supIndex) => {
+                      const supDays = Array.isArray(sup.days) ? sup.days : [];
+                      return (
+                      <div key={sup.id} style={{padding:"12px 16px",marginBottom:6,background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:8}}>
+                        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+                          <div style={{minWidth:0,flex:1}}>
+                            <div style={{fontSize:14,fontWeight:700,color:"#111827"}}>{sup.name}</div>
+                            <div style={{fontSize:11,color:"#9CA3AF",marginTop:2}}>{sup.category}</div>
+                          </div>
+                          <div style={{display:"flex",flexDirection:"column",gap:2,flexShrink:0}}>
+                            <button onClick={()=>moveSupplier(supIndex,-1)} disabled={supIndex===0} title="העלה"
+                              style={{background:"none",border:"1px solid #E5E7EB",borderRadius:4,color:supIndex===0?"#D1D5DB":"#6B7280",cursor:supIndex===0?"default":"pointer",fontSize:12,lineHeight:1,padding:"4px 8px",fontFamily:"inherit"}}>▲</button>
+                            <button onClick={()=>moveSupplier(supIndex,1)} disabled={supIndex===suppliers.length-1} title="הורד"
+                              style={{background:"none",border:"1px solid #E5E7EB",borderRadius:4,color:supIndex===suppliers.length-1?"#D1D5DB":"#6B7280",cursor:supIndex===suppliers.length-1?"default":"pointer",fontSize:12,lineHeight:1,padding:"4px 8px",fontFamily:"inherit"}}>▼</button>
+                          </div>
+                        </div>
+                        <div style={{marginTop:10}}>
+                          <div style={{fontSize:11,color:"#6B7280",fontWeight:600,marginBottom:6}}>ימי אספקה</div>
+                          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                            {DOW_LABELS.map((d,i)=>{
+                              const on = supDays.includes(i);
+                              return (
+                                <button key={i} type="button" onClick={()=>toggleSupplierDay(sup.id,i)} title={DOW_NAMES[i]}
+                                  style={{minWidth:34,padding:"6px 0",textAlign:"center",borderRadius:6,border:`1px solid ${on?"#111827":"#E5E7EB"}`,background:on?"#111827":"#FFFFFF",color:on?"#FFFFFF":"#6B7280",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{d}</button>
+                              );
+                            })}
+                          </div>
+                          {supDays.length===0 && <div style={{fontSize:10,color:"#9CA3AF",marginTop:6,lineHeight:1.5}}>אין ימי אספקה מתוכננים — עדיין אפשר להזין תשלום דרך ״יום אספקה לא מתוכנן״.</div>}
+                        </div>
+                      </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                <>
                 {suppliers.map((sup, supIndex) => {
                   const isOpen = expandedSup === sup.id;
                   const supMonthTotal = Array.from({length:smDays},(_,i)=>{
@@ -3932,8 +3994,10 @@ function PilotDashboard() {
                     const day=i+1;
                     const date=`${smY}-${String(smM).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
                     const dow=new Date(smY,smM-1,day).getDay();
-                    if(dow===6) return null;
-                    if(sup.days.length>0 && !sup.days.includes(dow)) return null;
+                    // Planned delivery days come ONLY from sup.days (0=Sun..6=Sat, Saturday supported).
+                    // Empty/missing days = no planned days. Saturday no longer skipped unconditionally;
+                    // a payment on any unplanned date still surfaces via unplannedDays below.
+                    if(!Array.isArray(sup.days) || !sup.days.includes(dow)) return null;
                     return {day,date,dow};
                   }).filter(Boolean);
                   // Bug fix (render-only): surface supplier payments saved on UNPLANNED
@@ -3956,14 +4020,6 @@ function PilotDashboard() {
                           <span style={{fontSize:11,color:"#9CA3AF"}}>{sup.days.map(d=>DOW_NAMES[d]).join(" ")}</span>
                         </div>
                         <div style={{display:"flex",alignItems:"center",gap:10}}>
-                          {canReorderSuppliers && (
-                            <div onClick={e=>e.stopPropagation()} style={{display:"flex",flexDirection:"column",gap:2,marginInlineEnd:2,flexShrink:0}}>
-                              <button onClick={()=>moveSupplier(supIndex,-1)} disabled={supIndex===0} title="העלה"
-                                style={{background:"none",border:"1px solid #E5E7EB",borderRadius:4,color:supIndex===0?"#D1D5DB":"#6B7280",cursor:supIndex===0?"default":"pointer",fontSize:10,lineHeight:1,padding:"2px 5px",fontFamily:"inherit"}}>▲</button>
-                              <button onClick={()=>moveSupplier(supIndex,1)} disabled={supIndex===suppliers.length-1} title="הורד"
-                                style={{background:"none",border:"1px solid #E5E7EB",borderRadius:4,color:supIndex===suppliers.length-1?"#D1D5DB":"#6B7280",cursor:supIndex===suppliers.length-1?"default":"pointer",fontSize:10,lineHeight:1,padding:"2px 5px",fontFamily:"inherit"}}>▼</button>
-                            </div>
-                          )}
                           {supMonthTotal>0 && (
                             <>
                               <span style={{fontWeight:700,color:"#111827",fontSize:14}}>{fmt(supMonthTotal)}</span>
@@ -4025,6 +4081,8 @@ function PilotDashboard() {
                   <span style={{fontWeight:500,color:"#6B7280",fontSize:12}}>סה״כ רכש {smLabel}</span>
                   <span style={{fontWeight:700,color:"#111827",fontSize:13}}>{fmt(monthTotal)}</span>
                 </div>
+                </>
+                )}
               </div>
             );
           })()}
