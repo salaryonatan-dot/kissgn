@@ -12,6 +12,13 @@
  *
  * Auth identical to /api/daily-snapshot/run: Vercel cron header OR
  * `Authorization: Bearer ${CRON_SECRET}`.
+ *
+ * NOTE: this endpoint also hosts an ISOLATED, read-only POS diagnostic branch
+ * (POST { action: "beecomm_diagnose", date }) — folded here only to avoid
+ * adding a new Vercel Serverless Function (Hobby plan 12-function cap). The
+ * branch has its own strict Bearer-CRON_SECRET check, does NOT honor
+ * x-vercel-cron, early-returns before any cron/build/save/RTDB logic, and
+ * never persists anything. It does not touch the analytics builder logic.
  */
 
 import { VercelRequest, VercelResponse } from "@vercel/node";
@@ -21,6 +28,7 @@ import {
   saveAnalyticsDoc,
   yesterdayInIsrael,
 } from "../../src/analytics/dailyBuilder.js";
+import { fetchBeecommDaily } from "../../lib/analytics/sources.js";
 
 function setCorsHeaders(req: VercelRequest, res: VercelResponse): void {
   const origin = (req.headers.origin as string) || "";
@@ -50,6 +58,125 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   setCorsHeaders(req, res);
 
   if (req.method === "OPTIONS") return res.status(200).end();
+
+  // ── POS Ingestion — Beecomm READ-ONLY diagnostic branch (Phase 1B) ─────────
+  // Isolated and early-returning. Enters ONLY on POST + explicit action.
+  // Uses its OWN strict Bearer-CRON_SECRET check (does NOT honor x-vercel-cron,
+  // no bypass). Read-only: calls fetchBeecommDaily only; no buildDailyDoc, no
+  // buildAnalyticsForAll/Biz, no saveAnalyticsDoc, no weather/oref/calendar, no
+  // RTDB write, no raw/normalized/import-log persistence. Returns before all
+  // normal cron/backfill logic below.
+  if (req.method === "POST" && (req.body as { action?: string } | undefined)?.action === "beecomm_diagnose") {
+    const cronSecret = process.env.CRON_SECRET;
+    if (!cronSecret) {
+      return res.status(401).json({ error: "unauthorized_cron_secret_not_configured" });
+    }
+    const authHeader = (req.headers.authorization as string) || "";
+    if (authHeader !== `Bearer ${cronSecret}`) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
+    // Config presence only — never expose the value.
+    if (!process.env.BEECOMM_API_KEY) {
+      return res.status(412).json({ success: false, error: "missing_beecomm_config" });
+    }
+
+    const date = ((req.body as { date?: string } | undefined)?.date as string) || "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ success: false, error: "invalid_date_format" });
+    }
+
+    // Generic event log only — no payload, no headers, no secret.
+    console.log("[analytics/daily-builder] beecomm_diagnose request", { businessDate: date });
+
+    const started = Date.now();
+    let report: {
+      revenue_total: number | null;
+      tickets: number | null;
+      revenue_dine_in: number | null;
+      revenue_delivery: number | null;
+      revenue_takeaway: number | null;
+      hourly: Record<string, number> | null;
+    };
+
+    try {
+      report = await fetchBeecommDaily(date);
+    } catch (e: any) {
+      // fetchBeecommDaily throws { source, reason } — already sanitized (no payload).
+      const reason = typeof e?.reason === "string" ? e.reason : "unknown";
+      return res.status(200).json({
+        success: false,
+        durationMs: Date.now() - started,
+        businessDate: date,
+        sourceSystem: "beecomm",
+        error: reason, // "timeout" | "network" | "http_401" | "http_404" | ...
+      });
+    }
+
+    const durationMs = Date.now() - started;
+    const has = (v: unknown) => v !== null && v !== undefined;
+    const hourlyKeys = report.hourly ? Object.keys(report.hourly) : [];
+    const hourlyNonZero = report.hourly
+      ? Object.values(report.hourly).filter((v) => Number(v) > 0).length
+      : 0;
+
+    const fieldPresence = {
+      revenueTotal: has(report.revenue_total),
+      tickets: has(report.tickets),
+      channels: {
+        dineIn: has(report.revenue_dine_in),
+        delivery: has(report.revenue_delivery),
+        takeaway: has(report.revenue_takeaway),
+      },
+      hourly: hourlyKeys.length > 0,
+      items: false, // daily-summary does not provide item-level
+    };
+
+    const missingFields: string[] = [];
+    if (!fieldPresence.revenueTotal) missingFields.push("revenueTotal");
+    if (!fieldPresence.tickets) missingFields.push("tickets");
+    if (!fieldPresence.channels.dineIn) missingFields.push("channels.dineIn");
+    if (!fieldPresence.channels.delivery) missingFields.push("channels.delivery");
+    if (!fieldPresence.channels.takeaway) missingFields.push("channels.takeaway");
+    if (!fieldPresence.hourly) missingFields.push("hourly");
+    missingFields.push("items"); // expected missing in daily-summary
+
+    const revenueTotal = report.revenue_total;
+    const tickets = report.tickets;
+    const avgCheck =
+      has(revenueTotal) && has(tickets) && (tickets as number) > 0
+        ? Math.round(((revenueTotal as number) / (tickets as number)) * 100) / 100
+        : null;
+
+    const normalizedPreview = {
+      sourceSystem: "beecomm",
+      businessDate: date,
+      revenueTotal,
+      tickets,
+      avgCheck, // computed, not from POS
+      channels: {
+        dineIn: report.revenue_dine_in,
+        delivery: report.revenue_delivery,
+        takeaway: report.revenue_takeaway,
+      },
+      hourlyBucketsPresent: hourlyKeys.length,
+      hourlyBucketsNonZero: hourlyNonZero,
+      items: null, // future-ready; not provided by daily-summary
+      schemaVersion: "1.0.0",
+    };
+
+    return res.status(200).json({
+      success: true,
+      durationMs,
+      businessDate: date,
+      sourceSystem: "beecomm",
+      fieldPresence,
+      normalizedPreview,
+      missingFields,
+      error: null,
+    });
+  }
+
   if (!verifyAuth(req)) return res.status(401).json({ error: "Unauthorized" });
 
   try {
