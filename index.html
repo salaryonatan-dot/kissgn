@@ -3058,6 +3058,26 @@ function PilotDashboard() {
       history: [ ...(c.history||[]), compHistoryEntry("cancelled", c.status, "cancelled", reason.trim()) ] };
     await saveCompensations({ ...(compensations||{}), [id]: next });
   };
+  // ── Repeat Customer History Warning (computed, display-only — no writes) ─────
+  // Aggregates prior compensations for a normalized phone, to flag serial claimants.
+  const REPEAT_STRONG_90D = 3;
+  const REPEAT_STRONG_AMOUNT = 300;
+  const customerHistoryFor = (phoneNorm) => {
+    if(!phoneNorm || phoneNorm.length < 7) return null;
+    const matches = Object.values(compensations||{}).filter(c => c.customerPhone === phoneNorm);
+    if(matches.length === 0) return null;
+    const now = Date.now();
+    const within = (days) => matches.filter(c => (now - (c.createdAt||0)) <= days*86400000).length;
+    // cumulative amount excludes cancelled; includes open/approved/redeemed/expired-display
+    const sum = matches.reduce((a,c) => a + (c.status==="cancelled" ? 0 : (Number(c.amount)||0)), 0);
+    const redeemed = matches.filter(c => c.status==="redeemed").length;
+    const cancelled = matches.filter(c => c.status==="cancelled").length;
+    const last = matches.slice().sort((a,b)=>(b.createdAt||0)-(a.createdAt||0))[0];
+    const d90 = within(90);
+    const strong = (d90 >= REPEAT_STRONG_90D) || (sum >= REPEAT_STRONG_AMOUNT);
+    return { total: matches.length, d30: within(30), d90, d180: within(180), sum, redeemed, cancelled, last, strong };
+  };
+
   const submitCompForm = async () => {
     const f = compForm || {};
     if(!(f.customerName||"").trim()) { alert("שם לקוח חובה."); return; }
@@ -4808,6 +4828,27 @@ function PilotDashboard() {
                 <input value={compForm.customerName} onChange={e=>setCompForm({...compForm,customerName:e.target.value})} style={{width:"100%",boxSizing:"border-box",border:"1px solid #D1D5DB",borderRadius:8,padding:"9px 12px",fontSize:13,fontFamily:"inherit",margin:"4px 0 10px"}}/>
                 <label style={{fontSize:12,color:"#6B7280",fontWeight:600}}>טלפון *</label>
                 <input value={compForm.phoneRaw} onChange={e=>setCompForm({...compForm,phoneRaw:e.target.value})} inputMode="tel" style={{width:"100%",boxSizing:"border-box",border:"1px solid #D1D5DB",borderRadius:8,padding:"9px 12px",fontSize:13,fontFamily:"inherit",margin:"4px 0 10px"}}/>
+                {(() => {
+                  const h = customerHistoryFor(normalizePhone(compForm.phoneRaw));
+                  if(!h) return null;
+                  const col = h.strong ? {bg:"#FEF2F2",bd:"#FCA5A5",fg:"#B91C1C"} : {bg:"#FFFBEB",bd:"#FDE68A",fg:"#92400E"};
+                  const last = h.last;
+                  const lastDT = last ? new Date(last.createdAt).toLocaleDateString("he-IL",{timeZone:"Asia/Jerusalem",day:"2-digit",month:"2-digit",year:"2-digit"}) : "—";
+                  return (
+                    <div style={{margin:"0 0 10px",padding:"10px 12px",borderRadius:8,background:col.bg,border:`1px solid ${col.bd}`}}>
+                      <div style={{fontSize:12,fontWeight:700,color:col.fg,marginBottom:4}}>⚠️ ללקוח זה היסטוריית פיצויים</div>
+                      <div style={{fontSize:11,color:"#374151",lineHeight:1.6}}>
+                        סה״כ {h.total} · 30 יום: {h.d30} · 90 יום: {h.d90} · 180 יום: {h.d180} · סכום מצטבר ₪{h.sum.toLocaleString()} · מומשו {h.redeemed} · בוטלו {h.cancelled}
+                      </div>
+                      {last && (
+                        <div style={{fontSize:11,color:"#6B7280",marginTop:2}}>
+                          אחרון: {lastDT} · {COMP_STATUS_LABELS[compEffectiveStatus(last)]} · {last.type==="item"?"פריט":`₪${(Number(last.amount)||0).toLocaleString()}`} · {COMP_REASON_LABELS[last.reasonCategory]||last.reasonCategory}
+                        </div>
+                      )}
+                      {h.strong && <div style={{fontSize:11,fontWeight:700,color:col.fg,marginTop:4}}>לקוח עם פיצויים חוזרים — בדוק לפני אישור נוסף.</div>}
+                    </div>
+                  );
+                })()}
                 <label style={{fontSize:12,color:"#6B7280",fontWeight:600}}>קטגוריה</label>
                 <select value={compForm.reasonCategory} onChange={e=>setCompForm({...compForm,reasonCategory:e.target.value})} style={{width:"100%",boxSizing:"border-box",border:"1px solid #D1D5DB",borderRadius:8,padding:"9px 12px",fontSize:13,fontFamily:"inherit",margin:"4px 0 10px",background:"#fff"}}>
                   {Object.entries(COMP_REASON_LABELS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
