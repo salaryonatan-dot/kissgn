@@ -2521,6 +2521,14 @@ function PilotDashboard() {
   const [showBizSelect, setShowBizSelect] = useState(false);
   const [entryStep, setEntryStep] = useState('idle'); // 'idle' | 'revenue' | 'suppliers'
   const [pendingCredits, setPendingCredits] = useState([]); // [{id,supplierId,supplierName,date,amount,note}]
+  // ── Customer Compensation Log (MVP) — stored at biz:{bizId}:customer_compensations (map by id) ──
+  const [compensations, setCompensations] = useState({});   // { [id]: comp }
+  const [compForm, setCompForm] = useState(null);           // null | {customerName, phoneRaw, reason, reasonCategory, type, amount}
+  const [compSearch, setCompSearch] = useState("");
+  const [compFilter, setCompFilter] = useState("all");      // all|open|approved|redeemed|cancelled|expired
+  const [compCancelId, setCompCancelId] = useState(null);   // id pending cancel
+  const [compCancelReason, setCompCancelReason] = useState("");
+  const [compDetailId, setCompDetailId] = useState(null);   // id to show history detail
   const [businessConfig, setBusinessConfig] = useState({
     businessName: "",
     rentPct: 0, royaltyPct: 0, hasRoyalty: false,
@@ -2672,6 +2680,7 @@ function PilotDashboard() {
     setPendingCredits([]);
     setMasterTasks([]);
     setPettyCash([]);
+    setCompensations({});
 
     const unsubs = [];
     const sub = (key, setter, shared=false) => {
@@ -2733,6 +2742,7 @@ function PilotDashboard() {
     sub(`biz:${currentBizId}:suppliers`, setSuppliers);
     sub(`biz:${currentBizId}:config`,    setBusinessConfig);
     sub(`biz:${currentBizId}:credits`,   setPendingCredits);
+    sub(`biz:${currentBizId}:customer_compensations`, setCompensations);
     sub(`biz:${currentBizId}:tasks`,    setMasterTasks);
     sub(`biz:${currentBizId}:pettycash`, setPettyCash);
     sub("app-users", u => { setAppUsers(u); }, true);
@@ -2969,6 +2979,96 @@ function PilotDashboard() {
     setPettyCash(items);
     if(!currentBizId) return;
     try { await window.storage.set(`biz:${currentBizId}:pettycash`, JSON.stringify(items), true); } catch(_){}
+  };
+
+  // ── Customer Compensation Log (MVP) — handlers/helpers ──────────────────────
+  // Writes ONLY to biz:{bizId}:customer_compensations. No hard delete. No PII in logs.
+  const COMP_APPROVAL_LIMIT = { shift_manager: 50, manager: 200, owner: Infinity, super_owner: Infinity };
+  const COMP_REASON_LABELS = { delivery_late:"איחור משלוח", order_error:"טעות בהזמנה", service:"יחס/שירות", quality:"איכות", other:"אחר" };
+  const COMP_STATUS_LABELS = { open:"פתוח", approved:"מאושר", redeemed:"מומש", cancelled:"בוטל", expired:"פג תוקף" };
+  const COMP_ALLOWED_ROLES = ["super_owner","owner","manager","shift_manager"];
+  const compActorName = () => (currentUser?.name || loggedInUser?.name || "—");
+  const compActorRole = () => (loggedInUser?.role || "shift_manager");
+  const compCanCancel = () => ["manager","owner","super_owner"].includes(compActorRole());
+  const compCanApproveAmount = (amount) => (COMP_APPROVAL_LIMIT[compActorRole()] ?? 0) >= (Number(amount)||0);
+  const normalizePhone = (p) => String(p||"").replace(/\D/g, "");
+  const genCompCode = () => {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no O/0/I/1
+    const taken = new Set(Object.values(compensations||{}).map(c=>c.code));
+    for(let t=0;t<50;t++){ let s=""; for(let i=0;i<4;i++) s+=alphabet[Math.floor(Math.random()*alphabet.length)]; const code=`CMP-${s}`; if(!taken.has(code)) return code; }
+    return `CMP-${Date.now().toString(36).slice(-4).toUpperCase()}`;
+  };
+  const compIsExpired = (c) => (c.status==="open"||c.status==="approved") && Date.now() > Number(c.validUntil||0);
+  const compEffectiveStatus = (c) => compIsExpired(c) ? "expired" : c.status; // expired = display-only
+  const compHistoryEntry = (action, from, to, note) => ({ at: Date.now(), by: compActorName(), action, from, to, ...(note?{note}:{}) });
+  const saveCompensations = async (map) => {
+    setCompensations(map);
+    if(!currentBizId) return;
+    try { await window.storage.set(`biz:${currentBizId}:customer_compensations`, JSON.stringify(map), true); }
+    catch(e){ console.error("[comp] save failed:", e); alert("שמירת הפיצוי נכשלה — נסה שוב."); }
+  };
+  const openCompensation = async (data) => {
+    const now = Date.now();
+    const id = newId("comp");
+    const comp = {
+      id, code: genCompCode(),
+      customerName: (data.customerName||"").trim(),
+      customerPhone: normalizePhone(data.phoneRaw),
+      customerPhoneRaw: (data.phoneRaw||"").trim(),
+      bizId: currentBizId,
+      openedBranchName: businessConfig.businessName || "",
+      reason: (data.reason||"").trim(),
+      reasonCategory: data.reasonCategory || "other",
+      type: data.type || "amount",
+      amount: (data.type==="item") ? null : (Number(data.amount)||0),
+      status: "open",
+      validUntil: now + 30*24*60*60*1000,
+      createdBy: compActorName(), createdAt: now,
+      approvedBy: null, approvedAt: null,
+      redeemedBy: null, redeemedAt: null, redeemedBranchName: null,
+      cancelledBy: null, cancelledAt: null, cancelReason: null,
+      updatedBy: compActorName(), updatedAt: now,
+      history: [ compHistoryEntry("created", null, "open") ],
+    };
+    await saveCompensations({ ...(compensations||{}), [id]: comp });
+    return comp;
+  };
+  const approveCompensation = async (id) => {
+    const c = (compensations||{})[id]; if(!c || c.status!=="open") return;
+    if(compIsExpired(c)) { alert("הפיצוי פג תוקף — לא ניתן לאשר."); return; }
+    if(!compCanApproveAmount(c.amount)) { alert("הסכום מעל סף האישור של התפקיד שלך — נדרש אישור של מנהל בכיר יותר."); return; }
+    const now = Date.now();
+    const next = { ...c, status:"approved", approvedBy: compActorName(), approvedAt: now, updatedBy: compActorName(), updatedAt: now,
+      history: [ ...(c.history||[]), compHistoryEntry("approved","open","approved") ] };
+    await saveCompensations({ ...(compensations||{}), [id]: next });
+  };
+  const redeemCompensation = async (id) => {
+    const c = (compensations||{})[id]; if(!c || c.status!=="approved" || compIsExpired(c)) return;
+    const now = Date.now();
+    const next = { ...c, status:"redeemed", redeemedBy: compActorName(), redeemedAt: now, redeemedBranchName: businessConfig.businessName||"", updatedBy: compActorName(), updatedAt: now,
+      history: [ ...(c.history||[]), compHistoryEntry("redeemed","approved","redeemed") ] };
+    await saveCompensations({ ...(compensations||{}), [id]: next });
+  };
+  const cancelCompensation = async (id, reason) => {
+    const c = (compensations||{})[id]; if(!c || c.status==="redeemed" || c.status==="cancelled") return;
+    if(!compCanCancel()) { alert("רק מנהל ומעלה יכול לבטל פיצוי."); return; }
+    if(!reason || !reason.trim()) { alert("חובה להזין סיבת ביטול."); return; }
+    const now = Date.now();
+    const next = { ...c, status:"cancelled", cancelledBy: compActorName(), cancelledAt: now, cancelReason: reason.trim(), updatedBy: compActorName(), updatedAt: now,
+      history: [ ...(c.history||[]), compHistoryEntry("cancelled", c.status, "cancelled", reason.trim()) ] };
+    await saveCompensations({ ...(compensations||{}), [id]: next });
+  };
+  const submitCompForm = async () => {
+    const f = compForm || {};
+    if(!(f.customerName||"").trim()) { alert("שם לקוח חובה."); return; }
+    if(!normalizePhone(f.phoneRaw)) { alert("טלפון לקוח חובה."); return; }
+    if(!(f.reason||"").trim()) { alert("סיבת הפיצוי חובה."); return; }
+    if((f.type||"amount")!=="item" && !(Number(f.amount)>0)) { alert("יש להזין סכום חיובי."); return; }
+    const phone = normalizePhone(f.phoneRaw);
+    const dup = Object.values(compensations||{}).find(c => c.customerPhone===phone && (c.status==="open"||c.status==="approved") && !compIsExpired(c));
+    if(dup && !window.confirm(`ללקוח זה כבר קיים פיצוי ${COMP_STATUS_LABELS[dup.status]} (${dup.code}). ליצור בכל זאת?`)) return;
+    await openCompensation(f);
+    setCompForm(null);
   };
 
   const saveMasterTasks = async (t) => {
@@ -3567,6 +3667,7 @@ function PilotDashboard() {
               {key:"foodcost",   label:"קניות",         roles:["super_owner","owner","manager"]},
               {key:"employees",  label:"עלות עובדים",   roles:["super_owner","owner","manager"]},
               {key:"checklist",  label:"📋 צ׳ק ליסט",   roles:["super_owner","owner","manager","shift_manager"]},
+              {key:"compensations", label:"🎟️ פיצויים", roles:["super_owner","owner","manager","shift_manager"]},
               {key:"insights",   label:"📊 תובנות",     roles:["super_owner","owner","manager"]},
               // {key:"tasks", ...} — hidden from owner/admin nav (2026-06-03). MasterTasksScreen
               // still exists; biz:{bid}:tasks RTDB path untouched. ShiftManagerEmbed uses tasks internally.
@@ -4595,6 +4696,155 @@ function PilotDashboard() {
       {screen==="insights" && !currentUser && (
         <div className="screen">
           <DailyInsightsScreen tenantId={window._currentTenantId} bizId={currentBizId||""}/>
+        </div>
+      )}
+
+      {screen==="compensations" && COMP_ALLOWED_ROLES.includes(loggedInUser?.role) && (
+        <div className="screen">
+          {(() => {
+            const all = Object.values(compensations||{}).sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
+            const q = compSearch.trim();
+            const qDigits = normalizePhone(q);
+            const matchSearch = (c) => {
+              if(!q) return true;
+              const inName = (c.customerName||"").includes(q);
+              const inCode = (c.code||"").toUpperCase().includes(q.toUpperCase());
+              const inPhone = qDigits && (c.customerPhone||"").includes(qDigits);
+              return inName || inCode || inPhone;
+            };
+            const matchFilter = (c) => compFilter==="all" ? true : compEffectiveStatus(c)===compFilter;
+            const list = all.filter(c => matchSearch(c) && matchFilter(c));
+            const statusStyle = (s) => ({
+              open:{bg:"#FFF7ED",bd:"#FED7AA",fg:"#9A3412"},
+              approved:{bg:"#EFF6FF",bd:"#BFDBFE",fg:"#1E40AF"},
+              redeemed:{bg:"#F0FDF4",bd:"#BBF7D0",fg:"#15803D"},
+              cancelled:{bg:"#F9FAFB",bd:"#E5E7EB",fg:"#6B7280"},
+              expired:{bg:"#FEF2F2",bd:"#FECACA",fg:"#B91C1C"},
+            }[s] || {bg:"#F9FAFB",bd:"#E5E7EB",fg:"#6B7280"});
+            const fmtDT = (ms) => ms ? new Date(ms).toLocaleString("he-IL",{timeZone:"Asia/Jerusalem",day:"2-digit",month:"2-digit",year:"2-digit",hour:"2-digit",minute:"2-digit"}) : "—";
+            const fmtD  = (ms) => ms ? new Date(ms).toLocaleDateString("he-IL",{timeZone:"Asia/Jerusalem",day:"2-digit",month:"2-digit",year:"2-digit"}) : "—";
+            return (
+            <div className="card card-p">
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap",marginBottom:14}}>
+                <div>
+                  <h3 style={{margin:0,fontSize:16,fontWeight:700,color:"#111827"}}>🎟️ פיצויים ללקוח</h3>
+                  <p style={{margin:"2px 0 0",fontSize:11,color:"#9CA3AF"}}>{all.length} פיצויים · {businessConfig.businessName||""}</p>
+                </div>
+                <button onClick={()=>setCompForm({customerName:"",phoneRaw:"",reason:"",reasonCategory:"delivery_late",type:"amount",amount:""})}
+                  style={{padding:"9px 16px",background:"#111827",border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ פתח פיצוי</button>
+              </div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
+                <input value={compSearch} onChange={e=>setCompSearch(e.target.value)} placeholder="חיפוש: טלפון / שם / קוד"
+                  style={{flex:"1 1 200px",border:"1px solid #D1D5DB",borderRadius:8,padding:"9px 12px",fontSize:13,fontFamily:"inherit",color:"#111827"}}/>
+                <select value={compFilter} onChange={e=>setCompFilter(e.target.value)}
+                  style={{border:"1px solid #D1D5DB",borderRadius:8,padding:"9px 12px",fontSize:13,fontFamily:"inherit",color:"#111827",background:"#fff"}}>
+                  <option value="all">הכל</option>
+                  <option value="open">פתוח</option>
+                  <option value="approved">מאושר</option>
+                  <option value="redeemed">מומש</option>
+                  <option value="cancelled">בוטל</option>
+                  <option value="expired">פג תוקף</option>
+                </select>
+              </div>
+              {list.length===0 ? (
+                <p style={{margin:"16px 0",fontSize:13,color:"#9CA3AF",textAlign:"center"}}>אין פיצויים להצגה.</p>
+              ) : list.map(c => {
+                const es = compEffectiveStatus(c);
+                const ss = statusStyle(es);
+                const expired = compIsExpired(c);
+                return (
+                  <div key={c.id} style={{border:"1px solid #E5E7EB",borderRadius:10,padding:"12px 14px",marginBottom:8,background:"#fff"}}>
+                    <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:10,flexWrap:"wrap"}}>
+                      <div style={{minWidth:0,flex:1}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                          <span style={{fontSize:14,fontWeight:700,color:"#111827"}}>{c.customerName}</span>
+                          <span style={{fontSize:12,color:"#6B7280"}}>{c.customerPhoneRaw||c.customerPhone}</span>
+                          <span style={{fontSize:11,fontWeight:700,color:ss.fg,background:ss.bg,border:`1px solid ${ss.bd}`,borderRadius:99,padding:"2px 9px"}}>{COMP_STATUS_LABELS[es]}</span>
+                        </div>
+                        <div style={{fontSize:11,color:"#9CA3AF",marginTop:4}}>
+                          <span style={{fontFamily:"monospace",color:"#374151",fontWeight:700}}>{c.code}</span>
+                          {" · "}{COMP_REASON_LABELS[c.reasonCategory]||c.reasonCategory}
+                          {c.type==="item" ? " · פריט" : ` · ${(Number(c.amount)||0).toLocaleString()} ₪`}
+                          {" · תוקף "}{fmtD(c.validUntil)}
+                        </div>
+                        {c.reason && <div style={{fontSize:12,color:"#6B7280",marginTop:4,lineHeight:1.4}}>{c.reason}</div>}
+                      </div>
+                      <div style={{display:"flex",flexDirection:"column",gap:6,flexShrink:0,alignItems:"stretch"}}>
+                        {c.status==="open" && !expired && compCanApproveAmount(c.amount) && (
+                          <button onClick={()=>approveCompensation(c.id)} style={{padding:"6px 12px",background:"#2563EB",border:"none",borderRadius:7,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>אשר</button>
+                        )}
+                        {c.status==="open" && !expired && !compCanApproveAmount(c.amount) && (
+                          <span style={{fontSize:10,color:"#92400E",textAlign:"center",maxWidth:90}}>מעל סף האישור שלך</span>
+                        )}
+                        {c.status==="approved" && !expired && (
+                          <button onClick={()=>{ if(window.confirm(`לסמן את פיצוי ${c.code} כמומש? פעולה זו סופית.`)) redeemCompensation(c.id); }} style={{padding:"6px 12px",background:"#16A34A",border:"none",borderRadius:7,color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>סמן מומש</button>
+                        )}
+                        {(c.status==="open"||c.status==="approved") && compCanCancel() && (
+                          <button onClick={()=>{setCompCancelId(c.id);setCompCancelReason("");}} style={{padding:"6px 12px",background:"#fff",border:"1px solid #E5E7EB",borderRadius:7,color:"#B91C1C",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>בטל</button>
+                        )}
+                        <button onClick={()=>setCompDetailId(compDetailId===c.id?null:c.id)} style={{padding:"6px 12px",background:"#fff",border:"1px solid #E5E7EB",borderRadius:7,color:"#6B7280",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>{compDetailId===c.id?"סגור":"היסטוריה"}</button>
+                      </div>
+                    </div>
+                    {compDetailId===c.id && (
+                      <div style={{marginTop:10,paddingTop:10,borderTop:"1px solid #F1F5F9"}}>
+                        <div style={{fontSize:11,color:"#9CA3AF",marginBottom:6}}>נפתח ע״י {c.createdBy} · {fmtDT(c.createdAt)}{c.approvedBy?` · אושר ע״י ${c.approvedBy}`:""}{c.redeemedBy?` · מומש ע״י ${c.redeemedBy}${c.redeemedBranchName?` (${c.redeemedBranchName})`:""}`:""}{c.cancelledBy?` · בוטל ע״י ${c.cancelledBy}: ${c.cancelReason||""}`:""}</div>
+                        {(c.history||[]).slice().reverse().map((h,i)=>(
+                          <div key={i} style={{fontSize:11,color:"#6B7280",padding:"2px 0"}}>• {fmtDT(h.at)} — {h.by} — {h.action}{h.from?` (${h.from}→${h.to})`:""}{h.note?` · ${h.note}`:""}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            );
+          })()}
+
+          {compForm && (
+            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.3)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setCompForm(null)}>
+              <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,padding:20,width:"100%",maxWidth:420,direction:"rtl",fontFamily:"'Heebo',sans-serif",maxHeight:"90vh",overflowY:"auto"}}>
+                <h3 style={{margin:"0 0 14px",fontSize:15,fontWeight:700,color:"#111827"}}>פתיחת פיצוי</h3>
+                <label style={{fontSize:12,color:"#6B7280",fontWeight:600}}>שם לקוח *</label>
+                <input value={compForm.customerName} onChange={e=>setCompForm({...compForm,customerName:e.target.value})} style={{width:"100%",boxSizing:"border-box",border:"1px solid #D1D5DB",borderRadius:8,padding:"9px 12px",fontSize:13,fontFamily:"inherit",margin:"4px 0 10px"}}/>
+                <label style={{fontSize:12,color:"#6B7280",fontWeight:600}}>טלפון *</label>
+                <input value={compForm.phoneRaw} onChange={e=>setCompForm({...compForm,phoneRaw:e.target.value})} inputMode="tel" style={{width:"100%",boxSizing:"border-box",border:"1px solid #D1D5DB",borderRadius:8,padding:"9px 12px",fontSize:13,fontFamily:"inherit",margin:"4px 0 10px"}}/>
+                <label style={{fontSize:12,color:"#6B7280",fontWeight:600}}>קטגוריה</label>
+                <select value={compForm.reasonCategory} onChange={e=>setCompForm({...compForm,reasonCategory:e.target.value})} style={{width:"100%",boxSizing:"border-box",border:"1px solid #D1D5DB",borderRadius:8,padding:"9px 12px",fontSize:13,fontFamily:"inherit",margin:"4px 0 10px",background:"#fff"}}>
+                  {Object.entries(COMP_REASON_LABELS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+                </select>
+                <label style={{fontSize:12,color:"#6B7280",fontWeight:600}}>סיבה *</label>
+                <input value={compForm.reason} onChange={e=>setCompForm({...compForm,reason:e.target.value})} placeholder="פירוט קצר" style={{width:"100%",boxSizing:"border-box",border:"1px solid #D1D5DB",borderRadius:8,padding:"9px 12px",fontSize:13,fontFamily:"inherit",margin:"4px 0 10px"}}/>
+                <label style={{fontSize:12,color:"#6B7280",fontWeight:600}}>סוג</label>
+                <select value={compForm.type} onChange={e=>setCompForm({...compForm,type:e.target.value})} style={{width:"100%",boxSizing:"border-box",border:"1px solid #D1D5DB",borderRadius:8,padding:"9px 12px",fontSize:13,fontFamily:"inherit",margin:"4px 0 10px",background:"#fff"}}>
+                  <option value="amount">סכום כספי</option>
+                  <option value="voucher">שובר</option>
+                  <option value="item">פריט</option>
+                </select>
+                {compForm.type!=="item" && (<>
+                  <label style={{fontSize:12,color:"#6B7280",fontWeight:600}}>סכום (₪) *</label>
+                  <input value={compForm.amount} onChange={e=>setCompForm({...compForm,amount:e.target.value})} type="number" inputMode="decimal" style={{width:"100%",boxSizing:"border-box",border:"1px solid #D1D5DB",borderRadius:8,padding:"9px 12px",fontSize:13,fontFamily:"inherit",margin:"4px 0 10px"}}/>
+                </>)}
+                <div style={{display:"flex",gap:8,marginTop:6}}>
+                  <button onClick={submitCompForm} style={{flex:1,padding:"10px",background:"#111827",border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>צור פיצוי</button>
+                  <button onClick={()=>setCompForm(null)} style={{padding:"10px 16px",background:"#fff",border:"1px solid #E5E7EB",borderRadius:8,color:"#6B7280",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>ביטול</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {compCancelId && (
+            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.3)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setCompCancelId(null)}>
+              <div onClick={e=>e.stopPropagation()} style={{background:"#fff",borderRadius:12,padding:20,width:"100%",maxWidth:380,direction:"rtl",fontFamily:"'Heebo',sans-serif"}}>
+                <h3 style={{margin:"0 0 10px",fontSize:15,fontWeight:700,color:"#111827"}}>ביטול פיצוי</h3>
+                <label style={{fontSize:12,color:"#6B7280",fontWeight:600}}>סיבת ביטול *</label>
+                <input value={compCancelReason} onChange={e=>setCompCancelReason(e.target.value)} style={{width:"100%",boxSizing:"border-box",border:"1px solid #D1D5DB",borderRadius:8,padding:"9px 12px",fontSize:13,fontFamily:"inherit",margin:"4px 0 12px"}}/>
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={async()=>{ await cancelCompensation(compCancelId, compCancelReason); setCompCancelId(null); setCompCancelReason(""); }} style={{flex:1,padding:"10px",background:"#DC2626",border:"none",borderRadius:8,color:"#fff",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>בטל פיצוי</button>
+                  <button onClick={()=>{setCompCancelId(null);setCompCancelReason("");}} style={{padding:"10px 16px",background:"#fff",border:"1px solid #E5E7EB",borderRadius:8,color:"#6B7280",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>חזרה</button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
