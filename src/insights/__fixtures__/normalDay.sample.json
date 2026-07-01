@@ -1,0 +1,10 @@
+{
+  "date": "2026-06-01",
+  "bizId": "biz_test",
+  "tenantId": "tenant_test",
+  "revenue": { "sales": 13000, "deliveries": 2000, "other_income": 0, "total": 15000, "food_cost": 4950, "payroll": 3900, "had_entry": true },
+  "weather": { "is_rain_day": false, "rain_mm": 0 },
+  "alerts": { "alert_count": 0, "alert_minutes": 0, "is_alert_day": false },
+  "operational": { "war_day": "regular" },
+  "calendar": { "dow": 1, "weekend": false, "holiday": false }
+}
