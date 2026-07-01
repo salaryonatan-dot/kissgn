@@ -2509,6 +2509,11 @@ function PilotDashboard() {
   // ── AI send — defined at component level so it's never stale ──────────────
   const [businesses, setBusinesses] = useState([]);
   const [currentBizId, setCurrentBizId_] = useState(null);
+  // ── Insight Engine v1 — Dashboard card state (Phase 3, read-only) ──────────
+  const [dashboardInsights, setDashboardInsights] = useState(null);        // null = no doc found; [] = doc exists but no insights
+  const [dashboardInsightsDate, setDashboardInsightsDate] = useState(null);
+  const [dashboardInsightsLoading, setDashboardInsightsLoading] = useState(false);
+  const [dashboardInsightsError, setDashboardInsightsError] = useState(false);
   const setCurrentBizId = id => {
     setCurrentBizId_(id);
     // NOTE: do NOT update tenantId here — tenantId is fixed per user account
@@ -2789,6 +2794,53 @@ function PilotDashboard() {
 
     return () => { unsubs.forEach(u => typeof u==="function" && u()); clearInterval(orefInterval); };
   },[currentBizId]);
+
+  // ── Insight Engine v1 — load daily insights for the dashboard card ─────────
+  // Read-only. Reads the insights:daily doc via readChecklistDoc (the same
+  // storage helper the checklist screen uses). Starts at yesterday (Israel)
+  // and walks back up to 7 days to the most recent doc. Reads only the daily
+  // insights node; never computes insights client-side; never writes.
+  useEffect(() => {
+    // Only fetch when the dashboard is actually shown AND the role can see it
+    // (same gate as the dashboard nav item: super_owner / owner / manager).
+    const roleOk = ["super_owner", "owner", "manager"].includes(loggedInUser?.role);
+    if (!currentBizId || screen !== "dashboard" || !roleOk) {
+      setDashboardInsights(null);
+      setDashboardInsightsDate(null);
+      setDashboardInsightsLoading(false);
+      setDashboardInsightsError(false);
+      return;
+    }
+    let cancelled = false;
+    setDashboardInsightsLoading(true);
+    setDashboardInsightsError(false);
+    (async () => {
+      try {
+        const todayIL = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
+        const [yy, mm, dd] = todayIL.split("-").map(Number);
+        const anchorMs = Date.UTC(yy, mm - 1, dd);
+        let foundDoc = null, foundDate = null;
+        for (let i = 1; i <= 7; i++) {
+          const key = new Date(anchorMs - i * 86400000).toISOString().slice(0, 10);
+          const doc = await readChecklistDoc(`biz:${currentBizId}:insights:daily:${key}`).catch(() => null);
+          if (doc) { foundDoc = doc; foundDate = key; break; }
+        }
+        if (cancelled) return;
+        // RTDB drops empty arrays, so `insights` may be absent → coerce to [].
+        setDashboardInsights(foundDoc ? (foundDoc.insights || []) : null);
+        setDashboardInsightsDate(foundDate);
+        setDashboardInsightsLoading(false);
+      } catch (_e) {
+        if (cancelled) return;
+        // Silent fallback: never surface payloads, never break the dashboard.
+        setDashboardInsights(null);
+        setDashboardInsightsDate(null);
+        setDashboardInsightsError(true);
+        setDashboardInsightsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [currentBizId, screen, loggedInUser]);
 
   const persist = async (e, f) => {
     if(!currentBizId) { console.warn("[persist] no bizId"); return; }
@@ -3812,6 +3864,65 @@ function PilotDashboard() {
                     </div>
                   </div>
                   )}
+                </div>
+
+                {/* ── Insight Engine v1 — 🧠 תובנות היום (Phase 3, read-only) ── */}
+                <div className="dash-section">
+                  {(() => {
+                    const SEV = {
+                      critical: { bg:"#FEF2F2", fg:"#991B1B", bd:"#FECACA", label:"קריטי" },
+                      warning:  { bg:"#FFFBEB", fg:"#92400E", bd:"#FDE68A", label:"אזהרה" },
+                      positive: { bg:"#F0FDF4", fg:"#166534", bd:"#BBF7D0", label:"חיובי" },
+                      info:     { bg:"#EFF6FF", fg:"#1E40AF", bd:"#BFDBFE", label:"מידע" },
+                    };
+                    const yestIL = (() => {
+                      const t = new Date().toLocaleDateString("en-CA", { timeZone:"Asia/Jerusalem" });
+                      const [y,m,d] = t.split("-").map(Number);
+                      return new Date(Date.UTC(y, m-1, d) - 86400000).toISOString().slice(0,10);
+                    })();
+                    let dateChip = null;
+                    if (dashboardInsightsDate) {
+                      const parts = dashboardInsightsDate.split("-");
+                      dateChip = dashboardInsightsDate === yestIL ? "היום" : `ל-${parts[2]}/${parts[1]}`;
+                    }
+                    const list = Array.isArray(dashboardInsights) ? dashboardInsights.slice(0, 3) : [];
+                    return (
+                      <div style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:12,padding:"16px 18px"}}>
+                        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+                          <h2 style={{margin:0,fontSize:14,fontWeight:700,color:"#111827"}}>🧠 תובנות היום</h2>
+                          {dateChip && <span style={{fontSize:11,color:"#9CA3AF"}}>{dateChip}</span>}
+                        </div>
+                        {dashboardInsightsLoading ? (
+                          <div style={{padding:"14px 0",textAlign:"center",color:"#9CA3AF",fontSize:12}}>טוען תובנות…</div>
+                        ) : dashboardInsights === null ? (
+                          <div style={{padding:"14px 0",textAlign:"center",color:"#9CA3AF",fontSize:12}}>אין תובנות זמינות עדיין</div>
+                        ) : list.length === 0 ? (
+                          <div style={{padding:"14px 0",textAlign:"center",color:"#9CA3AF",fontSize:12}}>אין תובנות חריגות להיום</div>
+                        ) : (
+                          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                            {list.map((ins, i) => {
+                              const sev = SEV[ins.severity] || SEV.info;
+                              return (
+                                <div key={ins.id || i} style={{background:sev.bg,border:`1px solid ${sev.bd}`,borderRadius:8,padding:"10px 12px"}}>
+                                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                                    <span style={{fontSize:10,fontWeight:700,color:sev.fg,background:"#FFFFFF",border:`1px solid ${sev.bd}`,borderRadius:5,padding:"1px 6px"}}>{sev.label}</span>
+                                    <span style={{fontSize:13,fontWeight:700,color:"#111827"}}>{ins.title}</span>
+                                  </div>
+                                  {ins.summary && <div style={{fontSize:12,color:"#374151",lineHeight:1.5}}>{ins.summary}</div>}
+                                  {Array.isArray(ins.evidence) && ins.evidence[0] && (
+                                    <div style={{fontSize:11,color:"#6B7280",marginTop:4}}>{ins.evidence[0]}</div>
+                                  )}
+                                  {ins.recommendation && (
+                                    <div style={{fontSize:11,color:sev.fg,marginTop:4,fontWeight:600}}>המלצה: {ins.recommendation}</div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* ── 2. HERO card ── */}
