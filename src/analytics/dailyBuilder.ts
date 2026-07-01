@@ -5,7 +5,7 @@
  * - Revenue (from manual entries in Firebase, NOT a POS API)
  * - Weather (Open-Meteo, no API key — using business's lat/lon)
  * - Oref alerts (count + minutes — filtered by business's areas)
- * - Calendar (holiday / holiday-eve / weekend, computed via @hebcal/core)
+ * - Calendar (holiday / holiday-eve / weekend, derived locally)
  * - Operational classification (auto: war_day = "no" | "partial" | "full")
  *
  * The intent is research, not real-time alerting: building a multi-month
@@ -14,41 +14,12 @@
  *
  * Soft-fails on optional upstreams: if Open-Meteo is down, weather is null.
  * Hard-fails only if Firebase is unreachable (so the cron loops correctly).
- *
- * 2026-05 update:
- * - Replaced hard-coded IL_HOLIDAYS table with @hebcal/core lookup so we
- *   don't have to re-edit this file every year.
- * - Weather fields now return null on missing data instead of 0 (0°C is
- *   a valid temperature, so the previous behavior was silently lying).
- * - Magic numbers promoted to named constants.
- * - alert_minutes heuristic refined to collapse alerts within a 30-min
- *   window into one disruption.
- * - yesterdayInIsrael computes "yesterday" inside the IL timezone
- *   directly, avoiding the DST edge case.
  */
 
-import { HDate, HebrewCalendar, Event, flags } from "@hebcal/core";
 import { getDb } from "../firebase/admin.js";
 import { resolveOrefAreas, type RegionSelection } from "./regionResolver.js";
 import { buildInsights } from "../insights/buildInsights.js";
 import type { InsightsDailyDoc } from "../insights/types.js";
-
-// ── Tunables (documented constants instead of magic numbers) ─────────────────
-
-/** A day with > this much rain (mm) is flagged is_rain_day=true. */
-const RAIN_THRESHOLD_MM = 1;
-
-/** Operational disruption minutes attributed to one alert cluster. */
-const MINUTES_PER_ALERT_CLUSTER = 30;
-
-/** Alerts within this many milliseconds of each other count as one cluster. */
-const ALERT_CLUSTER_WINDOW_MS = 30 * 60 * 1000; // 30 min
-
-/** Open-Meteo request timeout. */
-const WEATHER_TIMEOUT_MS = 6_000;
-
-/** Oref alerts history request timeout. */
-const OREF_TIMEOUT_MS = 4_000;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -68,7 +39,12 @@ interface BusinessConfig {
   businessName?: string;
   lat?: number | string;
   lon?: number | string;
+  // Legacy: a flat list of Oref-area substrings. Still honored for
+  // backward compatibility with any business that pre-dated the
+  // region taxonomy.
   oref_areas?: string[];
+  // New: hierarchical region selection. The builder prefers this
+  // when present and falls back to oref_areas / Hadera defaults.
   region_ids?: string[];
   subregion_ids?: string[];
   custom_oref_areas?: string[];
@@ -79,6 +55,7 @@ export interface AnalyticsDoc {
   tenantId: string;
   bizId: string;
   bizName: string;
+
   revenue: {
     sales: number;
     deliveries: number;
@@ -88,36 +65,40 @@ export interface AnalyticsDoc {
     payroll: number;
     had_entry: boolean;
   };
+
   weather: {
-    /** Mean daily temperature in °C, or null if Open-Meteo returned no value. */
     temp_avg: number | null;
-    /** Total daily precipitation in mm, or null if missing. */
     rain_mm: number | null;
-    /** True iff rain_mm strictly greater than RAIN_THRESHOLD_MM. Null if rain_mm null. */
     is_rain_day: boolean | null;
-    /** Max daily wind speed (km/h), or null if missing. */
     wind_avg: number | null;
   } | null;
+
   alerts: {
     alert_count: number;
-    /** Operational disruption minutes — clustered, not raw count×10. */
     alert_minutes: number;
     is_alert_day: boolean;
     matched_areas: string[];
   } | null;
+
+  // Auto-classified operational status. The user explicitly chose "automatic
+  // from alerts + revenue" over a manual toggle, so this is derived:
+  // - "regular": no alerts that day
+  // - "partial": alerts AND a real entry (open but disrupted)
+  // - "full": alerts AND no entry (closed for the day)
+  // - "unknown": alerts source failed → can't classify
   operational: {
     war_day: "regular" | "partial" | "full" | "unknown";
   };
+
   calendar: {
-    dow: number;
-    weekend: boolean;
-    month: number;
+    dow: number; // 0 = Sunday … 6 = Saturday
+    weekend: boolean; // Friday/Saturday in Israel
+    month: number; // 1–12
     holiday: boolean;
     holiday_eve: boolean;
     new_year_eve: boolean;
-    /** Names of Hebrew calendar events on this date, for traceability. */
-    holiday_names: string[];
   };
+
   meta: {
     createdAt: number;
     builtAt: string;
@@ -130,7 +111,12 @@ export interface AnalyticsDoc {
     location: {
       lat: number;
       lon: number;
+      // The flat substrings actually used for filtering — denormalized
+      // from regions for efficient querying without re-running resolver.
       oref_areas: string[];
+      // Which selection layer produced the areas, for traceability.
+      // "regions" = new hierarchical taxonomy; "legacy" = pre-existing
+      // flat oref_areas array; "default" = Hadera fallback.
       areas_source: "regions" | "legacy" | "default";
       region_ids?: string[];
       subregion_ids?: string[];
@@ -138,7 +124,7 @@ export interface AnalyticsDoc {
   };
 }
 
-// ── Coercion helpers ─────────────────────────────────────────────────────────
+// ── Coercion helper (same pattern as snapshotBuilder.ts) ──────────────────────
 
 function num(value: any): number {
   if (value === null || value === undefined || value === "") return 0;
@@ -150,24 +136,6 @@ function num(value: any): number {
   }
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
-}
-
-/**
- * Like num(), but preserves null/undefined so callers can distinguish
- * "missing" from "zero". Used for weather metrics where 0 is a valid
- * reading and shouldn't be conflated with "API didn't return this".
- */
-function numOrNull(value: any): number | null {
-  if (value === null || value === undefined || value === "") return null;
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (typeof value === "string") {
-    const cleaned = value.replace(/,/g, "").trim();
-    if (cleaned === "") return null;
-    const n = Number(cleaned);
-    return Number.isFinite(n) ? n : null;
-  }
-  const n = Number(value);
-  return Number.isFinite(n) ? n : null;
 }
 
 function parseFirebaseData<T>(value: any, fallback: T): T {
@@ -212,46 +180,25 @@ async function fetchWeather(
       daily: "precipitation_sum,temperature_2m_mean,windspeed_10m_max",
       timezone: "Asia/Jerusalem",
     });
-
   try {
-    const res = await fetchWithTimeout(
-      url,
-      { headers: { Accept: "application/json" } },
-      WEATHER_TIMEOUT_MS
-    );
+    const res = await fetchWithTimeout(url, { headers: { Accept: "application/json" } }, 6_000);
     if (!res.ok) return null;
-    const raw = (await res.json()) as any;
-
-    const rain_mm = numOrNull(raw?.daily?.precipitation_sum?.[0]);
-    const temp_avg = numOrNull(raw?.daily?.temperature_2m_mean?.[0]);
-    const wind_avg = numOrNull(raw?.daily?.windspeed_10m_max?.[0]);
-
+    // Cast to any: under Vercel's strict TS settings, res.json() resolves to
+    // unknown, which makes the optional-chained reads below trigger TS2339.
+    // We're already inside a try/catch and num() handles every malformed
+    // value, so the cast is safe.
+    const raw = await res.json() as any;
+    const rain = num(raw?.daily?.precipitation_sum?.[0]);
     return {
-      rain_mm,
-      is_rain_day: rain_mm === null ? null : rain_mm > RAIN_THRESHOLD_MM,
-      temp_avg,
-      wind_avg,
+      rain_mm: rain,
+      is_rain_day: rain > 1,
+      temp_avg: num(raw?.daily?.temperature_2m_mean?.[0]),
+      wind_avg: num(raw?.daily?.windspeed_10m_max?.[0]),
     };
   } catch (err) {
     console.error("[analytics/weather] failed:", (err as Error)?.message ?? err);
     return null;
   }
-}
-
-/**
- * Cluster alert timestamps so multiple sirens within ALERT_CLUSTER_WINDOW_MS
- * of each other count as one operational disruption. For a restaurant, this
- * is closer to reality than "10 minutes per siren" — back-to-back alerts
- * during one barrage shouldn't multiply.
- */
-function clusterAlertMinutes(timestamps: number[]): number {
-  if (timestamps.length === 0) return 0;
-  const sorted = [...timestamps].sort((a, b) => a - b);
-  let clusters = 1;
-  for (let i = 1; i < sorted.length; i++) {
-    if (sorted[i] - sorted[i - 1] > ALERT_CLUSTER_WINDOW_MS) clusters++;
-  }
-  return clusters * MINUTES_PER_ALERT_CLUSTER;
 }
 
 async function fetchOrefAlerts(
@@ -267,38 +214,37 @@ async function fetchOrefAlerts(
       {
         headers: { Referer: "https://www.oref.org.il/", Accept: "application/json" },
       },
-      OREF_TIMEOUT_MS
+      4_000
     );
     if (!res.ok) return null;
-
     const text = await res.text();
     if (!text || !text.trim().startsWith("[")) {
-      // Oref sometimes returns HTML when degraded.
+      // Oref sometimes returns HTML when their service is degraded —
+      // never feed that into JSON.parse.
       return null;
     }
     const alerts = JSON.parse(text);
     if (!Array.isArray(alerts)) return null;
 
     const matched = new Set<string>();
-    const timestamps: number[] = [];
-
-    for (const a of alerts) {
-      const dRaw = String(a?.alertDate ?? a?.date ?? "");
-      const d = dRaw.slice(0, 10);
-      if (d !== date) continue;
+    const dayAlerts = alerts.filter((a: any) => {
+      const d = String(a?.alertDate ?? a?.date ?? "").slice(0, 10);
       const area = String(a?.data ?? a?.area ?? "");
+      if (d !== date) return false;
       const hit = areas.find((h) => area.includes(h));
-      if (!hit) continue;
-      matched.add(hit);
-      const ts = Date.parse(dRaw);
-      if (Number.isFinite(ts)) timestamps.push(ts);
-    }
+      if (hit) {
+        matched.add(hit);
+        return true;
+      }
+      return false;
+    });
 
-    const alert_count = timestamps.length;
     return {
-      alert_count,
-      alert_minutes: clusterAlertMinutes(timestamps),
-      is_alert_day: alert_count > 0,
+      alert_count: dayAlerts.length,
+      // Heuristic: 10 minutes of operational disruption per alert (siren +
+      // shelter time + return-to-work). Not exact — refine later.
+      alert_minutes: dayAlerts.length * 10,
+      is_alert_day: dayAlerts.length > 0,
       matched_areas: Array.from(matched),
     };
   } catch (err) {
@@ -307,60 +253,68 @@ async function fetchOrefAlerts(
   }
 }
 
-// ── Calendar (Hebcal — replaces previous hard-coded tables) ─────────────────
+// ── Calendar (Israeli holidays for 2024–2026) ─────────────────────────────────
+// Mirror of lib/analytics/sources.js — kept inline so this module is
+// self-contained for serverless cold starts.
 
-const HOLIDAY_FLAGS =
-  flags.CHAG | flags.MAJOR_FAST | flags.MINOR_HOLIDAY | flags.MODERN_HOLIDAY;
+const IL_HOLIDAYS = new Set<string>([
+  // 2024
+  "2024-10-02", "2024-10-03", "2024-10-11", "2024-10-16", "2024-10-17",
+  "2024-10-23", "2024-10-24",
+  "2024-12-25", "2024-12-26", "2024-12-27", "2024-12-28",
+  "2024-12-29", "2024-12-30", "2024-12-31", "2025-01-01",
+  // 2025
+  "2025-03-13", "2025-03-14",
+  "2025-04-12", "2025-04-13", "2025-04-14", "2025-04-15",
+  "2025-04-16", "2025-04-17", "2025-04-18", "2025-04-19",
+  "2025-05-05", "2025-05-12", "2025-05-13", "2025-05-16",
+  "2025-06-01", "2025-06-02", "2025-08-03",
+  "2025-09-22", "2025-09-23", "2025-10-01",
+  "2025-10-06", "2025-10-07", "2025-10-08", "2025-10-09",
+  "2025-10-10", "2025-10-11", "2025-10-12", "2025-10-13", "2025-10-14",
+  "2025-12-14", "2025-12-15", "2025-12-16", "2025-12-17",
+  "2025-12-18", "2025-12-19", "2025-12-20", "2025-12-21",
+  // 2026
+  "2026-03-02", "2026-03-03",
+  "2026-03-31", "2026-04-01", "2026-04-02", "2026-04-03",
+  "2026-04-04", "2026-04-05", "2026-04-06", "2026-04-07",
+  "2026-04-20", "2026-04-28", "2026-04-29",
+  "2026-05-19", "2026-05-20", "2026-07-23",
+  "2026-09-10", "2026-09-11", "2026-09-19",
+  "2026-09-24", "2026-09-25", "2026-09-26", "2026-09-27",
+  "2026-09-28", "2026-09-29", "2026-09-30",
+  "2026-10-01", "2026-10-02",
+]);
 
-const EVE_FLAGS = flags.EREV;
+const IL_HOLIDAY_EVES = new Set<string>([
+  "2024-10-01", "2024-10-10", "2024-10-15", "2024-10-22",
+  "2025-03-12", "2025-04-11", "2025-04-17", "2025-05-11",
+  "2025-05-31", "2025-08-02", "2025-09-21", "2025-09-30",
+  "2025-10-05", "2025-10-12",
+  "2026-03-01", "2026-03-30", "2026-04-05", "2026-04-27",
+  "2026-05-18", "2026-07-22", "2026-09-09", "2026-09-18",
+  "2026-09-23", "2026-09-30",
+]);
+
+const NEW_YEAR_EVES = new Set<string>([
+  "2024-12-31", "2025-12-31", "2026-12-31",
+]);
 
 function buildCalendar(date: string): AnalyticsDoc["calendar"] {
-  // Parse the YMD components directly to avoid any UTC↔IL shifts. The
-  // local Date constructor uses the host's timezone, which on Vercel is
-  // UTC — that's fine here because we only care about Y/M/D and DOW.
-  const [yStr, mStr, dStr] = date.split("-");
-  const y = Number(yStr), m = Number(mStr), d = Number(dStr);
-
-  const jsDate = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
-  const dow = jsDate.getUTCDay(); // 0 = Sun … 6 = Sat
-  const weekend = dow === 5 || dow === 6;
-
-  // Hebcal day-level events.
-  const hd = new HDate(d, m, y);
-  let events: Event[] = [];
-  try {
-    events = HebrewCalendar.getHolidaysOnDate(hd, false) ?? [];
-  } catch {
-    events = [];
-  }
-
-  const holiday_names: string[] = [];
-  let holiday = false;
-  let holiday_eve = false;
-
-  for (const ev of events) {
-    const f = ev.getFlags();
-    holiday_names.push(ev.getDesc());
-    if (f & HOLIDAY_FLAGS) holiday = true;
-    if (f & EVE_FLAGS) holiday_eve = true;
-  }
-
-  // Gregorian New Year's Eve is a notable evening-out night for restaurants
-  // but isn't in Hebcal as a holiday. Keep it as a separate flag.
-  const new_year_eve = m === 12 && d === 31;
-
+  const d = new Date(date + "T12:00:00Z");
+  const dow = d.getUTCDay();
+  const newYearEve = NEW_YEAR_EVES.has(date);
   return {
     dow,
-    weekend,
-    month: m,
-    holiday,
-    holiday_eve: holiday_eve || new_year_eve,
-    new_year_eve,
-    holiday_names,
+    weekend: dow === 5 || dow === 6,
+    month: d.getUTCMonth() + 1,
+    holiday: IL_HOLIDAYS.has(date),
+    holiday_eve: IL_HOLIDAY_EVES.has(date) || newYearEve,
+    new_year_eve: newYearEve,
   };
 }
 
-// ── Operational classification ──────────────────────────────────────────────
+// ── Operational classification (auto from alerts + revenue) ───────────────────
 
 function classifyOperationalStatus(
   alertsDoc: AnalyticsDoc["alerts"],
@@ -371,7 +325,7 @@ function classifyOperationalStatus(
   return hadEntry ? "partial" : "full";
 }
 
-// ── Main builder ─────────────────────────────────────────────────────────────
+// ── Main builder ──────────────────────────────────────────────────────────────
 
 export async function buildAnalyticsForBiz(
   tenantId: string,
@@ -380,6 +334,7 @@ export async function buildAnalyticsForBiz(
 ): Promise<AnalyticsDoc> {
   const db = getDb();
 
+  // Read entry + config in parallel.
   const [entriesSnap, configSnap, businessSnap] = await Promise.all([
     db.ref(`tenants/${tenantId}/biz:${bizId}:entries`).once("value"),
     db.ref(`tenants/${tenantId}/biz:${bizId}:config`).once("value"),
@@ -394,21 +349,32 @@ export async function buildAnalyticsForBiz(
   );
 
   const bizName =
-    businesses.find((b) => b.id === bizId)?.name || config.businessName || "Unknown";
+    businesses.find((b) => b.id === bizId)?.name ||
+    config.businessName ||
+    "Unknown";
+
   const todayEntry = entries.find((e) => e.date === date);
 
-  // Hadera fallback until the user picks a location through the map picker.
+  // Resolve location with sane defaults (Hadera) until the user sets it
+  // explicitly through the map picker in SetupWizard.
   const lat = num(config.lat) || 32.4342;
   const lon = num(config.lon) || 34.9194;
 
+  // Three layers of precedence for which Oref areas to filter alerts by:
+  // 1. NEW: hierarchical region selection (region_ids / subregion_ids /
+  //    custom_oref_areas) — resolved through the resolver, which de-dupes
+  //    and returns a flat list of substrings.
+  // 2. LEGACY: a pre-existing flat oref_areas list (config saved before
+  //    we introduced the taxonomy).
+  // 3. DEFAULT: the Hadera-area fallback, kept identical to what we had
+  //    before so a brand-new biz still gets *something* useful until the
+  //    owner picks a region.
   const hasNewSelection =
     (config.region_ids?.length ?? 0) > 0 ||
     (config.subregion_ids?.length ?? 0) > 0 ||
     (config.custom_oref_areas?.length ?? 0) > 0;
-
   let orefAreas: string[];
   let areasSource: "regions" | "legacy" | "default";
-
   if (hasNewSelection) {
     orefAreas = resolveOrefAreas({
       region_ids: config.region_ids,
@@ -424,6 +390,7 @@ export async function buildAnalyticsForBiz(
     areasSource = "default";
   }
 
+  // Optional sources — soft-fail so one outage doesn't kill the whole doc.
   const [weather, alerts] = await Promise.all([
     fetchWeather(lat, lon, date),
     fetchOrefAlerts(orefAreas, date),
@@ -441,9 +408,8 @@ export async function buildAnalyticsForBiz(
       )
     : 0;
   const total_payroll = payroll_manual + hourly_payroll;
-  const hadEntry =
-    !!todayEntry && (sales > 0 || deliveries > 0 || food_cost > 0);
 
+  const hadEntry = !!todayEntry && (sales > 0 || deliveries > 0 || food_cost > 0);
   const calendar = buildCalendar(date);
   const war_day = classifyOperationalStatus(alerts, hadEntry);
 
@@ -468,7 +434,7 @@ export async function buildAnalyticsForBiz(
     meta: {
       createdAt: Date.now(),
       builtAt: new Date().toISOString(),
-      version: "1.1.0",
+      version: "1.0.0",
       sources: {
         entry: hadEntry ? "ok" : "missing",
         weather: weather ? "ok" : "missing",
@@ -486,10 +452,11 @@ export async function buildAnalyticsForBiz(
   };
 }
 
-// ── Persist to Firebase ──────────────────────────────────────────────────────
+// ── Persist to Firebase ───────────────────────────────────────────────────────
 
 export async function saveAnalyticsDoc(doc: AnalyticsDoc): Promise<void> {
   const db = getDb();
+  // Per-day path so backfills are idempotent and queries are cheap.
   const path = `tenants/${doc.tenantId}/biz:${doc.bizId}:analytics:daily:${doc.date}`;
   await db.ref(path).set(doc);
 }
@@ -568,30 +535,24 @@ export async function buildAndSaveInsights(
   }
 }
 
-// ── Iterate active businesses ───────────────────────────────────────────────
+// ── Iterate active businesses (mirrors snapshotBuilder discovery) ────────────
 
 export async function buildAnalyticsForAll(
   date: string
-): Promise<{
-  docs: AnalyticsDoc[];
-  failures: Array<{ tenantId: string; bizId: string; error: string }>;
-}> {
+): Promise<{ docs: AnalyticsDoc[]; failures: Array<{ tenantId: string; bizId: string; error: string }> }> {
   const db = getDb();
   const docs: AnalyticsDoc[] = [];
   const failures: Array<{ tenantId: string; bizId: string; error: string }> = [];
 
   let activeBusinesses: Array<{ tenantId: string; bizId: string }> = [];
 
+  // Preferred discovery: proactive_biz_index.
   try {
     const indexSnap = await db.ref("proactive_biz_index").once("value");
     const indexData = indexSnap.val();
     if (indexData && typeof indexData === "object") {
       for (const [key, value] of Object.entries(indexData)) {
-        if (
-          typeof value === "object" &&
-          value !== null &&
-          (value as any).active === true
-        ) {
+        if (typeof value === "object" && value !== null && (value as any).active === true) {
           const parts = key.split(":");
           if (parts.length === 2) {
             activeBusinesses.push({ tenantId: parts[0], bizId: parts[1] });
@@ -603,6 +564,7 @@ export async function buildAnalyticsForAll(
     console.error("[analytics] proactive_biz_index read failed:", err);
   }
 
+  // Fallback: discover via tenants list.
   if (activeBusinesses.length === 0) {
     try {
       const tenantsSnap = await db.ref("tenants").once("value");
@@ -614,9 +576,10 @@ export async function buildAnalyticsForAll(
             tenantData !== null &&
             (tenantData as any).app?.business
           ) {
-            const businesses = parseFirebaseData<
-              Array<{ id: string; name: string }>
-            >((tenantData as any).app.business, []);
+            const businesses = parseFirebaseData<Array<{ id: string; name: string }>>(
+              (tenantData as any).app.business,
+              []
+            );
             for (const biz of businesses) {
               activeBusinesses.push({ tenantId, bizId: biz.id });
             }
@@ -638,32 +601,21 @@ export async function buildAnalyticsForAll(
       docs.push(doc);
     } catch (err) {
       console.error(`[analytics] biz ${tenantId}:${bizId} failed:`, err);
-      failures.push({
-        tenantId,
-        bizId,
-        error: String((err as Error)?.message ?? err),
-      });
+      failures.push({ tenantId, bizId, error: String((err as Error)?.message ?? err) });
     }
   }
 
   return { docs, failures };
 }
 
-// ── Date helpers ────────────────────────────────────────────────────────────
+// ── Date helpers ──────────────────────────────────────────────────────────────
 
 /**
- * Returns yesterday's date in Israel timezone (YYYY-MM-DD). Computed by
- * formatting `now` in IL TZ first, then subtracting one day from the
- * resulting Y/M/D components — sidesteps the UTC↔IL DST edge case the
- * old implementation had.
+ * Returns yesterday's date in Israel timezone, formatted YYYY-MM-DD.
+ * The cron runs at 02:00 IST, so "yesterday" is the day that just ended.
  */
 export function yesterdayInIsrael(now: Date = new Date()): string {
-  const todayIL = now.toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
-  // todayIL = "YYYY-MM-DD"
-  const [y, m, d] = todayIL.split("-").map(Number);
-  const prev = new Date(Date.UTC(y, m - 1, d - 1));
-  const yy = prev.getUTCFullYear();
-  const mm = String(prev.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(prev.getUTCDate()).padStart(2, "0");
-  return `${yy}-${mm}-${dd}`;
+  const israelMs = now.getTime();
+  const israel = new Date(israelMs - 24 * 60 * 60 * 1000);
+  return israel.toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
 }
