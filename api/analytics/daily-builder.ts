@@ -26,6 +26,7 @@ import {
   buildAnalyticsForBiz,
   buildAnalyticsForAll,
   saveAnalyticsDoc,
+  buildAndSaveInsights,
   yesterdayInIsrael,
 } from "../../src/analytics/dailyBuilder.js";
 import { fetchBeecommDaily } from "../../lib/analytics/sources.js";
@@ -226,6 +227,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const doc = await buildAnalyticsForBiz(tenantId, bizId, targetDate);
       await saveAnalyticsDoc(doc);
+      // Insight Engine v1 — rebuild insights for this date too (isolated; never throws).
+      await buildAndSaveInsights(tenantId, bizId, targetDate, doc);
 
       return res.status(200).json({
         status: "success",
