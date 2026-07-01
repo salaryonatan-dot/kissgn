@@ -138,6 +138,17 @@ function num(value: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/**
+ * Sum a supplier_payments-style map (supplierId -> amount) into one number.
+ * Amounts are form inputs (strings) and may be "", "skip", "0", or otherwise
+ * non-numeric; num() coerces every such value to 0. Safe on null/undefined or
+ * a non-object (returns 0, never throws).
+ */
+function sumSupplierPayments(obj: Record<string, number | string> | undefined | null): number {
+  if (!obj || typeof obj !== "object") return 0;
+  return Object.values(obj).reduce<number>((acc, v) => acc + num(v), 0);
+}
+
 function parseFirebaseData<T>(value: any, fallback: T): T {
   if (!value) return fallback;
   if (typeof value === "string") {
@@ -399,7 +410,12 @@ export async function buildAnalyticsForBiz(
   const sales = num(todayEntry?.sales);
   const deliveries = num(todayEntry?.deliveries);
   const other_income = num(todayEntry?.other_income);
-  const food_cost = num(todayEntry?.food_cost);
+  // Food cost lives in supplier_payments for most businesses; fall back to the
+  // legacy food_cost field only when there are no supplier payments. This
+  // mirrors the canonical mapping used elsewhere (dailyMetricsRepo, snapshot,
+  // frontend): sum(supplier_payments) || food_cost. OR (not +) => no double count.
+  const supplierFood = sumSupplierPayments(todayEntry?.supplier_payments);
+  const food_cost = supplierFood || num(todayEntry?.food_cost);
   const payroll_manual = num(todayEntry?.payroll);
   const hourly_payroll = todayEntry?.hourly_payroll
     ? Object.values(todayEntry.hourly_payroll).reduce<number>(
