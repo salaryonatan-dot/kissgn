@@ -560,53 +560,161 @@ export async function buildAnalyticsForAll(
   const docs: AnalyticsDoc[] = [];
   const failures: Array<{ tenantId: string; bizId: string; error: string }> = [];
 
-  let activeBusinesses: Array<{ tenantId: string; bizId: string }> = [];
+  // ── Hardened business discovery ────────────────────────────────────────────
+  // Merges BOTH sources on every run — proactive_biz_index AND
+  // tenants/*/app/business — then de-dupes by (tenantId, bizId).
+  // Previous behavior consulted app/business only when the index yielded zero
+  // entries, so a single stale/partial index entry silently excluded every
+  // business missing from it. Inclusion is default-on: a business is skipped
+  // ONLY when an explicit inactive/disabled/deleted/archived flag is present.
+  // Missing optional fields never exclude a business.
 
-  // Preferred discovery: proactive_biz_index.
+  const discovered = new Map<string, { tenantId: string; bizId: string }>();
+  const addBiz = (tenantId: unknown, bizId: unknown): void => {
+    if (typeof tenantId !== "string" || typeof bizId !== "string") return;
+    const t = tenantId.trim();
+    const b = bizId.trim();
+    if (!t || !b) return;
+    discovered.set(`${t}|${b}`, { tenantId: t, bizId: b });
+  };
+
+  // True only when an EXPLICIT negative flag exists. `active === undefined`
+  // (missing field) must NOT exclude a business. Also honors a string
+  // `status` field ("inactive" | "disabled" | "deleted" | "archived"),
+  // compared lowercase/trimmed.
+  const INACTIVE_STATUSES = new Set(["inactive", "disabled", "deleted", "archived"]);
+  const isExplicitlyInactive = (v: Record<string, unknown>): boolean =>
+    v.active === false ||
+    v.inactive === true ||
+    v.disabled === true ||
+    v.deleted === true ||
+    v.archived === true ||
+    (typeof v.status === "string" && INACTIVE_STATUSES.has(v.status.trim().toLowerCase()));
+
+  // Lightweight discovery telemetry — sanitized counts only, no payloads.
+  let fromIndex = 0;
+  let fromAppBusiness = 0;
+  let malformedSkipped = 0;
+  let inactiveSkipped = 0;
+
+  // Source 1: proactive_biz_index (optional — absence is not an error).
   try {
     const indexSnap = await db.ref("proactive_biz_index").once("value");
     const indexData = indexSnap.val();
     if (indexData && typeof indexData === "object") {
-      for (const [key, value] of Object.entries(indexData)) {
-        if (typeof value === "object" && value !== null && (value as any).active === true) {
+      for (const [key, rawValue] of Object.entries(indexData)) {
+        // Primitive legacy entries: `"tenantId:bizId": true | false`.
+        // `false` is an EXPLICIT inactive marker — skip it. Only `true` is
+        // accepted as legacy-active (ids come from the colon key below);
+        // any other primitive is malformed.
+        if (rawValue === false) {
+          inactiveSkipped++;
+          console.log(
+            `[analytics/discovery] skipping explicitly inactive index entry key="${key}" (false)`
+          );
+          continue;
+        }
+        const value =
+          rawValue && typeof rawValue === "object"
+            ? (rawValue as Record<string, unknown>)
+            : null;
+        if (value === null && rawValue !== true) {
+          malformedSkipped++;
+          console.warn(
+            `[analytics/discovery] ignoring malformed proactive_biz_index entry key="${key}"`
+          );
+          continue;
+        }
+
+        // Prefer explicit ids stored in the value.
+        let tenantId = value && typeof value.tenantId === "string" ? value.tenantId : "";
+        let bizId = value && typeof value.bizId === "string" ? value.bizId : "";
+
+        // Legacy colon keys "tenantId:bizId" — exact 2-part keys only.
+        // No underscore-key reverse engineering: the ids themselves contain
+        // underscores, so splitting on "_" would be ambiguous.
+        if (!tenantId || !bizId) {
           const parts = key.split(":");
-          if (parts.length === 2) {
-            activeBusinesses.push({ tenantId: parts[0], bizId: parts[1] });
+          if (parts.length === 2 && parts[0] && parts[1]) {
+            tenantId = parts[0];
+            bizId = parts[1];
           }
         }
+
+        if (!tenantId || !bizId) {
+          // Sanitized: key + ids only, never the value payload.
+          malformedSkipped++;
+          console.warn(
+            `[analytics/discovery] ignoring malformed proactive_biz_index entry key="${key}"`
+          );
+          continue;
+        }
+
+        if (value && isExplicitlyInactive(value)) {
+          inactiveSkipped++;
+          console.log(
+            `[analytics/discovery] skipping explicitly inactive index entry ${tenantId}:${bizId}`
+          );
+          continue;
+        }
+
+        addBiz(tenantId, bizId);
+        fromIndex++;
       }
     }
   } catch (err) {
     console.error("[analytics] proactive_biz_index read failed:", err);
   }
 
-  // Fallback: discover via tenants list.
-  if (activeBusinesses.length === 0) {
-    try {
-      const tenantsSnap = await db.ref("tenants").once("value");
-      const tenantsData = tenantsSnap.val();
-      if (tenantsData && typeof tenantsData === "object") {
-        for (const [tenantId, tenantData] of Object.entries(tenantsData)) {
-          if (
-            typeof tenantData === "object" &&
-            tenantData !== null &&
-            (tenantData as any).app?.business
-          ) {
-            const businesses = parseFirebaseData<Array<{ id: string; name: string }>>(
-              (tenantData as any).app.business,
-              []
-            );
-            for (const biz of businesses) {
-              activeBusinesses.push({ tenantId, bizId: biz.id });
+  // Source 2: ALWAYS scan tenants/*/app/business (merged, not fallback-only).
+  try {
+    const tenantsSnap = await db.ref("tenants").once("value");
+    const tenantsData = tenantsSnap.val();
+    if (tenantsData && typeof tenantsData === "object") {
+      for (const [tenantId, tenantData] of Object.entries(tenantsData)) {
+        if (
+          typeof tenantData === "object" &&
+          tenantData !== null &&
+          (tenantData as any).app?.business
+        ) {
+          const businesses = parseFirebaseData<
+            Array<{ id: string; name: string; [k: string]: unknown }>
+          >((tenantData as any).app.business, []);
+          if (!Array.isArray(businesses)) continue;
+          for (const biz of businesses) {
+            if (!biz || typeof biz !== "object" || typeof biz.id !== "string" || !biz.id) {
+              malformedSkipped++;
+              console.warn(
+                `[analytics/discovery] ignoring malformed app/business entry under tenant ${tenantId}`
+              );
+              continue;
             }
+            if (isExplicitlyInactive(biz as Record<string, unknown>)) {
+              inactiveSkipped++;
+              console.log(
+                `[analytics/discovery] skipping explicitly inactive business ${tenantId}:${biz.id}`
+              );
+              continue;
+            }
+            addBiz(tenantId, biz.id);
+            fromAppBusiness++;
           }
         }
       }
-    } catch (err) {
-      console.error("[analytics] tenant discovery failed:", err);
-      return { docs, failures };
     }
+  } catch (err) {
+    console.error("[analytics] tenant discovery failed:", err);
+    // Proceed with index results if we have any; abort only if BOTH sources
+    // produced nothing (previous behavior for a total discovery failure).
+    if (discovered.size === 0) return { docs, failures };
   }
+
+  const activeBusinesses: Array<{ tenantId: string; bizId: string }> =
+    Array.from(discovered.values());
+  console.log(
+    `[analytics/discovery] summary fromIndex=${fromIndex} fromAppBusiness=${fromAppBusiness} ` +
+      `afterDedupe=${activeBusinesses.length} malformedSkipped=${malformedSkipped} inactiveSkipped=${inactiveSkipped}`
+  );
 
   for (const { tenantId, bizId } of activeBusinesses) {
     try {
