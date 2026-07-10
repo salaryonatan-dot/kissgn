@@ -4591,7 +4591,7 @@ function PilotDashboard() {
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
             <div>
               <div style={{fontSize:15,fontWeight:700,color:"#0F172A",letterSpacing:"-.3px"}}>פדיון יומי יומית</div>
-              <div style={{fontSize:12,color:"#94A3B8",marginTop:3}}>{entries.length} ימים מוזנים · {MONTH_NAMES[MONTH]}</div>
+	              <div style={{fontSize:12,color:"#94A3B8",marginTop:3}}>{monthEntries.length} ימים מוזנים · {MONTH_NAMES[MONTH]}</div>
             </div>
             {entries.length>0&&(
               <button onClick={()=>{if(window.confirm("למחוק את כל הרשומות?")){ const u=[];setEntries(u);persist(u,null);}}}
@@ -4601,16 +4601,19 @@ function PilotDashboard() {
             )}
           </div>
 
-          {entries.length===0
-            ? <div className="empty">
-                <div style={{width:40,height:40,border:"1px solid #E5E7EB",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 14px",color:"#9CA3AF",fontSize:18}}>≡</div>
-                <p style={{margin:"0 0 16px",fontSize:13,color:"#94A3B8"}}>אין רשומות עדיין</p>
-                <button className="btn btn-primary" style={{flex:"none",padding:"9px 20px"}} onClick={()=>{setForm({...EMPTY_ENTRY,date:YESTERDAY_STR,security_event:false});setEditingId(null);setEntryStep('revenue');setScreen("entry");}}>הזן יום ראשון</button>
-              </div>
-            : (()=>{
-                const sorted = [...entries].map((e,i)=>({...e,_idx:i})).reverse();
-                const today = TODAY_STR;
-                const sevenDaysAgo = (() => { const d=new Date(_NOW); d.setDate(d.getDate()-7); return d.toISOString().slice(0,10); })();
+	          {(()=>{
+	                const entriesByDate = new Map();
+	                entries.forEach((e,i)=>{
+	                  if(e?.date && e.date.startsWith(monthPrefix) && !entriesByDate.has(e.date)) {
+	                    entriesByDate.set(e.date, {...e,_idx:i,__missing:false});
+	                  }
+	                });
+	                const sorted = Array.from({length:DAY_OF_MONTH},(_,i)=>{
+	                  const date = `${YEAR}-${MONTH_STR}-${String(i+1).padStart(2,"0")}`;
+	                  return entriesByDate.get(date) || {...EMPTY_ENTRY,date,_idx:null,__missing:true,__key:`__missing__${date}`};
+	                }).reverse();
+	                const today = TODAY_STR;
+	                const sevenDaysAgo = (() => { const d=new Date(_NOW); d.setDate(d.getDate()-7); return d.toISOString().slice(0,10); })();
 
                 // Determine status for each entry
                 const getStatus = (e) => {
@@ -4623,12 +4626,13 @@ function PilotDashboard() {
                   return "empty";
                 };
 
-                const StatusBadge = ({status}) => {
-                  const cfg = {
-                    complete: {bg:"#F0FDF4",color:"#15803D",border:"#BBF7D0",label:"הוזן מלא"},
-                    partial:  {bg:"#FFFBEB",color:"#B45309",border:"#FDE68A",label:"חסר נתונים"},
-                    empty:    {bg:"#FEF2F2",color:"#B91C1C",border:"#FECACA",label:"לא הוזן"},
-                  }[status];
+	                const StatusBadge = ({status}) => {
+	                  const cfg = {
+	                    complete: {bg:"#F0FDF4",color:"#15803D",border:"#BBF7D0",label:"הוזן מלא"},
+	                    partial:  {bg:"#FFFBEB",color:"#B45309",border:"#FDE68A",label:"חסר נתונים"},
+	                    empty:    {bg:"#FEF2F2",color:"#B91C1C",border:"#FECACA",label:"לא הוזן"},
+	                    missing:  {bg:"#FEF2F2",color:"#B91C1C",border:"#FECACA",label:"לא הוזן"},
+	                  }[status];
                   return (
                     <span style={{
                       fontSize:10,fontWeight:600,padding:"3px 8px",borderRadius:999,
@@ -4638,16 +4642,24 @@ function PilotDashboard() {
                   );
                 };
 
-                const DayCard = ({e}) => {
-                  const i = e._idx;
-                  const inc = (Number(e.sales)||0)+(Number(e.deliveries)||0)+(Number(e.other_income)||0);
-                  const supp = e.supplier_payments ? Object.values(e.supplier_payments).reduce((a,b)=>a+(Number(b)||0),0) : 0;
-                  const hourlyPay = e.hourly_payroll ? Object.values(e.hourly_payroll).reduce((a,b)=>a+(Number(b)||0),0) : 0;
-                  const exp = supp+(Number(e.payroll)||0)+hourlyPay+(Number(e.other_expense)||0);
-                  const net = inc-exp;
-                  const status = getStatus(e);
-                  const isToday = e.date === today;
-                  const dow = DOW_NAMES[getDateDOW(e.date)];
+	                const DayCard = ({e}) => {
+	                  const i = e._idx;
+	                  const isMissing = !!e.__missing;
+	                  const inc = (Number(e.sales)||0)+(Number(e.deliveries)||0)+(Number(e.other_income)||0);
+	                  const supp = e.supplier_payments ? Object.values(e.supplier_payments).reduce((a,b)=>a+(Number(b)||0),0) : 0;
+	                  const hourlyPay = e.hourly_payroll ? Object.values(e.hourly_payroll).reduce((a,b)=>a+(Number(b)||0),0) : 0;
+	                  const exp = supp+(Number(e.payroll)||0)+hourlyPay+(Number(e.other_expense)||0);
+	                  const net = inc-exp;
+	                  const status = isMissing ? "missing" : getStatus(e);
+		                  const isToday = e.date === today;
+		                  const dow = DOW_NAMES[getDateDOW(e.date)];
+		                  const openEntry = () => {
+		                    const {_idx, __missing, __key, ...cleanEntry} = e;
+		                    setForm(isMissing ? {...EMPTY_ENTRY,date:e.date} : cleanEntry);
+		                    setEditingId(isMissing ? null : i);
+		                    setEntryStep('revenue');
+		                    setScreen("entry");
+	                  };
 
                   return (
                     <div style={{
@@ -4667,13 +4679,14 @@ function PilotDashboard() {
                             {isToday&&<span style={{fontSize:10,fontWeight:600,color:"#6366F1",background:"#EEF2FF",padding:"2px 7px",borderRadius:999,border:"1px solid #C7D2FE"}}>היום</span>}
                           </div>
                           {/* Tags */}
-                          {(e.weather_impact||e.security_event||e.notes)&&(
-                            <div style={{display:"flex",gap:5,marginTop:5,flexWrap:"wrap"}}>
-                              {e.weather_impact&&<span style={{fontSize:10,background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:4,padding:"1px 6px",color:"#C2410C"}}>{e.weather_impact}</span>}
-                              {e.security_event&&<span style={{fontSize:10,background:"#F5F3FF",border:"1px solid #DDD6FE",borderRadius:4,padding:"1px 6px",color:"#7C3AED"}}>ביטחון</span>}
-                              {e.notes&&<span style={{fontSize:10,color:"#94A3B8",fontStyle:"italic",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:140}}>{e.notes}</span>}
-                            </div>
-                          )}
+	                          {(e.weather_impact||e.security_event||e.notes)&&(
+	                            <div style={{display:"flex",gap:5,marginTop:5,flexWrap:"wrap"}}>
+	                              {e.weather_impact&&<span style={{fontSize:10,background:"#FFF7ED",border:"1px solid #FED7AA",borderRadius:4,padding:"1px 6px",color:"#C2410C"}}>{e.weather_impact}</span>}
+	                              {e.security_event&&<span style={{fontSize:10,background:"#F5F3FF",border:"1px solid #DDD6FE",borderRadius:4,padding:"1px 6px",color:"#7C3AED"}}>ביטחון</span>}
+	                              {e.notes&&<span style={{fontSize:10,color:"#94A3B8",fontStyle:"italic",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:140}}>{e.notes}</span>}
+	                            </div>
+	                          )}
+	                          {isMissing&&<div style={{fontSize:10,color:"#B91C1C",marginTop:5}}>חסר — לא נשמרה רשומה ליום הזה</div>}
                         </div>
                         <StatusBadge status={status}/>
                       </div>
@@ -4696,43 +4709,47 @@ function PilotDashboard() {
                       </div>
 
                       {/* Row 3: actions */}
-                      <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                        <button
-                          onClick={()=>{setForm({...e});setEditingId(i);setEntryStep('revenue');setScreen("entry");}}
-                          style={{
-                            padding:"6px 14px",background:"#F8FAFC",border:"1px solid #E2E8F0",
-                            borderRadius:8,fontSize:12,fontWeight:500,color:"#475569",
-                            cursor:"pointer",fontFamily:"inherit",transition:"all .15s",
-                          }}>
-                          ערוך
-                        </button>
-                        {status==="partial"&&(
-                          <button
-                            onClick={()=>{setForm({...e});setEditingId(i);setEntryStep('revenue');setScreen("entry");}}
-                            style={{
-                              padding:"6px 14px",background:"#FFFBEB",border:"1px solid #FDE68A",
+	                      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+	                        {!isMissing&&(
+	                          <button
+	                            onClick={openEntry}
+	                            style={{
+	                              padding:"6px 14px",background:"#F8FAFC",border:"1px solid #E2E8F0",
+	                              borderRadius:8,fontSize:12,fontWeight:500,color:"#475569",
+	                              cursor:"pointer",fontFamily:"inherit",transition:"all .15s",
+	                            }}>
+	                            ערוך
+	                          </button>
+	                        )}
+	                        {status==="partial"&&(
+	                          <button
+	                            onClick={openEntry}
+	                            style={{
+	                              padding:"6px 14px",background:"#FFFBEB",border:"1px solid #FDE68A",
                               borderRadius:8,fontSize:12,fontWeight:600,color:"#B45309",
                               cursor:"pointer",fontFamily:"inherit",
                             }}>
                             השלם נתונים
                           </button>
-                        )}
-                        {status==="empty"&&(
-                          <button
-                            onClick={()=>{setForm({...EMPTY_ENTRY,date:e.date});setEditingId(i);setEntryStep('revenue');setScreen("entry");}}
-                            style={{
-                              padding:"6px 14px",background:"#FEF2F2",border:"1px solid #FECACA",
+	                        )}
+	                        {(status==="empty"||status==="missing")&&(
+	                          <button
+	                            onClick={openEntry}
+	                            style={{
+	                              padding:"6px 14px",background:"#FEF2F2",border:"1px solid #FECACA",
                               borderRadius:8,fontSize:12,fontWeight:600,color:"#B91C1C",
                               cursor:"pointer",fontFamily:"inherit",
                             }}>
-                            הזן נתונים
-                          </button>
-                        )}
-                        <button
-                          onClick={()=>deleteEntry(i)}
-                          style={{marginRight:"auto",background:"none",border:"none",color:"#CBD5E1",cursor:"pointer",padding:"4px 6px",fontFamily:"inherit",fontSize:12}}>
-                          מחק
-                        </button>
+	                            הזן נתונים
+	                          </button>
+	                        )}
+	                        {!isMissing&&(
+	                          <button
+	                            onClick={()=>deleteEntry(i)}
+	                            style={{marginRight:"auto",background:"none",border:"none",color:"#CBD5E1",cursor:"pointer",padding:"4px 6px",fontFamily:"inherit",fontSize:12}}>
+	                            מחק
+	                          </button>
+	                        )}
                       </div>
                     </div>
                   );
@@ -4746,8 +4763,8 @@ function PilotDashboard() {
                   <>
                     {/* Stats summary strip */}
                     {(()=>{
-                      const incomplete = sorted.filter(e=>getStatus(e)!=="complete").length;
-                      const complete   = sorted.filter(e=>getStatus(e)==="complete").length;
+	                      const incomplete = sorted.filter(e=>e.__missing||getStatus(e)!=="complete").length;
+	                      const complete   = sorted.filter(e=>!e.__missing&&getStatus(e)==="complete").length;
                       return (
                         <div style={{display:"flex",gap:10,marginBottom:20}}>
                           {[
@@ -4770,7 +4787,7 @@ function PilotDashboard() {
                           <span style={{fontSize:11,fontWeight:600,color:"#64748B",textTransform:"uppercase",letterSpacing:".5px"}}>7 ימים אחרונים</span>
                           <div style={{flex:1,height:1,background:"#E2E8F0"}}/>
                         </div>
-                        {recent.map(e=><DayCard key={e.date} e={e}/>)}
+	                        {recent.map(e=><DayCard key={e.__key || e.date} e={e}/>)}
                       </>
                     )}
 
@@ -4781,13 +4798,12 @@ function PilotDashboard() {
                           <span style={{fontSize:11,fontWeight:600,color:"#94A3B8",textTransform:"uppercase",letterSpacing:".5px"}}>ימים ישנים יותר</span>
                           <div style={{flex:1,height:1,background:"#E2E8F0"}}/>
                         </div>
-                        {older.map(e=><DayCard key={e.date} e={e}/>)}
+	                        {older.map(e=><DayCard key={e.__key || e.date} e={e}/>)}
                       </>
                     )}
                   </>
                 );
-              })()
-          }
+	              })()}
         </div>
       )}
 
