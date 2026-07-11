@@ -167,6 +167,73 @@ function validInsightsReadback(value: unknown, tenantId: string, bizId: string, 
     doc.generatedAt >= rebuildStartedAt;
 }
 
+// ── Analytics-rebuild rate limiter: bounded module-local fallback ───────────
+// The authenticated rebuild_after_entry_save branch normally uses the shared
+// remote limiter (lib/helpers.isRateLimited). When that limiter is UNAVAILABLE
+// (returns null/undefined or throws inside the limiter call), we fall back to a
+// bounded in-process sliding-window limiter with the SAME key and policy, so a
+// limiter outage cannot leave insights un-rebuilt after a save. A remote
+// decision (true = limited / false = allowed) is always honored and is never
+// overridden by the fallback. Only a failure of the limiter CALL triggers the
+// fallback; errors elsewhere in the handler are never treated as limiter faults.
+const ANALYTICS_REBUILD_RL_MAX_KEYS = 5000;
+const analyticsRebuildRlHits: Map<string, number[]> = new Map();
+
+export function analyticsRebuildLocalRateLimit(
+  key: string,
+  limit: number,
+  windowMs: number,
+  now: number = Date.now()
+): boolean {
+  const cutoff = now - windowMs;
+  // Prune stale timestamps across all keys so memory stays bounded.
+  for (const [k, arr] of analyticsRebuildRlHits) {
+    const kept = arr.filter((ts) => ts > cutoff);
+    if (kept.length === 0) analyticsRebuildRlHits.delete(k);
+    else analyticsRebuildRlHits.set(k, kept);
+  }
+  // Hard cap on total tracked keys (evict oldest-inserted first).
+  if (analyticsRebuildRlHits.size > ANALYTICS_REBUILD_RL_MAX_KEYS) {
+    const excess = analyticsRebuildRlHits.size - ANALYTICS_REBUILD_RL_MAX_KEYS;
+    let i = 0;
+    for (const k of analyticsRebuildRlHits.keys()) {
+      if (i++ >= excess) break;
+      analyticsRebuildRlHits.delete(k);
+    }
+  }
+  const recent = (analyticsRebuildRlHits.get(key) || []).filter((ts) => ts > cutoff);
+  if (recent.length >= limit) {
+    analyticsRebuildRlHits.set(key, recent);
+    return true; // limited
+  }
+  recent.push(now);
+  analyticsRebuildRlHits.set(key, recent);
+  return false; // allowed
+}
+
+// Test-only helper to reset the bounded fallback state between cases.
+export function __resetAnalyticsRebuildLocalRateLimit(): void {
+  analyticsRebuildRlHits.clear();
+}
+
+export async function resolveAnalyticsRebuildRateLimit(
+  remoteCheck: () => Promise<unknown> | unknown,
+  key: string,
+  limit: number,
+  windowMs: number,
+  now: number = Date.now()
+): Promise<"allow" | "limited"> {
+  try {
+    const remote = await remoteCheck();
+    if (remote === true) return "limited"; // remote says limited -> honor, no fallback
+    if (remote === false) return "allow";  // remote says allowed -> proceed normally
+    // any other value (null/undefined/non-boolean) -> limiter unavailable -> fall through
+  } catch {
+    // limiter CALL threw -> unavailable -> fall through to bounded fallback
+  }
+  return analyticsRebuildLocalRateLimit(key, limit, windowMs, now) ? "limited" : "allow";
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   setCorsHeaders(req, res);
 
@@ -327,12 +394,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(e?.status || 403).json({ ok: false, error: e?.msg || "access_denied" });
       }
 
-      try {
-        if (await isRateLimited(`analytics-rebuild:${claims.uid}:${safeTenantId}:${safeBizId}`, 8, 60_000)) {
-          return res.status(429).json({ ok: false, error: "rate_limited" });
-        }
-      } catch (e: any) {
-        return res.status(e?.status || 503).json({ ok: false, error: e?.msg || "rate_limiter_unavailable" });
+      const analyticsRebuildRateKey = `analytics-rebuild:${claims.uid}:${safeTenantId}:${safeBizId}`;
+      const analyticsRebuildRateOutcome = await resolveAnalyticsRebuildRateLimit(
+        () => isRateLimited(analyticsRebuildRateKey, 8, 60_000),
+        analyticsRebuildRateKey,
+        8,
+        60_000
+      );
+      if (analyticsRebuildRateOutcome === "limited") {
+        return res.status(429).json({ ok: false, error: "rate_limited" });
       }
 
       const db = getAdminDb();
