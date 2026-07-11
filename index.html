@@ -2514,6 +2514,11 @@ function PilotDashboard() {
   const [dashboardInsightsDate, setDashboardInsightsDate] = useState(null);
   const [dashboardInsightsLoading, setDashboardInsightsLoading] = useState(false);
   const [dashboardInsightsError, setDashboardInsightsError] = useState(false);
+  const [dashboardInsightsWarning, setDashboardInsightsWarning] = useState("");
+  const [entrySaveInFlight, setEntrySaveInFlight] = useState(false);
+  const [entrySaveError, setEntrySaveError] = useState("");
+  const entrySaveInFlightRef = useRef(false);
+  const suppressNextDashboardInsightsLoadForBizRef = useRef(null);
   const setCurrentBizId = id => {
     setCurrentBizId_(id);
     // NOTE: do NOT update tenantId here — tenantId is fixed per user account
@@ -2795,61 +2800,138 @@ function PilotDashboard() {
     return () => { unsubs.forEach(u => typeof u==="function" && u()); clearInterval(orefInterval); };
   },[currentBizId]);
 
-  // ── Insight Engine v1 — load daily insights for the dashboard card ─────────
-  // Read-only. Reads the insights:daily doc via readChecklistDoc (the same
-  // storage helper the checklist screen uses). Starts at yesterday (Israel)
-  // and walks back up to 7 days to the most recent doc. Reads only the daily
-  // insights node; never computes insights client-side; never writes.
-  useEffect(() => {
-    // Only fetch when the dashboard is actually shown AND the role can see it
-    // (same gate as the dashboard nav item: super_owner / owner / manager).
-    const roleOk = ["super_owner", "owner", "manager"].includes(loggedInUser?.role);
-    if (!currentBizId || screen !== "dashboard" || !roleOk) {
-      setDashboardInsights(null);
-      setDashboardInsightsDate(null);
-      setDashboardInsightsLoading(false);
-      setDashboardInsightsError(false);
-      return;
+  const israelDateKey = (offsetDays=0) => {
+    const todayIL = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
+    const [yy, mm, dd] = todayIL.split("-").map(Number);
+    return new Date(Date.UTC(yy, mm - 1, dd) + offsetDays * 86400000).toISOString().slice(0, 10);
+  };
+
+  const dashboardInsightCandidateDates = (preferredDate=null) => {
+    const todayIL = israelDateKey(0);
+    const yesterdayIL = israelDateKey(-1);
+    const dates = [];
+    if (preferredDate === todayIL || preferredDate === yesterdayIL) dates.push(preferredDate);
+    dates.push(todayIL);
+    for (let i = 1; i <= 7; i++) dates.push(israelDateKey(-i));
+    return [...new Set(dates)];
+  };
+
+  const clearDashboardInsightState = () => {
+    setDashboardInsights(null);
+    setDashboardInsightsDate(null);
+    setDashboardInsightsLoading(false);
+    setDashboardInsightsError(false);
+    setDashboardInsightsWarning("");
+  };
+
+  const readDashboardInsightCandidate = async (date) => {
+    try {
+      const doc = await readChecklistDoc(`biz:${currentBizId}:insights:daily:${date}`);
+      if (!doc) return { ok: true, found: false, date, insights: null };
+      // RTDB drops empty arrays, so `insights` may be absent → coerce to [].
+      return { ok: true, found: true, date, insights: doc.insights || [] };
+    } catch (err) {
+      if (err?.message === "not found") {
+        return { ok: true, found: false, date, insights: null };
+      }
+      return { ok: false, error: "read_failed" };
     }
-    let cancelled = false;
+  };
+
+  const loadDashboardInsights = async (preferredDate=null, isCancelled=()=>false) => {
+    const roleOk = ["super_owner", "owner", "manager"].includes(loggedInUser?.role);
+    if (!currentBizId || !roleOk) {
+      clearDashboardInsightState();
+      return { ok: false, skipped: true };
+    }
     setDashboardInsightsLoading(true);
     setDashboardInsightsError(false);
-    (async () => {
-      try {
-        const todayIL = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
-        const [yy, mm, dd] = todayIL.split("-").map(Number);
-        const anchorMs = Date.UTC(yy, mm - 1, dd);
-        let foundDoc = null, foundDate = null;
-        for (let i = 1; i <= 7; i++) {
-          const key = new Date(anchorMs - i * 86400000).toISOString().slice(0, 10);
-          const doc = await readChecklistDoc(`biz:${currentBizId}:insights:daily:${key}`).catch(() => null);
-          if (doc) { foundDoc = doc; foundDate = key; break; }
-        }
-        if (cancelled) return;
-        // RTDB drops empty arrays, so `insights` may be absent → coerce to [].
-        setDashboardInsights(foundDoc ? (foundDoc.insights || []) : null);
-        setDashboardInsightsDate(foundDate);
-        setDashboardInsightsLoading(false);
-      } catch (_e) {
-        if (cancelled) return;
-        // Silent fallback: never surface payloads, never break the dashboard.
-        setDashboardInsights(null);
-        setDashboardInsightsDate(null);
-        setDashboardInsightsError(true);
-        setDashboardInsightsLoading(false);
+    setDashboardInsightsWarning("");
+    setDashboardInsights(null);
+    setDashboardInsightsDate(null);
+    try {
+      let foundInsights = null, foundDate = null;
+      for (const key of dashboardInsightCandidateDates(preferredDate)) {
+        const result = await readDashboardInsightCandidate(key);
+        if (!result.ok) throw new Error("read_failed");
+        if (result.found) { foundInsights = result.insights; foundDate = result.date; break; }
       }
-    })();
+      if (isCancelled()) return { ok: false, cancelled: true };
+      setDashboardInsights(foundInsights);
+      setDashboardInsightsDate(foundDate);
+      setDashboardInsightsLoading(false);
+      return { ok: true, found: !!foundDate, date: foundDate, insights: foundInsights };
+    } catch (_e) {
+      if (isCancelled()) return { ok: false, cancelled: true };
+      // Silent fallback: never surface payloads, never break the dashboard.
+      setDashboardInsights(null);
+      setDashboardInsightsDate(null);
+      setDashboardInsightsError(true);
+      setDashboardInsightsLoading(false);
+      return { ok: false };
+    }
+  };
+
+  // ── Insight Engine v1 — load daily insights for the dashboard card ─────────
+  // Read-only. Reads only insights:daily docs; never computes insights client-side; never writes.
+  useEffect(() => {
+    const roleOk = ["super_owner", "owner", "manager"].includes(loggedInUser?.role);
+    if (!currentBizId || screen !== "dashboard" || !roleOk) {
+      clearDashboardInsightState();
+      return;
+    }
+    if (suppressNextDashboardInsightsLoadForBizRef.current) {
+      if (suppressNextDashboardInsightsLoadForBizRef.current === currentBizId) {
+        suppressNextDashboardInsightsLoadForBizRef.current = null;
+        setDashboardInsightsLoading(false);
+        return;
+      }
+      suppressNextDashboardInsightsLoadForBizRef.current = null;
+    }
+    let cancelled = false;
+    loadDashboardInsights(null, () => cancelled);
     return () => { cancelled = true; };
   }, [currentBizId, screen, loggedInUser]);
 
+  const rebuildInsightsAfterEntrySave = async (date) => {
+    if (typeof window.apiFetch !== "function") throw new Error("apiFetch unavailable");
+    if (!window._currentTenantId || !currentBizId) throw new Error("missing tenant or business context");
+    const resp = await window.apiFetch("/api/analytics/daily-builder", {
+      method: "POST",
+      body: JSON.stringify({
+        action: "rebuild_after_entry_save",
+        tenantId: window._currentTenantId,
+        bizId: currentBizId,
+        date,
+      }),
+    });
+    let payload = null;
+    try { payload = await resp.json(); } catch (_) {}
+    if (!resp.ok || !payload?.ok) {
+      throw new Error(payload?.error || `rebuild failed (${resp.status})`);
+    }
+    return payload;
+  };
+
   const persist = async (e, f) => {
-    if(!currentBizId) { console.warn("[persist] no bizId"); return; }
+    if(!currentBizId) {
+      const error = new Error("missing bizId");
+      console.warn("[persist] no bizId");
+      return { ok:false, error };
+    }
     try { await window.storage.set(`biz:${currentBizId}:entries`, JSON.stringify(e), true); }
-    catch(err) { console.error("[persist] entries save failed:", err.message); }
+    catch(err) {
+      console.error("[persist] entries save failed:", err.message);
+      return { ok:false, error:err };
+    }
     if(f) {
       try { await window.storage.set(`biz:${currentBizId}:fixed`, JSON.stringify(f), true); }
-      catch(err) { console.error("[persist] fixed save failed:", err.message); }
+      catch(err) {
+        console.error("[persist] fixed save failed:", err.message);
+        return { ok:false, error:err };
+      }
     }
+    return { ok:true };
   };
   const saveLastYear = async (ly) => {
     setLastYear(ly);
@@ -3168,35 +3250,74 @@ function PilotDashboard() {
   };
 
   const saveEntry = async (skipSuppliers=false) => {
-    const formFinal = {...form};  // payroll stores manual entry only; global employees added in calcMetrics
-    const netForm = formFinal.includeVat ? {
-      ...formFinal,
-      sales:        Math.round((Number(formFinal.sales)||0)        / VAT_RATE),
-      deliveries:   Math.round((Number(formFinal.deliveries)||0)   / VAT_RATE),
-      other_income: Math.round((Number(formFinal.other_income)||0) / VAT_RATE),
-      includeVat: false,
-    } : formFinal;
-    let updated = editingId!==null
-      ? entries.map((e,i)=>i===editingId?{...netForm}:e)
-      : [...entries,{...netForm}];
-    updated.sort((a,b)=>a.date.localeCompare(b.date));
-    setEntries(updated);
+    if (entrySaveInFlightRef.current) return;
+    entrySaveInFlightRef.current = true;
+    setEntrySaveInFlight(true);
+    setEntrySaveError("");
+    setDashboardInsightsWarning("");
     try {
-      await persist(updated, null);
-    } catch(err) {
-      console.warn("[save] persist error:", err.message);
-    }
-    setForm({...EMPTY_ENTRY}); setEditingId(null); setSaved(true);
-    setTimeout(()=>{setSaved(false); setEntryStep('idle'); setScreen("dashboard");},2000);
-    // Check anomalies
-    if(currentBizId) {
-      const tgt = businessConfig?.targets || {};
-      const foodTarget  = tgt.foodCostPct  || 33;
-      const laborTarget = tgt.laborCostPct || 27;
-      const s = Number(netForm.sales)||0;
-      const food  = s > 0 ? ((Number(netForm.food_cost)||0) / s) * 100  : 0;
-      const labor = s > 0 ? ((Number(netForm.payroll)||0)   / s) * 100  : 0;
-      // Anomaly detection logic is kept, notifications removed
+      const formFinal = {...form};  // payroll stores manual entry only; global employees added in calcMetrics
+      const netForm = formFinal.includeVat ? {
+        ...formFinal,
+        sales:        Math.round((Number(formFinal.sales)||0)        / VAT_RATE),
+        deliveries:   Math.round((Number(formFinal.deliveries)||0)   / VAT_RATE),
+        other_income: Math.round((Number(formFinal.other_income)||0) / VAT_RATE),
+        includeVat: false,
+      } : formFinal;
+      let updated = editingId!==null
+        ? entries.map((e,i)=>i===editingId?{...netForm}:e)
+        : [...entries,{...netForm}];
+      updated.sort((a,b)=>a.date.localeCompare(b.date));
+
+      const persistResult = await persist(updated, null);
+      if (!persistResult?.ok) {
+        setSaved(false);
+        setEntrySaveError("שמירת הנתונים נכשלה. נסה שוב.");
+        return;
+      }
+
+      setEntries(updated);
+
+      let insightsRefreshed = false;
+      const saveBizId = currentBizId;
+      try {
+        await rebuildInsightsAfterEntrySave(netForm.date);
+        const loadResult = await loadDashboardInsights(netForm.date);
+        const isTodayOrYesterday = netForm.date === israelDateKey(0) || netForm.date === israelDateKey(-1);
+        if (loadResult?.skipped) {
+          insightsRefreshed = true;
+        } else if (!loadResult?.ok) {
+          throw new Error("insights_read_failed");
+        } else if (isTodayOrYesterday && (!loadResult.found || loadResult.date !== netForm.date)) {
+          throw new Error("insights_readback_mismatch");
+        } else {
+          insightsRefreshed = true;
+        }
+      } catch (err) {
+        console.warn("[save] insights rebuild failed:", err.message);
+        setDashboardInsights(null);
+        setDashboardInsightsDate(null);
+        setDashboardInsightsLoading(false);
+        setDashboardInsightsError(false);
+        setDashboardInsightsWarning("הנתונים נשמרו, אך התובנות לא רועננו.");
+        suppressNextDashboardInsightsLoadForBizRef.current = saveBizId;
+      }
+
+      setForm({...EMPTY_ENTRY}); setEditingId(null); setSaved(true);
+      setTimeout(()=>{setSaved(false); setEntryStep('idle'); setScreen("dashboard");}, insightsRefreshed ? 1200 : 2000);
+      // Check anomalies
+      if(currentBizId) {
+        const tgt = businessConfig?.targets || {};
+        const foodTarget  = tgt.foodCostPct  || 33;
+        const laborTarget = tgt.laborCostPct || 27;
+        const s = Number(netForm.sales)||0;
+        const food  = s > 0 ? ((Number(netForm.food_cost)||0) / s) * 100  : 0;
+        const labor = s > 0 ? ((Number(netForm.payroll)||0)   / s) * 100  : 0;
+        // Anomaly detection logic is kept, notifications removed
+      }
+    } finally {
+      entrySaveInFlightRef.current = false;
+      setEntrySaveInFlight(false);
     }
   };
 
@@ -3875,15 +3996,12 @@ function PilotDashboard() {
                       positive: { bg:"#F0FDF4", fg:"#166534", bd:"#BBF7D0", label:"חיובי" },
                       info:     { bg:"#EFF6FF", fg:"#1E40AF", bd:"#BFDBFE", label:"מידע" },
                     };
-                    const yestIL = (() => {
-                      const t = new Date().toLocaleDateString("en-CA", { timeZone:"Asia/Jerusalem" });
-                      const [y,m,d] = t.split("-").map(Number);
-                      return new Date(Date.UTC(y, m-1, d) - 86400000).toISOString().slice(0,10);
-                    })();
+                    const todayIL = israelDateKey(0);
+                    const yestIL = israelDateKey(-1);
                     let dateChip = null;
                     if (dashboardInsightsDate) {
                       const parts = dashboardInsightsDate.split("-");
-                      dateChip = dashboardInsightsDate === yestIL ? "היום" : `ל-${parts[2]}/${parts[1]}`;
+                      dateChip = dashboardInsightsDate === todayIL ? "היום" : dashboardInsightsDate === yestIL ? "אתמול" : `ל-${parts[2]}/${parts[1]}`;
                     }
                     const list = Array.isArray(dashboardInsights) ? dashboardInsights.slice(0, 3) : [];
                     return (
@@ -3894,6 +4012,8 @@ function PilotDashboard() {
                         </div>
                         {dashboardInsightsLoading ? (
                           <div style={{padding:"14px 0",textAlign:"center",color:"#9CA3AF",fontSize:12}}>טוען תובנות…</div>
+                        ) : dashboardInsightsWarning ? (
+                          <div style={{padding:"14px 0",textAlign:"center",color:"#92400E",fontSize:12,lineHeight:1.5}}>{dashboardInsightsWarning}</div>
                         ) : dashboardInsights === null ? (
                           <div style={{padding:"14px 0",textAlign:"center",color:"#9CA3AF",fontSize:12}}>אין תובנות זמינות עדיין</div>
                         ) : list.length === 0 ? (
@@ -4575,10 +4695,12 @@ function PilotDashboard() {
               );
             })()}
 
+            {entrySaveError && <div style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:6,padding:"10px 14px",textAlign:"center",fontWeight:600,color:"#B91C1C",fontSize:13,marginBottom:8}}>{entrySaveError}</div>}
+            {dashboardInsightsWarning && <div style={{background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:6,padding:"10px 14px",textAlign:"center",fontWeight:600,color:"#92400E",fontSize:13,marginBottom:8}}>{dashboardInsightsWarning}</div>}
             {saved && <div style={{background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:6,padding:"10px 14px",textAlign:"center",fontWeight:600,color:"#16A34A",fontSize:13,marginBottom:8}}>נשמר בהצלחה</div>}
             <div style={{display:"flex",gap:10,marginTop:12}}>
-              <button className="btn btn-primary" style={{ opacity: saved ? 0.6 : 1}} onClick={()=>!saved && saveEntry()}>{saved ? "נשמר..." : "שמור"}</button>
-              <button className="btn btn-secondary" onClick={()=>{setForm({...EMPTY_ENTRY});setEditingId(null);setEntryStep('idle');setScreen("dashboard");}}>ביטול</button>
+              <button className="btn btn-primary" disabled={saved || entrySaveInFlight} style={{ opacity: (saved || entrySaveInFlight) ? 0.6 : 1}} onClick={()=>!(saved || entrySaveInFlight) && saveEntry()}>{entrySaveInFlight ? "שומר..." : saved ? "נשמר..." : "שמור"}</button>
+              <button className="btn btn-secondary" disabled={entrySaveInFlight} style={{ opacity: entrySaveInFlight ? 0.6 : 1}} onClick={()=>{if(entrySaveInFlight)return;setForm({...EMPTY_ENTRY});setEditingId(null);setEntryStep('idle');setScreen("dashboard");}}>ביטול</button>
             </div>
           </div>
         </div>

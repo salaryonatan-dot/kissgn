@@ -9,9 +9,13 @@
  *
  * GET  → cron trigger (all active businesses, yesterday's date).
  * POST → manual trigger { tenantId, bizId, date? } for backfills / testing.
+ * POST → user action { action:"rebuild_after_entry_save", tenantId, bizId, date }.
  *
- * Auth identical to /api/daily-snapshot/run: Vercel cron header OR
- * `Authorization: Bearer ${CRON_SECRET}`.
+ * Auth:
+ * - GET and legacy manual/backfill POST paths use the Vercel cron header OR
+ *   `Authorization: Bearer ${CRON_SECRET}`.
+ * - POST { action:"rebuild_after_entry_save", ... } uses Firebase user auth
+ *   plus tenant/business RBAC.
  *
  * NOTE: this endpoint also hosts an ISOLATED, read-only POS diagnostic branch
  * (POST { action: "beecomm_diagnose", date }) — folded here only to avoid
@@ -30,6 +34,9 @@ import {
   yesterdayInIsrael,
 } from "../../src/analytics/dailyBuilder.js";
 import { fetchBeecommDaily } from "../../lib/analytics/sources.js";
+import { getAdminDb } from "../../lib/adminSdk.js";
+import { requireAuth } from "../../lib/verifyToken.js";
+import { requireTenantAccess, isRateLimited } from "../../lib/helpers.js";
 
 function setCorsHeaders(req: VercelRequest, res: VercelResponse): void {
   const origin = (req.headers.origin as string) || "";
@@ -53,6 +60,111 @@ function verifyAuth(req: VercelRequest): boolean {
   const authHeader = (req.headers.authorization as string) || "";
   const [scheme, token] = authHeader.split(" ");
   return scheme === "Bearer" && token === cronSecret;
+}
+
+type AppBusiness = {
+  id?: string;
+  name?: string;
+  active?: boolean;
+  inactive?: boolean;
+  disabled?: boolean;
+  deleted?: boolean;
+  archived?: boolean;
+  status?: string;
+};
+
+type AppUser = {
+  uid?: string;
+  firebaseUid?: string;
+  role?: string;
+  allowedBizIds?: unknown;
+};
+
+function isSafeId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value.trim());
+}
+
+function isRealBusinessDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const utc = Date.UTC(year, month - 1, day);
+  if (!Number.isFinite(utc)) return false;
+  return new Date(utc).toISOString().slice(0, 10) === value;
+}
+
+function unwrapEnvelope<T>(value: unknown, fallback: T): T {
+  if (value == null) return fallback;
+  if (typeof value === "string") {
+    try { return JSON.parse(value) as T; } catch { return fallback; }
+  }
+  if (typeof value === "object" && "_v" in (value as Record<string, unknown>)) {
+    const wrapped = (value as { _v?: unknown })._v;
+    if (typeof wrapped === "string") {
+      try { return JSON.parse(wrapped) as T; } catch { return fallback; }
+    }
+  }
+  return value as T;
+}
+
+function isExplicitlyInactive(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  if (record.active === false) return true;
+  if (record.inactive === true || record.disabled === true || record.deleted === true || record.archived === true) {
+    return true;
+  }
+  if (typeof record.status === "string") {
+    return ["inactive", "disabled", "deleted", "archived"].includes(record.status.trim().toLowerCase());
+  }
+  return false;
+}
+
+function findBusiness(rawBusiness: unknown, bizId: string): AppBusiness | null {
+  const data = unwrapEnvelope<unknown>(rawBusiness, null);
+  if (Array.isArray(data)) {
+    return (data.find((b) => b && typeof b === "object" && (b as AppBusiness).id === bizId) as AppBusiness | undefined) || null;
+  }
+  if (data && typeof data === "object") {
+    const record = data as Record<string, unknown>;
+    const direct = record[bizId];
+    if (direct && typeof direct === "object") return direct as AppBusiness;
+    for (const value of Object.values(record)) {
+      if (value && typeof value === "object" && (value as AppBusiness).id === bizId) {
+        return value as AppBusiness;
+      }
+    }
+  }
+  return null;
+}
+
+function parseAppUsers(rawUsers: unknown): AppUser[] {
+  const data = unwrapEnvelope<unknown>(rawUsers, []);
+  if (Array.isArray(data)) return data.filter((u): u is AppUser => !!u && typeof u === "object");
+  if (data && typeof data === "object") {
+    return Object.values(data).filter((u): u is AppUser => !!u && typeof u === "object");
+  }
+  return [];
+}
+
+function hasBusinessAccess(role: string, uid: string, users: AppUser[], bizId: string): boolean {
+  if (role === "owner" || role === "super_owner") return true;
+  const user = users.find((u) => u.firebaseUid === uid || u.uid === uid);
+  const rawAllowed = user?.allowedBizIds;
+  const allowed = Array.isArray(rawAllowed)
+    ? rawAllowed.filter((id): id is string => typeof id === "string")
+    : [];
+  return allowed.includes(bizId);
+}
+
+function validInsightsReadback(value: unknown, tenantId: string, bizId: string, date: string, rebuildStartedAt: number): boolean {
+  if (!value || typeof value !== "object") return false;
+  const doc = value as Record<string, unknown>;
+  return doc.tenantId === tenantId &&
+    doc.bizId === bizId &&
+    doc.date === date &&
+    doc.engineVersion === "insights-v1" &&
+    typeof doc.generatedAt === "number" &&
+    doc.generatedAt >= rebuildStartedAt;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -176,6 +288,93 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       missingFields,
       error: null,
     });
+  }
+
+  if (req.method === "POST" && (req.body as { action?: string } | undefined)?.action === "rebuild_after_entry_save") {
+    try {
+      let claims: { uid: string };
+      try {
+        claims = await requireAuth(req);
+      } catch {
+        return res.status(401).json({ ok: false, error: "authentication_required" });
+      }
+
+      const { tenantId, bizId, date } = (req.body || {}) as {
+        tenantId?: unknown;
+        bizId?: unknown;
+        date?: unknown;
+      };
+
+      if (!isSafeId(tenantId) || !isSafeId(bizId)) {
+        return res.status(400).json({ ok: false, error: "invalid_tenant_or_biz_id" });
+      }
+
+      const safeTenantId = tenantId.trim();
+      const safeBizId = bizId.trim();
+
+      if (safeTenantId === safeBizId) {
+        return res.status(400).json({ ok: false, error: "invalid_self_business" });
+      }
+
+      if (!isRealBusinessDate(date)) {
+        return res.status(400).json({ ok: false, error: "date_must_be_real_yyyy_mm_dd" });
+      }
+
+      let role: string;
+      try {
+        role = await requireTenantAccess(claims.uid, safeTenantId, "shift_manager");
+      } catch (e: any) {
+        return res.status(e?.status || 403).json({ ok: false, error: e?.msg || "access_denied" });
+      }
+
+      try {
+        if (await isRateLimited(`analytics-rebuild:${claims.uid}:${safeTenantId}:${safeBizId}`, 8, 60_000)) {
+          return res.status(429).json({ ok: false, error: "rate_limited" });
+        }
+      } catch (e: any) {
+        return res.status(e?.status || 503).json({ ok: false, error: e?.msg || "rate_limiter_unavailable" });
+      }
+
+      const db = getAdminDb();
+      const [businessSnap, usersSnap] = await Promise.all([
+        db.ref(`tenants/${safeTenantId}/app/business`).once("value"),
+        db.ref(`tenants/${safeTenantId}/app/users`).once("value"),
+      ]);
+
+      const business = findBusiness(businessSnap.val(), safeBizId);
+      if (!business || isExplicitlyInactive(business)) {
+        return res.status(404).json({ ok: false, error: "business_not_found" });
+      }
+
+      if (!hasBusinessAccess(role, claims.uid, parseAppUsers(usersSnap.val()), safeBizId)) {
+        return res.status(403).json({ ok: false, error: "business_access_denied" });
+      }
+
+      const rebuildStartedAt = Date.now();
+      const analyticsDoc = await buildAnalyticsForBiz(safeTenantId, safeBizId, date);
+      await saveAnalyticsDoc(analyticsDoc);
+      await buildAndSaveInsights(safeTenantId, safeBizId, date, analyticsDoc);
+
+      const insightsPath = `tenants/${safeTenantId}/biz:${safeBizId}:insights:daily:${date}`;
+      const insightsSnap = await db.ref(insightsPath).once("value");
+      const insightsDoc = insightsSnap.val();
+      if (!validInsightsReadback(insightsDoc, safeTenantId, safeBizId, date, rebuildStartedAt)) {
+        return res.status(502).json({ ok: false, error: "insights_rebuild_not_confirmed" });
+      }
+
+      return res.status(200).json({
+        ok: true,
+        status: "success",
+        action: "rebuild_after_entry_save",
+        date,
+        analyticsBuiltAt: analyticsDoc.meta.builtAt,
+        insightsGeneratedAt: insightsDoc.generatedAt,
+        insightCount: Array.isArray(insightsDoc.insights) ? insightsDoc.insights.length : 0,
+      });
+    } catch (error) {
+      console.error("[analytics/daily-builder] rebuild_after_entry_save error:", (error as Error)?.message ?? "unknown");
+      return res.status(500).json({ ok: false, error: "rebuild_failed" });
+    }
   }
 
   if (!verifyAuth(req)) return res.status(401).json({ error: "Unauthorized" });
