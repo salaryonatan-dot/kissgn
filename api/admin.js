@@ -20,6 +20,9 @@ import { requireTenantAccess, isRateLimited,
   getIP, VALID_ROLES } from "../lib/helpers.js";
 import { isImplicitAllRole, normalizeAllowedBizIds, bizAccessSetUpdates,
   bizAccessDiffUpdates, bizAccessClearUpdates, bizIdsForUid, parseAppUsers } from "../lib/bizAccess.js";
+import { ownerGuardPath, isOwnerAffecting, guardTransition, guardCompensate,
+  ownersFromRolesMap } from "../lib/ownerGuard.js";
+import { randomUUID } from "node:crypto";
 import { getAdminDb, getAdminAuth } from "../lib/adminSdk.js";
 import { sendEmail } from "../lib/sendEmail.js";
 
@@ -1566,30 +1569,37 @@ async function handleRoles(req, res) {
 
   const db = getAdminDb();
 
-  // ── Single authoritative, ATOMIC role change ──────────────────────────────
-  //   role + members + audit + biz_access + app/users are written in ONE
-  //   multi-path db.ref().update() so they can never diverge or partially apply
-  //   (Codex P0: no partial mutations). The last-owner guard is enforced from a
-  //   fresh read taken immediately before the write — we trade Firebase
-  //   transaction isolation on the roles node for cross-path atomicity, which the
-  //   review requires. A malformed app/users blob stops the change (no guessing).
+  // Optional idempotency token + optimistic version (both may be absent — see
+  //   the idempotency note in owner-invariant-implementation.md).
+  const requestId = (body && typeof body.requestId === "string") ? body.requestId : null;
+  if (requestId !== null && (requestId.length > 128 || RTDB_FORBIDDEN.test(requestId))) {
+    res.status(400).json({ error: "invalid requestId" }); return;
+  }
+  const expectedVersion = (body && Number.isInteger(body.expectedVersion)) ? body.expectedVersion : undefined;
+  const opId = requestId || randomUUID();
+
+  // ── Prepare the atomic root mirror (roles + members + audit + biz_access +
+  //   app/users). Owner membership is guarded SEPARATELY below via a Firebase
+  //   transaction on tenants/{tid}/access_meta/owner_guard, which makes the
+  //   "at least one owner" invariant concurrency-safe (a plain pre-read of
+  //   `roles` is NOT). A malformed app/users blob stops the change (no guessing).
   const updates = {};
+  let prevRole, rolesMap, ownerAffecting;
+  const guardOp = { targetUid, nextRole: role, opId, expectedVersion, now: Date.now() };
   try {
     const [rolesSnap, baTreeSnap, appUsersSnap] = await Promise.all([
       db.ref(`tenants/${tenantId}/roles`).once("value"),
       db.ref(`tenants/${tenantId}/biz_access`).once("value"),
       db.ref(`tenants/${tenantId}/app/users`).once("value"),
     ]);
-    const rolesMap = (rolesSnap.val() && typeof rolesSnap.val() === "object") ? rolesSnap.val() : {};
-    const prevRole = rolesMap[targetUid];
+    rolesMap = (rolesSnap.val() && typeof rolesSnap.val() === "object") ? rolesSnap.val() : {};
+    prevRole = rolesMap[targetUid];
+    guardOp.prevRole = prevRole;
+    guardOp.seedOwnerUids = ownersFromRolesMap(rolesMap);
+    ownerAffecting = isOwnerAffecting(prevRole, role);
 
-    // last-owner guard: never remove/downgrade the sole remaining owner.
-    const owners = Object.entries(rolesMap).filter(([, r]) => r === "owner").map(([uid]) => uid);
-    if (owners.length === 1 && owners[0] === targetUid && role !== "owner") {
-      res.status(409).json({ error: "cannot remove or downgrade the last owner" }); return;
-    }
-
-    // biz_access + resolved scope (for app/users sync).
+    // biz_access + resolved scope (validated FIRST so an invalid scope fails
+    //   closed BEFORE the owner-guard transaction — nothing to compensate).
     const existingBiz = bizIdsForUid(baTreeSnap.val(), targetUid);
     let resolvedScope; // undefined = leave app/users scope as-is; null = implicit-all; array = scoped
     if (role === null) {
@@ -1598,7 +1608,6 @@ async function handleRoles(req, res) {
       Object.assign(updates, bizAccessClearUpdates(tenantId, targetUid, existingBiz));
       resolvedScope = null;
     } else if (isImplicitAllRole(prevRole)) {
-      // downgrade implicit → scoped: require explicit, non-empty scope; REPLACE the entire scope.
       let nextBiz;
       try { nextBiz = normalizeAllowedBizIds(body.allowedBizIds); }
       catch { res.status(400).json({ error: "יש להגדיר הרשאות עסק בעת הורדת תפקיד" }); return; }
@@ -1606,19 +1615,19 @@ async function handleRoles(req, res) {
       Object.assign(updates, bizAccessDiffUpdates(tenantId, targetUid, existingBiz, nextBiz)); // clears stale, adds new
       resolvedScope = nextBiz;
     } else if (body.allowedBizIds !== undefined) {
-      // scoped → scoped with an explicit new scope ⇒ replace to exactly that set.
       const nextBiz = normalizeAllowedBizIds(body.allowedBizIds);
       Object.assign(updates, bizAccessDiffUpdates(tenantId, targetUid, existingBiz, nextBiz));
       resolvedScope = nextBiz;
     }
     // scoped → scoped without allowedBizIds ⇒ preserve existing scope (no change).
 
-    // role + membership + audit.
+    // role + membership + audit. Audit key = opId for owner-affecting changes so
+    //   an identical retry overwrites the SAME event (no duplicate audit).
     updates[`tenants/${tenantId}/roles/${targetUid}`]   = role; // null removes the key
     updates[`tenants/${tenantId}/members/${targetUid}`] = role === null ? null : true;
-    const auditKey = db.ref(`tenants/${tenantId}/audit/roles`).push().key;
+    const auditKey = ownerAffecting ? opId : db.ref(`tenants/${tenantId}/audit/roles`).push().key;
     updates[`tenants/${tenantId}/audit/roles/${auditKey}`] = {
-      ts: Date.now(), actorUid: claims.uid, targetUid, role: role ?? "REMOVED",
+      ts: Date.now(), actorUid: claims.uid, targetUid, role: role ?? "REMOVED", opId,
     };
 
     // app/users sync — keep the human-facing list consistent with roles + biz_access.
@@ -1638,12 +1647,53 @@ async function handleRoles(req, res) {
     res.status(500).json({ error: "role update failed" }); return;
   }
 
+  // ── Owner-guard transaction (concurrency-safe) — ONLY for owner-affecting ops.
+  //   Firebase serializes + retries this against the latest committed value, so
+  //   concurrent owner removals cannot both pass. Non-owner-affecting changes
+  //   (scoped-role edits, scope changes) skip the guard entirely.
+  if (ownerAffecting) {
+    let outcome = { code: null, idempotent: false };
+    let committed = false;
+    try {
+      const txRes = await db.ref(ownerGuardPath(tenantId)).transaction((cur) => {
+        const r = guardTransition(cur, guardOp);
+        outcome = { code: r.code || null, idempotent: !!r.idempotent };
+        return r.commit ? r.value : undefined; // undefined = ABORT
+      }, undefined, false);
+      committed = !!txRes.committed;
+    } catch (e) {
+      console.error("[admin-roles] owner guard transaction error:", e?.message);
+      res.status(503).json({ error: "owner_guard_unavailable" }); return;
+    }
+    if (!committed) {
+      if (outcome.idempotent) {
+        // The exact opId was already fully applied (compensation removes the opId
+        //   on mirror failure, so its presence proves the prior mirror succeeded).
+        res.status(200).json({ ok: true, tenantId, targetUid, role, idempotent: true }); return;
+      }
+      const statusMap = { last_owner: 409, stale_version: 409, opId_conflict: 409, owner_guard_pending: 423 };
+      res.status(statusMap[outcome.code] || 409).json({ error: outcome.code || "owner_guard_rejected" }); return;
+    }
+  }
+
+  // ── Root mirror write (atomic across roles/members/audit/biz_access/app_users).
   try {
     await db.ref().update(updates);
   } catch (e) {
     console.error("[admin-roles] atomic role update failed:", e?.message);
+    if (ownerAffecting) {
+      // Compensate the guard so it never silently diverges from the (unchanged)
+      //   role mirror. If compensation itself fails, mark the guard PENDING to
+      //   block further owner mutations until reconciliation.
+      try {
+        await db.ref(ownerGuardPath(tenantId)).transaction((cur) => guardCompensate(cur, guardOp));
+      } catch (ce) {
+        console.error("[admin-roles] guard compensation failed — marking pending:", ce?.message);
+        try { await db.ref(`${ownerGuardPath(tenantId)}/pending`).set({ opId, ts: Date.now() }); } catch (_) {}
+      }
+    }
     res.status(502).json({ error: "db write failed" }); return;
   }
 
-  res.status(200).json({ ok: true, tenantId, targetUid, role });
+  res.status(200).json({ ok: true, tenantId, targetUid, role, opId });
 }

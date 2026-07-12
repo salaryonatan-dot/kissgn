@@ -71,13 +71,13 @@ T("C4 create manager/viewer stage exact scope; owner/super_owner implicit-all", 
 });
 
 // ── Codex finding: ATOMIC DOWNGRADE / no partial mutations ──
-T("A1 [static-src] handleRoles uses ONE atomic multi-path update (no roles transaction)", () => {
+T("A1 [static-src] handleRoles: ONE atomic mirror update; no transaction on the roles NODE (only the owner guard)", () => {
   const rolesStart = admin.indexOf("async function handleRoles");
   const rolesEnd = admin.indexOf("async function ", rolesStart + 10);
   const body = admin.slice(rolesStart, rolesEnd);
-  assert.ok(!body.includes(".transaction("), "roles transaction must be gone");
-  assert.ok(body.includes("Single authoritative, ATOMIC role change"));
-  assert.strictEqual((body.match(/await db\.ref\(\)\.update\(updates\)/g) || []).length, 1, "exactly one atomic update");
+  assert.ok(!/db\.ref\(`tenants\/\$\{tenantId\}\/roles`\)\.transaction\(/.test(body), "no transaction on the roles node");
+  assert.strictEqual((body.match(/await db\.ref\(\)\.update\(updates\)/g) || []).length, 1, "exactly one atomic mirror update");
+  assert.ok(body.includes("ownerGuardPath(tenantId)).transaction("), "owner invariant guarded by a transaction on the guard node");
 });
 T("A2 [static-src] handleRoles writes role+members+audit+biz_access+app/users together", () => {
   const rolesStart = admin.indexOf("async function handleRoles");
@@ -87,10 +87,11 @@ T("A2 [static-src] handleRoles writes role+members+audit+biz_access+app/users to
   assert.ok(body.includes("/audit/roles/${auditKey}`]"));
   assert.ok(body.includes("/app/users`] = { _v: JSON.stringify(list) }"));
 });
-T("A3 last-owner guard preserved", () => {
+T("A3 last-owner invariant preserved (now via concurrency-safe owner guard)", () => {
   const rolesStart = admin.indexOf("async function handleRoles");
   const body = admin.slice(rolesStart, admin.indexOf("async function ", rolesStart + 10));
-  assert.ok(body.includes("cannot remove or downgrade the last owner"));
+  assert.ok(body.includes("if (ownerAffecting) {"), "owner-affecting ops routed through the guard");
+  assert.ok(body.includes("last_owner"), "last-owner rejection mapped");
 });
 
 // ── Codex finding: REPLACEMENT OF STALE SCOPE / no stale entries survive downgrade ──
