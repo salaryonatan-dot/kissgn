@@ -77,7 +77,7 @@ T("A1 [static-src] handleRoles: ONE atomic mirror update; no transaction on the 
   const body = admin.slice(rolesStart, rolesEnd);
   assert.ok(!/db\.ref\(`tenants\/\$\{tenantId\}\/roles`\)\.transaction\(/.test(body), "no transaction on the roles node");
   assert.strictEqual((body.match(/await db\.ref\(\)\.update\(updates\)/g) || []).length, 1, "exactly one atomic mirror update");
-  assert.ok(body.includes("ownerGuardPath(tenantId)).transaction("), "owner invariant guarded by a transaction on the guard node");
+  assert.ok(body.includes("runGuardedOwnerOp("), "owner-affecting changes routed through the shared durable guard runner");
 });
 T("A2 [static-src] handleRoles writes role+members+audit+biz_access+app/users together", () => {
   const rolesStart = admin.indexOf("async function handleRoles");
@@ -87,11 +87,11 @@ T("A2 [static-src] handleRoles writes role+members+audit+biz_access+app/users to
   assert.ok(body.includes("/audit/roles/${auditKey}`]"));
   assert.ok(body.includes("/app/users`] = { _v: JSON.stringify(list) }"));
 });
-T("A3 last-owner invariant preserved (now via concurrency-safe owner guard)", () => {
+T("A3 last-owner invariant preserved (via shared durable owner guard)", () => {
   const rolesStart = admin.indexOf("async function handleRoles");
   const body = admin.slice(rolesStart, admin.indexOf("async function ", rolesStart + 10));
-  assert.ok(body.includes("if (ownerAffecting) {"), "owner-affecting ops routed through the guard");
-  assert.ok(body.includes("last_owner"), "last-owner rejection mapped");
+  assert.ok(body.includes("runGuardedOwnerOp("), "owner-affecting ops routed through the shared runner");
+  assert.ok(admin.includes("last_owner: 409"), "last-owner rejection mapped in the shared runner");
 });
 
 // ── Codex finding: REPLACEMENT OF STALE SCOPE / no stale entries survive downgrade ──

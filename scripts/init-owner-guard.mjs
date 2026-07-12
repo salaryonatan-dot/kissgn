@@ -70,6 +70,23 @@ export function planOwnerGuardInit(tenantsData, opts = {}) {
   return { updates, summary };
 }
 
+/**
+ * Reconciliation detector: find owner_guard nodes with a PREPARED-but-not-mirrored
+ * `pending` operation (a prepare that never completed its mirror — e.g. a crash
+ * between PREPARE and MIRROR). These block further owner ops and must be resumed
+ * (retry same requestId) or compensated. Pure; read-only.
+ */
+export function detectPendingOwnerOps(tenantsData) {
+  const out = [];
+  const tenants = (tenantsData && typeof tenantsData === "object") ? tenantsData : {};
+  for (const [tid, tv] of Object.entries(tenants)) {
+    const g = tv && tv.access_meta ? tv.access_meta.owner_guard : null;
+    const pend = g && g.pending;
+    if (pend && pend.opId) out.push({ tenantId: tid, opId: pend.opId, phase: pend.phase || "prepared", kind: pend.kind || null, ts: pend.ts || null });
+  }
+  return out;
+}
+
 export function parseArgs(argv) {
   const a = { env: null, project: null, apply: false, confirmProduction: null, stopOnZeroOwner: true };
   for (const arg of argv) {
@@ -107,8 +124,13 @@ async function main() {
   const db = admin.database();
   const tenantsSnap = await db.ref("tenants").once("value");
   const { updates, summary } = planOwnerGuardInit(tenantsSnap.val(), { stopOnZeroOwner: args.stopOnZeroOwner, now: Date.now() });
+  const pendingOps = detectPendingOwnerOps(tenantsSnap.val());
   console.log("── owner-guard init summary ──");
-  console.log(JSON.stringify(summary, null, 2));
+  console.log(JSON.stringify({ ...summary, pendingOwnerOps: pendingOps.length }, null, 2));
+  if (pendingOps.length) {
+    console.log("PREPARED-but-unmirrored owner operations (require resume or compensation):");
+    console.log(JSON.stringify(pendingOps, null, 2));
+  }
 
   const decision = writeAllowed(args);
   if (!decision.allowed) {

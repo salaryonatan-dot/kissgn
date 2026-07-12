@@ -20,8 +20,8 @@ import { requireTenantAccess, isRateLimited,
   getIP, VALID_ROLES } from "../lib/helpers.js";
 import { isImplicitAllRole, normalizeAllowedBizIds, bizAccessSetUpdates,
   bizAccessDiffUpdates, bizAccessClearUpdates, bizIdsForUid, parseAppUsers } from "../lib/bizAccess.js";
-import { ownerGuardPath, isOwnerAffecting, guardTransition, guardCompensate,
-  ownersFromRolesMap } from "../lib/ownerGuard.js";
+import { ownerGuardPath, isOwnerAffecting, ownersFromRolesMap,
+  opSignatureV2, guardPrepare, guardMirrorFields, guardCompensateClearPending } from "../lib/ownerGuard.js";
 import { randomUUID } from "node:crypto";
 import { getAdminDb, getAdminAuth } from "../lib/adminSdk.js";
 import { sendEmail } from "../lib/sendEmail.js";
@@ -88,6 +88,7 @@ export default async function handler(req, res) {
   if (action === "delete-user")       return handleDeleteUser(req, res);
   if (action === "update-user")       return handleUpdateUser(req, res);
   if (action === "roles")             return handleRoles(req, res);
+  if (action === "bootstrap-self")    return handleBootstrapSelf(req, res);
   res.status(400).json({ error: "missing or invalid action" });
 }
 
@@ -972,54 +973,95 @@ async function handleDeleteUser(req, res) {
     res.status(400).json({ error: "לא ניתן למחוק את עצמך" }); return;
   }
 
-  // ── Phase 1: Delete Firebase Auth user FIRST (frees up the email) ─────
-  console.log(`[delete-user][debug] Phase 1: calling auth.deleteUser(${firebaseUid})`);
+  // Optional idempotency token (owner-affecting deletes should carry one; if absent
+  //   the server generates one — retry safety is documented as P1).
+  const requestId = (req.body && typeof req.body.requestId === "string") ? req.body.requestId : null;
+  if (requestId !== null && (requestId.length > 128 || RTDB_FORBIDDEN.test(requestId))) {
+    res.status(400).json({ error: "invalid requestId" }); return;
+  }
+  const opId = requestId || randomUUID();
+  const now = Date.now();
+
+  // ── Determine the target's TRUSTED current role + owner-affecting status ──
+  let targetRole = null, rolesMap = {};
+  try {
+    const rolesSnap = await db.ref(`tenants/${tenantId}/roles`).once("value");
+    rolesMap = (rolesSnap.val() && typeof rolesSnap.val() === "object") ? rolesSnap.val() : {};
+    targetRole = rolesMap[firebaseUid] ?? null;
+  } catch (e) {
+    res.status(503).json({ error: "role lookup failed" }); return;
+  }
+  const ownerAffecting = targetRole === "owner";
+
+  // ── Build the RTDB removal mirror (roles/members/users/user_tenants/lookup/biz_access + audit). ──
+  const updates = {};
+  updates[`tenants/${tenantId}/members/${firebaseUid}`] = null;
+  updates[`tenants/${tenantId}/roles/${firebaseUid}`] = null;
+  updates[`tenants/${tenantId}/users/${firebaseUid}`] = null;
+  updates[`user_tenants/${firebaseUid}`] = null;
+  if (username) {
+    const uLower = String(username).toLowerCase();
+    updates[`tenants/${tenantId}/lookup/${uLower}`] = null;
+    updates[`username_index/${uLower}`] = null;
+  }
+  // app/users — drop the target entry (keep the human-facing list consistent).
+  try {
+    const appUsersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
+    const list = parseAppUsers(appUsersSnap.val());
+    const filtered = list.filter(u => !(u && u.firebaseUid === firebaseUid));
+    updates[`tenants/${tenantId}/app/users`] = { _v: JSON.stringify(filtered) };
+  } catch (be) {
+    console.error("[delete-user] app/users read failed (malformed?) — aborting to avoid guessing:", be?.message);
+    res.status(500).json({ error: "רשימת המשתמשים פגומה — פנה לתמיכה" }); return;
+  }
+  try {
+    const baTreeSnap = await db.ref(`tenants/${tenantId}/biz_access`).once("value");
+    Object.assign(updates, bizAccessClearUpdates(tenantId, firebaseUid, bizIdsForUid(baTreeSnap.val(), firebaseUid)));
+  } catch (be) { console.error("[delete-user] biz_access clear read failed:", be?.message); }
+  const auditKey = ownerAffecting ? opId : db.ref(`tenants/${tenantId}/audit/roles`).push().key;
+  updates[`tenants/${tenantId}/audit/roles/${auditKey}`] = {
+    ts: now, actorUid: claims.uid, targetUid: firebaseUid, role: "DELETED", opId,
+  };
+
+  // ── STEP 1+2: remove RTDB authorization FIRST (owner deletes go through the
+  //   durable guard — last-owner is rejected, guard↔roles stay consistent).
+  //   Firebase Auth is deleted LAST, only after RTDB authorization is gone. ──
+  if (ownerAffecting) {
+    const guardOp = { kind: "delete", targetUid: firebaseUid, prevRole: "owner", nextRole: null,
+      opId, seedOwnerUids: ownersFromRolesMap(rolesMap), now };
+    const r = await runGuardedOwnerOp(db, tenantId, guardOp, updates);
+    if (!r.ok) { res.status(r.status).json({ error: r.code }); return; }
+    if (r.idempotent) {
+      // RTDB authorization already removed by the first attempt. Ensure the Auth
+      //   account is also gone (idempotent), then report success.
+      try { await auth.deleteUser(firebaseUid); } catch (e) { if (e.code !== "auth/user-not-found") { res.status(200).json({ ok: true, idempotent: true, authDeleted: false, retryableAuthCleanup: true }); return; } }
+      res.status(200).json({ ok: true, idempotent: true, authDeleted: true }); return;
+    }
+  } else {
+    try {
+      await db.ref().update(updates);
+    } catch (e) {
+      console.error("[delete-user] RTDB removal failed:", e?.message);
+      res.status(502).json({ error: "db write failed" }); return;
+    }
+  }
+
+  // ── STEP 3: delete the Firebase Auth user LAST. If this fails, the account
+  //   already has NO tenant role/membership/access (authorization is gone); we
+  //   report a retryable cleanup condition WITHOUT restoring authorization. ──
   try {
     await auth.deleteUser(firebaseUid);
-    console.log(`[delete-user][debug] auth.deleteUser SUCCEEDED for ${firebaseUid}`);
-  } catch(e) {
-    console.error(`[delete-user] auth.deleteUser FAILED for ${firebaseUid}:`, e.message, e.code);
-    console.error(`[delete-user][debug] Full auth delete error:`, e.stack || e);
-    res.status(500).json({ error: "מחיקת חשבון המשתמש נכשלה — האימייל עדיין תפוס" });
-    return;
+  } catch (e) {
+    if (e.code === "auth/user-not-found") {
+      res.status(200).json({ ok: true, authDeleted: true }); return; // already gone — treat as success
+    }
+    console.error(`[delete-user] auth.deleteUser failed AFTER RTDB removal for ${firebaseUid}:`, e.message, e.code);
+    res.status(500).json({ ok: false, authDeleted: false, retryableAuthCleanup: true,
+      error: "הרשאות המשתמש הוסרו אך מחיקת חשבון ההתחברות נכשלה — נדרש ניקוי חוזר" }); return;
   }
 
-  // ── Phase 2: Clean up RTDB (only after Auth deletion succeeded) ─────
-  try {
-    const updates = {};
-
-    // Tenant references
-    updates[`tenants/${tenantId}/members/${firebaseUid}`] = null;
-    updates[`tenants/${tenantId}/roles/${firebaseUid}`] = null;
-    updates[`tenants/${tenantId}/users/${firebaseUid}`] = null;
-    updates[`user_tenants/${firebaseUid}`] = null;
-
-    // Username lookup/index
-    if (username) {
-      const uLower = username.toLowerCase();
-      updates[`tenants/${tenantId}/lookup/${uLower}`] = null;
-      updates[`username_index/${uLower}`] = null;
-    }
-
-    // biz_access — remove every access entry for this uid (no orphan access).
-    try {
-      const _baTreeSnap = await db.ref(`tenants/${tenantId}/biz_access`).once("value");
-      Object.assign(updates, bizAccessClearUpdates(tenantId, firebaseUid, bizIdsForUid(_baTreeSnap.val(), firebaseUid)));
-    } catch (be) {
-      console.error("[delete-user] biz_access clear read failed:", be?.message);
-    }
-
-    console.log(`[delete-user][debug] Phase 2: RTDB paths to null:`, Object.keys(updates));
-    await db.ref().update(updates);
-
-    console.log(`[delete-user] deleted user ${firebaseUid} (username=${username}) from tenant ${tenantId}`);
-    res.status(200).json({ ok: true, authDeleted: true, debug: { firebaseUidReceived: firebaseUid, tenantIdReceived: tenantId } });
-
-  } catch(e) {
-    // Auth user is already deleted but RTDB cleanup failed — log for manual repair
-    console.error(`[delete-user] RTDB cleanup FAILED (auth already deleted) for ${firebaseUid}:`, e.message);
-    res.status(500).json({ error: "החשבון נמחק אך ניקוי הנתונים נכשל — יש לפנות לתמיכה" });
-  }
+  console.log(`[delete-user] deleted user ${firebaseUid} (username=${username}) from tenant ${tenantId}`);
+  res.status(200).json({ ok: true, authDeleted: true, opId });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1177,6 +1219,13 @@ async function handleUpdateUser(req, res) {
         error: `תפקיד לא חוקי — ערכים מותרים: ${CREATE_USER_ALLOWED_ROLES.join(", ")}`
       });
       return;
+    }
+    // Owner-affecting role changes (e.g. downgrading an existing owner) must NOT
+    //   bypass the durable owner guard. update-user cannot set owner (not in
+    //   CREATE_USER_ALLOWED_ROLES); the only owner-affecting case is downgrading
+    //   a current owner — route those through the guarded roles endpoint.
+    if (isOwnerAffecting(currentUser.role, role)) {
+      res.status(409).json({ error: "owner_role_change_requires_roles_endpoint" }); return;
     }
     changedFields.role = role;
   }
@@ -1520,6 +1569,98 @@ async function handleSendUserInvite(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// POST ?action=bootstrap-self — self-service first-owner bootstrap (Admin SDK).
+//   Writes the canonical roles/{uid}=super_owner + members/{uid}=true so that
+//   `roles` can be fully server-managed (clients no longer write roles directly).
+//   Only permitted on an UNINITIALIZED tenant (no existing roles) — equivalent to
+//   the old `!data.exists()` bootstrap rule, but enforced server-side and no
+//   weaker. Also seeds the owner guard so the first principal is authoritative.
+// ─────────────────────────────────────────────────────────────────────────────
+async function handleBootstrapSelf(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+  let claims;
+  try { claims = await requireAuth(req); }
+  catch { res.status(401).json({ error: "unauthorized" }); return; }
+
+  const { tenantId } = req.body || {};
+  if (!tenantId || typeof tenantId !== "string" || tenantId.length > 128 || RTDB_FORBIDDEN.test(tenantId)) {
+    res.status(400).json({ error: "invalid tenantId" }); return;
+  }
+  const db = getAdminDb();
+  try {
+    const rolesSnap = await db.ref(`tenants/${tenantId}/roles`).once("value");
+    if (rolesSnap.exists() && rolesSnap.hasChildren()) {
+      res.status(409).json({ error: "tenant_already_initialized" }); return; // cannot claim an initialized tenant
+    }
+  } catch (e) {
+    console.error("[bootstrap-self] roles check failed:", e?.message);
+    res.status(503).json({ error: "bootstrap check failed" }); return;
+  }
+
+  const now = Date.now();
+  const uid = claims.uid;
+  const updates = {};
+  updates[`tenants/${tenantId}/roles/${uid}`]   = "super_owner";
+  updates[`tenants/${tenantId}/members/${uid}`] = true;
+  updates[`user_tenants/${uid}`] = tenantId;
+  // Seed the owner guard: the bootstrapping super_owner is an owner-level principal.
+  updates[`tenants/${tenantId}/access_meta/owner_guard`] = {
+    version: 1, ownerUids: { [uid]: true }, updatedAt: now, lastOpId: null, ops: {}, pending: null,
+  };
+  try { await db.ref().update(updates); }
+  catch (e) { console.error("[bootstrap-self] write failed:", e?.message); res.status(500).json({ error: "bootstrap failed" }); return; }
+
+  res.status(200).json({ ok: true, tenantId, role: "super_owner" });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared durable owner-operation runner (used by handleRoles + handleDeleteUser).
+//   PREPARE (transaction) → MIRROR (ONE atomic root update incl. guard finalize)
+//   → COMPENSATE on failure. Returns { ok, status, code, idempotent }.
+//   A crash between PREPARE and MIRROR leaves a durable `prepared` pending that a
+//   retry with the same requestId RESUMES; other owner ops are blocked meanwhile.
+// ─────────────────────────────────────────────────────────────────────────────
+async function runGuardedOwnerOp(db, tenantId, guardOp, baseUpdates) {
+  const gpath = ownerGuardPath(tenantId);
+  guardOp.sig = opSignatureV2(guardOp);
+
+  // ── PREPARE ──
+  let decision = null, code = null;
+  try {
+    const tx = await db.ref(gpath).transaction((cur) => {
+      const r = guardPrepare(cur, guardOp);
+      decision = r.decision; code = r.code || null;
+      return r.decision === "commit" ? r.value : undefined; // commit records prepared; others ABORT
+    }, undefined, false);
+    if (tx.committed) decision = "commit";
+  } catch (e) {
+    console.error("[owner-op] prepare transaction error:", e?.message);
+    return { ok: false, status: 503, code: "owner_guard_unavailable" };
+  }
+  const MAP = { last_owner: 409, stale_version: 409, opId_conflict: 409, owner_op_pending: 423 };
+  if (decision === "reject")     return { ok: false, status: MAP[code] || 409, code };
+  if (decision === "idempotent") return { ok: true, idempotent: true };
+
+  // decision is "commit" or "resume" → we own the prepared pending.
+  const preparedGuard = (await db.ref(gpath).once("value")).val();
+  let mirrorFields;
+  try { mirrorFields = guardMirrorFields(tenantId, guardOp, preparedGuard); }
+  catch (e) { return { ok: false, status: 409, code: "owner_op_pending" }; } // not prepared for us → never report success
+
+  // ── MIRROR: one atomic root update (base mirror + guard finalize together) ──
+  try {
+    await db.ref().update({ ...baseUpdates, ...mirrorFields });
+    return { ok: true };
+  } catch (e) {
+    console.error("[owner-op] mirror write failed:", e?.message);
+    // ── COMPENSATE: clear the prepared pending (ownerUids never advanced). ──
+    try { await db.ref(gpath).transaction((cur) => guardCompensateClearPending(cur, guardOp)); }
+    catch (ce) { console.error("[owner-op] compensation failed — pending remains for reconciliation:", ce?.message); }
+    return { ok: false, status: 502, code: "db_write_failed" };
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // POST ?action=roles
 // ─────────────────────────────────────────────────────────────────────────────
 async function handleRoles(req, res) {
@@ -1585,7 +1726,7 @@ async function handleRoles(req, res) {
   //   `roles` is NOT). A malformed app/users blob stops the change (no guessing).
   const updates = {};
   let prevRole, rolesMap, ownerAffecting;
-  const guardOp = { targetUid, nextRole: role, opId, expectedVersion, now: Date.now() };
+  const guardOp = { kind: "roles", targetUid, nextRole: role, opId, expectedVersion, now: Date.now() };
   try {
     const [rolesSnap, baTreeSnap, appUsersSnap] = await Promise.all([
       db.ref(`tenants/${tenantId}/roles`).once("value"),
@@ -1647,53 +1788,21 @@ async function handleRoles(req, res) {
     res.status(500).json({ error: "role update failed" }); return;
   }
 
-  // ── Owner-guard transaction (concurrency-safe) — ONLY for owner-affecting ops.
-  //   Firebase serializes + retries this against the latest committed value, so
-  //   concurrent owner removals cannot both pass. Non-owner-affecting changes
-  //   (scoped-role edits, scope changes) skip the guard entirely.
+  // ── Owner-affecting changes go through the shared durable guard (prepare →
+  //   atomic mirror+finalize → compensate). Non-owner-affecting changes take the
+  //   plain atomic mirror (no guard).
   if (ownerAffecting) {
-    let outcome = { code: null, idempotent: false };
-    let committed = false;
-    try {
-      const txRes = await db.ref(ownerGuardPath(tenantId)).transaction((cur) => {
-        const r = guardTransition(cur, guardOp);
-        outcome = { code: r.code || null, idempotent: !!r.idempotent };
-        return r.commit ? r.value : undefined; // undefined = ABORT
-      }, undefined, false);
-      committed = !!txRes.committed;
-    } catch (e) {
-      console.error("[admin-roles] owner guard transaction error:", e?.message);
-      res.status(503).json({ error: "owner_guard_unavailable" }); return;
-    }
-    if (!committed) {
-      if (outcome.idempotent) {
-        // The exact opId was already fully applied (compensation removes the opId
-        //   on mirror failure, so its presence proves the prior mirror succeeded).
-        res.status(200).json({ ok: true, tenantId, targetUid, role, idempotent: true }); return;
-      }
-      const statusMap = { last_owner: 409, stale_version: 409, opId_conflict: 409, owner_guard_pending: 423 };
-      res.status(statusMap[outcome.code] || 409).json({ error: outcome.code || "owner_guard_rejected" }); return;
-    }
+    const r = await runGuardedOwnerOp(db, tenantId, guardOp, updates);
+    if (!r.ok) { res.status(r.status).json({ error: r.code }); return; }
+    res.status(200).json({ ok: true, tenantId, targetUid, role, opId, ...(r.idempotent ? { idempotent: true } : {}) });
+    return;
   }
 
-  // ── Root mirror write (atomic across roles/members/audit/biz_access/app_users).
   try {
     await db.ref().update(updates);
   } catch (e) {
     console.error("[admin-roles] atomic role update failed:", e?.message);
-    if (ownerAffecting) {
-      // Compensate the guard so it never silently diverges from the (unchanged)
-      //   role mirror. If compensation itself fails, mark the guard PENDING to
-      //   block further owner mutations until reconciliation.
-      try {
-        await db.ref(ownerGuardPath(tenantId)).transaction((cur) => guardCompensate(cur, guardOp));
-      } catch (ce) {
-        console.error("[admin-roles] guard compensation failed — marking pending:", ce?.message);
-        try { await db.ref(`${ownerGuardPath(tenantId)}/pending`).set({ opId, ts: Date.now() }); } catch (_) {}
-      }
-    }
     res.status(502).json({ error: "db write failed" }); return;
   }
-
   res.status(200).json({ ok: true, tenantId, targetUid, role, opId });
 }

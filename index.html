@@ -1610,14 +1610,19 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
       return;
     }
     if(!confirm(`למחוק את המשתמש "${u.name}"? פעולה זו תמחק את החשבון לגמרי.`)) return;
-    // Delete from Firebase Auth + RTDB via API
+    // Delete from Firebase Auth + RTDB via API. A stable requestId is generated
+    //   ONCE per user action so retries are idempotent (owner-affecting deletes
+    //   resume through the durable owner guard rather than double-applying).
+    const delRequestId = (window.crypto && window.crypto.randomUUID)
+      ? window.crypto.randomUUID()
+      : ("del-" + Date.now() + "-" + Math.random().toString(36).slice(2));
     try {
       const token = await window.getIdToken().catch(() => null);
       if(!token) { setErr("שגיאה: אין חיבור למערכת — יש להתחבר מחדש"); return; }
       const resp = await fetch("/api/admin?action=delete-user", {
         method:"POST",
         headers:{"Content-Type":"application/json","Authorization":"Bearer "+token},
-        body: JSON.stringify({ tenantId, firebaseUid: u.firebaseUid, username: u.username })
+        body: JSON.stringify({ tenantId, firebaseUid: u.firebaseUid, username: u.username, requestId: delRequestId })
       });
       const result = await resp.json();
       if(!resp.ok) {
@@ -3183,47 +3188,32 @@ function PilotDashboard() {
     // fall back to server-side /api/create-tenant which uses Admin SDK.
     if(firebaseUid) {
       let bootstrapOk = false;
-      // Attempt A: direct RTDB write (requires bootstrap rule in RTDB Rules)
+      // roles/members are SERVER-MANAGED (database.rules.json denies direct client
+      //   role writes). Bootstrap the first owner via the authenticated Admin-SDK
+      //   endpoint, which writes canonical roles/members and seeds the owner guard.
       try {
-        await window._rtdbSet(`tenants/${tenantId}/members/${firebaseUid}`, true);
-        await window._rtdbSet(`tenants/${tenantId}/roles/${firebaseUid}`, "super_owner");
-        await window._rtdbSet(`user_tenants/${firebaseUid}`, tenantId);
-        if(firstOwner) {
-          const unameLower = firstOwner.username.toLowerCase();
-          await window._rtdbSet(`tenants/${tenantId}/lookup/${unameLower}`, { email: firstOwner.email, firebaseUid });
-          await window._rtdbSet(`username_index/${unameLower}`, { tenantId, email: firstOwner.email });
-        }
-        bootstrapOk = true;
-        console.log("[setup] direct RTDB bootstrap succeeded");
-      } catch(directErr) {
-        console.warn("[setup] direct RTDB bootstrap failed, trying server fallback:", directErr.message);
-        // Attempt B: server-side /api/bootstrap-owner fallback (Admin SDK, bypasses Rules)
-        try {
-          const idToken = await window._auth.currentUser.getIdToken();
-          const resp = await fetch("/api/bootstrap-owner", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "Authorization": "Bearer " + idToken },
-            body: JSON.stringify({ tenantId, uid: firebaseUid })
-          });
-          const result = await resp.json();
-          if(resp.ok && result.ok) {
-            console.log("[setup] server bootstrap succeeded:", result);
-            // Server wrote members + roles. Now write remaining paths client-side
-            try { await window._rtdbSet(`user_tenants/${firebaseUid}`, tenantId); } catch(_){}
-            if(firstOwner) {
-              const unameLower = firstOwner.username.toLowerCase();
-              try { await window._rtdbSet(`tenants/${tenantId}/lookup/${unameLower}`, { email: firstOwner.email, firebaseUid }); } catch(_){}
-              try { await window._rtdbSet(`username_index/${unameLower}`, { tenantId, email: firstOwner.email }); } catch(_){}
-            }
-            // Upgrade role to super_owner (server wrote "owner")
-            try { await window._rtdbSet(`tenants/${tenantId}/roles/${firebaseUid}`, "super_owner"); } catch(_){}
-            bootstrapOk = true;
-          } else {
-            console.error("[setup] server bootstrap failed:", result);
+        const idToken = await window._auth.currentUser.getIdToken();
+        const resp = await fetch("/api/admin?action=bootstrap-self", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + idToken },
+          body: JSON.stringify({ tenantId })
+        });
+        const result = await resp.json().catch(() => ({}));
+        if(resp.ok && result.ok) {
+          // Non-role paths the client is still allowed to write.
+          try { await window._rtdbSet(`user_tenants/${firebaseUid}`, tenantId); } catch(_){}
+          if(firstOwner) {
+            const unameLower = firstOwner.username.toLowerCase();
+            try { await window._rtdbSet(`tenants/${tenantId}/lookup/${unameLower}`, { email: firstOwner.email, firebaseUid }); } catch(_){}
+            try { await window._rtdbSet(`username_index/${unameLower}`, { tenantId, email: firstOwner.email }); } catch(_){}
           }
-        } catch(serverErr) {
-          console.error("[setup] server bootstrap also failed:", serverErr.message);
+          bootstrapOk = true;
+          console.log("[setup] server bootstrap-self succeeded");
+        } else {
+          console.error("[setup] server bootstrap-self failed:", result);
         }
+      } catch(serverErr) {
+        console.error("[setup] server bootstrap-self error:", serverErr.message);
       }
       if(bootstrapOk) {
         try { sessionStorage.setItem("marjin_tid_" + firebaseUid, tenantId); } catch(_){}
