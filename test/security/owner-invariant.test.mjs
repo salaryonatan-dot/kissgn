@@ -438,5 +438,72 @@ T("P35 no failed operation leaves zero owners", () => {
   assert.ok(ownersOf(w).length>=1);
 });
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SUPER_OWNER DELETE — deletion must classify owner OR super_owner as owner-affecting
+// (isOwnerLevel), route through the durable guard, and never leave a stale UID.
+// ═══════════════════════════════════════════════════════════════════════════
+T("SO1 deleting the ONLY super_owner is rejected", () => {
+  const w=world({version:1,ownerUids:{S:true},ops:{}}, {S:"super_owner"});
+  const r=prep(w, delOp("S","super_owner",["S"],"so1"));
+  assert.strictEqual(r.decision,"reject"); assert.strictEqual(r.code,"last_owner");
+  assert.deepStrictEqual(ownersOf(w),["S"]);
+});
+T("SO2 deleting one of two super_owners succeeds", () => {
+  const w=world({version:1,ownerUids:{S1:true,S2:true},ops:{}}, {S1:"super_owner",S2:"super_owner"});
+  const op=delOp("S1","super_owner",["S1","S2"],"so2");
+  assert.strictEqual(prep(w,op).decision,"commit"); mir(w,op,delBase("S1","so2"));
+  assert.deepStrictEqual(ownersOf(w).sort(),["S2"]);
+  assert.deepStrictEqual(rolesOwners(w).sort(), ownersOf(w).sort());
+});
+T("SO3 deleting a super_owner while one owner remains succeeds", () => {
+  const w=world({version:1,ownerUids:{S:true,A:true},ops:{}}, {S:"super_owner",A:"owner"});
+  const op=delOp("S","super_owner",["S","A"],"so3");
+  assert.strictEqual(prep(w,op).decision,"commit"); mir(w,op,delBase("S","so3"));
+  assert.deepStrictEqual(ownersOf(w).sort(),["A"]);
+});
+T("SO4 deleting remaining owner after super_owner deletion cannot leave zero owner-level", () => {
+  const w=world({version:1,ownerUids:{S:true,A:true},ops:{}}, {S:"super_owner",A:"owner"});
+  const opS=delOp("S","super_owner",["S","A"],"so4a"); prep(w,opS); mir(w,opS,delBase("S","so4a")); // → {A}
+  assert.strictEqual(prep(w, delOp("A","owner",[],"so4b")).code,"last_owner");
+  assert.ok(ownersOf(w).length>=1);
+});
+T("SO5 owner_guard removes the deleted super_owner UID (no stale entry)", () => {
+  const w=world({version:1,ownerUids:{S:true,A:true},ops:{}}, {S:"super_owner",A:"owner"});
+  const op=delOp("S","super_owner",["S","A"],"so5"); prep(w,op); mir(w,op,delBase("S","so5"));
+  assert.ok(!ownersOf(w).includes("S"), "deleted super_owner UID must not remain in owner_guard");
+});
+T("SO6 concurrent deletion of owner and super_owner leaves ≥1 owner-level principal", () => {
+  const w=world({version:1,ownerUids:{A:true,S:true},ops:{}}, {A:"owner",S:"super_owner"});
+  const opA=delOp("A","owner",["A","S"],"so6a");
+  assert.strictEqual(prep(w,opA).decision,"commit");                              // A prepared (pending)
+  assert.strictEqual(prep(w, delOp("S","super_owner",["A","S"],"so6b")).code,"owner_op_pending"); // S blocked
+  mir(w,opA,delBase("A","so6a"));                                                 // → {S}
+  assert.strictEqual(prep(w, delOp("S","super_owner",[],"so6b")).code,"last_owner");
+  assert.ok(ownersOf(w).length>=1);
+});
+T("SO7 non-owner deletion does not invoke the guard", () => {
+  assert.strictEqual(isOwnerLevel("manager"), false);
+  assert.strictEqual(isOwnerLevel("shift_manager"), false);
+  assert.strictEqual(isOwnerLevel("viewer"), false);
+});
+T("SO8 [static-src] delete-user classifies via isOwnerLevel and deletes Auth AFTER the RTDB mirror", () => {
+  const b = admin.slice(admin.indexOf("async function handleDeleteUser"), admin.indexOf("async function ", admin.indexOf("async function handleDeleteUser")+10));
+  assert.ok(b.includes("isOwnerLevel(targetRole)"), "owner-affecting via canonical helper");
+  const guardIdx=b.indexOf("runGuardedOwnerOp(db, tenantId, guardOp, updates)");
+  const authIdx=b.lastIndexOf("await auth.deleteUser(firebaseUid)");
+  assert.ok(guardIdx>0 && guardIdx<authIdx, "guard mirror before Auth delete");
+  assert.ok(b.includes("prevRole: targetRole"), "guardOp uses the real target role, not a hardcoded owner");
+});
+T("SO9 super_owner delete retry with same requestId is idempotent", () => {
+  const w=world({version:1,ownerUids:{S1:true,S2:true},ops:{}}, {S1:"super_owner",S2:"super_owner"});
+  const op=delOp("S1","super_owner",["S1","S2"],"so9"); prep(w,op); mir(w,op,delBase("S1","so9"));
+  assert.strictEqual(prep(w,op).decision,"idempotent");
+});
+T("SO10 [static-src] no bare owner-only classification remains in delete-user", () => {
+  const b = admin.slice(admin.indexOf("async function handleDeleteUser"), admin.indexOf("async function ", admin.indexOf("async function handleDeleteUser")+10));
+  assert.ok(!/ownerAffecting\s*=\s*targetRole\s*===\s*"owner"/.test(b), "must not use literal owner-only comparison");
+});
+
 console.log(`\nTotal: ${pass + fail}  Passed: ${pass}  Failed: ${fail}`);
 process.exit(fail === 0 ? 0 : 1);

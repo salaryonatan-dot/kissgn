@@ -20,7 +20,7 @@ import { requireTenantAccess, isRateLimited,
   getIP, VALID_ROLES } from "../lib/helpers.js";
 import { isImplicitAllRole, normalizeAllowedBizIds, bizAccessSetUpdates,
   bizAccessDiffUpdates, bizAccessClearUpdates, bizIdsForUid, parseAppUsers } from "../lib/bizAccess.js";
-import { ownerGuardPath, isOwnerAffecting, ownersFromRolesMap,
+import { ownerGuardPath, isOwnerAffecting, isOwnerLevel, ownersFromRolesMap,
   opSignatureV2, guardPrepare, guardMirrorFields, guardCompensateClearPending } from "../lib/ownerGuard.js";
 import { randomUUID } from "node:crypto";
 import { getAdminDb, getAdminAuth } from "../lib/adminSdk.js";
@@ -991,7 +991,7 @@ async function handleDeleteUser(req, res) {
   } catch (e) {
     res.status(503).json({ error: "role lookup failed" }); return;
   }
-  const ownerAffecting = targetRole === "owner";
+  const ownerAffecting = isOwnerLevel(targetRole); // owner OR super_owner (canonical helper)
 
   // ── Build the RTDB removal mirror (roles/members/users/user_tenants/lookup/biz_access + audit). ──
   const updates = {};
@@ -1027,7 +1027,7 @@ async function handleDeleteUser(req, res) {
   //   durable guard — last-owner is rejected, guard↔roles stay consistent).
   //   Firebase Auth is deleted LAST, only after RTDB authorization is gone. ──
   if (ownerAffecting) {
-    const guardOp = { kind: "delete", targetUid: firebaseUid, prevRole: "owner", nextRole: null,
+    const guardOp = { kind: "delete", targetUid: firebaseUid, prevRole: targetRole, nextRole: null,
       opId, seedOwnerUids: ownersFromRolesMap(rolesMap), now };
     const r = await runGuardedOwnerOp(db, tenantId, guardOp, updates);
     if (!r.ok) { res.status(r.status).json({ error: r.code }); return; }
