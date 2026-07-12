@@ -18,6 +18,8 @@
 import { requireAuth } from "../lib/verifyToken.js";
 import { requireTenantAccess, isRateLimited,
   getIP, VALID_ROLES } from "../lib/helpers.js";
+import { isImplicitAllRole, normalizeAllowedBizIds, bizAccessSetUpdates,
+  bizAccessDiffUpdates, bizAccessClearUpdates, bizIdsForUid } from "../lib/bizAccess.js";
 import { getAdminDb, getAdminAuth } from "../lib/adminSdk.js";
 import { sendEmail } from "../lib/sendEmail.js";
 
@@ -720,7 +722,7 @@ async function handleCreateUser(req, res) {
   }
 
   // ── Phase 1: Validate input ───────────────────────────────────────────────
-  const { email: rawEmail, username: rawUsername, name, phone, role } = req.body || {};
+  const { email: rawEmail, username: rawUsername, name, phone, role, allowedBizIds } = req.body || {};
 
   if (!rawEmail?.trim() || !rawUsername?.trim() || !role) {
     res.status(400).json({ error: "שדות חובה: email, username, role" }); return;
@@ -786,6 +788,21 @@ async function handleCreateUser(req, res) {
   // Lookup indexes (needed for cross-browser login discovery)
   updates[`tenants/${tenantId}/lookup/${safeUsername}`] = { email: safeEmail, firebaseUid };
   updates[`username_index/${safeUsername}`] = { tenantId, email: safeEmail };
+
+  // biz_access — server-managed per-business authorization index (lib/bizAccess.js).
+  //   create-user only creates scoped roles (CREATE_USER_ALLOWED_ROLES), so we stage
+  //   a `true` entry for each supplied allowedBizId. Absent ⇒ no access (fail-closed;
+  //   the backfill migration or a later update-user can populate it). Clients never
+  //   write biz_access (database.rules.json `.write:false`).
+  if (!isImplicitAllRole(role) && allowedBizIds !== undefined) {
+    let createBiz;
+    try { createBiz = normalizeAllowedBizIds(allowedBizIds); }
+    catch (be) {
+      try { await auth.deleteUser(firebaseUid); } catch (_) {}
+      res.status(be?.status || 400).json({ error: be?.msg || "invalid allowedBizIds" }); return;
+    }
+    Object.assign(updates, bizAccessSetUpdates(tenantId, firebaseUid, createBiz));
+  }
 
   try {
     await db.ref().update(updates);
@@ -942,6 +959,14 @@ async function handleDeleteUser(req, res) {
       const uLower = username.toLowerCase();
       updates[`tenants/${tenantId}/lookup/${uLower}`] = null;
       updates[`username_index/${uLower}`] = null;
+    }
+
+    // biz_access — remove every access entry for this uid (no orphan access).
+    try {
+      const _baTreeSnap = await db.ref(`tenants/${tenantId}/biz_access`).once("value");
+      Object.assign(updates, bizAccessClearUpdates(tenantId, firebaseUid, bizIdsForUid(_baTreeSnap.val(), firebaseUid)));
+    } catch (be) {
+      console.error("[delete-user] biz_access clear read failed:", be?.message);
     }
 
     console.log(`[delete-user][debug] Phase 2: RTDB paths to null:`, Object.keys(updates));
@@ -1354,6 +1379,42 @@ async function handleUpdateUser(req, res) {
     res.status(500).json({ error: "שגיאה בעיבוד רשימת המשתמשים — פנה לתמיכה" }); return;
   }
 
+  // ── biz_access mirror — server-managed per-business authorization index ──
+  //   Merged into the SAME atomic update batch as app/users so the human-facing
+  //   list and the rule-readable index never diverge on a successful write.
+  //   Clients never write biz_access (database.rules.json `.write:false`).
+  {
+    const prevRoleBA = currentUser.role;
+    const effectiveRoleBA = changedFields.role || currentUser.role;
+    try {
+      if (isImplicitAllRole(effectiveRoleBA)) {
+        // owner/super_owner ⇒ implicit ALL-business; clear any lingering scoped entries.
+        const treeSnap = await db.ref(`tenants/${tenantId}/biz_access`).once("value");
+        Object.assign(updates, bizAccessClearUpdates(tenantId, firebaseUid, bizIdsForUid(treeSnap.val(), firebaseUid)));
+      } else {
+        const downgradeFromImplicit = isImplicitAllRole(prevRoleBA);
+        if (allowedBizIdsResolved === undefined) {
+          if (downgradeFromImplicit) {
+            res.status(400).json({ error: "יש להגדיר הרשאות עסק בעת שינוי לתפקיד מוגבל" }); return;
+          }
+          // no allowedBizIds change requested ⇒ leave biz_access untouched
+        } else {
+          const nextBiz = normalizeAllowedBizIds(allowedBizIdsResolved);
+          if (downgradeFromImplicit) {
+            Object.assign(updates, bizAccessSetUpdates(tenantId, firebaseUid, nextBiz));
+          } else {
+            const prevBiz = Array.isArray(currentUser.allowedBizIds) ? normalizeAllowedBizIds(currentUser.allowedBizIds) : [];
+            Object.assign(updates, bizAccessDiffUpdates(tenantId, firebaseUid, prevBiz, nextBiz));
+          }
+        }
+      }
+    } catch (be) {
+      if (be && be.status) { res.status(be.status).json({ error: be.msg }); return; }
+      console.error("[update-user] biz_access sync failed:", be?.message);
+      res.status(500).json({ error: "שגיאה בעדכון הרשאות עסק" }); return;
+    }
+  }
+
   try {
     await db.ref().update(updates);
   } catch (e) {
@@ -1463,6 +1524,37 @@ async function handleRoles(req, res) {
 
   const db = getAdminDb();
 
+  // ── biz_access sync (server-managed per-business authorization index) ──
+  //   Computed BEFORE the role change so a downgrade with no valid business
+  //   scope fails closed without mutating anything. Applied atomically with the
+  //   membership/audit write below. Clients never write biz_access.
+  const _prevRoleSnap = await db.ref(`tenants/${tenantId}/roles/${targetUid}`).once("value");
+  const _prevRoleBA = _prevRoleSnap.val();
+  let roleBizUpdates = {};
+  try {
+    const _baTreeSnap = await db.ref(`tenants/${tenantId}/biz_access`).once("value");
+    const _existingBiz = bizIdsForUid(_baTreeSnap.val(), targetUid);
+    if (role === null || isImplicitAllRole(role)) {
+      roleBizUpdates = bizAccessClearUpdates(tenantId, targetUid, _existingBiz);
+    } else if (isImplicitAllRole(_prevRoleBA)) {
+      // downgrade owner/super_owner → scoped: require explicit, non-empty scope
+      let nextBiz;
+      try { nextBiz = normalizeAllowedBizIds(body.allowedBizIds); }
+      catch { res.status(400).json({ error: "יש להגדיר הרשאות עסק בעת הורדת תפקיד" }); return; }
+      if (nextBiz.length < 1) { res.status(400).json({ error: "יש להגדיר לפחות עסק אחד בעת הורדת תפקיד" }); return; }
+      roleBizUpdates = bizAccessSetUpdates(tenantId, targetUid, nextBiz);
+    } else if (body.allowedBizIds !== undefined) {
+      // scoped → scoped with an explicit new scope ⇒ apply as full set (diff)
+      const nextBiz = normalizeAllowedBizIds(body.allowedBizIds);
+      roleBizUpdates = bizAccessDiffUpdates(tenantId, targetUid, _existingBiz, nextBiz);
+    }
+    // scoped → scoped without allowedBizIds ⇒ preserve existing scope (no change)
+  } catch (be) {
+    if (be && be.status) { res.status(be.status).json({ error: be.msg }); return; }
+    console.error("[admin-roles] biz_access sync failed:", be?.message);
+    res.status(500).json({ error: "biz access sync failed" }); return;
+  }
+
   if (role !== "owner") {
     let committed = false, txError = null, txAbortReason = null;
     try {
@@ -1494,6 +1586,7 @@ async function handleRoles(req, res) {
       [`tenants/${tenantId}/audit/roles/${auditRef.key}`]: {
         ts: Date.now(), actorUid: claims.uid, targetUid, role: role ?? "REMOVED"
       },
+      ...roleBizUpdates,
     });
   } catch (e) {
     console.error("[admin-roles] membership/audit write failed:", e?.message);
