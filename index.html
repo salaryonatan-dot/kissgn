@@ -793,6 +793,167 @@
     window._firebaseReady = true;
     window.dispatchEvent(new Event("firebase-ready"));
   </script>
+  <!-- ═══ REV_FORECAST/v1 — mirrored from src/forecast/revenueForecast.ts ═══
+       Canonical, deterministic revenue month-end forecast + exception-day helpers.
+       This inline block is the SINGLE active forecast implementation in the UI.
+       It must stay behaviorally equivalent to src/forecast/revenueForecast.ts
+       (same thresholds, last-4/min-3, same-weekday, missing/partial/future/exception
+       semantics, confidence bands, warning ids). Do not add a third formula. -->
+  <script>
+  (function(){
+    var WINDOW = 4, MIN_SAMPLES = 3, MAX_CONFIDENCE = 0.95;
+    // Day-of-week 0=Sun..6=Sat for "YYYY-MM-DD" (pure Sakamoto — no ambiguous Date parsing)
+    function dowOf(dateStr){
+      var p = String(dateStr).split("-").map(Number), y=p[0], m=p[1], d=p[2];
+      var t=[0,3,2,5,0,3,5,1,4,6,2,4]; var yy = m<3 ? y-1 : y;
+      return (yy + Math.floor(yy/4) - Math.floor(yy/100) + Math.floor(yy/400) + t[m-1] + d) % 7;
+    }
+    function daysInMonth(year, month1){ return new Date(Date.UTC(year, month1, 0)).getUTCDate(); }
+    function datesInMonth(targetMonth){
+      var p=targetMonth.split("-").map(Number), y=p[0], m=p[1], n=daysInMonth(y,m), out=[];
+      for(var d=1; d<=n; d++) out.push(y+"-"+String(m).padStart(2,"0")+"-"+String(d).padStart(2,"0"));
+      return out;
+    }
+    function num(v){ var n=parseFloat(String(v).replace(/,/g,"")); return isFinite(n)?n:0; }
+    // Map app daily entries -> forecast days (mirrors dailyBuilder has_sales/total logic)
+    function entriesToForecastDays(entries){
+      return (entries||[]).map(function(e){
+        var sales=num(e.sales), del=num(e.deliveries), oi=num(e.other_income);
+        var food = e.supplier_payments ? Object.values(e.supplier_payments).filter(function(v){return v!=='skip';}).reduce(function(a,v){return a+num(v);},0) : num(e.food_cost);
+        var total = sales+del+oi;
+        return { date:e.date, total:total, had_entry:(sales>0||del>0||food>0),
+                 has_sales:(sales>0||del>0||oi>0), is_exception:e.is_exception===true,
+                 is_outlier:e.is_outlier===true, stale:e.stale===true };
+      });
+    }
+    function isValidSample(d){
+      return !!d && d.had_entry===true && isFinite(d.total) && d.total>0 &&
+             d.has_sales!==false && d.is_exception!==true && d.is_outlier!==true && d.stale!==true;
+    }
+    function sameWeekdayForecast(history, weekday, beforeDate){
+      var s = history.filter(function(d){ return d.date < beforeDate && dowOf(d.date)===weekday && isValidSample(d); })
+                     .sort(function(a,b){ return a.date<b.date?-1:a.date>b.date?1:0; }).slice(-WINDOW);
+      var values=s.map(function(d){return d.total;});
+      var avg = values.length ? values.reduce(function(a,b){return a+b;},0)/values.length : null;
+      return { avg:avg, n:values.length, dates:s.map(function(d){return d.date;}), values:values };
+    }
+    function r0(n){ return Math.round(n); }
+    function r4(n){ return Math.round(n*10000)/10000; }
+    // opts: { today, targetMonth, tenantId, bizId }. history = forecast days (all months).
+    function computeRevenueForecast(opts){
+      var history = opts.history||[], today = opts.today, targetMonth = opts.targetMonth || String(today).slice(0,7);
+      var warnings = {}; var setW=function(w){warnings[w]=true;};
+      var byDate={}; history.forEach(function(d){ (byDate[d.date]=byDate[d.date]||[]).push(d); });
+      var dup={}; Object.keys(byDate).forEach(function(k){ if(byDate[k].length>1) dup[k]=true; });
+      if(Object.keys(dup).length) setW("duplicate_dates");
+      var dayOf=function(dt){ return byDate[dt] && byDate[dt][0]; };
+      var baseHistory = history.filter(function(d){ return !dup[d.date]; });
+      var dates = datesInMonth(targetMonth);
+      var wkMap={}; var wkOrder=[]; var ensureWk=function(wd){ if(!wkMap[wd]){ wkMap[wd]={weekday:wd,calendarOccurrencesInMonth:0,actualOccurrences:0,futureOrPartialOccurrences:0,validHistoricalSamples:0,sampleDates:[],sampleValues:[],sampleAverage:null,forecastContribution:0,status:"insufficient_history"}; wkOrder.push(wd); } return wkMap[wd]; };
+      var actual=0, entered=0, completed=0, missing=[], remainingFC=0, remaining=0, partial=null, anyExc=false;
+      dates.forEach(function(date){
+        var wd=dowOf(date), wk=ensureWk(wd); wk.calendarOccurrencesInMonth++;
+        if(date<today){
+          completed++;
+          var e = dup[date]?null:dayOf(date);
+          if(e && e.had_entry===true){ entered++; wk.actualOccurrences++; actual += isFinite(e.total)?e.total:0; if(e.is_exception===true) anyExc=true; if(e.stale===true) setW("stale_source_data"); }
+          else missing.push(date);
+        } else {
+          remaining++; wk.futureOrPartialOccurrences++;
+          if(date===today){ setW("partial_current_day"); var t=dup[date]?null:dayOf(date); partial=(t&&t.had_entry===true&&isFinite(t.total))?t.total:null; }
+          var s=sameWeekdayForecast(baseHistory, wd, date);
+          if(s.n>=MIN_SAMPLES && s.avg!==null){ wk.status="ready"; wk.validHistoricalSamples=s.n; wk.sampleDates=s.dates; wk.sampleValues=s.values; wk.sampleAverage=s.avg; wk.forecastContribution+=s.avg; remainingFC+=s.avg; }
+          else { wk.validHistoricalSamples=s.n; wk.sampleDates=s.dates; wk.sampleValues=s.values; setW("insufficient_weekday_history"); }
+        }
+      });
+      if(missing.length) setW("missing_completed_days");
+      if(anyExc) setW("exception_days_excluded");
+      var remWk = Object.keys(wkMap).map(function(k){return wkMap[k];}).filter(function(w){return w.futureOrPartialOccurrences>0;});
+      var anyReady = remWk.some(function(w){return w.status==="ready";});
+      var allInsuff = remWk.length>0 && !anyReady;
+      var monthEnd = allInsuff ? null : r0(actual+remainingFC);
+      var dataComp = completed>0 ? entered/completed : 1;
+      var sufficient = remWk.filter(function(w){return w.status==="ready";}).length;
+      var wkComp = remWk.length>0 ? sufficient/remWk.length : 1;
+      var completeness = r4(Math.min(dataComp, wkComp));
+      var readyN = remWk.filter(function(w){return w.status==="ready";}).map(function(w){return w.validHistoricalSamples;});
+      var nEff = readyN.length ? Math.min.apply(null, readyN) : 0;
+      var base = Math.min(MAX_CONFIDENCE, Math.max(0.3, 0.3+0.05*nEff));
+      var confidence = allInsuff ? 0 : r4(Math.min(MAX_CONFIDENCE, base*completeness));
+      var band = confidence>=0.75?"high":confidence>=0.5?"medium":"low";
+      var evidence=[];
+      wkOrder.forEach(function(wd){ var w=wkMap[wd]; if(w.sampleAverage!==null) evidence.push("יום "+w.weekday+": ממוצע "+r0(w.sampleAverage)+" מתוך "+w.validHistoricalSamples+" דגימות ("+w.sampleDates.join(", ")+")"); });
+      if(missing.length) evidence.push("ימים שהסתיימו וטרם הוזנו: "+missing.join(", "));
+      return {
+        formulaId:"REV_FORECAST/v1", confidenceFormulaId:"CONFIDENCE/v1",
+        tenantId:opts.tenantId||null, bizId:opts.bizId||null, targetMonth:targetMonth,
+        businessTimezone:"Asia/Jerusalem", today:today, generatedAt:(opts.nowMs||Date.now()),
+        actualCompletedRevenue:r0(actual), partialTodayRevenue: partial===null?null:r0(partial),
+        remainingForecastRevenue:r0(remainingFC), monthEndForecastRevenue:monthEnd,
+        completedCalendarDays:completed, enteredCompletedDays:entered, missingCompletedDays:missing.length,
+        missingCompletedDates:missing, remainingDays:remaining,
+        weekdayBreakdown:Object.keys(wkMap).map(function(k){return wkMap[k];}).sort(function(a,b){return a.weekday-b.weekday;}),
+        completeness:completeness, confidence:confidence, confidenceBand:band, warnings:Object.keys(warnings), evidence:evidence
+      };
+    }
+    function ILS(n){ return "₪"+Math.round(n).toLocaleString("en-US"); }
+    var BAND_HE={high:"גבוה",medium:"בינוני",low:"נמוך"};
+    function buildForecastCardModel(r){
+      var suppressed = r.monthEndForecastRevenue===null;
+      return {
+        title:"תחזית מחזור לסוף החודש",
+        actualLine:"בפועל מימים שהושלמו: "+ILS(r.actualCompletedRevenue),
+        remainingLine:"תחזית לימים שנותרו: "+ILS(r.remainingForecastRevenue),
+        monthEndLine: suppressed ? "אין מספיק היסטוריה לתחזית אמינה" : "תחזית סוף חודש: "+ILS(r.monthEndForecastRevenue),
+        completenessLine:"שלמות נתונים: "+r.enteredCompletedDays+" מתוך "+r.completedCalendarDays+" ימים שהסתיימו",
+        confidenceLine:"ביטחון: "+BAND_HE[r.confidenceBand],
+        missingWarning: r.missingCompletedDays>0 ? "התחזית מבוססת על נתונים חלקיים — "+r.missingCompletedDays+" ימים טרם הוזנו" : null,
+        partialNote: r.partialTodayRevenue!==null ? "היום טרם הסתיים: "+ILS(r.partialTodayRevenue)+" עד כה; בתחזית החודש חושב לפי ממוצע יום השבוע" : null,
+        suppressed:suppressed
+      };
+    }
+    // ── Exception-day helpers (role-gated; Formula Bible §7 + §35) ──
+    var EXCEPTION_ROLES = ["super_owner","owner","manager"];
+    function canEditException(role){ return EXCEPTION_ROLES.indexOf(role) !== -1; }
+    var EXCEPTION_REASONS = ["closure","holiday_eve","holiday","partial_hours","one_off","promotion","operational_failure","extreme_weather","renovation","force_majeure","other"];
+    var REASON_HE = { closure:"סגור", holiday_eve:"ערב חג", holiday:"חג", partial_hours:"שעות פעילות חלקיות", one_off:"אירוע חד-פעמי", promotion:"מבצע חריג", operational_failure:"תקלה תפעולית", extreme_weather:"מזג אוויר קיצוני", renovation:"שיפוץ", force_majeure:"כוח עליון", other:"אחר" };
+    // Legacy entries load as non-exception.
+    function loadExceptionForForm(entry){
+      return { is_exception: (entry && entry.is_exception===true), exception_reason:(entry&&entry.exception_reason)||"", exception_note:(entry&&entry.exception_note)||"" };
+    }
+    // Merge exception fields into a save object. Unauthorized roles CANNOT change
+    // exception status — their attempted changes are stripped and the PRIOR values
+    // are preserved. Authorized changes stamp set_at/set_by. Clearing nulls fields.
+    function sanitizeExceptionOnSave(role, prevEntry, formVals, uid, nowMs){
+      var prev = loadExceptionForForm(prevEntry||{});
+      if(!canEditException(role)){
+        // preserve prior exception state exactly; ignore any forged form fields
+        if(prevEntry && prevEntry.is_exception===true){
+          return { is_exception:true, exception_reason:prevEntry.exception_reason||null, exception_note:prevEntry.exception_note||null, exception_set_at:prevEntry.exception_set_at||null, exception_set_by:prevEntry.exception_set_by||null };
+        }
+        return { is_exception:false };
+      }
+      var wantOn = formVals && formVals.is_exception===true;
+      if(!wantOn){ return { is_exception:false }; } // cleared => nulled/removed
+      var changed = !prev.is_exception || prev.exception_reason!==(formVals.exception_reason||"") || prev.exception_note!==(formVals.exception_note||"");
+      return {
+        is_exception:true,
+        exception_reason: formVals.exception_reason || (prevEntry&&prevEntry.exception_reason) || null,
+        exception_note: (formVals.exception_note!==undefined ? (formVals.exception_note||null) : (prevEntry&&prevEntry.exception_note)||null),
+        exception_set_at: changed ? (nowMs||Date.now()) : ((prevEntry&&prevEntry.exception_set_at)|| (nowMs||Date.now())),
+        exception_set_by: changed ? (uid||null) : ((prevEntry&&prevEntry.exception_set_by)||uid||null)
+      };
+    }
+    window.MarjinForecast = {
+      dowOf:dowOf, daysInMonth:daysInMonth, datesInMonth:datesInMonth, entriesToForecastDays:entriesToForecastDays,
+      sameWeekdayForecast:sameWeekdayForecast, computeRevenueForecast:computeRevenueForecast,
+      buildForecastCardModel:buildForecastCardModel, canEditException:canEditException,
+      EXCEPTION_REASONS:EXCEPTION_REASONS, REASON_HE:REASON_HE, loadExceptionForForm:loadExceptionForForm,
+      sanitizeExceptionOnSave:sanitizeExceptionOnSave, FORMULA_ID:"REV_FORECAST/v1"
+    };
+  })();
+  </script>
+
   <script type="text/babel" data-presets="react">
 
 
@@ -841,6 +1002,9 @@ const EMPTY_ENTRY = {
   security_event:    false,
   includeVat:        false,
   notes:             "",
+  is_exception:      false,
+  exception_reason:  "",
+  exception_note:    "",
 };
 
 // ─── Formatters (module-level for use in helper components) ───────────────────
@@ -3264,9 +3428,19 @@ function PilotDashboard() {
         other_income: Math.round((Number(formFinal.other_income)||0) / VAT_RATE),
         includeVat: false,
       } : formFinal;
+      // Exception-day fields via the canonical role-gated sanitizer (REV_FORECAST/v1
+      // §7/§35): unauthorized roles cannot change exception state (forged fields
+      // stripped, prior preserved); authorized changes stamp set_at/set_by.
+      const __prevEntry = editingId!==null ? entries[editingId] : null;
+      const __exc = window.MarjinForecast.sanitizeExceptionOnSave(
+        loggedInUser?.role, __prevEntry,
+        { is_exception: formFinal.is_exception===true, exception_reason: formFinal.exception_reason, exception_note: formFinal.exception_note },
+        (loggedInUser?.firebaseUid || loggedInUser?.uid || null), Date.now()
+      );
+      const __applyExc = (o)=>{ const c={...o}; delete c.is_exception; delete c.exception_reason; delete c.exception_note; delete c.exception_set_at; delete c.exception_set_by; return {...c, ...__exc}; };
       let updated = editingId!==null
-        ? entries.map((e,i)=>i===editingId?{...netForm}:e)
-        : [...entries,{...netForm}];
+        ? entries.map((e,i)=>i===editingId?__applyExc(netForm):e)
+        : [...entries,__applyExc(netForm)];
       updated.sort((a,b)=>a.date.localeCompare(b.date));
 
       const persistResult = await persist(updated, null);
@@ -3896,7 +4070,12 @@ function PilotDashboard() {
             const salesPct = tSales>0 ? Math.min(Math.round((metrics.totalSales/tSales)*100),100) : 0;
             const dayPct   = DAYS_IN_MONTH>0 ? Math.round((DAY_OF_MONTH/DAYS_IN_MONTH)*100) : 0;
             const daysLeft = DAYS_IN_MONTH - DAY_OF_MONTH;
-            const fSales   = metrics.totalSales + (DAY_OF_MONTH>0 ? (metrics.totalSales/DAY_OF_MONTH)*daysLeft : 0);
+            // REV_FORECAST/v1 (mirrored from src/forecast/revenueForecast.ts).
+            // Replaces the DEPRECATED naive MTD run-rate. Single active revenue
+            // forecast across the app.
+            const __mfToday = new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jerusalem"});
+            const __mfDash = window.MarjinForecast.computeRevenueForecast({tenantId:(window._currentTenantId||null),bizId:(currentBizId||null),today:__mfToday,targetMonth:__mfToday.slice(0,7),history:window.MarjinForecast.entriesToForecastDays(entries)});
+            const fSales   = __mfDash.monthEndForecastRevenue!=null ? __mfDash.monthEndForecastRevenue : metrics.totalSales;
             const fProfit  = fSales*(1-tFood/100-tLabor/100-((businessConfig.rentType==="pct"?(businessConfig.rentPct||0):0)+(businessConfig.hasRoyalty?(businessConfig.royaltyPct||0):0))/100)-metrics.fixedRegular-(businessConfig.rentType==="fixed"?(businessConfig.rentFixed||0):0);
             const gap      = Math.round(fSales - tSales);
 
@@ -4683,6 +4862,25 @@ function PilotDashboard() {
             )}
             <label className="label">הערות</label>
             <textarea className="input" style={{minHeight:52,resize:"vertical"}} placeholder="חריגות, אירועים..." value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))}/>
+
+            {/* Exception-day control (REV_FORECAST/v1) — role-gated to super_owner/owner/manager */}
+            {window.MarjinForecast.canEditException(loggedInUser?.role) && (
+              <div style={{marginTop:8,padding:"10px 12px",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:8}}>
+                <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,fontWeight:600,color:"#92400E"}}>
+                  <input type="checkbox" checked={form.is_exception===true} onChange={e=>setForm(f=>({...f,is_exception:e.target.checked,...(e.target.checked?{}:{exception_reason:"",exception_note:""})}))}/>
+                  יום חריג — לא לכלול בבסיס התחזית
+                </label>
+                {form.is_exception===true && (
+                  <div style={{marginTop:8}}>
+                    <select className="input" value={form.exception_reason||""} onChange={e=>setForm(f=>({...f,exception_reason:e.target.value}))}>
+                      <option value="">בחר סיבה…</option>
+                      {window.MarjinForecast.EXCEPTION_REASONS.map(r=>(<option key={r} value={r}>{window.MarjinForecast.REASON_HE[r]}</option>))}
+                    </select>
+                    <textarea className="input" style={{marginTop:6,minHeight:40,resize:"vertical"}} placeholder="הערה ליום החריג" value={form.exception_note||""} onChange={e=>setForm(f=>({...f,exception_note:e.target.value}))}/>
+                  </div>
+                )}
+              </div>
+            )}
 
             {(()=>{
               const rawInc=(Number(form.sales)||0)+(Number(form.deliveries)||0)+(Number(form.other_income)||0);
@@ -8341,7 +8539,12 @@ function ForecastScreen({ metrics, lastYear, saveLastYear, currentMonth, entries
     return { fSalesExtra, fFoodExtra, fLaborExtra, dowDetails };
   })();
 
-  const fSales = metrics.totalSales   + fSalesExtra;
+  // REV_FORECAST/v1 — canonical revenue forecast is the single headline number.
+  // (fSalesExtra/dowDetails retained only for the illustrative weekday breakdown.)
+  const __mfToday = new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jerusalem"});
+  const __mf = window.MarjinForecast.computeRevenueForecast({tenantId:(tenantId||null),bizId:(bizId||null),today:__mfToday,targetMonth:__mfToday.slice(0,7),history:window.MarjinForecast.entriesToForecastDays(entries)});
+  const __mfCard = window.MarjinForecast.buildForecastCardModel(__mf);
+  const fSales = __mf.monthEndForecastRevenue!=null ? __mf.monthEndForecastRevenue : (metrics.totalSales + fSalesExtra);
   const fFood  = metrics.totalFood    + fFoodExtra;
   const fLabor = metrics.totalPayroll + fLaborExtra;
 
@@ -8412,9 +8615,17 @@ function ForecastScreen({ metrics, lastYear, saveLastYear, currentMonth, entries
           <div className="card card-p" style={{ marginBottom:10}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
               <div style={{fontSize:11,fontWeight:700,color:"#6B7280",textTransform:"uppercase",letterSpacing:1}}>
-                תחזית סוף חודש — ממוצע 6 ימים לפי יום שבוע
+                {__mfCard.title} — REV_FORECAST/v1
               </div>
               <div style={{fontSize:11,color:"#9CA3AF"}}>יום {DAY_OF_MONTH}/{DAYS_IN_MONTH}</div>
+            </div>
+            <div style={{marginBottom:12,fontSize:12,color:"#374151",lineHeight:1.9}}>
+              <div>{__mfCard.actualLine}</div>
+              <div>{__mfCard.remainingLine}</div>
+              <div style={{fontWeight:700,color:__mfCard.suppressed?"#B45309":"#111827"}}>{__mfCard.monthEndLine}</div>
+              <div style={{color:"#6B7280"}}>{__mfCard.completenessLine} · {__mfCard.confidenceLine}</div>
+              {__mfCard.missingWarning && <div style={{color:"#92400E",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:6,padding:"6px 10px",marginTop:6}}>{__mfCard.missingWarning}</div>}
+              {__mfCard.partialNote && <div style={{color:"#6B7280",marginTop:4}}>{__mfCard.partialNote}</div>}
             </div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:6}}>
               <MetricBox label="הכנסות חזויות"
