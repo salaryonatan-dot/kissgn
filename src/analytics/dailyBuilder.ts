@@ -33,6 +33,14 @@ interface DailyEntry {
   other_expense?: number | string;
   hourly_payroll?: Record<string, number | string>;
   supplier_payments?: Record<string, number | string>;
+  // Exception-day model (Formula Bible §7). Legacy entries omit these and are
+  // treated as non-exception. An exception day still counts in ACTUAL revenue
+  // but is excluded from forecast/anomaly baselines.
+  is_exception?: boolean;
+  exception_reason?: string;
+  exception_note?: string;
+  exception_set_at?: number;
+  exception_set_by?: string;
 }
 
 interface BusinessConfig {
@@ -55,6 +63,16 @@ export interface AnalyticsDoc {
   tenantId: string;
   bizId: string;
   bizName: string;
+
+  // Exception-day signal read by the forecast engine and the revenue anomaly
+  // rules. `is_exception=false` for legacy/normal days.
+  is_exception: boolean;
+  exception: {
+    reason: string | null;
+    note: string | null;
+    set_at: number | null;
+    set_by: string | null;
+  } | null;
 
   revenue: {
     sales: number;
@@ -435,11 +453,22 @@ export async function buildAnalyticsForBiz(
   const calendar = buildCalendar(date);
   const war_day = classifyOperationalStatus(alerts, hadEntry);
 
+  const isException = todayEntry?.is_exception === true;
+
   return {
     date,
     tenantId,
     bizId,
     bizName,
+    is_exception: isException,
+    exception: isException
+      ? {
+          reason: todayEntry?.exception_reason ?? null,
+          note: todayEntry?.exception_note ?? null,
+          set_at: todayEntry?.exception_set_at ?? null,
+          set_by: todayEntry?.exception_set_by ?? null,
+        }
+      : null,
     revenue: {
       sales,
       deliveries,
