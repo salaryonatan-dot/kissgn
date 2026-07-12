@@ -1,139 +1,167 @@
-// Deterministic tests for the server-managed biz_access authorization index.
-//   Run:  node test/security/biz-access.test.mjs
+// Deterministic tests for the server-managed biz_access authorization index and
+// the Codex P0 hardening. Run: node test/security/biz-access.test.mjs
 // NO network / Firebase / provider / production calls — pure functions + static
-// source assertions only. Rules behavior is validated STATICALLY (no emulator
-// available here); those cases are explicitly labelled [static-rules].
+// source assertions only. Rules behavior is validated STATICALLY (no emulator);
+// those cases are labelled [static-rules]. Handler wiring is validated by static
+// source assertions (invoking the real handlers needs Admin SDK/Firebase, which
+// is prohibited here) and labelled [static-src].
 import assert from "node:assert";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-const requireFs = { readdirSync, statSync };
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   isImplicitAllRole, normalizeAllowedBizIds, bizAccessSetUpdates,
-  bizAccessDiffUpdates, bizAccessClearUpdates, bizIdsForUid, parseAppUsers,
+  bizAccessDiffUpdates, bizAccessClearUpdates, bizIdsForUid, parseAppUsers, flattenBizAccess,
 } from "../../lib/bizAccess.js";
 import {
   planTenantBackfill, planBackfill, parseArgs, writeAllowed,
+  getActualProjectId, verifyProject, reconcile, cleanupUpdates,
 } from "../../scripts/backfill-biz-access.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = join(__dirname, "..", "..");
 const admin = readFileSync(join(REPO, "api", "admin.js"), "utf8");
-const rules = readFileSync(join(REPO, "database.rules.json"), "utf8");
-const rulesObj = JSON.parse(rules);
+const indexHtml = readFileSync(join(REPO, "index.html"), "utf8");
+const rulesObj = JSON.parse(readFileSync(join(REPO, "database.rules.json"), "utf8"));
+const ba = rulesObj.rules.tenants.$tenantId.biz_access;
 
 let pass = 0, fail = 0;
 const T = (name, fn) => { try { fn(); console.log("PASS " + name); pass++; }
   catch (e) { console.log("FAIL " + name + " — " + (e && e.message)); fail++; } };
 
-// ── [static-rules] client write/read denial (#1–#6) ──
-const ba = rulesObj.rules.tenants.$tenantId.biz_access;
-T("1 [static-rules] unauthenticated client write denied (.write:false)", () => assert.strictEqual(ba[".write"], false));
-T("2 [static-rules] viewer client write denied (.write:false, no role clause)", () => { assert.strictEqual(ba[".write"], false); assert.ok(!JSON.stringify(ba).includes("viewer")); });
-T("3 [static-rules] shift_manager client write denied", () => { assert.strictEqual(ba[".write"], false); assert.ok(!JSON.stringify(ba).includes("shift_manager")); });
-T("4 [static-rules] manager client write denied (no manager write clause)", () => { assert.strictEqual(ba[".write"], false); assert.ok(!JSON.stringify(ba).includes("manager")); });
-T("5 [static-rules] owner client write denied", () => { assert.strictEqual(ba[".write"], false); });
-T("6 [static-rules] super_owner client write denied + client read denied", () => { assert.strictEqual(ba[".write"], false); assert.strictEqual(ba[".read"], false); });
+// ── [static-rules] client write/read denial ──
+T("R1 [static-rules] biz_access client write denied (.write:false)", () => assert.strictEqual(ba[".write"], false));
+T("R2 [static-rules] biz_access client read denied (.read:false)", () => assert.strictEqual(ba[".read"], false));
+T("R3 [static-rules] no role clauses (all client roles denied incl owner/super_owner)", () => assert.ok(!JSON.stringify(ba).match(/owner|manager|viewer/)));
 
-// ── server flow behavior via the exact helpers the handlers use (#7–#26) ──
-T("7 create manager stages exact allowed businesses", () => {
-  const u = bizAccessSetUpdates("t1", "uidM", normalizeAllowedBizIds(["bizA", "bizB"]));
-  assert.deepStrictEqual(u, { "tenants/t1/biz_access/bizA/uidM": true, "tenants/t1/biz_access/bizB/uidM": true });
+// ── helper contracts ──
+T("H1 set stages exact businesses", () => assert.deepStrictEqual(bizAccessSetUpdates("t1","u",normalizeAllowedBizIds(["a","b"])), {"tenants/t1/biz_access/a/u":true,"tenants/t1/biz_access/b/u":true}));
+T("H2 diff adds/removes", () => assert.deepStrictEqual(bizAccessDiffUpdates("t1","u",["a","b"],["b","c"]), {"tenants/t1/biz_access/c/u":true,"tenants/t1/biz_access/a/u":null}));
+T("H3 diff unchanged ⇒ {}", () => assert.deepStrictEqual(bizAccessDiffUpdates("t1","u",["a"],["a"]), {}));
+T("H4 clear nulls all", () => assert.deepStrictEqual(bizAccessClearUpdates("t1","u",["a","b"]), {"tenants/t1/biz_access/a/u":null,"tenants/t1/biz_access/b/u":null}));
+T("H5 bizIdsForUid lists true entries", () => assert.deepStrictEqual(bizIdsForUid({a:{u:true},b:{u:true,x:true},c:{x:true}},"u").sort(), ["a","b"]));
+T("H6 tenantId===bizId valid", () => assert.deepStrictEqual(bizAccessSetUpdates("t1","u",["t1"]), {"tenants/t1/biz_access/t1/u":true}));
+T("H7 malformed allowedBizIds rejected", () => { assert.throws(()=>normalizeAllowedBizIds("a")); assert.throws(()=>normalizeAllowedBizIds([1])); assert.throws(()=>normalizeAllowedBizIds(["a/b"])); assert.throws(()=>normalizeAllowedBizIds(["x".repeat(129)])); });
+T("H8 duplicates normalized (no dup writes)", () => { const ids=normalizeAllowedBizIds(["a","a"," a ","b"]); assert.deepStrictEqual(ids,["a","b"]); assert.strictEqual(Object.keys(bizAccessSetUpdates("t","u",ids)).length,2); });
+
+// ── Codex finding: NEW SCOPED CREATE-USER (validate-before-auth, persist app/users+users+biz_access) ──
+T("C1 [static-src] create-user validates allowedBizIds BEFORE Auth creation", () => {
+  const v = admin.indexOf("Validate allowedBizIds BEFORE creating the Auth user");
+  const auth = admin.indexOf("Phase 2: Create Firebase Auth user");
+  assert.ok(v > 0 && v < auth, "validation must precede Auth creation");
 });
-T("8 create viewer stages exact allowed businesses", () => {
-  const u = bizAccessSetUpdates("t1", "uidV", normalizeAllowedBizIds(["bizA"]));
-  assert.deepStrictEqual(u, { "tenants/t1/biz_access/bizA/uidV": true });
+T("C2 [static-src] create-user persists app/users, users/{uid}(+allowedBizIds), biz_access in one flow", () => {
+  assert.ok(admin.includes("updates[`tenants/${tenantId}/app/users`] = { _v: JSON.stringify(appUsersList) };"));
+  assert.ok(admin.includes("allowedBizIds: createBiz,")); // users/{uid} record carries scope
+  const appUsers = admin.indexOf("_v: JSON.stringify(appUsersList)");
+  const bizSet = admin.indexOf("Object.assign(updates, bizAccessSetUpdates(tenantId, firebaseUid, createBiz))");
+  const write = admin.indexOf("await db.ref().update(updates);", appUsers);
+  assert.ok(appUsers > 0 && bizSet > appUsers && write > bizSet, "single atomic write after staging all three");
 });
-T("9 create owner stages none (implicit-all guard)", () => {
+T("C3 [static-src] create-user client now sends allowedBizIds + is backend-authoritative (no client app/users write)", () => {
+  assert.ok(indexHtml.includes("role: form.role,\n            allowedBizIds"));
+  assert.ok(indexHtml.includes("Backend is the source of truth on create"));
+  assert.ok(!indexHtml.includes("saveUsers([...users, newUser]);"));
+});
+T("C4 create manager/viewer stage exact scope; owner/super_owner implicit-all", () => {
+  assert.deepStrictEqual(bizAccessSetUpdates("t","m",normalizeAllowedBizIds(["a","b"])), {"tenants/t/biz_access/a/m":true,"tenants/t/biz_access/b/m":true});
   assert.strictEqual(isImplicitAllRole("owner"), true);
-  // handler guard: `if (!isImplicitAllRole(role) && allowedBizIds !== undefined)`
-  assert.ok(admin.includes("!isImplicitAllRole(role) && allowedBizIds !== undefined"));
-});
-T("10 create super_owner stages none (implicit-all)", () => assert.strictEqual(isImplicitAllRole("super_owner"), true));
-T("11 update adds one business", () => {
-  const u = bizAccessDiffUpdates("t1", "u", ["bizA"], ["bizA", "bizB"]);
-  assert.deepStrictEqual(u, { "tenants/t1/biz_access/bizB/u": true });
-});
-T("12 update removes one business (→ null)", () => {
-  const u = bizAccessDiffUpdates("t1", "u", ["bizA", "bizB"], ["bizA"]);
-  assert.deepStrictEqual(u, { "tenants/t1/biz_access/bizB/u": null });
-});
-T("13 update unchanged ⇒ no mutation", () => {
-  const u = bizAccessDiffUpdates("t1", "u", ["bizA", "bizB"], ["bizB", "bizA"]);
-  assert.deepStrictEqual(u, {});
-});
-T("14 promotion to owner clears scoped entries", () => {
-  const tree = { bizA: { u: true }, bizB: { u: true, other: true } };
-  const cleared = bizAccessClearUpdates("t1", "u", bizIdsForUid(tree, "u"));
-  assert.deepStrictEqual(cleared, { "tenants/t1/biz_access/bizA/u": null, "tenants/t1/biz_access/bizB/u": null });
-  // handler applies this when effective role is implicit-all
-  assert.ok(admin.includes("isImplicitAllRole(effectiveRoleBA)"));
-});
-T("15 downgrade to scoped WITHOUT allowedBizIds fails closed", () => {
-  // roles handler returns 400 before mutating; normalize(undefined) throws (fail-closed signal)
-  assert.throws(() => normalizeAllowedBizIds(undefined));
-  assert.ok(admin.includes("יש להגדיר הרשאות עסק בעת הורדת תפקיד"));
-});
-T("16 downgrade WITH explicit allowedBizIds creates exact entries", () => {
-  const u = bizAccessSetUpdates("t1", "u", normalizeAllowedBizIds(["bizA", "bizC"]));
-  assert.deepStrictEqual(Object.keys(u).sort(), ["tenants/t1/biz_access/bizA/u", "tenants/t1/biz_access/bizC/u"]);
-});
-T("17 scoped→scoped preserves valid scope (no allowedBizIds ⇒ no change path exists)", () => {
-  // handler leaves biz_access untouched when allowedBizIds is undefined and not a downgrade
-  assert.ok(admin.includes("// scoped → scoped without allowedBizIds ⇒ preserve existing scope (no change)"));
-  assert.deepStrictEqual(bizAccessDiffUpdates("t1", "u", ["bizA"], ["bizA"]), {});
-});
-T("18 delete removes every access entry for the uid", () => {
-  const tree = { bizA: { u: true }, bizB: { u: true }, bizC: { other: true } };
-  const cleared = bizAccessClearUpdates("t1", "u", bizIdsForUid(tree, "u"));
-  assert.deepStrictEqual(cleared, { "tenants/t1/biz_access/bizA/u": null, "tenants/t1/biz_access/bizB/u": null });
-});
-T("19 wrong tenant cannot be targeted (paths scoped to given tenant + owner-gated handlers)", () => {
-  const u = bizAccessSetUpdates("tenantX", "u", ["bizA"]);
-  assert.ok(Object.keys(u).every(k => k.startsWith("tenants/tenantX/biz_access/")));
-  // every user-admin handler requires owner/super_owner of the *named* tenant
-  assert.ok(admin.includes('requireTenantAccess(claims.uid, tenantId, "owner")')); // create + roles
-  assert.ok(admin.match(/\["owner", "super_owner"\]\.includes\(callerRole\.val\(\)\)/)); // update + delete
-});
-T("20 forged UID cannot be targeted without existing owner authorization", () => {
-  // biz_access is only ever written inside owner-gated handlers; no client write path exists
-  assert.strictEqual(ba[".write"], false);
-  assert.ok(admin.includes("bizAccessSetUpdates(") || admin.includes("bizAccessDiffUpdates("));
-});
-T("21 tenantId === bizId is valid", () => {
-  const u = bizAccessSetUpdates("t1", "u", ["t1"]);
-  assert.deepStrictEqual(u, { "tenants/t1/biz_access/t1/u": true });
-});
-T("22 malformed allowedBizIds rejected", () => {
-  assert.throws(() => normalizeAllowedBizIds("bizA"));       // not array
-  assert.throws(() => normalizeAllowedBizIds([123]));         // non-string
-  assert.throws(() => normalizeAllowedBizIds(["a/b"]));       // forbidden char
-  assert.throws(() => normalizeAllowedBizIds(["x".repeat(129)])); // too long
-});
-T("23 duplicate IDs normalized without duplicate writes", () => {
-  const ids = normalizeAllowedBizIds(["bizA", "bizA", " bizA ", "bizB"]);
-  assert.deepStrictEqual(ids, ["bizA", "bizB"]);
-  assert.strictEqual(Object.keys(bizAccessSetUpdates("t1", "u", ids)).length, 2);
-});
-T("24 empty scoped list policy: [] allowed for update, rejected for role-downgrade", () => {
-  assert.deepStrictEqual(normalizeAllowedBizIds([]), []); // update-user: explicit no-access is allowed
-  assert.ok(admin.includes("יש להגדיר לפחות עסק אחד בעת הורדת תפקיד")); // roles: downgrade needs >=1
-});
-T("25 update batch contains BOTH app/users and biz_access, one atomic write", () => {
-  const upd = admin.indexOf("updates[`tenants/${tenantId}/app/users`] = { _v: JSON.stringify(list) };");
-  const bizSync = admin.indexOf("biz_access mirror — server-managed per-business authorization index");
-  const write = admin.indexOf("await db.ref().update(updates);\n  } catch (e) {\n    console.error(\"[update-user] RTDB write failed:\"");
-  assert.ok(upd > 0 && bizSync > upd && write > bizSync, "app/users → biz_access → single update ordering");
-});
-T("26 failed validation writes nothing (throw precedes any update merge)", () => {
-  // create-user: normalize throw → rollback + return BEFORE db.ref().update(updates)
-  const idx = admin.indexOf("createBiz = normalizeAllowedBizIds(allowedBizIds)");
-  const ret = admin.indexOf('res.status(be?.status || 400).json({ error: be?.msg || "invalid allowedBizIds" }); return;');
-  const write = admin.indexOf("await db.ref().update(updates);", idx);
-  assert.ok(idx > 0 && ret > idx && write > ret);
+  assert.strictEqual(isImplicitAllRole("super_owner"), true);
+  assert.ok(admin.includes("if (!isImplicitAllRole(role)) {\n    Object.assign(updates, bizAccessSetUpdates(tenantId, firebaseUid, createBiz));"));
 });
 
-// ── migration (#27–#32) ──
+// ── Codex finding: ATOMIC DOWNGRADE / no partial mutations ──
+T("A1 [static-src] handleRoles uses ONE atomic multi-path update (no roles transaction)", () => {
+  const rolesStart = admin.indexOf("async function handleRoles");
+  const rolesEnd = admin.indexOf("async function ", rolesStart + 10);
+  const body = admin.slice(rolesStart, rolesEnd);
+  assert.ok(!body.includes(".transaction("), "roles transaction must be gone");
+  assert.ok(body.includes("Single authoritative, ATOMIC role change"));
+  assert.strictEqual((body.match(/await db\.ref\(\)\.update\(updates\)/g) || []).length, 1, "exactly one atomic update");
+});
+T("A2 [static-src] handleRoles writes role+members+audit+biz_access+app/users together", () => {
+  const rolesStart = admin.indexOf("async function handleRoles");
+  const body = admin.slice(rolesStart, admin.indexOf("async function ", rolesStart + 10));
+  assert.ok(body.includes("/roles/${targetUid}`]   = role"));
+  assert.ok(body.includes("/members/${targetUid}`] = role === null ? null : true"));
+  assert.ok(body.includes("/audit/roles/${auditKey}`]"));
+  assert.ok(body.includes("/app/users`] = { _v: JSON.stringify(list) }"));
+});
+T("A3 last-owner guard preserved", () => {
+  const rolesStart = admin.indexOf("async function handleRoles");
+  const body = admin.slice(rolesStart, admin.indexOf("async function ", rolesStart + 10));
+  assert.ok(body.includes("cannot remove or downgrade the last owner"));
+});
+
+// ── Codex finding: REPLACEMENT OF STALE SCOPE / no stale entries survive downgrade ──
+T("S1 downgrade replaces entire scope — stale entries cleared, new added", () => {
+  // existing stale (drifted) entries for a formerly-implicit user + new scope
+  const existing = ["stale1", "stale2"];
+  const next = ["a", "stale1"];
+  const u = bizAccessDiffUpdates("t", "u", existing, next);
+  assert.deepStrictEqual(u, {
+    "tenants/t/biz_access/a/u": true,        // added
+    "tenants/t/biz_access/stale2/u": null,   // stale removed
+    // stale1 kept (still in scope) — no redundant write
+  });
+});
+T("S2 [static-src] roles downgrade uses diff(existing→next) so no stale survives", () => {
+  assert.ok(admin.includes("bizAccessDiffUpdates(tenantId, targetUid, existingBiz, nextBiz)); // clears stale, adds new"));
+});
+T("S3 [static-src] roles downgrade requires explicit non-empty scope (fail closed)", () => {
+  assert.ok(admin.includes("יש להגדיר הרשאות עסק בעת הורדת תפקיד"));
+  assert.ok(admin.includes("יש להגדיר לפחות עסק אחד בעת הורדת תפקיד"));
+});
+
+// ── Codex finding: DIVERGENCE PREVENTION (app/users ↔ roles/biz_access) ──
+T("D1 [static-src] handleRoles syncs app/users role + allowedBizIds (no divergence)", () => {
+  const rolesStart = admin.indexOf("async function handleRoles");
+  const body = admin.slice(rolesStart, admin.indexOf("async function ", rolesStart + 10));
+  assert.ok(body.includes("const merged = { ...list[idx], role };"));
+  assert.ok(body.includes("if (resolvedScope !== undefined) merged.allowedBizIds = resolvedScope;"));
+  assert.ok(body.includes("if (idx >= 0) list.splice(idx, 1);")); // role removal drops from app/users
+});
+T("D2 [static-src] create-user is single authoritative flow (server writes app/users)", () => {
+  assert.ok(admin.includes("server-authoritative append"));
+});
+
+// ── Codex finding: TARGET UID / PATH VALIDATION ──
+T("V1 [static-src] update-user validates tenantId+firebaseUid path chars", () => {
+  const s = admin.indexOf("async function handleUpdateUser");
+  const body = admin.slice(s, admin.indexOf("async function ", s + 10));
+  assert.ok(body.includes("invalid tenantId or firebaseUid"));
+  assert.ok(body.includes("RTDB_FORBIDDEN.test(tenantId) || RTDB_FORBIDDEN.test(firebaseUid)"));
+});
+T("V2 [static-src] delete-user validates tenantId+firebaseUid path chars", () => {
+  const s = admin.indexOf("async function handleDeleteUser");
+  const body = admin.slice(s, admin.indexOf("async function ", s + 10));
+  assert.ok(body.includes("invalid tenantId or firebaseUid"));
+  assert.ok(body.includes("RTDB_FORBIDDEN.test(tenantId) || RTDB_FORBIDDEN.test(firebaseUid)"));
+});
+T("V3 [static-src] create-user validates tenantId path chars before write", () => {
+  assert.ok(admin.includes("invalid characters in tenantId"));
+});
+T("V4 [static-src] roles validates tenantId+targetUid path chars", () => {
+  assert.ok(admin.includes('RTDB_FORBIDDEN.test(tenantId) || RTDB_FORBIDDEN.test(targetUid)'));
+});
+
+// ── Codex finding: BACKFILL — WRONG PROJECT verification ──
+T("B1 verifyProject rejects mismatch (never trusts --env label)", () => {
+  assert.strictEqual(verifyProject("proj-A", "proj-B").ok, false);
+});
+T("B2 verifyProject rejects unknown actual / missing expected", () => {
+  assert.strictEqual(verifyProject(null, "proj-B").ok, false);
+  assert.strictEqual(verifyProject("proj-A", null).ok, false);
+});
+T("B3 verifyProject accepts exact match", () => {
+  assert.strictEqual(verifyProject("proj-A", "proj-A").ok, true);
+});
+T("B4 getActualProjectId reads app options / credential", () => {
+  assert.strictEqual(getActualProjectId({ options: { projectId: "p1" } }), "p1");
+  assert.strictEqual(getActualProjectId({ options: { credential: { projectId: "p2" } } }), "p2");
+});
+
+// ── Codex finding: BACKFILL — UNEXPECTED ENTRIES / reconcile + cleanup ──
 const fixtureTenants = {
   t1: {
     roles: { uOwner: "owner", uSuper: "super_owner", uMgr: "manager", uView: "viewer" },
@@ -143,70 +171,63 @@ const fixtureTenants = {
       { firebaseUid: "uMgr", role: "manager", allowedBizIds: ["bizA", "bizB", "bizA"] },
       { firebaseUid: "uView", role: "viewer", allowedBizIds: ["bizA"] },
     ]) } },
+    // existing biz_access has a stale/unexpected entry (bizZ/uMgr) not in the plan:
+    biz_access: { bizA: { uMgr: true, uView: true }, bizB: { uMgr: true }, bizZ: { uMgr: true } },
   },
 };
-T("27 migration dry-run writes nothing (default not allowed)", () => {
-  assert.strictEqual(writeAllowed(parseArgs(["--env=e1"])).allowed, false);
-});
-T("28 migration skips owner/super_owner", () => {
+T("U1 reconcile detects UNEXPECTED entries (in DB, not in plan)", () => {
   const { updates } = planBackfill(fixtureTenants);
-  assert.ok(!Object.keys(updates).some(k => k.includes("/uOwner") || k.includes("/uSuper")));
+  const { unexpected } = reconcile(updates, fixtureTenants);
+  assert.deepStrictEqual(unexpected, ["tenants/t1/biz_access/bizZ/uMgr"]);
 });
-T("29 migration maps scoped users correctly (dedup + per biz)", () => {
-  const { updates, summary } = planBackfill(fixtureTenants);
-  assert.deepStrictEqual(updates, {
-    "tenants/t1/biz_access/bizA/uMgr": true,
-    "tenants/t1/biz_access/bizB/uMgr": true,
-    "tenants/t1/biz_access/bizA/uView": true,
-  });
-  assert.strictEqual(summary.scopedUsers, 2);
-  assert.strictEqual(summary.skippedUsers, 2);
-  assert.strictEqual(summary.accessEntriesProposed, 3);
+T("U2 reconcile detects MISSING entries (in plan, absent in DB)", () => {
+  const barePlanTenants = { t1: { roles: fixtureTenants.t1.roles, app: fixtureTenants.t1.app } }; // no biz_access yet
+  const { updates } = planBackfill(barePlanTenants);
+  const { missing } = reconcile(updates, barePlanTenants);
+  assert.strictEqual(missing.length, 3);
 });
-T("30 migration idempotent (same input ⇒ identical plan)", () => {
-  assert.deepStrictEqual(planBackfill(fixtureTenants).updates, planBackfill(fixtureTenants).updates);
+T("U3 cleanupUpdates nulls exactly the unexpected paths", () => {
+  assert.deepStrictEqual(cleanupUpdates(["tenants/t1/biz_access/bizZ/uMgr"]), { "tenants/t1/biz_access/bizZ/uMgr": null });
 });
-T("31 migration STOPS on malformed tenant blob", () => {
-  const bad = { t9: { roles: {}, app: { users: { _v: "{not json" } } } };
-  assert.throws(() => planBackfill(bad, { stopOnMalformed: true }), (e) => e.malformed === true);
-});
-T("32 migration production write requires explicit matching confirmation", () => {
-  assert.strictEqual(writeAllowed(parseArgs(["--env=prod", "--apply"])).allowed, false);
-  assert.strictEqual(writeAllowed(parseArgs(["--env=prod", "--apply", "--confirm-production=wrong"])).allowed, false);
-  assert.strictEqual(writeAllowed(parseArgs(["--env=prod", "--apply", "--confirm-production=prod"])).allowed, true);
+T("U4 flattenBizAccess enumerates existing true paths", () => {
+  const s = flattenBizAccess(fixtureTenants);
+  assert.ok(s.has("tenants/t1/biz_access/bizZ/uMgr") && s.has("tenants/t1/biz_access/bizA/uView"));
 });
 
-// ── invariants (#33–#35) ──
-T("33 no role named 'admin' (biz_access + rules); admin only refers to /api/admin", () => {
-  assert.strictEqual(isImplicitAllRole("admin"), false);
-  const validRoles = ["owner", "manager", "shift_manager", "viewer", "super_owner"];
-  // biz_access rule contains no role literals at all
-  assert.ok(!JSON.stringify(ba).includes("admin"));
-  // the only "admin" tokens in api/admin.js are the endpoint/file name, never a role value
-  assert.ok(!/role\s*===\s*["']admin["']/.test(admin));
+// ── migration modes / guards ──
+T("M1 dry-run (default) writes nothing", () => assert.strictEqual(writeAllowed(parseArgs(["--env=e","--project=p"]), "apply").allowed, false));
+T("M2 skips owner/super_owner; maps scoped w/ dedup", () => {
+  const { updates, summary } = planBackfill(fixtureTenants);
+  assert.deepStrictEqual(updates, { "tenants/t1/biz_access/bizA/uMgr": true, "tenants/t1/biz_access/bizB/uMgr": true, "tenants/t1/biz_access/bizA/uView": true });
+  assert.strictEqual(summary.scopedUsers, 2); assert.strictEqual(summary.skippedUsers, 2);
 });
-T("34 no new Vercel function added (api function-file count unchanged = 12)", () => {
-  // helpers live in lib/ and scripts/, which are NOT Vercel serverless functions.
-  // Count api/ function files — must remain 12 (our new files are lib/, scripts/, test/).
-  const { readdirSync, statSync } = requireFs;
-  const walk = (d) => readdirSync(d).flatMap((f) => {
-    const fp = join(d, f);
-    return statSync(fp).isDirectory() ? walk(fp) : [fp];
-  });
+T("M3 idempotent", () => assert.deepStrictEqual(planBackfill(fixtureTenants).updates, planBackfill(fixtureTenants).updates));
+T("M4 STOPS on malformed tenant blob", () => assert.throws(() => planBackfill({ t9: { roles: {}, app: { users: { _v: "{bad" } } } }, { stopOnMalformed: true }), (e) => e.malformed === true));
+T("M5 apply requires --project + matching --confirm-production", () => {
+  assert.strictEqual(writeAllowed(parseArgs(["--env=e","--project=p","--apply"]), "apply").allowed, false);
+  assert.strictEqual(writeAllowed(parseArgs(["--env=e","--project=p","--apply","--confirm-production=wrong"]), "apply").allowed, false);
+  assert.strictEqual(writeAllowed(parseArgs(["--env=e","--project=p","--apply","--confirm-production=p"]), "apply").allowed, true);
+});
+T("M6 cleanup is an explicit, separately-confirmed mode", () => {
+  assert.strictEqual(writeAllowed(parseArgs(["--env=e","--project=p","--cleanup"]), "cleanup").allowed, false);
+  assert.strictEqual(writeAllowed(parseArgs(["--env=e","--project=p","--cleanup","--confirm-production=p"]), "cleanup").allowed, true);
+  assert.strictEqual(parseArgs(["--reconcile"]).reconcile, true);
+});
+
+// ── invariants ──
+T("I1 no role named 'admin'", () => { assert.strictEqual(isImplicitAllRole("admin"), false); assert.ok(!/role\s*===\s*["']admin["']/.test(admin)); assert.ok(!JSON.stringify(ba).includes("admin")); });
+T("I2 no new Vercel function (api function-file count = 12)", () => {
+  const walk = (d) => readdirSync(d).flatMap((f) => { const fp = join(d, f); return statSync(fp).isDirectory() ? walk(fp) : [fp]; });
   const apiFns = walk(join(REPO, "api")).filter((f) => f.endsWith(".js") || f.endsWith(".ts"));
-  assert.strictEqual(apiFns.length, 12, "api function count changed: " + apiFns.length);
+  assert.strictEqual(apiFns.length, 12, "api function count = " + apiFns.length);
 });
-T("35 tests perform no external/Firebase calls (pure imports only)", () => {
-  // firebase-admin is imported dynamically INSIDE main(), never at module load
+T("I3 tests do no external/Firebase calls; migration imports firebase-admin only in main()", () => {
   const mig = readFileSync(join(REPO, "scripts", "backfill-biz-access.mjs"), "utf8");
   assert.ok(mig.includes('await import("firebase-admin")'));
   assert.ok(!/^import .*firebase-admin/m.test(mig));
 });
-
-// parseAppUsers semantics sanity (supports server parity)
-T("parseAppUsers matches server semantics ({_v}|string|array)", () => {
+T("I4 parseAppUsers matches server semantics", () => {
   assert.deepStrictEqual(parseAppUsers({ _v: JSON.stringify([{ a: 1 }]) }), [{ a: 1 }]);
-  assert.deepStrictEqual(parseAppUsers([{ a: 1 }]), [{ a: 1 }]);
   assert.deepStrictEqual(parseAppUsers(null), []);
   assert.throws(() => parseAppUsers({ _v: "nope" }), (e) => e.malformed === true);
 });

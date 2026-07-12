@@ -1577,7 +1577,8 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
             username: form.username.trim(),
             name: form.name.trim(),
             phone: form.phone.trim(),
-            role: form.role
+            role: form.role,
+            allowedBizIds
           })
         });
         const result = await resp.json();
@@ -1585,13 +1586,11 @@ function UserManagement({ users, saveUsers, tenantId, businesses }) {
           setErr(result.error || "שגיאה ביצירת המשתמש");
           setSaving(false); return;
         }
-        const firebaseUid = result.firebaseUid;
-        const userEmail = form.email.trim();
-        // lookup + username_index are now written by the create-user API (Phase 3)
-        const newUser = {id:Date.now(), name:form.name.trim(), username:form.username.trim(),
-          email: userEmail, phone: form.phone.trim(), role:form.role, firebaseUid, allowedBizIds,
-          mustCompleteProfile: true};
-        saveUsers([...users, newUser]);
+        // Backend is the source of truth on create: the create-user API now
+        //   persists app/users, users/{uid} and biz_access atomically (with the
+        //   validated allowedBizIds). Do NOT write app/users from here — the
+        //   window.storage.subscribe on "app-users" refreshes local state from
+        //   the backend within a tick (same pattern as the update path above).
       }
       resetForm();
     } catch(e) {

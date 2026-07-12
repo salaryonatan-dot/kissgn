@@ -19,7 +19,7 @@ import { requireAuth } from "../lib/verifyToken.js";
 import { requireTenantAccess, isRateLimited,
   getIP, VALID_ROLES } from "../lib/helpers.js";
 import { isImplicitAllRole, normalizeAllowedBizIds, bizAccessSetUpdates,
-  bizAccessDiffUpdates, bizAccessClearUpdates, bizIdsForUid } from "../lib/bizAccess.js";
+  bizAccessDiffUpdates, bizAccessClearUpdates, bizIdsForUid, parseAppUsers } from "../lib/bizAccess.js";
 import { getAdminDb, getAdminAuth } from "../lib/adminSdk.js";
 import { sendEmail } from "../lib/sendEmail.js";
 
@@ -748,6 +748,22 @@ async function handleCreateUser(req, res) {
     res.status(400).json({ error: "כתובת אימייל לא תקינה" }); return;
   }
 
+  // Path-character validation for tenantId (fail closed before any write/Auth).
+  if (RTDB_FORBIDDEN.test(tenantId)) {
+    res.status(400).json({ error: "invalid characters in tenantId" }); return;
+  }
+
+  // Validate allowedBizIds BEFORE creating the Auth user (fail closed — never
+  //   leave an orphan Auth account on malformed scope). create-user only creates
+  //   scoped roles, so an array (possibly empty) is expected; null/undefined ⇒ no scope.
+  let createBiz = [];
+  if (Array.isArray(allowedBizIds)) {
+    try { createBiz = normalizeAllowedBizIds(allowedBizIds); }
+    catch (be) { res.status(be?.status || 400).json({ error: be?.msg || "invalid allowedBizIds" }); return; }
+  } else if (allowedBizIds !== undefined && allowedBizIds !== null) {
+    res.status(400).json({ error: "invalid allowedBizIds" }); return;
+  }
+
   // ── Phase 2: Create Firebase Auth user ────────────────────────────────────
   const auth = getAdminAuth();
   const tempPass = "Marjin_" + Math.random().toString(36).slice(2, 10);
@@ -781,6 +797,7 @@ async function handleCreateUser(req, res) {
     email:     safeEmail,
     phone:     phone?.trim() || "",
     role,
+    allowedBizIds: createBiz,
     createdAt: now,
     createdBy: claims.uid,
   };
@@ -789,18 +806,33 @@ async function handleCreateUser(req, res) {
   updates[`tenants/${tenantId}/lookup/${safeUsername}`] = { email: safeEmail, firebaseUid };
   updates[`username_index/${safeUsername}`] = { tenantId, email: safeEmail };
 
-  // biz_access — server-managed per-business authorization index (lib/bizAccess.js).
-  //   create-user only creates scoped roles (CREATE_USER_ALLOWED_ROLES), so we stage
-  //   a `true` entry for each supplied allowedBizId. Absent ⇒ no access (fail-closed;
-  //   the backfill migration or a later update-user can populate it). Clients never
-  //   write biz_access (database.rules.json `.write:false`).
-  if (!isImplicitAllRole(role) && allowedBizIds !== undefined) {
-    let createBiz;
-    try { createBiz = normalizeAllowedBizIds(allowedBizIds); }
-    catch (be) {
-      try { await auth.deleteUser(firebaseUid); } catch (_) {}
-      res.status(be?.status || 400).json({ error: be?.msg || "invalid allowedBizIds" }); return;
-    }
+  // app/users — server-authoritative append so app/users, users/{uid} and
+  //   biz_access are persisted in ONE atomic flow (no client/server divergence).
+  //   A malformed existing blob stops the create rather than guessing.
+  let appUsersList;
+  try {
+    const appUsersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
+    appUsersList = parseAppUsers(appUsersSnap.val());
+  } catch (be) {
+    try { await auth.deleteUser(firebaseUid); } catch (_) {}
+    res.status(500).json({ error: "רשימת המשתמשים פגומה — פנה לתמיכה" }); return;
+  }
+  appUsersList.push({
+    id: now,
+    name: name?.trim() || safeUsername,
+    username: safeUsername,
+    email: safeEmail,
+    phone: phone?.trim() || "",
+    role,
+    firebaseUid,
+    allowedBizIds: createBiz,
+    mustCompleteProfile: true,
+  });
+  updates[`tenants/${tenantId}/app/users`] = { _v: JSON.stringify(appUsersList) };
+
+  // biz_access — server-managed per-business authorization index. Scope was
+  //   validated ABOVE (before Auth creation); clients never write biz_access.
+  if (!isImplicitAllRole(role)) {
     Object.assign(updates, bizAccessSetUpdates(tenantId, firebaseUid, createBiz));
   }
 
@@ -919,6 +951,11 @@ async function handleDeleteUser(req, res) {
     console.error(`[delete-user][debug] missing fields — tenantId=${tenantId}, firebaseUid=${firebaseUid}`);
     res.status(400).json({ error: "missing tenantId or firebaseUid" }); return;
   }
+  if (typeof tenantId !== "string" || typeof firebaseUid !== "string" ||
+      tenantId.length > 128 || firebaseUid.length > 128 ||
+      RTDB_FORBIDDEN.test(tenantId) || RTDB_FORBIDDEN.test(firebaseUid)) {
+    res.status(400).json({ error: "invalid tenantId or firebaseUid" }); return;
+  }
 
   // Verify caller is owner/super_owner in this tenant
   const callerRole = await db.ref(`tenants/${tenantId}/roles/${claims.uid}`).once("value");
@@ -1015,6 +1052,11 @@ async function handleUpdateUser(req, res) {
 
   if (!tenantId || !firebaseUid) {
     res.status(400).json({ error: "missing tenantId or firebaseUid" }); return;
+  }
+  if (typeof tenantId !== "string" || typeof firebaseUid !== "string" ||
+      tenantId.length > 128 || firebaseUid.length > 128 ||
+      RTDB_FORBIDDEN.test(tenantId) || RTDB_FORBIDDEN.test(firebaseUid)) {
+    res.status(400).json({ error: "invalid tenantId or firebaseUid" }); return;
   }
 
   const db   = getAdminDb();
@@ -1524,72 +1566,83 @@ async function handleRoles(req, res) {
 
   const db = getAdminDb();
 
-  // ── biz_access sync (server-managed per-business authorization index) ──
-  //   Computed BEFORE the role change so a downgrade with no valid business
-  //   scope fails closed without mutating anything. Applied atomically with the
-  //   membership/audit write below. Clients never write biz_access.
-  const _prevRoleSnap = await db.ref(`tenants/${tenantId}/roles/${targetUid}`).once("value");
-  const _prevRoleBA = _prevRoleSnap.val();
-  let roleBizUpdates = {};
+  // ── Single authoritative, ATOMIC role change ──────────────────────────────
+  //   role + members + audit + biz_access + app/users are written in ONE
+  //   multi-path db.ref().update() so they can never diverge or partially apply
+  //   (Codex P0: no partial mutations). The last-owner guard is enforced from a
+  //   fresh read taken immediately before the write — we trade Firebase
+  //   transaction isolation on the roles node for cross-path atomicity, which the
+  //   review requires. A malformed app/users blob stops the change (no guessing).
+  const updates = {};
   try {
-    const _baTreeSnap = await db.ref(`tenants/${tenantId}/biz_access`).once("value");
-    const _existingBiz = bizIdsForUid(_baTreeSnap.val(), targetUid);
-    if (role === null || isImplicitAllRole(role)) {
-      roleBizUpdates = bizAccessClearUpdates(tenantId, targetUid, _existingBiz);
-    } else if (isImplicitAllRole(_prevRoleBA)) {
-      // downgrade owner/super_owner → scoped: require explicit, non-empty scope
+    const [rolesSnap, baTreeSnap, appUsersSnap] = await Promise.all([
+      db.ref(`tenants/${tenantId}/roles`).once("value"),
+      db.ref(`tenants/${tenantId}/biz_access`).once("value"),
+      db.ref(`tenants/${tenantId}/app/users`).once("value"),
+    ]);
+    const rolesMap = (rolesSnap.val() && typeof rolesSnap.val() === "object") ? rolesSnap.val() : {};
+    const prevRole = rolesMap[targetUid];
+
+    // last-owner guard: never remove/downgrade the sole remaining owner.
+    const owners = Object.entries(rolesMap).filter(([, r]) => r === "owner").map(([uid]) => uid);
+    if (owners.length === 1 && owners[0] === targetUid && role !== "owner") {
+      res.status(409).json({ error: "cannot remove or downgrade the last owner" }); return;
+    }
+
+    // biz_access + resolved scope (for app/users sync).
+    const existingBiz = bizIdsForUid(baTreeSnap.val(), targetUid);
+    let resolvedScope; // undefined = leave app/users scope as-is; null = implicit-all; array = scoped
+    if (role === null) {
+      Object.assign(updates, bizAccessClearUpdates(tenantId, targetUid, existingBiz));
+    } else if (isImplicitAllRole(role)) {
+      Object.assign(updates, bizAccessClearUpdates(tenantId, targetUid, existingBiz));
+      resolvedScope = null;
+    } else if (isImplicitAllRole(prevRole)) {
+      // downgrade implicit → scoped: require explicit, non-empty scope; REPLACE the entire scope.
       let nextBiz;
       try { nextBiz = normalizeAllowedBizIds(body.allowedBizIds); }
       catch { res.status(400).json({ error: "יש להגדיר הרשאות עסק בעת הורדת תפקיד" }); return; }
       if (nextBiz.length < 1) { res.status(400).json({ error: "יש להגדיר לפחות עסק אחד בעת הורדת תפקיד" }); return; }
-      roleBizUpdates = bizAccessSetUpdates(tenantId, targetUid, nextBiz);
+      Object.assign(updates, bizAccessDiffUpdates(tenantId, targetUid, existingBiz, nextBiz)); // clears stale, adds new
+      resolvedScope = nextBiz;
     } else if (body.allowedBizIds !== undefined) {
-      // scoped → scoped with an explicit new scope ⇒ apply as full set (diff)
+      // scoped → scoped with an explicit new scope ⇒ replace to exactly that set.
       const nextBiz = normalizeAllowedBizIds(body.allowedBizIds);
-      roleBizUpdates = bizAccessDiffUpdates(tenantId, targetUid, _existingBiz, nextBiz);
+      Object.assign(updates, bizAccessDiffUpdates(tenantId, targetUid, existingBiz, nextBiz));
+      resolvedScope = nextBiz;
     }
-    // scoped → scoped without allowedBizIds ⇒ preserve existing scope (no change)
+    // scoped → scoped without allowedBizIds ⇒ preserve existing scope (no change).
+
+    // role + membership + audit.
+    updates[`tenants/${tenantId}/roles/${targetUid}`]   = role; // null removes the key
+    updates[`tenants/${tenantId}/members/${targetUid}`] = role === null ? null : true;
+    const auditKey = db.ref(`tenants/${tenantId}/audit/roles`).push().key;
+    updates[`tenants/${tenantId}/audit/roles/${auditKey}`] = {
+      ts: Date.now(), actorUid: claims.uid, targetUid, role: role ?? "REMOVED",
+    };
+
+    // app/users sync — keep the human-facing list consistent with roles + biz_access.
+    const list = parseAppUsers(appUsersSnap.val());
+    const idx = list.findIndex(u => u && u.firebaseUid === targetUid);
+    if (role === null) {
+      if (idx >= 0) list.splice(idx, 1);
+    } else if (idx >= 0) {
+      const merged = { ...list[idx], role };
+      if (resolvedScope !== undefined) merged.allowedBizIds = resolvedScope;
+      list[idx] = merged;
+    }
+    updates[`tenants/${tenantId}/app/users`] = { _v: JSON.stringify(list) };
   } catch (be) {
     if (be && be.status) { res.status(be.status).json({ error: be.msg }); return; }
-    console.error("[admin-roles] biz_access sync failed:", be?.message);
-    res.status(500).json({ error: "biz access sync failed" }); return;
-  }
-
-  if (role !== "owner") {
-    let committed = false, txError = null, txAbortReason = null;
-    try {
-      const result = await db.ref(`tenants/${tenantId}/roles`).transaction(currentRoles => {
-        const roles = currentRoles ?? {};
-        const owners = Object.entries(roles).filter(([, r]) => r === "owner").map(([uid]) => uid);
-        if (owners.length === 1 && owners[0] === targetUid) { txAbortReason = "last-owner"; return undefined; }
-        if (role === null) { const updated = { ...roles }; delete updated[targetUid]; return updated; }
-        return { ...roles, [targetUid]: role };
-      });
-      committed = result.committed;
-    } catch (e) { txError = e; }
-
-    if (txError) { res.status(503).json({ error: "db transaction failed" }); return; }
-    if (!committed) {
-      res.status(409).json({ error: txAbortReason === "last-owner"
-        ? "cannot remove or downgrade the last owner" : "role update aborted" });
-      return;
-    }
-  } else {
-    try { await db.ref(`tenants/${tenantId}/roles/${targetUid}`).set(role); }
-    catch (e) { res.status(502).json({ error: "db write failed" }); return; }
+    console.error("[admin-roles] role change preparation failed:", be?.message);
+    res.status(500).json({ error: "role update failed" }); return;
   }
 
   try {
-    const auditRef = db.ref(`tenants/${tenantId}/audit/roles`).push();
-    await db.ref().update({
-      [`tenants/${tenantId}/members/${targetUid}`]: role === null ? null : true,
-      [`tenants/${tenantId}/audit/roles/${auditRef.key}`]: {
-        ts: Date.now(), actorUid: claims.uid, targetUid, role: role ?? "REMOVED"
-      },
-      ...roleBizUpdates,
-    });
+    await db.ref().update(updates);
   } catch (e) {
-    console.error("[admin-roles] membership/audit write failed:", e?.message);
+    console.error("[admin-roles] atomic role update failed:", e?.message);
+    res.status(502).json({ error: "db write failed" }); return;
   }
 
   res.status(200).json({ ok: true, tenantId, targetUid, role });
