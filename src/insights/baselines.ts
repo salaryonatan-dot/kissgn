@@ -18,7 +18,20 @@ import type { AnalyticsDailyInput } from "./types.js";
 export function validDays(history: AnalyticsDailyInput[]): AnalyticsDailyInput[] {
   return (history || [])
     .filter(
-      (d) => d && d.revenue && d.revenue.had_entry === true && Number.isFinite(d.revenue.total)
+      (d) =>
+        d &&
+        d.revenue &&
+        d.revenue.had_entry === true &&
+        Number.isFinite(d.revenue.total) &&
+        // P0 (stale/zero protection): a real revenue day must have positive
+        // revenue. A supplier-only day (no sales, just a lump supplier payment)
+        // has total=0 yet had_entry===true, and previously polluted revenue
+        // baselines toward zero — producing false "surge" percentages. Legacy
+        // analytics docs without `has_sales` still qualify on total>0; an
+        // explicit has_sales===false is always excluded. Missing data is never
+        // treated as zero (it is simply absent from history).
+        d.revenue.total > 0 &&
+        (d.revenue as { has_sales?: boolean }).has_sales !== false
     )
     .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 }
@@ -67,6 +80,26 @@ export function sameWeekdayAvg(
   const valid = validDays(history).filter((d) => d.calendar && d.calendar.dow === dow);
   const avg = mean(valid.map((d) => d.revenue.total));
   return { avg, n: valid.length };
+}
+
+/**
+ * P0 revenue baseline: mean revenue.total over the most recent `maxSamples`
+ * VALID days that share the given weekday (0..6). Same-weekday only — a Friday
+ * is compared to prior Fridays, never to a generic mix of weekdays or to stale
+ * zero-revenue days (validDays already excludes total<=0). The caller passes
+ * history WITHOUT the target day, so the target never appears in its own
+ * baseline. Returns the sample count so the rule can enforce a minimum and
+ * never silently fall back to a generic average.
+ */
+export function sameWeekdayRecentAvg(
+  history: AnalyticsDailyInput[],
+  dow: number,
+  maxSamples: number
+): { avg: number | null; n: number } {
+  const valid = validDays(history)
+    .filter((d) => d.calendar && d.calendar.dow === dow)
+    .slice(-Math.max(0, maxSamples));
+  return { avg: mean(valid.map((d) => d.revenue.total)), n: valid.length };
 }
 
 /** Mean of a ratio (numerator/total) over valid days with total>0. */

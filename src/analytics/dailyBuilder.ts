@@ -64,6 +64,12 @@ export interface AnalyticsDoc {
     food_cost: number;
     payroll: number;
     had_entry: boolean;
+    // P0: explicit "this day actually had sales/revenue" signal. Distinct from
+    // had_entry (which is also true for a supplier-payment-only day). Revenue
+    // baselines require has_sales !== false so supplier-only / zero days never
+    // pollute same-weekday averages. Legacy docs without this field fall back to
+    // total>0 in the insight baselines (backward compatible).
+    has_sales: boolean;
   };
 
   weather: {
@@ -442,6 +448,8 @@ export async function buildAnalyticsForBiz(
       food_cost,
       payroll: total_payroll,
       had_entry: hadEntry,
+      // Real sales/revenue occurred (not a supplier-payment-only day).
+      has_sales: sales > 0 || deliveries > 0 || other_income > 0,
     },
     weather,
     alerts,
