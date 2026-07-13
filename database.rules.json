@@ -119,8 +119,8 @@
           ".write": false
         },
         "$dataKey": {
-          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true",
-          ".write": "auth !== null && (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager')"
+          ".read": "auth !== null && root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && ( $dataKey.matches(/^biz:[^:]+:entries$/) ? ( root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('biz_access').child($dataKey.replace('biz:','').replace(':entries','')).child(auth.uid).val() === true ) : true )",
+          ".write": "auth !== null && ( $dataKey.matches(/^biz:[^:]+:entries$/) ? ( root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || ( root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager' && root.child('tenants').child($tenantId).child('biz_access').child($dataKey.replace('biz:','').replace(':entries','')).child(auth.uid).val() === true ) ) : ( root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager' ) )"
         },
         "app": {
           ".read": false,
