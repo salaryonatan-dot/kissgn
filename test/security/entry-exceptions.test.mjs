@@ -3,6 +3,9 @@
 // PURE — no network / Firebase / external calls. The RTDB transaction body is the
 // pure applyOperation(); a tiny in-memory envelope models the transaction node.
 import assert from "node:assert";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   SCHEMA_VERSION, EXCEPTION_REASONS, isValidBusinessDate, isValidOperationId, isValidExpectedRevision,
   normalizeReasonText, validateSetInput, categoryForReason, activeEffects, buildSetState, buildClearState,
@@ -122,6 +125,15 @@ T("R2 structured cleared → normal, blocks legacy fallback", () => { const r = 
 T("R3 structured absent → legacy fallback", () => { const r = resolveEffectiveException(null, { is_exception: true }); assert.ok(r.isException && r.origin === "legacy"); });
 T("R4 missing everywhere → normal", () => { const r = resolveEffectiveException(null, { is_exception: false }); assert.ok(!r.isException && r.origin === "none"); });
 T("R5 reasons enum matches current UI enum", () => assert.deepStrictEqual(EXCEPTION_REASONS[0], "closure"));
+
+// ── Rules (JSON parse only; Emulator matrix is a separate later phase) ──
+const RULES = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "database.rules.json"), "utf8"));
+T("RULES entry_exceptions node denies direct client read AND write", () => {
+  const node = RULES.rules.tenants.$tenantId.entry_exceptions;
+  assert.ok(node, "named entry_exceptions node present (overrides the permissive $dataKey wildcard)");
+  assert.strictEqual(node[".read"], false);
+  assert.strictEqual(node[".write"], false);
+});
 
 console.log(`\nTotal: ${pass + fail}  Passed: ${pass}  Failed: ${fail}`);
 process.exit(fail === 0 ? 0 : 1);
