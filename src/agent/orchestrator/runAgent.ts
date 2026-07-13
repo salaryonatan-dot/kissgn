@@ -21,22 +21,14 @@ export async function runAgent(context: AgentContext): Promise<AgentResponse> {
     const intent = classifyIntent(context.userQuestion, context);
     logger.info(`intent=${intent} | question="${context.userQuestion.slice(0, 60)}"`);
 
-    if (intent === "unknown_or_insufficient") {
-      return failSafeResponse(intent, {
-        ok: false,
-        completenessScore: 0,
-        freshnessScore: 0,
-        consistencyScore: 0,
-        sampleAdequacyScore: 0,
-        issues: [{ code: "missing_data", severity: "high", message: "לא הצלחתי להבין את השאלה" }],
-      }, []);
-    }
-
     // Hourly SALES / weak-hour-sales questions: POS hourly data is unsupported
     // this release. Requires BOTH an hourly/time-of-day intent AND a sales/POS
     // intent, so ordinary labor/payroll/opening-hours questions are NOT caught.
     // Deterministic (no LLM), no fabrication, no daily-aggregate fallback, before
-    // any data fetch.
+    // any planner/analytics/LLM/database/external call. MUST run BEFORE the
+    // generic unknown_or_insufficient return, otherwise recognized hourly-sales
+    // questions whose general classifier is unknown (e.g. "transactions by hour",
+    // "tickets per hour", "באיזו שעה יש הכי מעט עסקאות") never reach this path.
     if (isUnsupportedHourlySalesQuestion(context.userQuestion)) {
       logger.info("hourly-sales question — unsupported data source; returning deterministic response");
       return failSafeResponse(intent, {
@@ -46,6 +38,17 @@ export async function runAgent(context: AgentContext): Promise<AgentResponse> {
         consistencyScore: 0,
         sampleAdequacyScore: 0,
         issues: [{ code: "unsupported_hourly", severity: "high", message: "hourly POS data is not available" }],
+      }, []);
+    }
+
+    if (intent === "unknown_or_insufficient") {
+      return failSafeResponse(intent, {
+        ok: false,
+        completenessScore: 0,
+        freshnessScore: 0,
+        consistencyScore: 0,
+        sampleAdequacyScore: 0,
+        issues: [{ code: "missing_data", severity: "high", message: "לא הצלחתי להבין את השאלה" }],
       }, []);
     }
 

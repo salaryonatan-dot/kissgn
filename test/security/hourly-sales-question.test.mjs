@@ -123,3 +123,67 @@ test("no allowJs / unrelated tsconfig relaxation was added", () => {
   // include not broadened to lib/**
   assert.doesNotMatch(ts, /"lib\/\*\*/);
 });
+
+// ─── P2 re-review: runAgent ORDERING (hourly short-circuit before unknown) ────
+// The pure matcher was already correct; the blocker was integration order —
+// the generic `unknown_or_insufficient` return ran BEFORE the hourly check, so
+// hourly-sales questions that classify as unknown never reached unsupported_hourly.
+// Harness faithfully mirrors the runAgent decision order using the REAL matcher.
+function runAgentDecision(question, classifyIntentStub) {
+  const trace = { fetched: false, plannerRan: false, llm: false };
+  const intent = classifyIntentStub(question);
+  // NEW ORDER — hourly-sales short-circuit runs first, before any planner/fetch.
+  if (f(question)) {
+    return { code: "unsupported_hourly", intent, ...trace };
+  }
+  if (intent === "unknown_or_insufficient") {
+    return { code: "missing_data", intent, ...trace };
+  }
+  // would proceed to planner + analytics fetch + analysis
+  trace.plannerRan = true; trace.fetched = true;
+  return { code: "proceed", intent, ...trace };
+}
+// Codex says these hourly-sales questions classify as unknown_or_insufficient.
+const stubUnknown = () => "unknown_or_insufficient";
+const stubKnown = () => "direct_metric_query";
+
+for (const q of ["transactions by hour", "tickets per hour", "customer volume by hour",
+                 "באיזו שעה יש הכי מעט עסקאות", "hourly revenue yesterday", "מה הפדיון לפי שעה"]) {
+  test(`ordering: "${q}" ⇒ unsupported_hourly even when intent is unknown, no planner/fetch`, () => {
+    const r = runAgentDecision(q, stubUnknown);
+    assert.equal(r.code, "unsupported_hourly");
+    assert.equal(r.plannerRan, false, "planner must not run");
+    assert.equal(r.fetched, false, "analytics must not be fetched");
+    assert.equal(r.llm, false, "no LLM");
+  });
+}
+
+test("ordering: generic unknown NON-hourly question still returns missing_data", () => {
+  const r = runAgentDecision("asdf qwer zxcv", stubUnknown);
+  assert.equal(r.code, "missing_data");
+});
+
+for (const q of ["hourly labor cost", "hourly payroll", "employee hours", "opening hours",
+                 "revenue per labor hour", "שעות עובדים", "שכר שעתי", "שעות פתיחה", "פדיון לשעת עבודה"]) {
+  test(`ordering: labor/hour "${q}" does NOT return unsupported_hourly`, () => {
+    assert.notEqual(runAgentDecision(q, stubUnknown).code, "unsupported_hourly");
+    assert.notEqual(runAgentDecision(q, stubKnown).code, "unsupported_hourly");
+  });
+}
+
+test("source-order: hourly matcher branch precedes the unknown-intent return", () => {
+  const r = read("src/agent/orchestrator/runAgent.ts");
+  const hourlyIdx = r.indexOf("isUnsupportedHourlySalesQuestion(context.userQuestion)");
+  const unknownIdx = r.indexOf('intent === "unknown_or_insufficient"');
+  assert.ok(hourlyIdx > -1 && unknownIdx > -1, "both branches present");
+  assert.ok(hourlyIdx < unknownIdx, "hourly matcher runs before the generic unknown return");
+});
+
+test("source-order: hourly branch precedes planner and analytics fetch", () => {
+  const r = read("src/agent/orchestrator/runAgent.ts");
+  const hourlyIdx = r.indexOf("isUnsupportedHourlySalesQuestion(context.userQuestion)");
+  const plannerIdx = r.indexOf("buildMetricsPlan(intent");
+  const fetchIdx = r.indexOf("fetchPlannedData(plan, context)");
+  assert.ok(hourlyIdx < plannerIdx, "hourly branch before buildMetricsPlan");
+  assert.ok(hourlyIdx < fetchIdx, "hourly branch before fetchPlannedData");
+});
