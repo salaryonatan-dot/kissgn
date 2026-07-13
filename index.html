@@ -2654,6 +2654,7 @@ function PilotDashboard() {
   //   optimistic concurrency. Loaded from the server list action — NEVER the entries blob.
   const [entryExceptions, setEntryExceptions] = useState({});
   const entryExceptionStateRef = useRef({});
+  const entryExceptionOpIdRef = useRef({}); // date→operationId, reused across retries of the SAME save (replay-safe)
   const [fixedList, setFixedList] = useState(FIXED_EXPENSES_DEFAULT);
   const [lastYear, setLastYear] = useState(LAST_YEAR_2025);
   const [saved, setSaved] = useState(false);
@@ -3423,9 +3424,12 @@ function PilotDashboard() {
       if (!data || !data.ok || !data.exceptions) return;
       const boolMap = {}, stateMap = {};
       Object.keys(data.exceptions).forEach(d => {
+        // Effective shape: {businessDate,source,status,reasonCode,reasonText,revision,structured}
+        //   — the client never infers structured-vs-legacy precedence itself.
         const rec = data.exceptions[d];
-        boolMap[d] = rec.isException === true;
-        if (rec.state) stateMap[d] = { revision: rec.state.revision, status: rec.state.status, reasonCode: rec.state.reasonCode, reasonText: rec.state.reasonText };
+        const active = rec.status === "active";
+        boolMap[d] = active;
+        stateMap[d] = { source: rec.source, status: rec.status, revision: (typeof rec.revision === "number" ? rec.revision : 0), reasonCode: rec.reasonCode || "", reasonText: rec.reasonText || "" };
       });
       entryExceptionStateRef.current = stateMap;
       setEntryExceptions(boolMap);
@@ -3461,55 +3465,81 @@ function PilotDashboard() {
         : [...entries,__applyExc(netForm)];
       updated.sort((a,b)=>a.date.localeCompare(b.date));
 
-      const persistResult = await persist(updated, null);
-      if (!persistResult?.ok) {
-        setSaved(false);
-        setEntrySaveError("שמירת הנתונים נכשלה. נסה שוב.");
-        return;
-      }
-
-      setEntries(updated);
-
-      // ── Structured exception mutation (server-authoritative). Only manager+ may
-      //   change it; the server enforces role + business access regardless. The UI
-      //   reflects the exception ONLY after a confirmed server response. ──
+      // ── SAVE ORDER (review Part 3): execute the structured exception command
+      //   FIRST; stop on any non-OK; only AFTER confirmed structured success do we
+      //   persist the revenue blob (with exception fields stripped). Legacy blob
+      //   fields for this date stay intact until the structured command succeeds. ──
       const __exRole = loggedInUser?.role;
       const __canExc = __exRole==="super_owner"||__exRole==="owner"||__exRole==="manager";
       const __exDate = netForm.date;
-      const __loadedExc = entryExceptionStateRef.current[__exDate] || null;
-      const __loadedActive = entryExceptions[__exDate]===true;
+      const __loaded = entryExceptionStateRef.current[__exDate] || null;
+      const __loadedActive = __loaded ? (__loaded.status==="active") : false;
+      const __isLegacy = !!(__loaded && __loaded.source==="legacy");
       const __wantExc = form.is_exception===true;
-      const __reasonChanged = __wantExc && __loadedExc && (__loadedExc.reasonCode !== (form.exception_reason||""));
-      if (__canExc && (__wantExc !== __loadedActive || __reasonChanged)) {
-        const __opId = (window.crypto&&window.crypto.randomUUID)?window.crypto.randomUUID():("ee-"+Date.now()+"-"+Math.random().toString(36).slice(2));
-        const __expRev = __loadedExc ? (__loadedExc.revision|0) : 0;
-        const __exAction = __wantExc ? "set-entry-exception" : "clear-entry-exception";
-        const __exBody = __wantExc
+      const __reasonChanged = __wantExc && __loaded && (__loaded.reasonCode !== (form.exception_reason||""));
+      // set needed: user wants it and it isn't already structured-active, OR reason changed,
+      //   OR the active state is LEGACY (must be materialized). clear needed: user unchecks an
+      //   active exception. Absence of structured state alone does NOT trigger a clear.
+      const __needSet = __canExc && __wantExc && (!__loadedActive || __reasonChanged || __isLegacy);
+      const __needClear = __canExc && !__wantExc && __loadedActive;
+      let __exResponse = null;
+      if (__needSet || __needClear) {
+        // Reuse ONE operationId per date across retries so a retry REPLAYS (no new revision/audit).
+        if (!entryExceptionOpIdRef.current[__exDate]) entryExceptionOpIdRef.current[__exDate] = (window.crypto&&window.crypto.randomUUID)?window.crypto.randomUUID():("ee-"+Date.now()+"-"+Math.random().toString(36).slice(2));
+        const __opId = entryExceptionOpIdRef.current[__exDate];
+        const __expRev = (__loaded && Number.isSafeInteger(__loaded.revision)) ? __loaded.revision : 0; // legacy => 0
+        const __exAction = __needSet ? "set-entry-exception" : "clear-entry-exception";
+        const __exBody = __needSet
           ? { tenantId: window._currentTenantId, bizId: currentBizId, businessDate: __exDate, reasonCode: form.exception_reason||"other", reasonText: form.exception_note||undefined, expectedRevision: __expRev, operationId: __opId }
           : { tenantId: window._currentTenantId, bizId: currentBizId, businessDate: __exDate, expectedRevision: __expRev, operationId: __opId };
+        let __exResp, __exJson;
         try {
-          const __exResp = await window.apiFetch(`/api/admin?action=${__exAction}`, { method:"POST", body: JSON.stringify(__exBody) });
-          const __exJson = await __exResp.json().catch(()=>({}));
-          if (!__exResp.ok) {
-            if (__exResp.status===409) setEntrySaveError("מצב יום החריג עודכן במקביל — רענן ונסה שוב.");
-            else if (__exResp.status===403 || __exResp.status===401) setEntrySaveError("אין הרשאה לעדכן יום חריג לעסק זה.");
-            else setEntrySaveError("שמירת יום החריג נכשלה.");
-            await loadEntryExceptions(currentBizId); // resync; do NOT claim success
-          } else {
-            const __active = !!(__exJson.exception && __exJson.exception.status==="active");
-            setEntryExceptions(prev=>({ ...prev, [__exDate]: __active }));
-            if (__exJson.exception) entryExceptionStateRef.current[__exDate] = { revision: __exJson.revision, status: __exJson.exception.status, reasonCode: __exJson.exception.reasonCode, reasonText: __exJson.exception.reasonText };
-          }
+          __exResp = await window.apiFetch(`/api/admin?action=${__exAction}`, { method:"POST", body: JSON.stringify(__exBody) });
+          __exJson = await __exResp.json().catch(()=>({}));
         } catch(_) {
-          setEntrySaveError("שמירת יום החריג נכשלה (שגיאת רשת).");
-          await loadEntryExceptions(currentBizId);
+          setSaved(false); setEntrySaveError("שמירת יום החריג נכשלה (שגיאת רשת)."); await loadEntryExceptions(currentBizId); return;
         }
+        if (!__exResp.ok) {
+          // FAILURE: stop. Legacy blob untouched, no revenue persist, no success, no rebuild.
+          setSaved(false);
+          if (__exResp.status===409) setEntrySaveError("מצב יום החריג עודכן במקביל — רענן ונסה שוב.");
+          else if (__exResp.status===403 || __exResp.status===401) setEntrySaveError("אין הרשאה לעדכן יום חריג לעסק זה.");
+          else setEntrySaveError("שמירת יום החריג נכשלה.");
+          await loadEntryExceptions(currentBizId);
+          return;
+        }
+        __exResponse = __exJson; // { applied, replayed, rebuildRequired, exception, revision }
+        const __active = !!(__exJson.exception && __exJson.exception.status==="active");
+        setEntryExceptions(prev=>({ ...prev, [__exDate]: __active }));
+        entryExceptionStateRef.current[__exDate] = { source:"structured", status: __exJson.exception ? __exJson.exception.status : (__needSet?"active":"cleared"), revision: __exJson.revision, reasonCode: (__exJson.exception&&__exJson.exception.reasonCode)||"", reasonText: (__exJson.exception&&__exJson.exception.reasonText)||"" };
       }
 
+      // Revenue persist AFTER confirmed structured success (exception fields already stripped).
+      const persistResult = await persist(updated, null);
+      if (!persistResult?.ok) {
+        // PARTIAL: structured exception succeeded (if any) but revenue failed. Keep the
+        //   operationId so a retry REPLAYS the same structured op. Do NOT claim success,
+        //   do NOT reset/navigate, do NOT rebuild.
+        setSaved(false);
+        setEntrySaveError(__exResponse ? "יום החריג נשמר אך שמירת ההכנסות נכשלה — נסה שוב." : "שמירת הנתונים נכשלה. נסה שוב.");
+        return;
+      }
+      // Full success → the operationId for this date is consumed.
+      delete entryExceptionOpIdRef.current[__exDate];
+      setEntries(updated);
+
+      // ── ONE rebuild decision after all required saves succeed (review Part 4):
+      //   shouldRebuild = revenueChanged OR (exceptionApplied && rebuildRequired).
+      //   A revenue save always changes revenue, so exactly ONE rebuild runs here;
+      //   an idempotent exception replay adds no extra rebuild. ──
+      const __revenueChanged = true;
+      const __shouldRebuild = __revenueChanged || (__exResponse && __exResponse.applied===true && __exResponse.rebuildRequired===true);
       let insightsRefreshed = false;
+      if (!__shouldRebuild) { insightsRefreshed = true; }
+      else {
       const saveBizId = currentBizId;
       try {
-        await rebuildInsightsAfterEntrySave(netForm.date);
+        await rebuildInsightsAfterEntrySave(netForm.date); // exactly one rebuild call
         const loadResult = await loadDashboardInsights(netForm.date);
         const isTodayOrYesterday = netForm.date === israelDateKey(0) || netForm.date === israelDateKey(-1);
         if (loadResult?.skipped) {
@@ -3529,6 +3559,7 @@ function PilotDashboard() {
         setDashboardInsightsError(false);
         setDashboardInsightsWarning("הנתונים נשמרו, אך התובנות לא רועננו.");
         suppressNextDashboardInsightsLoadForBizRef.current = saveBizId;
+      }
       }
 
       setForm({...EMPTY_ENTRY}); setEditingId(null); setSaved(true);

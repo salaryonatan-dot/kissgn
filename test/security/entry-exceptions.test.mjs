@@ -10,6 +10,8 @@ import {
   SCHEMA_VERSION, EXCEPTION_REASONS, isValidBusinessDate, isValidOperationId, isValidExpectedRevision,
   normalizeReasonText, validateSetInput, categoryForReason, activeEffects, buildSetState, buildClearState,
   canonicalRequest, requestHash, applyOperation, safeStateView, resolveEffectiveException,
+  buildEffectiveRecord, shouldRebuildDecision, dateRangeDays, MAX_LIST_RANGE_DAYS,
+  MAX_OPERATIONS_PER_DATE, hashState,
 } from "../../lib/entryExceptions.js";
 
 let pass = 0, fail = 0;
@@ -133,6 +135,105 @@ T("RULES entry_exceptions node denies direct client read AND write", () => {
   assert.ok(node, "named entry_exceptions node present (overrides the permissive $dataKey wildcard)");
   assert.strictEqual(node[".read"], false);
   assert.strictEqual(node[".write"], false);
+});
+
+
+// ═══ REVIEW BLOCKER FIXES ═══
+
+// Part 7 — safe-integer revision validation
+T("P7 expectedRevision accepts only safe non-negative integers", () => {
+  assert.ok(isValidExpectedRevision(0)); assert.ok(isValidExpectedRevision(7)); assert.ok(isValidExpectedRevision(Number.MAX_SAFE_INTEGER));
+  for (const bad of [-1, 1.5, NaN, Infinity, -Infinity, "0", null, undefined, Number.MAX_SAFE_INTEGER + 1])
+    assert.ok(!isValidExpectedRevision(bad), "reject " + String(bad));
+});
+
+// Part 5 — idempotent replay returns the ORIGINAL operation result, not current state
+function seq(env, cmdObj) { const c = withHash(cmd(cmdObj)); const r = applyOperation(env, c); return { r, env: r.outcome === "applied" ? r.envelope : env, cmd: c }; }
+T("P5 replay of op A AFTER a later clear returns A's original after/revisionTo (state unchanged)", () => {
+  let a = seq(null, { action: "set", expectedRevision: 0, operationId: "op-AAAAAAAA", reasonCode: "closure" });     // A: active rev1
+  let b = seq(a.env, { action: "clear", expectedRevision: 1, operationId: "op-BBBBBBBB", reasonCode: null });        // B: cleared rev2
+  assert.strictEqual(b.env.state.status, "cleared"); assert.strictEqual(b.env.state.revision, 2);
+  const replayA = applyOperation(b.env, a.cmd);                                                                       // retry A
+  assert.strictEqual(replayA.outcome, "replayed");
+  assert.strictEqual(replayA.state.status, "active");   // A's ORIGINAL result, not current cleared
+  assert.strictEqual(replayA.revision, 1);              // A's original revisionTo
+  assert.strictEqual(b.env.state.status, "cleared");   // envelope state NOT changed by the replay
+});
+T("P5 replay of op A AFTER a later set returns A's original result", () => {
+  let a = seq(null, { action: "set", expectedRevision: 0, operationId: "op-CCCCCCCC", reasonCode: "closure" });
+  let b = seq(a.env, { action: "set", expectedRevision: 1, operationId: "op-DDDDDDDD", reasonCode: "holiday" });
+  const replayA = applyOperation(b.env, a.cmd);
+  assert.strictEqual(replayA.outcome, "replayed");
+  assert.strictEqual(replayA.revision, 1);
+  assert.strictEqual(replayA.state.reasonCode, "closure");
+});
+
+// Part 6 — bounded, compact operations ledger
+T("P6 ledger cap = 32; ops 0..31 allowed, 33rd rejected operation_limit_reached (writes nothing)", () => {
+  assert.strictEqual(MAX_OPERATIONS_PER_DATE, 32);
+  let env = null; let rev = 0;
+  for (let i = 0; i < 32; i++) {
+    const c = withHash(cmd({ action: "set", expectedRevision: rev, operationId: "op-" + String(1e7 + i), reasonCode: "closure" }));
+    const r = applyOperation(env, c);
+    assert.strictEqual(r.outcome, "applied", "op " + i); env = r.envelope; rev = r.state.revision;
+  }
+  assert.strictEqual(Object.keys(env.operations).length, 32);
+  const over = applyOperation(env, withHash(cmd({ action: "set", expectedRevision: rev, operationId: "op-99999999", reasonCode: "holiday" })));
+  assert.strictEqual(over.outcome, "conflict"); assert.strictEqual(over.code, "operation_limit_reached");
+  assert.ok(!over.envelope); // writes nothing
+  assert.strictEqual(Object.keys(env.operations).length, 32); // no pruning/overwrite
+});
+T("P6 existing-op REPLAY still succeeds at the 32-op limit", () => {
+  let env = null; let rev = 0; let firstCmd = null;
+  for (let i = 0; i < 32; i++) {
+    const c = withHash(cmd({ action: "set", expectedRevision: rev, operationId: "op-" + String(2e7 + i), reasonCode: "closure" }));
+    if (i === 0) firstCmd = c;
+    const r = applyOperation(env, c); env = r.envelope; rev = r.state.revision;
+  }
+  const replay = applyOperation(env, firstCmd); // op already exists; checked before the cap
+  assert.strictEqual(replay.outcome, "replayed");
+});
+T("P6 operation record is COMPACT: beforeHash (not a full before snapshot) + after", () => {
+  const env = applyOperation(null, withHash(cmd({ action: "set", expectedRevision: 0, operationId: "op-COMPACT1", reasonCode: "closure" }))).envelope;
+  const env2 = applyOperation(env, withHash(cmd({ action: "clear", expectedRevision: 1, operationId: "op-COMPACT2", reasonCode: null })));
+  const op = env2.envelope.operations["op-COMPACT2"];
+  assert.ok(!("before" in op), "no full before snapshot");
+  assert.ok("beforeHash" in op, "compact beforeHash present");
+  assert.ok(op.after && op.after.status === "cleared");
+  assert.strictEqual(op.beforeHash, hashState(env.state)); // integrity of the prior state
+});
+
+// Part 1 — normalized effective record shapes
+T("P1 buildEffectiveRecord: structured active / cleared / legacy / none", () => {
+  const active = { state: { status: "active", reasonCode: "closure", reasonText: "x", revision: 3 } };
+  const cleared = { state: { status: "cleared", revision: 4 } };
+  assert.deepStrictEqual(buildEffectiveRecord("2026-07-13", active, null), { businessDate: "2026-07-13", source: "structured", status: "active", reasonCode: "closure", reasonText: "x", revision: 3, structured: true });
+  assert.deepStrictEqual(buildEffectiveRecord("2026-07-13", cleared, { is_exception: true }), { businessDate: "2026-07-13", source: "structured", status: "cleared", reasonCode: null, reasonText: null, revision: 4, structured: true });
+  assert.deepStrictEqual(buildEffectiveRecord("2026-07-13", null, { is_exception: true, exception_reason: "holiday", exception_note: "n" }), { businessDate: "2026-07-13", source: "legacy", status: "active", reasonCode: "holiday", reasonText: "n", revision: 0, structured: false });
+  assert.deepStrictEqual(buildEffectiveRecord("2026-07-13", null, { is_exception: false }), { businessDate: "2026-07-13", source: "none", status: "normal", reasonCode: null, reasonText: null, revision: 0, structured: false });
+});
+T("P1 malformed structured state fails SAFE to cleared/normal (never spurious active)", () => {
+  assert.strictEqual(buildEffectiveRecord("2026-07-13", { state: {} }, { is_exception: true }).status, "cleared"); // no status => not active
+  assert.strictEqual(buildEffectiveRecord("2026-07-13", {}, { is_exception: true }).source, "legacy"); // no state => legacy fallback
+});
+
+// Part 4 — rebuild decision
+T("P4 shouldRebuildDecision", () => {
+  assert.strictEqual(shouldRebuildDecision(true, null), true);                                   // revenue changed
+  assert.strictEqual(shouldRebuildDecision(false, { applied: true, rebuildRequired: true }), true);
+  assert.strictEqual(shouldRebuildDecision(false, { applied: false, rebuildRequired: false }), false); // replay
+  assert.strictEqual(shouldRebuildDecision(false, { applied: true, rebuildRequired: false }), false);
+  assert.strictEqual(shouldRebuildDecision(false, null), false);
+});
+
+// Part 8 — range helpers
+T("P8 dateRangeDays: forward positive, reversed negative, cap = 400", () => {
+  assert.strictEqual(MAX_LIST_RANGE_DAYS, 400);
+  assert.strictEqual(dateRangeDays("2026-07-01", "2026-07-01"), 0);
+  assert.strictEqual(dateRangeDays("2026-07-01", "2026-07-11"), 10);
+  assert.ok(dateRangeDays("2026-07-11", "2026-07-01") < 0); // reversed
+  assert.strictEqual(dateRangeDays("2026-01-01", "2027-02-05"), 400); // exactly 400
+  assert.ok(dateRangeDays("2026-01-01", "2027-02-06") > MAX_LIST_RANGE_DAYS); // over cap
 });
 
 console.log(`\nTotal: ${pass + fail}  Passed: ${pass}  Failed: ${fail}`);

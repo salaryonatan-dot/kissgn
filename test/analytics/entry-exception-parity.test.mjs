@@ -41,6 +41,9 @@ const fixtures = [
   ["structured absent+legacy", null,       { is_exception: true }],
   ["missing everywhere",       null,       { is_exception: false }],
   ["structured absent no leg", null,       null],
+  ["malformed state (no status)", { state: {} },      { is_exception: true }],
+  ["malformed envelope (no state)", {},               { is_exception: true }],
+  ["malformed envelope (no state) no legacy", {},     null],
 ];
 for (const [name, env, legacy] of fixtures) {
   T("parity: " + name, () => {

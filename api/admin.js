@@ -25,7 +25,8 @@ import { ownerGuardPath, isOwnerAffecting, isOwnerLevel, ownersFromRolesMap,
 import { randomUUID } from "node:crypto";
 import { getAdminDb, getAdminAuth } from "../lib/adminSdk.js";
 import { isValidBusinessDate, isValidOperationId, isValidExpectedRevision,
-  validateSetInput, requestHash as eeRequestHash, safeStateView } from "../lib/entryExceptions.js";
+  validateSetInput, requestHash as eeRequestHash, safeStateView,
+  dateRangeDays, MAX_LIST_RANGE_DAYS } from "../lib/entryExceptions.js";
 import { runEntryExceptionTxn, listEntryExceptions } from "../lib/repositories/entryExceptionsRepo.js";
 import { sendEmail } from "../lib/sendEmail.js";
 
@@ -1833,13 +1834,17 @@ function eeValidIds(tenantId, bizId) {
 }
 
 async function handleListEntryExceptions(req, res) {
+  if (req.method !== "GET") { res.status(405).json({ error: "Method not allowed" }); return; }
   let claims;
   try { claims = await requireAuth(req); } catch { res.status(401).json({ error: "unauthorized" }); return; }
   const tenantId = req.query.tenantId, bizId = req.query.bizId;
-  const fromDate = req.query.fromDate || null, toDate = req.query.toDate || null;
+  const fromDate = req.query.fromDate, toDate = req.query.toDate;
   if (!eeValidIds(tenantId, bizId)) { res.status(400).json({ error: "invalid tenantId or bizId" }); return; }
-  if (fromDate && !isValidBusinessDate(fromDate)) { res.status(400).json({ error: "invalid_from_date" }); return; }
-  if (toDate && !isValidBusinessDate(toDate)) { res.status(400).json({ error: "invalid_to_date" }); return; }
+  if (!isValidBusinessDate(fromDate)) { res.status(400).json({ error: "invalid_from_date" }); return; }
+  if (!isValidBusinessDate(toDate)) { res.status(400).json({ error: "invalid_to_date" }); return; }
+  const __rangeDays = dateRangeDays(fromDate, toDate);
+  if (__rangeDays < 0) { res.status(400).json({ error: "reversed_range" }); return; }
+  if (__rangeDays > MAX_LIST_RANGE_DAYS) { res.status(400).json({ error: "range_too_large" }); return; }
   let role;
   try { role = await requireTenantAccess(claims.uid, tenantId, "viewer"); }
   catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "forbidden" }); return; }
@@ -1876,7 +1881,7 @@ async function eeAuthorizeWrite(req, res) {
 
 function eeRespond(res, outcome) {
   if (outcome.outcome === "conflict") {
-    const map = { revision_conflict: 409, idempotency_conflict: 409, txn_failed: 502 };
+    const map = { revision_conflict: 409, idempotency_conflict: 409, operation_limit_reached: 409, txn_failed: 502 };
     res.status(map[outcome.code] || 409).json({ ok: false, error: outcome.code });
     return;
   }
