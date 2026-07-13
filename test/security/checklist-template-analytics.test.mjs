@@ -149,10 +149,16 @@ test("checkers.ts: reads the authorized flat per-business analytics source", () 
   );
 });
 
-test("checkers.ts: helper maps AnalyticsDoc.revenue fields to legacy shape", () => {
-  assert.match(checkers, /revenue: Number\(rev\.total\) \|\| 0/, "total -> revenue");
-  assert.match(checkers, /laborCost: Number\(rev\.payroll\) \|\| 0/, "payroll -> laborCost");
-  assert.match(checkers, /foodCost: Number\(rev\.food_cost\) \|\| 0/, "food_cost -> foodCost");
+test("checkers.ts: maps AnalyticsDoc.revenue via the strict finite-metric helper", () => {
+  // Mapping was refactored into lib/analytics/strictDailyMetrics.js (strict
+  // finite validation). checkers.ts now delegates to it and no longer
+  // zero-coerces raw fields.
+  assert.match(checkers, /strictLegacyDailyMetric\(rev\)/, "checkers uses the strict helper");
+  assert.doesNotMatch(checkers, /Number\(rev\.total\) \|\| 0/, "old zero-coercion removed");
+  const strict = readFileSync(join(ROOT, "lib", "analytics", "strictDailyMetrics.js"), "utf8");
+  assert.match(strict, /revenue: total/, "total -> revenue");
+  assert.match(strict, /laborCost: payroll/, "payroll -> laborCost");
+  assert.match(strict, /foodCost/, "food_cost -> foodCost");
 });
 
 test("checkers.ts: all five daily checkers route through readLegacyShapedDaily", () => {

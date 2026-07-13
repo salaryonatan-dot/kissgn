@@ -87,14 +87,13 @@ function planComparison(base: MetricsPlan, q: string, tz: string): MetricsPlan {
 function planAnomaly(base: MetricsPlan, q: string, tz: string): MetricsPlan {
   const metrics: MetricKey[] = ["daily_revenue", "labor_cost", "labor_pct"];
 
-  if (/כוח אדם|labor/i.test(q)) {
-    metrics.push("hourly_revenue");
-  }
+  // hourly_revenue RETIRED — no valid per-business hourly POS source
+  // (Foundation Release). Hourly analysis is unsupported; never requested.
 
   return {
     ...base,
     metrics,
-    dimensions: ["date", "hour", "day_of_week"],
+    dimensions: ["date", "day_of_week"],
     timeRange: inferTimeRange(q, tz, 28),
     requiresBaseline: true,
     requiresComparison: true,
@@ -106,8 +105,8 @@ function planAnomaly(base: MetricsPlan, q: string, tz: string): MetricsPlan {
 function planTrend(base: MetricsPlan, q: string, tz: string): MetricsPlan {
   return {
     ...base,
-    metrics: ["daily_revenue", "hourly_revenue", "labor_pct"],
-    dimensions: ["date", "day_of_week", "hour"],
+    metrics: ["daily_revenue", "labor_pct"],
+    dimensions: ["date", "day_of_week"],
     timeRange: inferTimeRange(q, tz, 56),
     requiresBaseline: true,
     requiresComparison: true,
@@ -134,8 +133,8 @@ function planForecast(base: MetricsPlan, q: string, tz: string): MetricsPlan {
 function planStrategic(base: MetricsPlan, q: string, tz: string): MetricsPlan {
   return {
     ...base,
-    metrics: ["daily_revenue", "hourly_revenue", "labor_pct", "food_cost_pct", "product_mix"],
-    dimensions: ["date", "hour", "product_name", "day_of_week"],
+    metrics: ["daily_revenue", "labor_pct", "food_cost_pct", "product_mix"],
+    dimensions: ["date", "product_name", "day_of_week"],
     timeRange: inferTimeRange(q, tz, 56),
     requiresBaseline: true,
     requiresComparison: true,

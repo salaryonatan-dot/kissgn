@@ -17,7 +17,6 @@ import { detectDailyRevenueUnderperformance } from "./detectors/detectDailyReven
 import { detectLaborInefficiency } from "./detectors/detectLaborInefficiency.js";
 import { detectWeakDayPattern } from "./detectors/detectWeakDayPattern.js";
 // Phase 2 detectors
-import { detectWeakHourPattern } from "./detectors/detectWeakHourPattern.js";
 import { detectPurchasesWithoutRevenueSupport } from "./detectors/detectPurchasesWithoutRevenueSupport.js";
 import { detectForecastRisk } from "./detectors/detectForecastRisk.js";
 // Dedup, suppression, repo
@@ -122,7 +121,8 @@ export async function runForBiz(
     { name: "labor_inefficiency", fn: () => detectLaborInefficiency(fetched, baseline) },
     { name: "weak_day_pattern", fn: () => detectWeakDayPattern(fetched, baseline) },
     // Phase 2 detectors
-    { name: "weak_hour_pattern", fn: () => detectWeakHourPattern(fetched, baseline) },
+    // weak_hour_pattern RETIRED — no valid per-business hourly POS source
+    // (Foundation Release). See "fix: retire unsupported hourly analytics workflow".
     { name: "purchases_without_revenue", fn: () => detectPurchasesWithoutRevenueSupport(fetched, baseline) },
     { name: "forecast_risk", fn: () => detectForecastRisk(fetched, baseline) },
   ];
@@ -359,8 +359,8 @@ function buildSyntheticContext(tenantId: string, bizId: string, branchId?: strin
 function buildProactivePlan(context: AgentContext): MetricsPlan {
   return {
     intent: "anomaly_detection",  // closest existing intent for baseline selection
-    metrics: ["daily_revenue", "labor_cost", "labor_pct", "hourly_revenue", "purchases", "food_cost"],
-    dimensions: ["date", "day_of_week", "hour"],
+    metrics: ["daily_revenue", "labor_cost", "labor_pct", "purchases", "food_cost"],
+    dimensions: ["date", "day_of_week"],
     filters: {},
     timeRange: {
       start: daysAgoIso(28),

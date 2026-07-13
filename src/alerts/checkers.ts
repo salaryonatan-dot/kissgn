@@ -5,6 +5,7 @@
 import type { FiredAlert, AlertThresholds, AlertSeverity } from "./types.js";
 import { getDb } from "../firebase/admin.js";
 import { todayIso, daysAgoIso } from "../utils/dates.js";
+import { strictLegacyDailyMetric } from "../../lib/analytics/strictDailyMetrics.js";
 
 // Read the AUTHORIZED per-business flat analytics source
 // (tenants/{tid}/biz:{bizId}:analytics:daily:{date}). The legacy tenant-wide
@@ -31,12 +32,13 @@ async function readLegacyShapedDaily(
   snaps.forEach((snap: any, i: number) => {
     const doc: any = snap && typeof snap.val === "function" ? snap.val() : null;
     const rev = doc && doc.revenue ? doc.revenue : null;
-    if (rev && typeof rev === "object") {
-      out[dates[i]] = { [bizId]: {
-        revenue: Number(rev.total) || 0,
-        laborCost: Number(rev.payroll) || 0,
-        foodCost: Number(rev.food_cost) || 0,
-      } };
+    // Part 3: strict finite-metric validation. Only dates whose total/payroll/
+    // food_cost are ALL valid finite numerics enter alert calculations; anything
+    // missing/empty/NaN/±Infinity/text/boolean/object/array skips the whole date
+    // (no zero record, no false alert).
+    const strict = strictLegacyDailyMetric(rev);
+    if (strict) {
+      out[dates[i]] = { [bizId]: strict };
     }
   });
   return out;

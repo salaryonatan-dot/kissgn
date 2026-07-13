@@ -12,6 +12,15 @@ import { getRelevantBusinessMemory } from "../memory/getRelevantBusinessMemory.j
 import { saveBusinessInsight } from "../memory/saveBusinessInsight.js";
 import { logger } from "../../utils/logging.js";
 
+// Deterministic detector for questions specifically about hourly / weak-hour
+// performance. Hourly POS data is unsupported this release (no per-business
+// source), so such questions get the deterministic unsupported-data response —
+// never a fabricated answer and never a daily-aggregate fallback.
+const HOURLY_QUESTION_RE = /שעות\s+(שקטות|חלשות|חזקות|עמוסות|מתות)|לפי\s+שעה|פילוח\s+שעתי|ניתוח\s+שעתי|שעתי(ים|ות)?\b|weak.?hour|hourly|by\s+hour|per\s+hour/i;
+function isHourlyQuestion(q: string): boolean {
+  return HOURLY_QUESTION_RE.test(q || "");
+}
+
 export async function runAgent(context: AgentContext): Promise<AgentResponse> {
   const startMs = Date.now();
 
@@ -28,6 +37,21 @@ export async function runAgent(context: AgentContext): Promise<AgentResponse> {
         consistencyScore: 0,
         sampleAdequacyScore: 0,
         issues: [{ code: "missing_data", severity: "high", message: "לא הצלחתי להבין את השאלה" }],
+      }, []);
+    }
+
+    // Hourly / weak-hour questions: POS hourly data is unsupported this release.
+    // Return the deterministic unsupported-data response (no fabrication, no
+    // daily-aggregate fallback, no LLM) before any data fetch.
+    if (isHourlyQuestion(context.userQuestion)) {
+      logger.info("hourly question — unsupported data source; returning deterministic response");
+      return failSafeResponse(intent, {
+        ok: false,
+        completenessScore: 0,
+        freshnessScore: 0,
+        consistencyScore: 0,
+        sampleAdequacyScore: 0,
+        issues: [{ code: "unsupported_hourly", severity: "high", message: "hourly POS data is not available" }],
       }, []);
     }
 

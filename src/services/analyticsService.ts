@@ -1,7 +1,6 @@
 import type { MetricsPlan, FetchedData } from "../agent/types/agent.js";
 import type { AgentContext } from "../agent/types/agent.js";
 import { getDailyMetrics, getLatestDailyDate } from "../repositories/analytics/dailyMetricsRepo.js";
-import { getHourlyMetrics } from "../repositories/analytics/hourlyMetricsRepo.js";
 import { getLaborMetrics } from "../repositories/analytics/laborRepo.js";
 import { getProductMetrics, getTopProducts } from "../repositories/analytics/productRepo.js";
 import { getPurchaseMetrics } from "../repositories/analytics/purchasesRepo.js";
@@ -41,25 +40,13 @@ export async function fetchPlannedData(
     fetchStatus["daily"] = "failed";
   }
 
-  // --- Hourly: if needed ---
-  if (plan.metrics.some((m) => m.includes("hourly"))) {
-    try {
-      const hourly = await withTimeout(
-        getHourlyMetrics(tenantId, start, end, branchId),
-        TIMEOUT_SECONDARY_MS,
-        "getHourlyMetrics"
-      );
-      metrics["hourly"] = hourly;
-      totalRecords += hourly.length;
-      sources.push("analytics/hourly");
-      fetchStatus["hourly"] = "ok";
-    } catch (err) {
-      logger.error("Failed to fetch hourly metrics:", err);
-      fetchStatus["hourly"] = "failed";
-    }
-  } else {
-    fetchStatus["hourly"] = "skipped";
-  }
+  // --- Hourly: RETIRED (Foundation Release) ---
+  // The per-business analytics source carries no POS hourly revenue/tickets, and
+  // the legacy tenant-wide analytics/daily node is locked (.read/.write:false).
+  // The weak_hour_pattern workflow is deactivated, so hourly metrics are never
+  // fetched and no path reaches the legacy node. Re-enable under a dedicated
+  // POS-ingestion release. See "fix: retire unsupported hourly analytics workflow".
+  fetchStatus["hourly"] = "skipped";
 
   // --- Labor: if needed ---
   if (plan.metrics.some((m) => m.includes("labor"))) {
