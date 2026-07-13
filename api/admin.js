@@ -28,7 +28,8 @@ import { isValidBusinessDate, isValidOperationId, isValidExpectedRevision,
   validateSetInput, requestHash as eeRequestHash, safeStateView,
   dateRangeDays, MAX_LIST_RANGE_DAYS } from "../lib/entryExceptions.js";
 import { runEntryExceptionTxn, listEntryExceptions } from "../lib/repositories/entryExceptionsRepo.js";
-import { readBizDoc, writeBizDoc, readBizDailyRange } from "../lib/repositories/bizDataRepo.js";
+import { readBizDoc, writeBizDoc, readBizDailyRange, getBizDocWithToken, setBizDocGuarded } from "../lib/repositories/bizDataRepo.js";
+import { canonicalizeChecklistDocument } from "../lib/checklistVersion.js";
 import { sendEmail } from "../lib/sendEmail.js";
 
 const RTDB_FORBIDDEN = /[.#$\[\]\/]/;
@@ -1974,11 +1975,21 @@ async function bizDataAuthWrite(req, res, minRole) {
   catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "business_access_denied" }); return null; }
   return { claims, role, db, body, tenantId, bizId };
 }
+function validVersionToken(t) { return typeof t === "string" && /^[a-f0-9]{64}$/.test(t); }
 function bizDataValidDoc(res, doc) {
-  if (doc == null || typeof doc !== "object") { res.status(400).json({ error: "invalid_doc" }); return false; }
-  let str; try { str = JSON.stringify(doc); } catch { res.status(400).json({ error: "invalid_doc" }); return false; }
-  if (str.length > BIZDATA_MAX_DOC) { res.status(400).json({ error: "doc_too_large" }); return false; }
+  // Checklist docs are OBJECTS (never null for set, never a top-level array).
+  if (doc == null || typeof doc !== "object" || Array.isArray(doc)) { res.status(400).json({ error: "invalid_doc" }); return false; }
+  let str; try { str = JSON.stringify(doc); } catch { res.status(400).json({ error: "invalid_doc" }); return false; } // cyclic
+  if (typeof str !== "string") { res.status(400).json({ error: "invalid_doc" }); return false; }
+  if (Buffer.byteLength(str, "utf8") > BIZDATA_MAX_DOC) { res.status(400).json({ error: "doc_too_large" }); return false; } // UTF-8 bytes
+  try { canonicalizeChecklistDocument(doc); } // rejects cyclic / non-JSON / prototype-pollution keys at any depth
+  catch (e) { res.status(400).json({ error: e && e.code === "forbidden_key" ? "forbidden_key" : "invalid_doc" }); return false; }
   return true;
+}
+function bizDataConflictOrWrite(res, r, doc) {
+  if (r.conflict) { res.status(409).json({ ok: false, error: "checklist_conflict" }); return; }
+  if (!r.ok) { res.status(500).json({ error: "write_failed" }); return; }
+  res.status(200).json({ ok: true, document: doc, versionToken: r.versionToken });
 }
 
 async function handleGetChecklistTemplateItems(req, res) {
@@ -1986,16 +1997,17 @@ async function handleGetChecklistTemplateItems(req, res) {
   const { tenantId, bizId, templateId } = req.query;
   if (!bizDataValidTemplateId(templateId)) { res.status(400).json({ error: "invalid_template_id" }); return; }
   const ctx = await bizDataAuthRead(req, res, tenantId, bizId); if (!ctx) return;
-  try { res.status(200).json({ ok: true, doc: await readBizDoc(tenantId, bizId, `checklist_template_items:${templateId}`) }); }
+  try { const { document, versionToken } = await getBizDocWithToken(tenantId, bizId, `checklist_template_items:${templateId}`); res.status(200).json({ ok: true, document, versionToken }); }
   catch (e) { res.status(500).json({ error: "read_failed" }); }
 }
 async function handleSetChecklistTemplateItems(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
   const ctx = await bizDataAuthWrite(req, res, "manager"); if (!ctx) return;
-  const { templateId, doc } = ctx.body;
+  const { templateId, doc, expectedVersionToken } = ctx.body;
   if (!bizDataValidTemplateId(templateId)) { res.status(400).json({ error: "invalid_template_id" }); return; }
+  if (!validVersionToken(expectedVersionToken)) { res.status(400).json({ error: "invalid_version_token" }); return; }
   if (!bizDataValidDoc(res, doc)) return;
-  try { await writeBizDoc(ctx.tenantId, ctx.bizId, `checklist_template_items:${templateId}`, doc); res.status(200).json({ ok: true }); }
+  try { bizDataConflictOrWrite(res, await setBizDocGuarded(ctx.tenantId, ctx.bizId, `checklist_template_items:${templateId}`, doc, expectedVersionToken), doc); }
   catch (e) { res.status(500).json({ error: "write_failed" }); }
 }
 async function handleGetChecklistRun(req, res) {
@@ -2003,16 +2015,17 @@ async function handleGetChecklistRun(req, res) {
   const { tenantId, bizId, businessDate } = req.query;
   if (!isValidBusinessDate(businessDate)) { res.status(400).json({ error: "invalid_business_date" }); return; }
   const ctx = await bizDataAuthRead(req, res, tenantId, bizId); if (!ctx) return;
-  try { res.status(200).json({ ok: true, doc: await readBizDoc(tenantId, bizId, `checklist_runs:${businessDate}`) }); }
+  try { const { document, versionToken } = await getBizDocWithToken(tenantId, bizId, `checklist_runs:${businessDate}`); res.status(200).json({ ok: true, document, versionToken }); }
   catch (e) { res.status(500).json({ error: "read_failed" }); }
 }
 async function handleSetChecklistRun(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
   const ctx = await bizDataAuthWrite(req, res, "shift_manager"); if (!ctx) return;
-  const { businessDate, doc } = ctx.body;
+  const { businessDate, doc, expectedVersionToken } = ctx.body;
   if (!isValidBusinessDate(businessDate)) { res.status(400).json({ error: "invalid_business_date" }); return; }
+  if (!validVersionToken(expectedVersionToken)) { res.status(400).json({ error: "invalid_version_token" }); return; }
   if (!bizDataValidDoc(res, doc)) return;
-  try { await writeBizDoc(ctx.tenantId, ctx.bizId, `checklist_runs:${businessDate}`, doc); res.status(200).json({ ok: true }); }
+  try { bizDataConflictOrWrite(res, await setBizDocGuarded(ctx.tenantId, ctx.bizId, `checklist_runs:${businessDate}`, doc, expectedVersionToken), doc); }
   catch (e) { res.status(500).json({ error: "write_failed" }); }
 }
 async function handleGetChecklistSimpleRun(req, res) {
@@ -2021,17 +2034,18 @@ async function handleGetChecklistSimpleRun(req, res) {
   if (!isValidBusinessDate(businessDate)) { res.status(400).json({ error: "invalid_business_date" }); return; }
   if (!bizDataValidTemplateId(templateId)) { res.status(400).json({ error: "invalid_template_id" }); return; }
   const ctx = await bizDataAuthRead(req, res, tenantId, bizId); if (!ctx) return;
-  try { res.status(200).json({ ok: true, doc: await readBizDoc(tenantId, bizId, `checklist_simple_runs:${businessDate}:${templateId}`) }); }
+  try { const { document, versionToken } = await getBizDocWithToken(tenantId, bizId, `checklist_simple_runs:${businessDate}:${templateId}`); res.status(200).json({ ok: true, document, versionToken }); }
   catch (e) { res.status(500).json({ error: "read_failed" }); }
 }
 async function handleSetChecklistSimpleRun(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
   const ctx = await bizDataAuthWrite(req, res, "shift_manager"); if (!ctx) return;
-  const { businessDate, templateId, doc } = ctx.body;
+  const { businessDate, templateId, doc, expectedVersionToken } = ctx.body;
   if (!isValidBusinessDate(businessDate)) { res.status(400).json({ error: "invalid_business_date" }); return; }
   if (!bizDataValidTemplateId(templateId)) { res.status(400).json({ error: "invalid_template_id" }); return; }
+  if (!validVersionToken(expectedVersionToken)) { res.status(400).json({ error: "invalid_version_token" }); return; }
   if (!bizDataValidDoc(res, doc)) return;
-  try { await writeBizDoc(ctx.tenantId, ctx.bizId, `checklist_simple_runs:${businessDate}:${templateId}`, doc); res.status(200).json({ ok: true }); }
+  try { bizDataConflictOrWrite(res, await setBizDocGuarded(ctx.tenantId, ctx.bizId, `checklist_simple_runs:${businessDate}:${templateId}`, doc, expectedVersionToken), doc); }
   catch (e) { res.status(500).json({ error: "write_failed" }); }
 }
 // Derived analytics/insights — bounded date-range READ only (client write is impossible; server/Admin SDK writes them).

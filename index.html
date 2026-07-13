@@ -7112,12 +7112,13 @@ async function apiGetChecklistDoc(kind, bizId, params) {
   const resp = await window.apiFetch(`/api/admin?action=get-checklist-${kind}&` + q.toString(), { method: "GET" });
   if (!resp.ok) throw new Error("read_" + resp.status);
   const d = await resp.json().catch(() => ({}));
-  return d.doc ?? null;
+  return { document: d.document ?? null, versionToken: d.versionToken || null };
 }
 async function apiSetChecklistDoc(kind, bizId, body) {
   const resp = await window.apiFetch(`/api/admin?action=set-checklist-${kind}`, { method: "POST", body: JSON.stringify({ tenantId: window._currentTenantId, bizId, ...body }) });
-  if (!resp.ok) { let j = {}; try { j = await resp.json(); } catch (_) {} const e = new Error(j.error || ("write_" + resp.status)); e.status = resp.status; throw e; }
-  return true;
+  const d = await resp.json().catch(() => ({}));
+  if (!resp.ok) { const e = new Error(d.error || ("write_" + resp.status)); e.status = resp.status; e.conflict = (resp.status === 409 && d.error === "checklist_conflict"); throw e; }
+  return { document: d.document ?? null, versionToken: d.versionToken || null };
 }
 async function apiGetDailyRange(kind, bizId, fromDate, toDate) {
   const q = new URLSearchParams({ tenantId: window._currentTenantId || "", bizId: bizId || "", fromDate, toDate });
@@ -7201,6 +7202,10 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
   const [itemsEditorOpen, setItemsEditorOpen] = React.useState(false);
   // ── Step 2.3: simple daily run (item completion states) ────────────────────
   const [simpleRun, setSimpleRun] = React.useState(null);
+  // Optimistic-concurrency version tokens for the server-mediated checklist docs.
+  const runsTokenRef = React.useRef(null);
+  const itemsTokenRef = React.useRef(null);
+  const simpleRunTokenRef = React.useRef(null);
 
   const dow     = dowForBusinessKey(todayKey);
   const weekKey = DOW_KEYS[dow];
@@ -7276,8 +7281,8 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     (async () => {
       try {
         if (!bizId) { if (!cancelled){ setRuns(null); setLoadingRuns(false);} return; }
-        const doc = await apiGetChecklistDoc("run", bizId, { businessDate: todayKey });
-        if (!cancelled){ setRuns(doc || null); setLoadingRuns(false); }
+        const { document: doc, versionToken } = await apiGetChecklistDoc("run", bizId, { businessDate: todayKey });
+        if (!cancelled){ setRuns(doc || null); runsTokenRef.current = versionToken; setLoadingRuns(false); }
       } catch(e) {
         if (!cancelled){ setRuns(null); setLoadingRuns(false); }
       }
@@ -7317,9 +7322,9 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     if (!bizId || st.kind !== "simple") { setSimpleItems([]); return; }
     (async () => {
       try {
-        const doc = await apiGetChecklistDoc("template-items", bizId, { templateId: st.templateId });
+        const { document: doc, versionToken } = await apiGetChecklistDoc("template-items", bizId, { templateId: st.templateId });
         const items = (doc && Array.isArray(doc.items)) ? doc.items : [];
-        if (!cancelled) setSimpleItems(items);
+        if (!cancelled) { setSimpleItems(items); itemsTokenRef.current = versionToken; }
       } catch (e) {
         if (!cancelled) setSimpleItems([]); // missing/parse error → safe empty
       }
@@ -7335,8 +7340,8 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     setSimpleRun(null); // clear stale run before async read (template/date switch)
     (async () => {
       try {
-        const doc = await apiGetChecklistDoc("simple-run", bizId, { businessDate: todayKey, templateId: st.templateId });
-        if (!cancelled) setSimpleRun(doc && typeof doc === "object" ? doc : null);
+        const { document: doc, versionToken } = await apiGetChecklistDoc("simple-run", bizId, { businessDate: todayKey, templateId: st.templateId });
+        if (!cancelled) { setSimpleRun(doc && typeof doc === "object" ? doc : null); simpleRunTokenRef.current = versionToken; }
       } catch (e) {
         if (!cancelled) setSimpleRun(null); // missing/malformed → no completions yet
       }
@@ -7431,10 +7436,13 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     const todaysItems = itemsForPhase(runType);
     const doneCount = todaysItems.filter(it => run.items[it.id]?.status === "done").length;
     run.completionPercent = todaysItems.length ? Math.round(doneCount * 100 / todaysItems.length) : 0;
-    setRuns(newRuns);
-    closeItemEditor();
-    try { await apiSetChecklistDoc("run", bizId, { businessDate: todayKey, doc: newRuns }); }
-    catch (e) { alert("שמירה נכשלה — נסה שוב"); }
+    try {
+      const { document, versionToken } = await apiSetChecklistDoc("run", bizId, { businessDate: todayKey, doc: newRuns, expectedVersionToken: runsTokenRef.current });
+      setRuns(document); runsTokenRef.current = versionToken; closeItemEditor();
+    } catch (e) {
+      if (e.conflict) { alert("הנתונים השתנו על ידי משתמש אחר. יש לטעון מחדש לפני שמירה נוספת."); try { const r = await apiGetChecklistDoc("run", bizId, { businessDate: todayKey }); setRuns(r.document || null); runsTokenRef.current = r.versionToken; } catch (_) {} }
+      else alert("שמירה נכשלה — נסה שוב");
+    }
   };
 
   // ── Submit a phase run (locks it) ────────────────────────────────────────
@@ -7460,9 +7468,13 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     newRuns.runs[runType].status = "submitted";
     newRuns.runs[runType].submittedAt = now;
     newRuns.runs[runType].submittedBy = ctx.userId;
-    setRuns(newRuns);
-    try { await apiSetChecklistDoc("run", bizId, { businessDate: todayKey, doc: newRuns }); }
-    catch (e) { alert("שמירה נכשלה — נסה שוב"); }
+    try {
+      const { document, versionToken } = await apiSetChecklistDoc("run", bizId, { businessDate: todayKey, doc: newRuns, expectedVersionToken: runsTokenRef.current });
+      setRuns(document); runsTokenRef.current = versionToken;
+    } catch (e) {
+      if (e.conflict) { alert("הנתונים השתנו על ידי משתמש אחר. יש לטעון מחדש לפני שמירה נוספת."); try { const r = await apiGetChecklistDoc("run", bizId, { businessDate: todayKey }); setRuns(r.document || null); runsTokenRef.current = r.versionToken; } catch (_) {} }
+      else alert("שמירה נכשלה — נסה שוב");
+    }
   };
 
   // ── Step 2.2: read current registry map (safe: missing key → {}) ──────────
@@ -7489,7 +7501,8 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
       // Write the items doc FIRST. If the registry write below fails, this stays
       // an orphan items doc (invisible — no chip), which is safer than a visible
       // chip pointing at a missing items doc.
-      await apiSetChecklistDoc("template-items", bizId, { templateId, doc: { templateId, currentVersion: 1, items: [], updatedAt: now, updatedBy: ctx.userId } });
+      const { versionToken: itCreateToken } = await apiGetChecklistDoc("template-items", bizId, { templateId });
+      await apiSetChecklistDoc("template-items", bizId, { templateId, expectedVersionToken: itCreateToken, doc: { templateId, currentVersion: 1, items: [], updatedAt: now, updatedBy: ctx.userId } });
       // Only after the items doc exists, make the template visible in the registry.
       const map = await readRegistryMap();
       map[templateId] = entry;
@@ -7531,10 +7544,11 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     const now = Date.now();
     try {
       // preserve currentVersion from the existing items doc (fallback 1 if missing)
-      let doc = null;
-      try { doc = await apiGetChecklistDoc("template-items", bizId, { templateId: tplId }); } catch (_) { doc = null; }
+      let doc = null, itToken = null;
+      try { const r = await apiGetChecklistDoc("template-items", bizId, { templateId: tplId }); doc = r.document; itToken = r.versionToken; } catch (_) { doc = null; itToken = null; }
       const currentVersion = (doc && doc.currentVersion) || 1;
-      await apiSetChecklistDoc("template-items", bizId, { templateId: tplId, doc: { templateId: tplId, currentVersion, items: nextItems, updatedAt: now, updatedBy: ctx.userId } });
+      const setR = await apiSetChecklistDoc("template-items", bizId, { templateId: tplId, expectedVersionToken: itToken, doc: { templateId: tplId, currentVersion, items: nextItems, updatedAt: now, updatedBy: ctx.userId } });
+      itemsTokenRef.current = setR.versionToken;
       // registry: itemsCount = active items only; bump updatedAt/By; keep currentVersion
       const map = await readRegistryMap();
       if (map[tplId]) {
@@ -7547,7 +7561,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
       setItemsEditorOpen(false);
     } catch (e) {
       console.error("[checklist] save simple items failed:", e);
-      alert("שמירת הפריטים נכשלה — נסה שוב.");
+      alert(e && e.conflict ? "הנתונים השתנו על ידי משתמש אחר. יש לטעון מחדש לפני שמירה נוספת." : "שמירת הפריטים נכשלה — נסה שוב.");
     }
   };
 
@@ -7570,13 +7584,13 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
       itemStates: { ...(base.itemStates || {}), [itemId]: { done: !prevDone, updatedAt: now, updatedBy: ctx.userId } },
       updatedAt: now, updatedBy: ctx.userId,
     };
-    setSimpleRun(next); // optimistic
     try {
-      await apiSetChecklistDoc("simple-run", bizId, { businessDate: todayKey, templateId: tplId, doc: next });
+      const { document, versionToken } = await apiSetChecklistDoc("simple-run", bizId, { businessDate: todayKey, templateId: tplId, doc: next, expectedVersionToken: simpleRunTokenRef.current });
+      setSimpleRun(document); simpleRunTokenRef.current = versionToken;
     } catch (e) {
       console.error("[checklist] save simple run failed:", e);
-      setSimpleRun(prevRun || null); // rollback optimistic update
-      alert("שמירת הסימון נכשלה — נסה שוב.");
+      if (e.conflict) { alert("הנתונים השתנו על ידי משתמש אחר. יש לטעון מחדש לפני שמירה נוספת."); try { const r = await apiGetChecklistDoc("simple-run", bizId, { businessDate: todayKey, templateId: tplId }); setSimpleRun(r.document || null); simpleRunTokenRef.current = r.versionToken; } catch (_) { setSimpleRun(prevRun || null); } }
+      else { setSimpleRun(prevRun || null); alert("שמירת הסימון נכשלה — נסה שוב."); }
     }
   };
 
