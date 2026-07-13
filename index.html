@@ -7546,6 +7546,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
       setSelectedTemplateId(templateId);
       setShowCreate(false); setNewName(""); setNewType("cleaning");
     } catch (e) {
+      if (`${ctxRef.current.tenantId}|${ctxRef.current.bizId}` !== capBizKey || capGen !== itemsGenRef.current) return; // stale failure — no alert/error/log in the new context
       console.error("[checklist] create template failed:", e);
       alert("יצירת הצ׳ק ליסט נכשלה — נסה שוב.");
     }
@@ -7584,20 +7585,27 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
       try { const r = await apiGetChecklistDoc("template-items", bizId, { templateId: tplId }); doc = r.document; itToken = r.versionToken; } catch (_) { doc = null; itToken = null; }
       const currentVersion = (doc && doc.currentVersion) || 1;
       const setR = await apiSetChecklistDoc("template-items", bizId, { templateId: tplId, expectedVersionToken: itToken, doc: { templateId: tplId, currentVersion, items: nextItems, updatedAt: now, updatedBy: ctx.userId } });
-      if (!stillCurrent(capKey, itemsKey, capGen, itemsGenRef)) return; // stale: template/business switched or newer write superseded
+      if (!stillCurrent(capKey, itemsKey, capGen, itemsGenRef)) return; // stale after items write — no token/registry/UI setter
       itemsTokenRef.current = setR.versionToken;
-      // registry: itemsCount = active items only; bump updatedAt/By; keep currentVersion
+      // registry: itemsCount = active items only; bump updatedAt/By; keep currentVersion.
+      // The server writes (items + registry) may complete after a context switch;
+      // we NEVER roll those back — we only refuse to mutate UI state for a context
+      // the user is no longer viewing. Re-verify current context+generation after
+      // EVERY await and before EVERY setter (setTemplates was previously unguarded).
       const map = await readRegistryMap();
+      if (!stillCurrent(capKey, itemsKey, capGen, itemsGenRef)) return; // stale after registry read
       if (map[tplId]) {
         const activeCount = nextItems.filter(i => i.active !== false).length;
         map[tplId] = { ...map[tplId], itemsCount: activeCount, updatedBy: ctx.userId, updatedAt: now };
         await window.storage.set(`biz:${bizId}:checklist_templates`, JSON.stringify(map));
+        if (!stillCurrent(capKey, itemsKey, capGen, itemsGenRef)) return; // stale after registry write — do NOT touch registry UI state
         setTemplates(prev => prev.map(t => t.templateId === tplId ? { ...t, itemsCount: activeCount } : t));
       }
-      if (!stillCurrent(capKey, itemsKey, capGen, itemsGenRef)) return; // stale after registry sync
+      if (!stillCurrent(capKey, itemsKey, capGen, itemsGenRef)) return; // stale — no items/editor setter
       setSimpleItems(nextItems);
       setItemsEditorOpen(false);
     } catch (e) {
+      if (!stillCurrent(capKey, itemsKey, capGen, itemsGenRef)) return; // stale failure — no alert/error/log in the new context
       console.error("[checklist] save simple items failed:", e);
       alert(e && e.conflict ? "הנתונים השתנו על ידי משתמש אחר. יש לטעון מחדש לפני שמירה נוספת." : "שמירת הפריטים נכשלה — נסה שוב.");
     }

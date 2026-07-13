@@ -11,15 +11,7 @@ import { failSafeResponse } from "../response/failSafeResponse.js";
 import { getRelevantBusinessMemory } from "../memory/getRelevantBusinessMemory.js";
 import { saveBusinessInsight } from "../memory/saveBusinessInsight.js";
 import { logger } from "../../utils/logging.js";
-
-// Deterministic detector for questions specifically about hourly / weak-hour
-// performance. Hourly POS data is unsupported this release (no per-business
-// source), so such questions get the deterministic unsupported-data response —
-// never a fabricated answer and never a daily-aggregate fallback.
-const HOURLY_QUESTION_RE = /שעות\s+(שקטות|חלשות|חזקות|עמוסות|מתות)|לפי\s+שעה|פילוח\s+שעתי|ניתוח\s+שעתי|שעתי(ים|ות)?\b|weak.?hour|hourly|by\s+hour|per\s+hour/i;
-function isHourlyQuestion(q: string): boolean {
-  return HOURLY_QUESTION_RE.test(q || "");
-}
+import { isUnsupportedHourlySalesQuestion } from "../../../lib/analytics/hourlySalesQuestion.js";
 
 export async function runAgent(context: AgentContext): Promise<AgentResponse> {
   const startMs = Date.now();
@@ -40,11 +32,13 @@ export async function runAgent(context: AgentContext): Promise<AgentResponse> {
       }, []);
     }
 
-    // Hourly / weak-hour questions: POS hourly data is unsupported this release.
-    // Return the deterministic unsupported-data response (no fabrication, no
-    // daily-aggregate fallback, no LLM) before any data fetch.
-    if (isHourlyQuestion(context.userQuestion)) {
-      logger.info("hourly question — unsupported data source; returning deterministic response");
+    // Hourly SALES / weak-hour-sales questions: POS hourly data is unsupported
+    // this release. Requires BOTH an hourly/time-of-day intent AND a sales/POS
+    // intent, so ordinary labor/payroll/opening-hours questions are NOT caught.
+    // Deterministic (no LLM), no fabrication, no daily-aggregate fallback, before
+    // any data fetch.
+    if (isUnsupportedHourlySalesQuestion(context.userQuestion)) {
+      logger.info("hourly-sales question — unsupported data source; returning deterministic response");
       return failSafeResponse(intent, {
         ok: false,
         completenessScore: 0,

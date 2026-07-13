@@ -164,9 +164,11 @@ test("refs.ts no longer exports dailyMetricsRef", () => {
   assert.doesNotMatch(read("src/firebase/refs.ts"), /dailyMetricsRef/);
 });
 
-test("runAgent returns deterministic unsupported response for hourly questions (no fabrication/LLM/daily fallback)", () => {
+test("runAgent returns deterministic unsupported response for hourly-SALES questions (no fabrication/LLM/daily fallback)", () => {
   const r = read("src/agent/orchestrator/runAgent.ts");
-  assert.match(r, /isHourlyQuestion\(context\.userQuestion\)/);
+  // Matcher was narrowed to hourly-sales intersection (P3 Finding 3) and moved
+  // to the pure module lib/analytics/hourlySalesQuestion.js.
+  assert.match(r, /isUnsupportedHourlySalesQuestion\(context\.userQuestion\)/);
   assert.match(r, /unsupported_hourly/);
 });
 

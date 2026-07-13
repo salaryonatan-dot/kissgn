@@ -190,3 +190,88 @@ test("Part 4: token invalidation on context change for all three families", () =
   assert.match(html, /itemsTokenRef\.current = null;.*Part 1/);
   assert.match(html, /simpleRunTokenRef\.current = null;.*Part 1/);
 });
+
+// ─── P3 Finding 1/2: complete saveSimpleItems / createSimpleTemplate coverage ──
+test("items: stale saveSimpleItems success changes no registry/template/items state", () => {
+  const ed = makeEditor({ ...CTX, selectedTemplateId: "tplA" });
+  const h = ed.begin("items");
+  ed.switchContext({ selectedTemplateId: "tplB" }); // template switch mid-write
+  assert.equal(ed.applySuccess(h, { items: [1] }, "tk"), false);
+  assert.equal(ed.state.items, null, "no items/registry setter on stale success");
+});
+
+test("items: stale saveSimpleItems failure shows no error/alert", () => {
+  const ed = makeEditor({ ...CTX, selectedTemplateId: "tplA" });
+  const h = ed.begin("items");
+  ed.switchContext({ bizId: "B" });
+  assert.equal(ed.applyError(h, "שמירת הפריטים נכשלה"), false);
+  assert.equal(ed.state.lastError, null);
+});
+
+test("items: stale createSimpleTemplate failure shows no error/alert (biz switch)", () => {
+  const ed = makeEditor({ ...CTX });
+  const h = ed.begin("items");               // create shares the items generation family
+  ed.switchContext({ bizId: "B" });          // business switched during creation
+  assert.equal(ed.applyError(h, "יצירת הצ׳ק ליסט נכשלה"), false);
+  assert.equal(ed.state.lastError, null);
+});
+
+test("items: a CURRENT failure still displays the intended error", () => {
+  const ed = makeEditor({ ...CTX, selectedTemplateId: "tplA" });
+  const h = ed.begin("items");
+  assert.equal(ed.applyError(h, "שמירת הפריטים נכשלה"), true);
+  assert.equal(ed.state.lastError, "שמירת הפריטים נכשלה");
+});
+
+test("items: a CURRENT success still updates state", () => {
+  const ed = makeEditor({ ...CTX, selectedTemplateId: "tplA" });
+  const h = ed.begin("items");
+  assert.equal(ed.applySuccess(h, { items: [1, 2] }, "tkOK"), true);
+  assert.deepEqual(ed.state.items, { items: [1, 2] });
+  assert.equal(ed.state.token, "tkOK");
+});
+
+test("items: newer same-context generation supersedes an older write", () => {
+  const ed = makeEditor({ ...CTX, selectedTemplateId: "tplA" });
+  const h1 = ed.begin("items");
+  const h2 = ed.begin("items");
+  assert.equal(ed.applySuccess(h2, { v: 2 }, "t2"), true);
+  assert.equal(ed.applySuccess(h1, { v: 1 }, "t1"), false);
+  assert.deepEqual(ed.state.items, { v: 2 });
+});
+
+// Source-order assertions: the actual index.html guards the real setters.
+function fnBody(startMarker, endMarker) {
+  const a = html.indexOf(startMarker);
+  const b = html.indexOf(endMarker, a + 1);
+  assert.ok(a > -1 && b > a, `markers found: ${startMarker}`);
+  return html.slice(a, b);
+}
+
+test("source: saveSimpleItems setTemplates is preceded by a stillCurrent guard", () => {
+  const fn = fnBody("const saveSimpleItems = async", "const toggleSimpleItem = async");
+  const guardIdx = fn.indexOf("stale after registry write");
+  const setTemplatesIdx = fn.indexOf("setTemplates(prev => prev.map");
+  assert.ok(guardIdx > -1 && setTemplatesIdx > -1, "guard + setTemplates present");
+  assert.ok(guardIdx < setTemplatesIdx, "guard precedes setTemplates");
+});
+
+test("source: saveSimpleItems catch guards before console/alert", () => {
+  const fn = fnBody("const saveSimpleItems = async", "const toggleSimpleItem = async");
+  const catchIdx = fn.lastIndexOf("} catch (e) {");
+  const guardIdx = fn.indexOf("stale failure", catchIdx);
+  const alertIdx = fn.indexOf("alert(", catchIdx);
+  const consoleIdx = fn.indexOf("console.error", catchIdx);
+  assert.ok(guardIdx > catchIdx, "stale guard exists in catch");
+  assert.ok(guardIdx < consoleIdx && guardIdx < alertIdx, "guard precedes console.error and alert");
+});
+
+test("source: createSimpleTemplate catch guards before console/alert", () => {
+  const fn = fnBody("const createSimpleTemplate = async", "const disableTemplate = async");
+  const catchIdx = fn.lastIndexOf("} catch (e) {");
+  const guardIdx = fn.indexOf("capBizKey || capGen !== itemsGenRef.current) return", catchIdx);
+  const alertIdx = fn.indexOf("alert(", catchIdx);
+  const consoleIdx = fn.indexOf("console.error", catchIdx);
+  assert.ok(guardIdx > catchIdx, "stale guard exists in create catch");
+  assert.ok(guardIdx < consoleIdx && guardIdx < alertIdx, "guard precedes console.error and alert");
+});
