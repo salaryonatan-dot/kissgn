@@ -3006,7 +3006,8 @@ function PilotDashboard() {
 
   const readDashboardInsightCandidate = async (date) => {
     try {
-      const doc = await readChecklistDoc(`biz:${currentBizId}:insights:daily:${date}`);
+      const map = await apiGetDailyRange("insights", currentBizId, date, date);
+      const doc = map[date];
       if (!doc) return { ok: true, found: false, date, insights: null };
       // RTDB drops empty arrays, so `insights` may be absent → coerce to [].
       return { ok: true, found: true, date, insights: doc.insights || [] };
@@ -7103,6 +7104,29 @@ async function readChecklistDoc(key) {
   return raw;
 }
 
+// ── Server-mediated access for PARAMETERIZED business keys (checklist_* +
+//    analytics/insights). Direct RTDB access is denied by Rules; these go through
+//    the authenticated /api/admin dispatcher (auth + tenant + biz_access enforced). ──
+async function apiGetChecklistDoc(kind, bizId, params) {
+  const q = new URLSearchParams({ tenantId: window._currentTenantId || "", bizId: bizId || "", ...params });
+  const resp = await window.apiFetch(`/api/admin?action=get-checklist-${kind}&` + q.toString(), { method: "GET" });
+  if (!resp.ok) throw new Error("read_" + resp.status);
+  const d = await resp.json().catch(() => ({}));
+  return d.doc ?? null;
+}
+async function apiSetChecklistDoc(kind, bizId, body) {
+  const resp = await window.apiFetch(`/api/admin?action=set-checklist-${kind}`, { method: "POST", body: JSON.stringify({ tenantId: window._currentTenantId, bizId, ...body }) });
+  if (!resp.ok) { let j = {}; try { j = await resp.json(); } catch (_) {} const e = new Error(j.error || ("write_" + resp.status)); e.status = resp.status; throw e; }
+  return true;
+}
+async function apiGetDailyRange(kind, bizId, fromDate, toDate) {
+  const q = new URLSearchParams({ tenantId: window._currentTenantId || "", bizId: bizId || "", fromDate, toDate });
+  const resp = await window.apiFetch(`/api/admin?action=get-${kind}-daily&` + q.toString(), { method: "GET" });
+  if (!resp.ok) throw new Error("read_" + resp.status);
+  const d = await resp.json().catch(() => ({}));
+  return d.docs || {};
+}
+
 // ── Phase 1: version pinning for runs ────────────────────────────────────────
 // Build a day-scoped snapshot of the template items relevant to one business
 // day (active + daily, or weekly matching that day-of-week), keeping only the
@@ -7252,7 +7276,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     (async () => {
       try {
         if (!bizId) { if (!cancelled){ setRuns(null); setLoadingRuns(false);} return; }
-        const doc = await readChecklistDoc(`biz:${bizId}:checklist_runs:${todayKey}`);
+        const doc = await apiGetChecklistDoc("run", bizId, { businessDate: todayKey });
         if (!cancelled){ setRuns(doc || null); setLoadingRuns(false); }
       } catch(e) {
         if (!cancelled){ setRuns(null); setLoadingRuns(false); }
@@ -7293,7 +7317,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     if (!bizId || st.kind !== "simple") { setSimpleItems([]); return; }
     (async () => {
       try {
-        const doc = await readChecklistDoc(`biz:${bizId}:checklist_template_items:${st.templateId}`);
+        const doc = await apiGetChecklistDoc("template-items", bizId, { templateId: st.templateId });
         const items = (doc && Array.isArray(doc.items)) ? doc.items : [];
         if (!cancelled) setSimpleItems(items);
       } catch (e) {
@@ -7311,7 +7335,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     setSimpleRun(null); // clear stale run before async read (template/date switch)
     (async () => {
       try {
-        const doc = await readChecklistDoc(`biz:${bizId}:checklist_simple_runs:${todayKey}:${st.templateId}`);
+        const doc = await apiGetChecklistDoc("simple-run", bizId, { businessDate: todayKey, templateId: st.templateId });
         if (!cancelled) setSimpleRun(doc && typeof doc === "object" ? doc : null);
       } catch (e) {
         if (!cancelled) setSimpleRun(null); // missing/malformed → no completions yet
@@ -7409,7 +7433,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     run.completionPercent = todaysItems.length ? Math.round(doneCount * 100 / todaysItems.length) : 0;
     setRuns(newRuns);
     closeItemEditor();
-    try { await window.storage.set(`biz:${bizId}:checklist_runs:${todayKey}`, JSON.stringify(newRuns)); }
+    try { await apiSetChecklistDoc("run", bizId, { businessDate: todayKey, doc: newRuns }); }
     catch (e) { alert("שמירה נכשלה — נסה שוב"); }
   };
 
@@ -7437,7 +7461,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     newRuns.runs[runType].submittedAt = now;
     newRuns.runs[runType].submittedBy = ctx.userId;
     setRuns(newRuns);
-    try { await window.storage.set(`biz:${bizId}:checklist_runs:${todayKey}`, JSON.stringify(newRuns)); }
+    try { await apiSetChecklistDoc("run", bizId, { businessDate: todayKey, doc: newRuns }); }
     catch (e) { alert("שמירה נכשלה — נסה שוב"); }
   };
 
@@ -7465,8 +7489,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
       // Write the items doc FIRST. If the registry write below fails, this stays
       // an orphan items doc (invisible — no chip), which is safer than a visible
       // chip pointing at a missing items doc.
-      await window.storage.set(`biz:${bizId}:checklist_template_items:${templateId}`,
-        JSON.stringify({ templateId, currentVersion: 1, items: [], updatedAt: now, updatedBy: ctx.userId }));
+      await apiSetChecklistDoc("template-items", bizId, { templateId, doc: { templateId, currentVersion: 1, items: [], updatedAt: now, updatedBy: ctx.userId } });
       // Only after the items doc exists, make the template visible in the registry.
       const map = await readRegistryMap();
       map[templateId] = entry;
@@ -7509,10 +7532,9 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     try {
       // preserve currentVersion from the existing items doc (fallback 1 if missing)
       let doc = null;
-      try { doc = await readChecklistDoc(`biz:${bizId}:checklist_template_items:${tplId}`); } catch (_) { doc = null; }
+      try { doc = await apiGetChecklistDoc("template-items", bizId, { templateId: tplId }); } catch (_) { doc = null; }
       const currentVersion = (doc && doc.currentVersion) || 1;
-      await window.storage.set(`biz:${bizId}:checklist_template_items:${tplId}`,
-        JSON.stringify({ templateId: tplId, currentVersion, items: nextItems, updatedAt: now, updatedBy: ctx.userId }));
+      await apiSetChecklistDoc("template-items", bizId, { templateId: tplId, doc: { templateId: tplId, currentVersion, items: nextItems, updatedAt: now, updatedBy: ctx.userId } });
       // registry: itemsCount = active items only; bump updatedAt/By; keep currentVersion
       const map = await readRegistryMap();
       if (map[tplId]) {
@@ -7550,7 +7572,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     };
     setSimpleRun(next); // optimistic
     try {
-      await window.storage.set(`biz:${bizId}:checklist_simple_runs:${todayKey}:${tplId}`, JSON.stringify(next));
+      await apiSetChecklistDoc("simple-run", bizId, { businessDate: todayKey, templateId: tplId, doc: next });
     } catch (e) {
       console.error("[checklist] save simple run failed:", e);
       setSimpleRun(prevRun || null); // rollback optimistic update
@@ -8389,12 +8411,10 @@ function DailyInsightsScreen({ tenantId, bizId }) {
         // Read each in parallel via storage.get. Misses come back as null.
         // readChecklistDoc unwraps the {key, value, shared} envelope returned
         // by window.storage.get; same helper used by the checklist screen.
-        const results = await Promise.all(
-          keys.map(k =>
-            readChecklistDoc(`biz:${bizId}:analytics:daily:${k}`)
-              .catch(() => null)
-          )
-        );
+        const sortedKeys = [...keys].sort();
+        let rangeMap = {};
+        try { rangeMap = await apiGetDailyRange("analytics", bizId, sortedKeys[0], sortedKeys[sortedKeys.length - 1]); } catch (_) { rangeMap = {}; }
+        const results = keys.map(k => rangeMap[k] || null);
         const filled = results
           .map((raw, i) => {
             if (!raw) return { date: keys[i], _missing: true };

@@ -28,6 +28,7 @@ import { isValidBusinessDate, isValidOperationId, isValidExpectedRevision,
   validateSetInput, requestHash as eeRequestHash, safeStateView,
   dateRangeDays, MAX_LIST_RANGE_DAYS } from "../lib/entryExceptions.js";
 import { runEntryExceptionTxn, listEntryExceptions } from "../lib/repositories/entryExceptionsRepo.js";
+import { readBizDoc, writeBizDoc, readBizDailyRange } from "../lib/repositories/bizDataRepo.js";
 import { sendEmail } from "../lib/sendEmail.js";
 
 const RTDB_FORBIDDEN = /[.#$\[\]\/]/;
@@ -96,6 +97,14 @@ export default async function handler(req, res) {
   if (action === "list-entry-exceptions")  return handleListEntryExceptions(req, res);
   if (action === "set-entry-exception")    return handleSetEntryException(req, res);
   if (action === "clear-entry-exception")  return handleClearEntryException(req, res);
+  if (action === "get-checklist-template-items") return handleGetChecklistTemplateItems(req, res);
+  if (action === "set-checklist-template-items") return handleSetChecklistTemplateItems(req, res);
+  if (action === "get-checklist-run")            return handleGetChecklistRun(req, res);
+  if (action === "set-checklist-run")            return handleSetChecklistRun(req, res);
+  if (action === "get-checklist-simple-run")     return handleGetChecklistSimpleRun(req, res);
+  if (action === "set-checklist-simple-run")     return handleSetChecklistSimpleRun(req, res);
+  if (action === "get-analytics-daily")          return handleGetAnalyticsDaily(req, res);
+  if (action === "get-insights-daily")           return handleGetInsightsDaily(req, res);
   res.status(400).json({ error: "missing or invalid action" });
 }
 
@@ -1926,3 +1935,117 @@ async function handleClearEntryException(req, res) {
   const outcome = await runEntryExceptionTxn(cmd);
   eeRespond(res, outcome);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Server-mediated PARAMETERIZED business data (checklist_* + analytics/insights).
+//   Rules deny direct client access (bizId can't be extracted from these flat
+//   keys); the Admin SDK is the only reader/writer. Auth + tenant + authoritative
+//   biz_access are enforced; paths are CONSTRUCTED from validated ids only.
+// ─────────────────────────────────────────────────────────────────────────────
+const BIZDATA_MAX_DOC = 200000;
+function bizDataValidTemplateId(id) { return typeof id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(id) && !RTDB_FORBIDDEN.test(id); }
+
+// Shared read auth (GET): viewer+ within an authorized business.
+async function bizDataAuthRead(req, res, tenantId, bizId) {
+  let claims;
+  try { claims = await requireAuth(req); } catch { res.status(401).json({ error: "unauthorized" }); return null; }
+  if (!eeValidIds(tenantId, bizId)) { res.status(400).json({ error: "invalid tenantId or bizId" }); return null; }
+  let role;
+  try { role = await requireTenantAccess(claims.uid, tenantId, "viewer"); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "forbidden" }); return null; }
+  const db = getAdminDb();
+  try { await requireBizAccess(db, tenantId, bizId, claims.uid, role); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "business_access_denied" }); return null; }
+  return { claims, role, db };
+}
+// Shared write auth (POST): minRole ("manager" | "shift_manager") within an authorized business.
+async function bizDataAuthWrite(req, res, minRole) {
+  let claims;
+  try { claims = await requireAuth(req); } catch { res.status(401).json({ error: "unauthorized" }); return null; }
+  let body = req.body; if (typeof body === "string") { try { body = JSON.parse(body); } catch { res.status(400).json({ error: "invalid json" }); return null; } }
+  body = body || {};
+  const { tenantId, bizId } = body;
+  if (!eeValidIds(tenantId, bizId)) { res.status(400).json({ error: "invalid tenantId or bizId" }); return null; }
+  let role;
+  try { role = await requireTenantAccess(claims.uid, tenantId, minRole); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "forbidden" }); return null; }
+  const db = getAdminDb();
+  try { await requireBizAccess(db, tenantId, bizId, claims.uid, role); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "business_access_denied" }); return null; }
+  return { claims, role, db, body, tenantId, bizId };
+}
+function bizDataValidDoc(res, doc) {
+  if (doc == null || typeof doc !== "object") { res.status(400).json({ error: "invalid_doc" }); return false; }
+  let str; try { str = JSON.stringify(doc); } catch { res.status(400).json({ error: "invalid_doc" }); return false; }
+  if (str.length > BIZDATA_MAX_DOC) { res.status(400).json({ error: "doc_too_large" }); return false; }
+  return true;
+}
+
+async function handleGetChecklistTemplateItems(req, res) {
+  if (req.method !== "GET") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const { tenantId, bizId, templateId } = req.query;
+  if (!bizDataValidTemplateId(templateId)) { res.status(400).json({ error: "invalid_template_id" }); return; }
+  const ctx = await bizDataAuthRead(req, res, tenantId, bizId); if (!ctx) return;
+  try { res.status(200).json({ ok: true, doc: await readBizDoc(tenantId, bizId, `checklist_template_items:${templateId}`) }); }
+  catch (e) { res.status(500).json({ error: "read_failed" }); }
+}
+async function handleSetChecklistTemplateItems(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const ctx = await bizDataAuthWrite(req, res, "manager"); if (!ctx) return;
+  const { templateId, doc } = ctx.body;
+  if (!bizDataValidTemplateId(templateId)) { res.status(400).json({ error: "invalid_template_id" }); return; }
+  if (!bizDataValidDoc(res, doc)) return;
+  try { await writeBizDoc(ctx.tenantId, ctx.bizId, `checklist_template_items:${templateId}`, doc); res.status(200).json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: "write_failed" }); }
+}
+async function handleGetChecklistRun(req, res) {
+  if (req.method !== "GET") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const { tenantId, bizId, businessDate } = req.query;
+  if (!isValidBusinessDate(businessDate)) { res.status(400).json({ error: "invalid_business_date" }); return; }
+  const ctx = await bizDataAuthRead(req, res, tenantId, bizId); if (!ctx) return;
+  try { res.status(200).json({ ok: true, doc: await readBizDoc(tenantId, bizId, `checklist_runs:${businessDate}`) }); }
+  catch (e) { res.status(500).json({ error: "read_failed" }); }
+}
+async function handleSetChecklistRun(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const ctx = await bizDataAuthWrite(req, res, "shift_manager"); if (!ctx) return;
+  const { businessDate, doc } = ctx.body;
+  if (!isValidBusinessDate(businessDate)) { res.status(400).json({ error: "invalid_business_date" }); return; }
+  if (!bizDataValidDoc(res, doc)) return;
+  try { await writeBizDoc(ctx.tenantId, ctx.bizId, `checklist_runs:${businessDate}`, doc); res.status(200).json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: "write_failed" }); }
+}
+async function handleGetChecklistSimpleRun(req, res) {
+  if (req.method !== "GET") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const { tenantId, bizId, businessDate, templateId } = req.query;
+  if (!isValidBusinessDate(businessDate)) { res.status(400).json({ error: "invalid_business_date" }); return; }
+  if (!bizDataValidTemplateId(templateId)) { res.status(400).json({ error: "invalid_template_id" }); return; }
+  const ctx = await bizDataAuthRead(req, res, tenantId, bizId); if (!ctx) return;
+  try { res.status(200).json({ ok: true, doc: await readBizDoc(tenantId, bizId, `checklist_simple_runs:${businessDate}:${templateId}`) }); }
+  catch (e) { res.status(500).json({ error: "read_failed" }); }
+}
+async function handleSetChecklistSimpleRun(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const ctx = await bizDataAuthWrite(req, res, "shift_manager"); if (!ctx) return;
+  const { businessDate, templateId, doc } = ctx.body;
+  if (!isValidBusinessDate(businessDate)) { res.status(400).json({ error: "invalid_business_date" }); return; }
+  if (!bizDataValidTemplateId(templateId)) { res.status(400).json({ error: "invalid_template_id" }); return; }
+  if (!bizDataValidDoc(res, doc)) return;
+  try { await writeBizDoc(ctx.tenantId, ctx.bizId, `checklist_simple_runs:${businessDate}:${templateId}`, doc); res.status(200).json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: "write_failed" }); }
+}
+// Derived analytics/insights — bounded date-range READ only (client write is impossible; server/Admin SDK writes them).
+async function bizDailyRangeGet(req, res, kind) {
+  if (req.method !== "GET") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const { tenantId, bizId, fromDate, toDate } = req.query;
+  if (!isValidBusinessDate(fromDate)) { res.status(400).json({ error: "invalid_from_date" }); return; }
+  if (!isValidBusinessDate(toDate)) { res.status(400).json({ error: "invalid_to_date" }); return; }
+  const rd = dateRangeDays(fromDate, toDate);
+  if (rd < 0) { res.status(400).json({ error: "reversed_range" }); return; }
+  if (rd > MAX_LIST_RANGE_DAYS) { res.status(400).json({ error: "range_too_large" }); return; }
+  const ctx = await bizDataAuthRead(req, res, tenantId, bizId); if (!ctx) return;
+  try { res.status(200).json({ ok: true, tenantId, bizId, kind, docs: await readBizDailyRange(tenantId, bizId, kind, fromDate, toDate) }); }
+  catch (e) { console.error(`[get-${kind}-daily]`, e?.message); res.status(500).json({ error: "read_failed" }); }
+}
+async function handleGetAnalyticsDaily(req, res) { return bizDailyRangeGet(req, res, "analytics"); }
+async function handleGetInsightsDaily(req, res) { return bizDailyRangeGet(req, res, "insights"); }

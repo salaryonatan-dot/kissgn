@@ -18,7 +18,12 @@ const T = (n, fn) => { try { fn(); console.log("PASS " + n); pass++; } catch (e)
 
 // ── (1) structural assertions on the deployed rule string ──
 T("RULE pin read+write denied", () => { assert.ok(dk[".read"].includes("$dataKey.matches(/^biz:[^:]+:pin$/) ? false")); assert.ok(dk[".write"].includes("$dataKey.matches(/^biz:[^:]+:pin$/) ? false")); });
-T("RULE derived analytics/insights client-write denied", () => { assert.ok(dk[".write"].includes("analytics:daily:[0-9]{4}-[0-9]{2}-[0-9]{2}$/) ? false")); assert.ok(dk[".write"].includes("insights:daily:[0-9]{4}-[0-9]{2}-[0-9]{2}$/) ? false")); });
+T("RULE parameterized keys (checklist_*/analytics/insights) deny direct read AND write", () => {
+  for (const pat of ["checklist_template_items:[A-Za-z0-9_-]+","checklist_runs:[0-9]{4}-[0-9]{2}-[0-9]{2}","checklist_simple_runs:[0-9]{4}-[0-9]{2}-[0-9]{2}:[A-Za-z0-9_-]+","analytics:daily:[0-9]{4}-[0-9]{2}-[0-9]{2}","insights:daily:[0-9]{4}-[0-9]{2}-[0-9]{2}"]) {
+    assert.ok(dk[".read"].includes(pat+"$/) ? false"), "read deny "+pat);
+    assert.ok(dk[".write"].includes(pat+"$/) ? false"), "write deny "+pat);
+  }
+});
 T("RULE unknown biz key fails closed (deny read+write)", () => { assert.ok(dk[".read"].includes("$dataKey.beginsWith('biz:') ? false")); assert.ok(dk[".write"].includes("$dataKey.beginsWith('biz:') ? false")); });
 T("RULE fixed keys extract bizId and check biz_access", () => { assert.ok(dk[".write"].includes("$dataKey.replace('biz:','').replace(':entries','')")); assert.ok(dk[".write"].includes("$dataKey.replace('biz:','').replace(':pettycash','')")); });
 T("RULE shift-tier fixed keys allow shift_manager", () => { assert.ok(dk[".write"].includes("$dataKey.matches(/^biz:[^:]+:tasks$/) ? (") && dk[".write"].includes("'shift_manager'")); });
@@ -49,7 +54,7 @@ function canRead(ctx) {
     case "pin": return false;
     case "unknown_biz": return false;
     case "fixed_mgr": case "fixed_shift": return ctx.member && (isOwnerLvl(ctx.role) || ctx.biz.has(g(c.bizId, ctx.uid)));
-    case "derived": case "param_mgr": case "param_shift": return ctx.member; // documented residual
+    case "derived": case "param_mgr": case "param_shift": return false; // server-mediated: direct read denied
     case "nonbiz": return ctx.member;
   }
 }
@@ -60,8 +65,7 @@ function canWrite(ctx) {
     case "pin": case "derived": case "unknown_biz": return false;
     case "fixed_mgr": return isOwnerLvl(ctx.role) || (ctx.role === "manager" && ctx.biz.has(g(c.bizId, ctx.uid)));
     case "fixed_shift": return isOwnerLvl(ctx.role) || ((ctx.role === "manager" || ctx.role === "shift_manager") && ctx.biz.has(g(c.bizId, ctx.uid)));
-    case "param_mgr": return isOwnerLvl(ctx.role) || ctx.role === "manager"; // role-tightened (no biz_access — residual)
-    case "param_shift": return isOwnerLvl(ctx.role) || ctx.role === "manager" || ctx.role === "shift_manager";
+    case "param_mgr": case "param_shift": return false; // server-mediated: direct write denied
     case "nonbiz": return ctx.member || ["super_owner","owner","manager"].includes(ctx.role);
   }
 }
@@ -106,7 +110,7 @@ T("derived analytics/insights: authorized read; client write DENIED for every ro
     assert.strictEqual(canWrite(base({role:"owner",key:k})), false);
     assert.strictEqual(canWrite(base({role:"super_owner",key:k})), false);
     assert.strictEqual(canWrite(withA({role:"manager",key:k})), false);
-    assert.strictEqual(canRead(withA({role:"viewer",key:k})), true); // member read (residual)
+    assert.strictEqual(canRead(withA({role:"viewer",key:k})), false); // direct read denied (server-mediated)
   }
 });
 T("malformed derived date denied write path (unknown biz → deny)", () => {
@@ -138,11 +142,13 @@ T("malformed checklist date/id denied", () => {
   assert.strictEqual(classify("biz:A:checklist_runs:2026-7-1").type, "unknown_biz");
   assert.strictEqual(classify("biz:A:checklist_simple_runs:2026-07-13").type, "unknown_biz"); // missing tplId
 });
-T("parameterized checklist keys recognized (role-tightened, documented biz-binding gap)", () => {
-  assert.strictEqual(classify("biz:A:checklist_template_items:tpl1").type, "param_mgr");
-  assert.strictEqual(classify("biz:A:checklist_runs:2026-07-13").type, "param_shift");
-  assert.strictEqual(canWrite(base({role:"viewer",key:"biz:A:checklist_runs:2026-07-13"})), false);
-  assert.strictEqual(canWrite(base({role:"shift_manager",key:"biz:A:checklist_runs:2026-07-13"})), true); // no biz_access binding (residual)
+T("parameterized checklist/derived keys: ALL direct client read+write DENIED (server-mediated)", () => {
+  for (const k of ["biz:A:checklist_template_items:tpl1","biz:A:checklist_runs:2026-07-13","biz:A:checklist_simple_runs:2026-07-13:t1","biz:A:analytics:daily:2026-07-13","biz:A:insights:daily:2026-07-13"]) {
+    for (const r of ["viewer","shift_manager","manager","owner","super_owner"]) {
+      assert.strictEqual(canRead(withA({role:r,key:k})), false, "read "+k+" "+r);
+      assert.strictEqual(canWrite(withA({role:r,key:k})), false, "write "+k+" "+r);
+    }
+  }
 });
 // ── compatibility ──
 T("legitimate manager revenue save + shift-manager task/log/checklist-run workflow remain possible with biz_access", () => {
