@@ -1881,7 +1881,7 @@ async function eeAuthorizeWrite(req, res) {
 
 function eeRespond(res, outcome) {
   if (outcome.outcome === "conflict") {
-    const map = { revision_conflict: 409, idempotency_conflict: 409, operation_limit_reached: 409, txn_failed: 502 };
+    const map = { revision_conflict: 409, idempotency_conflict: 409, operation_owner_required: 409, operation_hard_limit_reached: 409, txn_failed: 502 };
     res.status(map[outcome.code] || 409).json({ ok: false, error: outcome.code });
     return;
   }

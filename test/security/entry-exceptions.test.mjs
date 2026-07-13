@@ -11,8 +11,9 @@ import {
   normalizeReasonText, validateSetInput, categoryForReason, activeEffects, buildSetState, buildClearState,
   canonicalRequest, requestHash, applyOperation, safeStateView, resolveEffectiveException,
   buildEffectiveRecord, shouldRebuildDecision, dateRangeDays, MAX_LIST_RANGE_DAYS,
-  MAX_OPERATIONS_PER_DATE, hashState,
+  MANAGER_OPERATION_SOFT_LIMIT, OWNER_OPERATION_HARD_LIMIT, hashState,
 } from "../../lib/entryExceptions.js";
+import { revenueChanged, shouldRebuild, stripOrPreserveException, REVENUE_MATERIAL_FIELDS } from "../../lib/entryDelta.js";
 
 let pass = 0, fail = 0;
 const T = (n, fn) => { try { fn(); console.log("PASS " + n); pass++; } catch (e) { console.log("FAIL " + n + " — " + (e && e.message)); fail++; } };
@@ -169,29 +170,48 @@ T("P5 replay of op A AFTER a later set returns A's original result", () => {
 });
 
 // Part 6 — bounded, compact operations ledger
-T("P6 ledger cap = 32; ops 0..31 allowed, 33rd rejected operation_limit_reached (writes nothing)", () => {
-  assert.strictEqual(MAX_OPERATIONS_PER_DATE, 32);
-  let env = null; let rev = 0;
-  for (let i = 0; i < 32; i++) {
-    const c = withHash(cmd({ action: "set", expectedRevision: rev, operationId: "op-" + String(1e7 + i), reasonCode: "closure" }));
-    const r = applyOperation(env, c);
-    assert.strictEqual(r.outcome, "applied", "op " + i); env = r.envelope; rev = r.state.revision;
-  }
-  assert.strictEqual(Object.keys(env.operations).length, 32);
-  const over = applyOperation(env, withHash(cmd({ action: "set", expectedRevision: rev, operationId: "op-99999999", reasonCode: "holiday" })));
-  assert.strictEqual(over.outcome, "conflict"); assert.strictEqual(over.code, "operation_limit_reached");
-  assert.ok(!over.envelope); // writes nothing
-  assert.strictEqual(Object.keys(env.operations).length, 32); // no pruning/overwrite
-});
-T("P6 existing-op REPLAY still succeeds at the 32-op limit", () => {
-  let env = null; let rev = 0; let firstCmd = null;
-  for (let i = 0; i < 32; i++) {
-    const c = withHash(cmd({ action: "set", expectedRevision: rev, operationId: "op-" + String(2e7 + i), reasonCode: "closure" }));
+// Two-tier ledger: manager soft limit 32, owner hard limit 128.
+function fillOps(count, role) {
+  let env = null, rev = 0, firstCmd = null;
+  for (let i = 0; i < count; i++) {
+    const c = withHash(cmd({ action: "set", expectedRevision: rev, operationId: "op-" + String(1e7 + i), reasonCode: "closure", actorRole: role || "manager" }));
     if (i === 0) firstCmd = c;
-    const r = applyOperation(env, c); env = r.envelope; rev = r.state.revision;
+    const r = applyOperation(env, c);
+    assert.strictEqual(r.outcome, "applied", "fill op " + i); env = r.envelope; rev = r.state.revision;
   }
-  const replay = applyOperation(env, firstCmd); // op already exists; checked before the cap
-  assert.strictEqual(replay.outcome, "replayed");
+  return { env, rev, firstCmd };
+}
+T("P6 constants: soft 32 / hard 128", () => { assert.strictEqual(MANAGER_OPERATION_SOFT_LIMIT, 32); assert.strictEqual(OWNER_OPERATION_HARD_LIMIT, 128); });
+T("P6 manager ops 1..32 allowed; op 33 rejected operation_owner_required (writes nothing)", () => {
+  const { env, rev } = fillOps(32, "manager");
+  assert.strictEqual(Object.keys(env.operations).length, 32);
+  const over = applyOperation(env, withHash(cmd({ action: "set", expectedRevision: rev, operationId: "op-MGR33", reasonCode: "holiday", actorRole: "manager" })));
+  assert.strictEqual(over.outcome, "conflict"); assert.strictEqual(over.code, "operation_owner_required");
+  assert.ok(!over.envelope); assert.strictEqual(Object.keys(env.operations).length, 32); // no pruning/overwrite
+});
+T("P6 owner op 33 allowed; owner continues through 128; op 129 rejected operation_hard_limit_reached for EVERYONE", () => {
+  const { env, rev } = fillOps(32, "manager");
+  const r33 = applyOperation(env, withHash(cmd({ action: "set", expectedRevision: rev, operationId: "op-OWN33", reasonCode: "holiday", actorRole: "owner" })));
+  assert.strictEqual(r33.outcome, "applied");
+  // build a 128-op ledger with owner
+  const big = fillOps(128, "super_owner");
+  assert.strictEqual(Object.keys(big.env.operations).length, 128);
+  const ownerOver = applyOperation(big.env, withHash(cmd({ action: "set", expectedRevision: big.rev, operationId: "op-OWN129", reasonCode: "holiday", actorRole: "owner" })));
+  assert.strictEqual(ownerOver.code, "operation_hard_limit_reached"); assert.ok(!ownerOver.envelope);
+  const superOver = applyOperation(big.env, withHash(cmd({ action: "set", expectedRevision: big.rev, operationId: "op-SO129", reasonCode: "holiday", actorRole: "super_owner" })));
+  assert.strictEqual(superOver.code, "operation_hard_limit_reached");
+});
+T("P6 replay succeeds at soft AND hard limits (checked before limits)", () => {
+  const soft = fillOps(32, "manager");
+  assert.strictEqual(applyOperation(soft.env, soft.firstCmd).outcome, "replayed");
+  const hard = fillOps(128, "owner");
+  assert.strictEqual(applyOperation(hard.env, hard.firstCmd).outcome, "replayed");
+});
+T("P6 actorRole from the COMMAND (server-set) governs the soft limit — a 'manager' cmd cannot pass 32", () => {
+  const { env, rev } = fillOps(32, "manager");
+  // even if a client tried to claim a higher role, the server sets cmd.actorRole; a manager cmd is blocked
+  const asManager = applyOperation(env, withHash(cmd({ action: "set", expectedRevision: rev, operationId: "op-SPOOF", reasonCode: "holiday", actorRole: "manager" })));
+  assert.strictEqual(asManager.code, "operation_owner_required");
 });
 T("P6 operation record is COMPACT: beforeHash (not a full before snapshot) + after", () => {
   const env = applyOperation(null, withHash(cmd({ action: "set", expectedRevision: 0, operationId: "op-COMPACT1", reasonCode: "closure" }))).envelope;
@@ -234,6 +254,70 @@ T("P8 dateRangeDays: forward positive, reversed negative, cap = 400", () => {
   assert.ok(dateRangeDays("2026-07-11", "2026-07-01") < 0); // reversed
   assert.strictEqual(dateRangeDays("2026-01-01", "2027-02-05"), 400); // exactly 400
   assert.ok(dateRangeDays("2026-01-01", "2027-02-06") > MAX_LIST_RANGE_DAYS); // over cap
+});
+
+
+// ═══ REVENUE DELTA (lib/entryDelta.js) ═══
+T("DELTA material field set is exactly the analytics-affecting fields", () => {
+  assert.deepStrictEqual(REVENUE_MATERIAL_FIELDS, ["sales","deliveries","other_income","food_cost","payroll","hourly_payroll","other_expense"]);
+});
+T("DELTA new entry (no prev) is always changed", () => assert.strictEqual(revenueChanged(null, { sales: 0 }), true));
+T("DELTA identical entry ⇒ not changed", () => assert.strictEqual(revenueChanged({ sales: 100, deliveries: 5 }, { sales: 100, deliveries: 5 }), false));
+T("DELTA numeric string vs number compare equal", () => assert.strictEqual(revenueChanged({ sales: "100" }, { sales: 100 }), false));
+T("DELTA missing vs zero normalize equal", () => assert.strictEqual(revenueChanged({ sales: "" }, { sales: 0 }), false));
+T("DELTA a material change is detected", () => assert.strictEqual(revenueChanged({ sales: 100 }, { sales: 101 }), true));
+T("DELTA supplier_payments change detected by key union; 'skip' ignored; order-independent", () => {
+  assert.strictEqual(revenueChanged({ supplier_payments: { s1: 10, s2: "skip" } }, { supplier_payments: { s2: "skip", s1: 10 } }), false);
+  assert.strictEqual(revenueChanged({ supplier_payments: { s1: 10 } }, { supplier_payments: { s1: 12 } }), true);
+  assert.strictEqual(revenueChanged({ supplier_payments: {} }, { supplier_payments: { s3: 5 } }), true);
+});
+T("DELTA exception + UI-only fields are IGNORED", () => {
+  assert.strictEqual(revenueChanged(
+    { sales: 100, is_exception: false, exception_reason: "", notes: "a", weather_impact: "x", security_event: false },
+    { sales: 100, is_exception: true, exception_reason: "closure", notes: "b", weather_impact: "y", security_event: true }
+  ), false);
+});
+T("DELTA shouldRebuild: revenueChanged OR (applied && rebuildRequired)", () => {
+  assert.strictEqual(shouldRebuild(true, null), true);
+  assert.strictEqual(shouldRebuild(false, { applied: true, rebuildRequired: true }), true);
+  assert.strictEqual(shouldRebuild(false, { applied: false, rebuildRequired: false }), false); // replay + unchanged
+  assert.strictEqual(shouldRebuild(false, { applied: true, rebuildRequired: false }), false);
+});
+
+// ═══ LEGACY EXCEPTION DEFENSIVE PRESERVATION (lib/entryDelta.js stripOrPreserveException) ═══
+const legacyPrev = { date: "2026-07-13", sales: 100, is_exception: true, exception_reason: "holiday", exception_note: "n", exception_set_at: 5, exception_set_by: "u1" };
+T("LEGACY non-editor (strip=false) PRESERVES pre-existing legacy exception fields", () => {
+  const out = stripOrPreserveException({ ...legacyPrev, sales: 120 }, false, legacyPrev);
+  assert.strictEqual(out.is_exception, true);
+  assert.strictEqual(out.exception_reason, "holiday");
+  assert.strictEqual(out.exception_set_by, "u1");
+});
+T("LEGACY editor with confirmed structured success (strip=true) STRIPS legacy fields", () => {
+  const out = stripOrPreserveException({ ...legacyPrev, sales: 120 }, true, legacyPrev);
+  assert.ok(!("is_exception" in out) && !("exception_reason" in out) && !("exception_set_by" in out));
+});
+T("LEGACY no new governance dual-written: strip=false but prev NOT exceptional ⇒ no exception fields", () => {
+  const out = stripOrPreserveException({ sales: 100, is_exception: true, exception_reason: "closure" }, false, { sales: 100 });
+  assert.ok(!("is_exception" in out), "form's UI exception not written when prev wasn't exceptional");
+});
+T("LEGACY structured-cleared prev (is_exception not true) ⇒ nothing preserved (normal)", () => {
+  const out = stripOrPreserveException({ sales: 100 }, false, { sales: 100, is_exception: false });
+  assert.ok(!("is_exception" in out));
+});
+
+// ═══ CLIENT WIRING (static-src on index.html) ═══
+const IDX = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "index.html"), "utf8");
+T("CLIENT saveEntry uses the real revenue delta (not hardcoded true)", () => {
+  assert.ok(!IDX.includes("const __revenueChanged = true;"), "hardcoded true removed");
+  assert.ok(IDX.includes("const __revenueChanged = __revenueMaterialChanged(__prevEntry, netForm);"));
+});
+T("CLIENT strip decision preserves legacy unless structured governs/succeeds", () => {
+  assert.ok(IDX.includes("const __stripException = __structuredGoverns || (__exResponse != null);"));
+  assert.ok(IDX.includes("__applyExc(netForm, __stripException, __prevEntry)"));
+});
+T("CLIENT ledger errors have dedicated (non-generic) messages", () => {
+  assert.ok(IDX.includes('__ec === "operation_owner_required"'));
+  assert.ok(IDX.includes('__ec === "operation_hard_limit_reached"'));
 });
 
 console.log(`\nTotal: ${pass + fail}  Passed: ${pass}  Failed: ${fail}`);

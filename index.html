@@ -3440,6 +3440,18 @@ function PilotDashboard() {
     const active = st && st.status === "active";
     return { ...base, is_exception: !!active, exception_reason: active ? (st.reasonCode||"") : "", exception_note: active ? (st.reasonText||"") : "" };
   };
+  // Real material-change detector for the rebuild decision (mirrors lib/entryDelta.js).
+  const __revenueMaterialChanged = (prev, next) => {
+    if (!prev) return true; // new entry
+    const num = (x)=>{ const n=Number(x); return Number.isFinite(n)?n:0; };
+    const F = ["sales","deliveries","other_income","food_cost","payroll","hourly_payroll","other_expense"];
+    for (const f of F) if (num(prev[f]) !== num(next[f])) return true;
+    const norm = (sp)=>{ const o={}; if(sp&&typeof sp==="object") for(const [k,v] of Object.entries(sp)){ if(v==="skip")continue; o[k]=num(v);} return o; };
+    const a=norm(prev.supplier_payments), b=norm(next.supplier_payments);
+    const keys=new Set([...Object.keys(a),...Object.keys(b)]);
+    for(const k of keys) if((a[k]||0)!==(b[k]||0)) return true;
+    return false;
+  };
 
   const saveEntry = async (skipSuppliers=false) => {
     if (entrySaveInFlightRef.current) return;
@@ -3456,14 +3468,24 @@ function PilotDashboard() {
         other_income: Math.round((Number(formFinal.other_income)||0) / VAT_RATE),
         includeVat: false,
       } : formFinal;
-      // Exception governance is NO LONGER written into the entries blob. It is a
-      // server-authoritative structured record, mutated below via the admin action.
-      // Here we only STRIP any exception fields so they can never travel in the blob.
-      const __applyExc = (o)=>{ const c={...o}; delete c.is_exception; delete c.exception_reason; delete c.exception_note; delete c.exception_set_at; delete c.exception_set_by; return c; };
-      let updated = editingId!==null
-        ? entries.map((e,i)=>i===editingId?__applyExc(netForm):e)
-        : [...entries,__applyExc(netForm)];
-      updated.sort((a,b)=>a.date.localeCompare(b.date));
+      // Exception governance is NEVER written into the entries blob as NEW state.
+      //   `__applyExc(o, strip, prev)` strips exception fields; when NOT stripping
+      //   (a legacy day with no confirmed structured mutation, or a non-editor), it
+      //   PRESERVES the prior entry's pre-existing legacy fields verbatim — it never
+      //   writes new governance. Prevents app-first/rules-later silent legacy loss.
+      const __applyExc = (o, strip, prev)=>{
+        const c={...o};
+        delete c.is_exception; delete c.exception_reason; delete c.exception_note; delete c.exception_set_at; delete c.exception_set_by;
+        if (!strip && prev && prev.is_exception===true) {
+          c.is_exception = true;
+          if (prev.exception_reason!==undefined) c.exception_reason = prev.exception_reason;
+          if (prev.exception_note!==undefined)   c.exception_note   = prev.exception_note;
+          if (prev.exception_set_at!==undefined) c.exception_set_at = prev.exception_set_at;
+          if (prev.exception_set_by!==undefined) c.exception_set_by = prev.exception_set_by;
+        }
+        return c;
+      };
+      const __prevEntry = editingId!==null ? entries[editingId] : null;
 
       // ── SAVE ORDER (review Part 3): execute the structured exception command
       //   FIRST; stop on any non-OK; only AFTER confirmed structured success do we
@@ -3502,7 +3524,10 @@ function PilotDashboard() {
         if (!__exResp.ok) {
           // FAILURE: stop. Legacy blob untouched, no revenue persist, no success, no rebuild.
           setSaved(false);
-          if (__exResp.status===409) setEntrySaveError("מצב יום החריג עודכן במקביל — רענן ונסה שוב.");
+          const __ec = __exJson && __exJson.error;
+          if (__ec === "operation_owner_required") setEntrySaveError("יום זה הגיע למגבלת שינויים למנהל. נדרש בעלים כדי לבצע שינוי נוסף.");
+          else if (__ec === "operation_hard_limit_reached") setEntrySaveError("יום זה הגיע למגבלת השינויים המרבית. לא ניתן לבצע שינוי נוסף ללא טיפול מערכת.");
+          else if (__exResp.status===409) setEntrySaveError("מצב יום החריג עודכן במקביל — רענן ונסה שוב.");
           else if (__exResp.status===403 || __exResp.status===401) setEntrySaveError("אין הרשאה לעדכן יום חריג לעסק זה.");
           else setEntrySaveError("שמירת יום החריג נכשלה.");
           await loadEntryExceptions(currentBizId);
@@ -3514,7 +3539,18 @@ function PilotDashboard() {
         entryExceptionStateRef.current[__exDate] = { source:"structured", status: __exJson.exception ? __exJson.exception.status : (__needSet?"active":"cleared"), revision: __exJson.revision, reasonCode: (__exJson.exception&&__exJson.exception.reasonCode)||"", reasonText: (__exJson.exception&&__exJson.exception.reasonText)||"" };
       }
 
-      // Revenue persist AFTER confirmed structured success (exception fields already stripped).
+      // Decide whether the blob's exception fields may be stripped for THIS date:
+      //   safe only if a structured record already governs it, or a structured set/clear
+      //   just succeeded. Otherwise (legacy day, non-editor, no structured mutation) we
+      //   PRESERVE the prior entry's legacy fields — no silent loss.
+      const __structuredGoverns = !!(__loaded && __loaded.source==="structured");
+      const __stripException = __structuredGoverns || (__exResponse != null);
+      let updated = editingId!==null
+        ? entries.map((e,i)=>i===editingId?__applyExc(netForm, __stripException, __prevEntry):e)
+        : [...entries,__applyExc(netForm, __stripException, __prevEntry)];
+      updated.sort((a,b)=>a.date.localeCompare(b.date));
+
+      // Revenue persist AFTER confirmed structured success.
       const persistResult = await persist(updated, null);
       if (!persistResult?.ok) {
         // PARTIAL: structured exception succeeded (if any) but revenue failed. Keep the
@@ -3532,7 +3568,7 @@ function PilotDashboard() {
       //   shouldRebuild = revenueChanged OR (exceptionApplied && rebuildRequired).
       //   A revenue save always changes revenue, so exactly ONE rebuild runs here;
       //   an idempotent exception replay adds no extra rebuild. ──
-      const __revenueChanged = true;
+      const __revenueChanged = __revenueMaterialChanged(__prevEntry, netForm);
       const __shouldRebuild = __revenueChanged || (__exResponse && __exResponse.applied===true && __exResponse.rebuildRequired===true);
       let insightsRefreshed = false;
       if (!__shouldRebuild) { insightsRefreshed = true; }
