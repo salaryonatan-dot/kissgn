@@ -24,6 +24,9 @@ import { ownerGuardPath, isOwnerAffecting, isOwnerLevel, ownersFromRolesMap,
   opSignatureV2, guardPrepare, guardMirrorFields, guardCompensateClearPending } from "../lib/ownerGuard.js";
 import { randomUUID } from "node:crypto";
 import { getAdminDb, getAdminAuth } from "../lib/adminSdk.js";
+import { isValidBusinessDate, isValidOperationId, isValidExpectedRevision,
+  validateSetInput, requestHash as eeRequestHash, safeStateView } from "../lib/entryExceptions.js";
+import { runEntryExceptionTxn, listEntryExceptions } from "../lib/repositories/entryExceptionsRepo.js";
 import { sendEmail } from "../lib/sendEmail.js";
 
 const RTDB_FORBIDDEN = /[.#$\[\]\/]/;
@@ -89,6 +92,9 @@ export default async function handler(req, res) {
   if (action === "update-user")       return handleUpdateUser(req, res);
   if (action === "roles")             return handleRoles(req, res);
   if (action === "bootstrap-self")    return handleBootstrapSelf(req, res);
+  if (action === "list-entry-exceptions")  return handleListEntryExceptions(req, res);
+  if (action === "set-entry-exception")    return handleSetEntryException(req, res);
+  if (action === "clear-entry-exception")  return handleClearEntryException(req, res);
   res.status(400).json({ error: "missing or invalid action" });
 }
 
@@ -1805,4 +1811,113 @@ async function handleRoles(req, res) {
     res.status(502).json({ error: "db write failed" }); return;
   }
   res.status(200).json({ ok: true, tenantId, targetUid, role, opId });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Structured entry exceptions (schema v1) — server-authoritative, biz-scoped.
+//   Reads: viewer+ within authorized business. Writes: manager+ within authorized
+//   business. Business access is fail-closed via the structured biz_access index
+//   (owner/super_owner ⇒ implicit all-biz). user_tenants/user_active_biz grant no
+//   authority. Direct client writes are denied by Rules; Admin SDK bypasses.
+// ─────────────────────────────────────────────────────────────────────────────
+async function requireBizAccess(db, tenantId, bizId, uid, role) {
+  if (isImplicitAllRole(role)) return true; // owner / super_owner ⇒ all businesses
+  const snap = await db.ref(`tenants/${tenantId}/biz_access/${bizId}/${uid}`).once("value");
+  if (snap.val() === true) return true;      // structured, fail-closed
+  throw { status: 403, msg: "business_access_denied" };
+}
+function eeValidIds(tenantId, bizId) {
+  return typeof tenantId === "string" && typeof bizId === "string" &&
+    tenantId.length <= 128 && bizId.length <= 128 &&
+    !RTDB_FORBIDDEN.test(tenantId) && !RTDB_FORBIDDEN.test(bizId);
+}
+
+async function handleListEntryExceptions(req, res) {
+  let claims;
+  try { claims = await requireAuth(req); } catch { res.status(401).json({ error: "unauthorized" }); return; }
+  const tenantId = req.query.tenantId, bizId = req.query.bizId;
+  const fromDate = req.query.fromDate || null, toDate = req.query.toDate || null;
+  if (!eeValidIds(tenantId, bizId)) { res.status(400).json({ error: "invalid tenantId or bizId" }); return; }
+  if (fromDate && !isValidBusinessDate(fromDate)) { res.status(400).json({ error: "invalid_from_date" }); return; }
+  if (toDate && !isValidBusinessDate(toDate)) { res.status(400).json({ error: "invalid_to_date" }); return; }
+  let role;
+  try { role = await requireTenantAccess(claims.uid, tenantId, "viewer"); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "forbidden" }); return; }
+  const db = getAdminDb();
+  try { await requireBizAccess(db, tenantId, bizId, claims.uid, role); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "business_access_denied" }); return; }
+  try {
+    const exceptions = await listEntryExceptions({ tenantId, bizId, fromDate, toDate });
+    res.status(200).json({ ok: true, tenantId, bizId, fromDate, toDate, exceptions });
+  } catch (e) {
+    console.error("[list-entry-exceptions]", e?.message);
+    res.status(500).json({ error: "list_failed" });
+  }
+}
+
+async function eeAuthorizeWrite(req, res) {
+  let claims;
+  try { claims = await requireAuth(req); } catch { res.status(401).json({ error: "unauthorized" }); return null; }
+  let body = req.body; if (typeof body === "string") { try { body = JSON.parse(body); } catch { res.status(400).json({ error: "invalid json" }); return null; } }
+  body = body || {};
+  const { tenantId, bizId, businessDate, expectedRevision, operationId } = body;
+  if (!eeValidIds(tenantId, bizId)) { res.status(400).json({ error: "invalid tenantId or bizId" }); return null; }
+  if (!isValidBusinessDate(businessDate)) { res.status(400).json({ error: "invalid_business_date" }); return null; }
+  if (!isValidOperationId(operationId)) { res.status(400).json({ error: "invalid_operation_id" }); return null; }
+  if (!isValidExpectedRevision(expectedRevision)) { res.status(400).json({ error: "invalid_expected_revision" }); return null; }
+  let role;
+  try { role = await requireTenantAccess(claims.uid, tenantId, "manager"); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "forbidden" }); return null; }
+  const db = getAdminDb();
+  try { await requireBizAccess(db, tenantId, bizId, claims.uid, role); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "business_access_denied" }); return null; }
+  return { claims, role, body, tenantId, bizId, businessDate, expectedRevision, operationId };
+}
+
+function eeRespond(res, outcome) {
+  if (outcome.outcome === "conflict") {
+    const map = { revision_conflict: 409, idempotency_conflict: 409, txn_failed: 502 };
+    res.status(map[outcome.code] || 409).json({ ok: false, error: outcome.code });
+    return;
+  }
+  const applied = outcome.outcome === "applied";
+  res.status(200).json({
+    ok: true,
+    exception: safeStateView(outcome.state),
+    revision: outcome.revision,
+    applied,
+    replayed: outcome.outcome === "replayed",
+    rebuildRequired: applied, // rebuild only when a NEW transition was applied (not on replay)
+  });
+}
+
+async function handleSetEntryException(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const ctx = await eeAuthorizeWrite(req, res); if (!ctx) return;
+  let normalized;
+  try { normalized = validateSetInput({ reasonCode: ctx.body.reasonCode, reasonText: ctx.body.reasonText }); }
+  catch (e) { res.status(400).json({ error: e?.code || "invalid_input" }); return; }
+  const cmd = {
+    action: "set", tenantId: ctx.tenantId, bizId: ctx.bizId, businessDate: ctx.businessDate,
+    reasonCode: normalized.reasonCode, reasonText: normalized.reasonText,
+    actorUid: ctx.claims.uid, actorRole: ctx.role,
+    expectedRevision: ctx.expectedRevision, operationId: ctx.operationId, now: Date.now(),
+  };
+  cmd.requestHash = eeRequestHash(cmd);
+  const outcome = await runEntryExceptionTxn(cmd);
+  eeRespond(res, outcome);
+}
+
+async function handleClearEntryException(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const ctx = await eeAuthorizeWrite(req, res); if (!ctx) return;
+  const cmd = {
+    action: "clear", tenantId: ctx.tenantId, bizId: ctx.bizId, businessDate: ctx.businessDate,
+    reasonCode: null, reasonText: null,
+    actorUid: ctx.claims.uid, actorRole: ctx.role,
+    expectedRevision: ctx.expectedRevision, operationId: ctx.operationId, now: Date.now(),
+  };
+  cmd.requestHash = eeRequestHash(cmd);
+  const outcome = await runEntryExceptionTxn(cmd);
+  eeRespond(res, outcome);
 }
