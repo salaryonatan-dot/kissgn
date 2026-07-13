@@ -6,6 +6,42 @@ import type { FiredAlert, AlertThresholds, AlertSeverity } from "./types.js";
 import { getDb } from "../firebase/admin.js";
 import { todayIso, daysAgoIso } from "../utils/dates.js";
 
+// Read the AUTHORIZED per-business flat analytics source
+// (tenants/{tid}/biz:{bizId}:analytics:daily:{date}). The legacy tenant-wide
+// tenants/{tid}/analytics/daily node is now Rules-denied to clients and orphaned.
+// Returns the legacy-shaped map {date: {bizId: {revenue, laborCost, foodCost}}} so
+// downstream checker logic is unchanged. Admin SDK (this cron) is authorized.
+async function readLegacyShapedDaily(
+  db: any,
+  tenantId: string,
+  bizId: string,
+  fromDate: string,
+  toDate: string
+): Promise<Record<string, Record<string, { revenue: number; laborCost: number; foodCost: number }>>> {
+  const out: Record<string, Record<string, { revenue: number; laborCost: number; foodCost: number }>> = {};
+  const [fy, fm, fd] = fromDate.split("-").map(Number);
+  const [ty, tm, td] = toDate.split("-").map(Number);
+  let cur = Date.UTC(fy, (fm || 1) - 1, fd || 1);
+  const end = Date.UTC(ty, (tm || 1) - 1, td || 1);
+  const dates: string[] = [];
+  while (cur <= end && dates.length <= 400) { dates.push(new Date(cur).toISOString().slice(0, 10)); cur += 86_400_000; }
+  const snaps = await Promise.all(
+    dates.map((k) => db.ref(`tenants/${tenantId}/biz:${bizId}:analytics:daily:${k}`).once("value").catch(() => null))
+  );
+  snaps.forEach((snap: any, i: number) => {
+    const doc: any = snap && typeof snap.val === "function" ? snap.val() : null;
+    const rev = doc && doc.revenue ? doc.revenue : null;
+    if (rev && typeof rev === "object") {
+      out[dates[i]] = { [bizId]: {
+        revenue: Number(rev.total) || 0,
+        laborCost: Number(rev.payroll) || 0,
+        foodCost: Number(rev.food_cost) || 0,
+      } };
+    }
+  });
+  return out;
+}
+
 // ââ Helper ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 function makeAlert(
@@ -55,13 +91,7 @@ export async function checkLaborPct(
 
   // Get last 7 days of daily metrics
   const start = daysAgoIso(7);
-  const snap = await db.ref(`tenants/${tenantId}/analytics/daily`)
-    .orderByKey()
-    .startAt(start)
-    .endAt(today)
-    .once("value");
-
-  const raw = snap.val();
+  const raw = await readLegacyShapedDaily(db, tenantId, bizId, start, today);
   if (!raw) return null;
 
   // Compute average labor %
@@ -111,10 +141,7 @@ export async function checkFoodCostPct(
   const db = getDb();
   const start = daysAgoIso(7);
 
-  const snap = await db.ref(`tenants/${tenantId}/analytics/daily`)
-    .orderByKey().startAt(start).endAt(today).once("value");
-
-  const raw = snap.val();
+  const raw = await readLegacyShapedDaily(db, tenantId, bizId, start, today);
   if (!raw) return null;
 
   const days = Object.values(raw) as any[];
@@ -243,10 +270,7 @@ export async function checkMinRevenue(
 
   // Check yesterday (today's data may not be complete)
   const yesterday = daysAgoIso(1);
-  const snap = await db.ref(`tenants/${tenantId}/analytics/daily`)
-    .orderByKey().equalTo(yesterday).once("value");
-
-  const raw = snap.val();
+  const raw = await readLegacyShapedDaily(db, tenantId, bizId, yesterday, yesterday);
   if (!raw) return null;
 
   // Sum revenue for the day
@@ -341,10 +365,7 @@ export async function checkWeakDay(
   const db = getDb();
 
   const start = daysAgoIso(28);
-  const snap = await db.ref(`tenants/${tenantId}/analytics/daily`)
-    .orderByKey().startAt(start).endAt(today).once("value");
-
-  const raw = snap.val();
+  const raw = await readLegacyShapedDaily(db, tenantId, bizId, start, today);
   if (!raw) return alerts;
 
   // Group revenue by day-of-week
@@ -404,10 +425,7 @@ export async function checkPurchaseTrend(
   const weekStart = daysAgoIso(7);
   const priorStart = daysAgoIso(14);
 
-  const snap = await db.ref(`tenants/${tenantId}/analytics/daily`)
-    .orderByKey().startAt(priorStart).endAt(today).once("value");
-
-  const raw = snap.val();
+  const raw = await readLegacyShapedDaily(db, tenantId, bizId, priorStart, today);
   if (!raw) return null;
 
   let recentRevenue = 0, recentFood = 0, priorRevenue = 0, priorFood = 0;
