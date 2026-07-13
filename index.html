@@ -816,13 +816,18 @@
     }
     function num(v){ var n=parseFloat(String(v).replace(/,/g,"")); return isFinite(n)?n:0; }
     // Map app daily entries -> forecast days (mirrors dailyBuilder has_sales/total logic)
-    function entriesToForecastDays(entries){
+    function entriesToForecastDays(entries, exByDate){
+      var hasMap = exByDate && typeof exByDate==='object';
       return (entries||[]).map(function(e){
         var sales=num(e.sales), del=num(e.deliveries), oi=num(e.other_income);
         var food = e.supplier_payments ? Object.values(e.supplier_payments).filter(function(v){return v!=='skip';}).reduce(function(a,v){return a+num(v);},0) : num(e.food_cost);
         var total = sales+del+oi;
+        // Structured-first: the effective-exception map (from the server list action)
+        //   already encodes structured active/cleared + narrow legacy fallback and WINS.
+        //   Absent from the map (or map not loaded) => legacy embedded value (compat mode).
+        var exc = (hasMap && Object.prototype.hasOwnProperty.call(exByDate, e.date)) ? (exByDate[e.date]===true) : (e.is_exception===true);
         return { date:e.date, total:total, had_entry:(sales>0||del>0||food>0),
-                 has_sales:(sales>0||del>0||oi>0), is_exception:e.is_exception===true,
+                 has_sales:(sales>0||del>0||oi>0), is_exception:exc,
                  is_outlier:e.is_outlier===true, stale:e.stale===true };
       });
     }
@@ -2644,6 +2649,11 @@ function PilotDashboard() {
   const [screen, setScreen] = useState("dashboard");
   const [form, setForm] = useState({...EMPTY_ENTRY});
   const [editingId, setEditingId] = useState(null);
+  // Structured entry-exceptions (schema v1): effective boolean map (date→isException)
+  //   + loaded state map (date→{revision,reasonCode,reasonText,status}) for the form and
+  //   optimistic concurrency. Loaded from the server list action — NEVER the entries blob.
+  const [entryExceptions, setEntryExceptions] = useState({});
+  const entryExceptionStateRef = useRef({});
   const [fixedList, setFixedList] = useState(FIXED_EXPENSES_DEFAULT);
   const [lastYear, setLastYear] = useState(LAST_YEAR_2025);
   const [saved, setSaved] = useState(false);
@@ -2916,6 +2926,7 @@ function PilotDashboard() {
         window.storage.set(`biz:${currentBizId}:entries`, JSON.stringify(deduped), true).catch(()=>{});
       }
     });
+    loadEntryExceptions(currentBizId);
     sub(`biz:${currentBizId}:fixed`,     setFixedList);
     sub(`biz:${currentBizId}:suppliers`, setSuppliers);
     sub(`biz:${currentBizId}:config`,    setBusinessConfig);
@@ -3402,6 +3413,30 @@ function PilotDashboard() {
     }
   };
 
+  const loadEntryExceptions = async (bizId) => {
+    if (!bizId || !window._currentTenantId || typeof window.apiFetch !== "function") return;
+    const to = israelDateKey(1), from = israelDateKey(-95);
+    try {
+      const resp = await window.apiFetch(`/api/admin?action=list-entry-exceptions&tenantId=${encodeURIComponent(window._currentTenantId)}&bizId=${encodeURIComponent(bizId)}&fromDate=${from}&toDate=${to}`, { method: "GET" });
+      if (!resp.ok) return;
+      const data = await resp.json().catch(()=>null);
+      if (!data || !data.ok || !data.exceptions) return;
+      const boolMap = {}, stateMap = {};
+      Object.keys(data.exceptions).forEach(d => {
+        const rec = data.exceptions[d];
+        boolMap[d] = rec.isException === true;
+        if (rec.state) stateMap[d] = { revision: rec.state.revision, status: rec.state.status, reasonCode: rec.state.reasonCode, reasonText: rec.state.reasonText };
+      });
+      entryExceptionStateRef.current = stateMap;
+      setEntryExceptions(boolMap);
+    } catch (_) { /* non-fatal: forecast falls back to legacy embedded values */ }
+  };
+  const formWithException = (base, date) => {
+    const st = entryExceptionStateRef.current[date];
+    const active = st && st.status === "active";
+    return { ...base, is_exception: !!active, exception_reason: active ? (st.reasonCode||"") : "", exception_note: active ? (st.reasonText||"") : "" };
+  };
+
   const saveEntry = async (skipSuppliers=false) => {
     if (entrySaveInFlightRef.current) return;
     entrySaveInFlightRef.current = true;
@@ -3417,16 +3452,10 @@ function PilotDashboard() {
         other_income: Math.round((Number(formFinal.other_income)||0) / VAT_RATE),
         includeVat: false,
       } : formFinal;
-      // Exception-day fields via the canonical role-gated sanitizer (REV_FORECAST/v1
-      // §7/§35): unauthorized roles cannot change exception state (forged fields
-      // stripped, prior preserved); authorized changes stamp set_at/set_by.
-      const __prevEntry = editingId!==null ? entries[editingId] : null;
-      const __exc = window.MarjinForecast.sanitizeExceptionOnSave(
-        loggedInUser?.role, __prevEntry,
-        { is_exception: formFinal.is_exception===true, exception_reason: formFinal.exception_reason, exception_note: formFinal.exception_note },
-        (loggedInUser?.firebaseUid || loggedInUser?.uid || null), Date.now()
-      );
-      const __applyExc = (o)=>{ const c={...o}; delete c.is_exception; delete c.exception_reason; delete c.exception_note; delete c.exception_set_at; delete c.exception_set_by; return {...c, ...__exc}; };
+      // Exception governance is NO LONGER written into the entries blob. It is a
+      // server-authoritative structured record, mutated below via the admin action.
+      // Here we only STRIP any exception fields so they can never travel in the blob.
+      const __applyExc = (o)=>{ const c={...o}; delete c.is_exception; delete c.exception_reason; delete c.exception_note; delete c.exception_set_at; delete c.exception_set_by; return c; };
       let updated = editingId!==null
         ? entries.map((e,i)=>i===editingId?__applyExc(netForm):e)
         : [...entries,__applyExc(netForm)];
@@ -3440,6 +3469,42 @@ function PilotDashboard() {
       }
 
       setEntries(updated);
+
+      // ── Structured exception mutation (server-authoritative). Only manager+ may
+      //   change it; the server enforces role + business access regardless. The UI
+      //   reflects the exception ONLY after a confirmed server response. ──
+      const __exRole = loggedInUser?.role;
+      const __canExc = __exRole==="super_owner"||__exRole==="owner"||__exRole==="manager";
+      const __exDate = netForm.date;
+      const __loadedExc = entryExceptionStateRef.current[__exDate] || null;
+      const __loadedActive = entryExceptions[__exDate]===true;
+      const __wantExc = form.is_exception===true;
+      const __reasonChanged = __wantExc && __loadedExc && (__loadedExc.reasonCode !== (form.exception_reason||""));
+      if (__canExc && (__wantExc !== __loadedActive || __reasonChanged)) {
+        const __opId = (window.crypto&&window.crypto.randomUUID)?window.crypto.randomUUID():("ee-"+Date.now()+"-"+Math.random().toString(36).slice(2));
+        const __expRev = __loadedExc ? (__loadedExc.revision|0) : 0;
+        const __exAction = __wantExc ? "set-entry-exception" : "clear-entry-exception";
+        const __exBody = __wantExc
+          ? { tenantId: window._currentTenantId, bizId: currentBizId, businessDate: __exDate, reasonCode: form.exception_reason||"other", reasonText: form.exception_note||undefined, expectedRevision: __expRev, operationId: __opId }
+          : { tenantId: window._currentTenantId, bizId: currentBizId, businessDate: __exDate, expectedRevision: __expRev, operationId: __opId };
+        try {
+          const __exResp = await window.apiFetch(`/api/admin?action=${__exAction}`, { method:"POST", body: JSON.stringify(__exBody) });
+          const __exJson = await __exResp.json().catch(()=>({}));
+          if (!__exResp.ok) {
+            if (__exResp.status===409) setEntrySaveError("מצב יום החריג עודכן במקביל — רענן ונסה שוב.");
+            else if (__exResp.status===403 || __exResp.status===401) setEntrySaveError("אין הרשאה לעדכן יום חריג לעסק זה.");
+            else setEntrySaveError("שמירת יום החריג נכשלה.");
+            await loadEntryExceptions(currentBizId); // resync; do NOT claim success
+          } else {
+            const __active = !!(__exJson.exception && __exJson.exception.status==="active");
+            setEntryExceptions(prev=>({ ...prev, [__exDate]: __active }));
+            if (__exJson.exception) entryExceptionStateRef.current[__exDate] = { revision: __exJson.revision, status: __exJson.exception.status, reasonCode: __exJson.exception.reasonCode, reasonText: __exJson.exception.reasonText };
+          }
+        } catch(_) {
+          setEntrySaveError("שמירת יום החריג נכשלה (שגיאת רשת).");
+          await loadEntryExceptions(currentBizId);
+        }
+      }
 
       let insightsRefreshed = false;
       const saveBizId = currentBizId;
@@ -4063,7 +4128,7 @@ function PilotDashboard() {
             // Replaces the DEPRECATED naive MTD run-rate. Single active revenue
             // forecast across the app.
             const __mfToday = new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jerusalem"});
-            const __mfDash = window.MarjinForecast.computeRevenueForecast({tenantId:(window._currentTenantId||null),bizId:(currentBizId||null),today:__mfToday,targetMonth:__mfToday.slice(0,7),history:window.MarjinForecast.entriesToForecastDays(entries)});
+            const __mfDash = window.MarjinForecast.computeRevenueForecast({tenantId:(window._currentTenantId||null),bizId:(currentBizId||null),today:__mfToday,targetMonth:__mfToday.slice(0,7),history:window.MarjinForecast.entriesToForecastDays(entries, entryExceptions)});
             const fSales   = __mfDash.monthEndForecastRevenue!=null ? __mfDash.monthEndForecastRevenue : metrics.totalSales;
             const fProfit  = fSales*(1-tFood/100-tLabor/100-((businessConfig.rentType==="pct"?(businessConfig.rentPct||0):0)+(businessConfig.hasRoyalty?(businessConfig.royaltyPct||0):0))/100)-metrics.fixedRegular-(businessConfig.rentType==="fixed"?(businessConfig.rentFixed||0):0);
             const gap      = Math.round(fSales - tSales);
@@ -4673,7 +4738,7 @@ function PilotDashboard() {
                               onClick={()=>{
                                 const existing=entries.find(e=>e.date===date);
                                 setEntryStep(existing?'revenue':'revenue');
-                                setForm(existing?{...existing}:{...EMPTY_ENTRY,date});
+                                setForm(formWithException(existing?{...existing}:{...EMPTY_ENTRY,date}, date));
                                 setEditingId(existing?entries.indexOf(existing):null);
                                 setScreen("entry");
                               }}>
@@ -4964,7 +5029,7 @@ function PilotDashboard() {
 		                  const dow = DOW_NAMES[getDateDOW(e.date)];
 		                  const openEntry = () => {
 		                    const {_idx, __missing, __key, ...cleanEntry} = e;
-		                    setForm(isMissing ? {...EMPTY_ENTRY,date:e.date} : cleanEntry);
+		                    setForm(formWithException(isMissing ? {...EMPTY_ENTRY,date:e.date} : cleanEntry, e.date));
 		                    setEditingId(isMissing ? null : i);
 		                    setEntryStep('revenue');
 		                    setScreen("entry");

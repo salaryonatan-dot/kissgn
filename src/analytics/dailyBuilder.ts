@@ -362,6 +362,22 @@ function classifyOperationalStatus(
 
 // ── Main builder ──────────────────────────────────────────────────────────────
 
+/**
+ * Canonical structured-first effective-exception resolution (mirror of
+ * lib/entryExceptions.js resolveEffectiveException; kept in parity by
+ * test/analytics/entry-exception-parity.test.mjs). Structured active/cleared
+ * WINS; structured absent falls back to the narrow legacy embedded field.
+ */
+export function resolveEffectiveException(
+  structuredEnvelope: { state?: { status?: string; reasonCode?: string; reasonText?: string; updatedAt?: number; updatedBy?: string } } | null | undefined,
+  legacyEntry: { is_exception?: boolean } | null | undefined
+): { isException: boolean; origin: "structured" | "legacy" | "none"; state: { status?: string; reasonCode?: string; reasonText?: string; updatedAt?: number; updatedBy?: string } | null } {
+  const state = structuredEnvelope && structuredEnvelope.state ? structuredEnvelope.state : null;
+  if (state) return { isException: state.status === "active", origin: "structured", state };
+  if (legacyEntry && legacyEntry.is_exception === true) return { isException: true, origin: "legacy", state: null };
+  return { isException: false, origin: "none", state: null };
+}
+
 export async function buildAnalyticsForBiz(
   tenantId: string,
   bizId: string,
@@ -370,11 +386,14 @@ export async function buildAnalyticsForBiz(
   const db = getDb();
 
   // Read entry + config in parallel.
-  const [entriesSnap, configSnap, businessSnap] = await Promise.all([
+  const [entriesSnap, configSnap, businessSnap, exceptionSnap] = await Promise.all([
     db.ref(`tenants/${tenantId}/biz:${bizId}:entries`).once("value"),
     db.ref(`tenants/${tenantId}/biz:${bizId}:config`).once("value"),
     db.ref(`tenants/${tenantId}/app/business`).once("value"),
+    db.ref(`tenants/${tenantId}/entry_exceptions/${bizId}/${date}`).once("value"),
   ]);
+  const structuredExceptionEnvelope = exceptionSnap.val() as
+    { state?: { status?: string; reasonCode?: string; reasonText?: string; updatedAt?: number; updatedBy?: string } } | null;
 
   const entries = parseFirebaseData<DailyEntry[]>(entriesSnap.val(), []);
   const config = parseFirebaseData<BusinessConfig>(configSnap.val(), {});
@@ -453,7 +472,9 @@ export async function buildAnalyticsForBiz(
   const calendar = buildCalendar(date);
   const war_day = classifyOperationalStatus(alerts, hadEntry);
 
-  const isException = todayEntry?.is_exception === true;
+  // Structured-first effective exception (falls back to legacy embedded fields).
+  const effectiveException = resolveEffectiveException(structuredExceptionEnvelope, todayEntry);
+  const isException = effectiveException.isException;
 
   return {
     date,
@@ -462,12 +483,19 @@ export async function buildAnalyticsForBiz(
     bizName,
     is_exception: isException,
     exception: isException
-      ? {
-          reason: todayEntry?.exception_reason ?? null,
-          note: todayEntry?.exception_note ?? null,
-          set_at: todayEntry?.exception_set_at ?? null,
-          set_by: todayEntry?.exception_set_by ?? null,
-        }
+      ? (effectiveException.origin === "structured" && effectiveException.state
+          ? {
+              reason: effectiveException.state.reasonCode ?? null,
+              note: effectiveException.state.reasonText ?? null,
+              set_at: effectiveException.state.updatedAt ?? null,
+              set_by: effectiveException.state.updatedBy ?? null,
+            }
+          : {
+              reason: todayEntry?.exception_reason ?? null,
+              note: todayEntry?.exception_note ?? null,
+              set_at: todayEntry?.exception_set_at ?? null,
+              set_by: todayEntry?.exception_set_by ?? null,
+            })
       : null,
     revenue: {
       sales,
