@@ -7207,6 +7207,23 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
   const itemsTokenRef = React.useRef(null);
   const simpleRunTokenRef = React.useRef(null);
 
+  // ── Part 1: async write-context guards ────────────────────────────────────
+  // A stale server response (arriving after the user switched business, tenant,
+  // business-date or template) must never mutate the currently rendered editor.
+  // ctxRef is refreshed during render, so it always reflects the latest
+  // committed context. Per-document-family monotonic generations reject
+  // out-of-order writes for the same context (older response ignored).
+  const ctxRef = React.useRef(null);
+  ctxRef.current = { tenantId, bizId, todayKey, selectedTemplateId };
+  const runGenRef = React.useRef(0);
+  const simpleRunGenRef = React.useRef(0);
+  const itemsGenRef = React.useRef(0);
+  const runKey       = (c) => `run|${c.tenantId}|${c.bizId}|${c.todayKey}`;
+  const simpleRunKey = (c) => `simplerun|${c.tenantId}|${c.bizId}|${c.todayKey}|${c.selectedTemplateId}`;
+  const itemsKey     = (c) => `items|${c.tenantId}|${c.bizId}|${c.selectedTemplateId}`;
+  // True only when the captured context key AND generation are still current.
+  const stillCurrent = (capKey, keyFn, capGen, genRef) => (capKey === keyFn(ctxRef.current) && capGen === genRef.current);
+
   const dow     = dowForBusinessKey(todayKey);
   const weekKey = DOW_KEYS[dow];
 
@@ -7262,7 +7279,15 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
           }
           const migrated = { version:"2.0", branchId: bizId, sourceStarter: null, items,
             updatedAt: Date.now(), updatedBy: ctx.userId, migratedFromLegacyAt: Date.now() };
-          await window.storage.set(`biz:${bizId}:checklist_template`, JSON.stringify(migrated));
+          // Part 4: the derived runtime template is usable immediately for EVERY
+          // role. Legacy auto-migration PERSISTENCE to the manager-only
+          // checklist_template key is attempted only by manager/owner/super_owner
+          // (canEdit). shift_manager/viewer never attempt the denied write, and a
+          // failed manager persist must NOT blank the already-derived template.
+          if (canEdit) {
+            try { await window.storage.set(`biz:${bizId}:checklist_template`, JSON.stringify(migrated)); }
+            catch (persistErr) { console.warn("[checklist] template migration persist failed (runtime template retained):", persistErr?.message || persistErr); }
+          }
           if (!cancelled){ setTemplate(migrated); setLoadingTpl(false); } return;
         }
         if (!cancelled){ setTemplate(blankTemplate(ctx)); setLoadingTpl(false); }
@@ -7278,6 +7303,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
   React.useEffect(() => {
     let cancelled = false;
     setLoadingRuns(true);
+    runsTokenRef.current = null; // Part 1: drop prior node's version token on business/date change
     (async () => {
       try {
         if (!bizId) { if (!cancelled){ setRuns(null); setLoadingRuns(false);} return; }
@@ -7319,6 +7345,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
   React.useEffect(() => {
     let cancelled = false;
     const st = templates.find(t => t.templateId === selectedTemplateId) || SHIFT_TEMPLATE_ENTRY;
+    itemsTokenRef.current = null; // Part 1: invalidate prior template's items token on template/business switch
     if (!bizId || st.kind !== "simple") { setSimpleItems([]); return; }
     (async () => {
       try {
@@ -7337,7 +7364,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     let cancelled = false;
     const st = templates.find(t => t.templateId === selectedTemplateId) || SHIFT_TEMPLATE_ENTRY;
     if (!bizId || st.kind !== "simple" || !st.templateId) { setSimpleRun(null); return; }
-    setSimpleRun(null); // clear stale run before async read (template/date switch)
+    setSimpleRun(null); simpleRunTokenRef.current = null; // Part 1: clear stale run + token before async read (template/date switch)
     (async () => {
       try {
         const { document: doc, versionToken } = await apiGetChecklistDoc("simple-run", bizId, { businessDate: todayKey, templateId: st.templateId });
@@ -7436,11 +7463,14 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     const todaysItems = itemsForPhase(runType);
     const doneCount = todaysItems.filter(it => run.items[it.id]?.status === "done").length;
     run.completionPercent = todaysItems.length ? Math.round(doneCount * 100 / todaysItems.length) : 0;
+    const capKey = runKey(ctxRef.current); const capGen = ++runGenRef.current;
     try {
       const { document, versionToken } = await apiSetChecklistDoc("run", bizId, { businessDate: todayKey, doc: newRuns, expectedVersionToken: runsTokenRef.current });
+      if (!stillCurrent(capKey, runKey, capGen, runGenRef)) return; // stale: context switched or newer write superseded
       setRuns(document); runsTokenRef.current = versionToken; closeItemEditor();
     } catch (e) {
-      if (e.conflict) { alert("הנתונים השתנו על ידי משתמש אחר. יש לטעון מחדש לפני שמירה נוספת."); try { const r = await apiGetChecklistDoc("run", bizId, { businessDate: todayKey }); setRuns(r.document || null); runsTokenRef.current = r.versionToken; } catch (_) {} }
+      if (!stillCurrent(capKey, runKey, capGen, runGenRef)) return; // stale error — show nothing in the new context
+      if (e.conflict) { alert("הנתונים השתנו על ידי משתמש אחר. יש לטעון מחדש לפני שמירה נוספת."); try { const r = await apiGetChecklistDoc("run", bizId, { businessDate: todayKey }); if (!stillCurrent(capKey, runKey, capGen, runGenRef)) return; setRuns(r.document || null); runsTokenRef.current = r.versionToken; } catch (_) {} }
       else alert("שמירה נכשלה — נסה שוב");
     }
   };
@@ -7468,11 +7498,14 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     newRuns.runs[runType].status = "submitted";
     newRuns.runs[runType].submittedAt = now;
     newRuns.runs[runType].submittedBy = ctx.userId;
+    const capKey = runKey(ctxRef.current); const capGen = ++runGenRef.current;
     try {
       const { document, versionToken } = await apiSetChecklistDoc("run", bizId, { businessDate: todayKey, doc: newRuns, expectedVersionToken: runsTokenRef.current });
+      if (!stillCurrent(capKey, runKey, capGen, runGenRef)) return; // stale: context switched or newer write superseded
       setRuns(document); runsTokenRef.current = versionToken;
     } catch (e) {
-      if (e.conflict) { alert("הנתונים השתנו על ידי משתמש אחר. יש לטעון מחדש לפני שמירה נוספת."); try { const r = await apiGetChecklistDoc("run", bizId, { businessDate: todayKey }); setRuns(r.document || null); runsTokenRef.current = r.versionToken; } catch (_) {} }
+      if (!stillCurrent(capKey, runKey, capGen, runGenRef)) return; // stale error — show nothing in the new context
+      if (e.conflict) { alert("הנתונים השתנו על ידי משתמש אחר. יש לטעון מחדש לפני שמירה נוספת."); try { const r = await apiGetChecklistDoc("run", bizId, { businessDate: todayKey }); if (!stillCurrent(capKey, runKey, capGen, runGenRef)) return; setRuns(r.document || null); runsTokenRef.current = r.versionToken; } catch (_) {} }
       else alert("שמירה נכשלה — נסה שוב");
     }
   };
@@ -7497,6 +7530,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
       active: true, currentVersion: 1, itemsCount: 0,
       createdBy: ctx.userId, createdAt: now, updatedBy: ctx.userId, updatedAt: now,
     };
+    const capBizKey = `${ctxRef.current.tenantId}|${ctxRef.current.bizId}`; const capGen = ++itemsGenRef.current;
     try {
       // Write the items doc FIRST. If the registry write below fails, this stays
       // an orphan items doc (invisible — no chip), which is safer than a visible
@@ -7507,6 +7541,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
       const map = await readRegistryMap();
       map[templateId] = entry;
       await window.storage.set(`biz:${bizId}:checklist_templates`, JSON.stringify(map));
+      if (`${ctxRef.current.tenantId}|${ctxRef.current.bizId}` !== capBizKey || capGen !== itemsGenRef.current) return; // stale: business/tenant switched during creation
       setTemplates(prev => [...prev, entry]);
       setSelectedTemplateId(templateId);
       setShowCreate(false); setNewName(""); setNewType("cleaning");
@@ -7542,12 +7577,14 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
     if (!bizId || st.kind !== "simple" || !st.templateId) return;
     const tplId = st.templateId;
     const now = Date.now();
+    const capKey = itemsKey(ctxRef.current); const capGen = ++itemsGenRef.current;
     try {
       // preserve currentVersion from the existing items doc (fallback 1 if missing)
       let doc = null, itToken = null;
       try { const r = await apiGetChecklistDoc("template-items", bizId, { templateId: tplId }); doc = r.document; itToken = r.versionToken; } catch (_) { doc = null; itToken = null; }
       const currentVersion = (doc && doc.currentVersion) || 1;
       const setR = await apiSetChecklistDoc("template-items", bizId, { templateId: tplId, expectedVersionToken: itToken, doc: { templateId: tplId, currentVersion, items: nextItems, updatedAt: now, updatedBy: ctx.userId } });
+      if (!stillCurrent(capKey, itemsKey, capGen, itemsGenRef)) return; // stale: template/business switched or newer write superseded
       itemsTokenRef.current = setR.versionToken;
       // registry: itemsCount = active items only; bump updatedAt/By; keep currentVersion
       const map = await readRegistryMap();
@@ -7557,6 +7594,7 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
         await window.storage.set(`biz:${bizId}:checklist_templates`, JSON.stringify(map));
         setTemplates(prev => prev.map(t => t.templateId === tplId ? { ...t, itemsCount: activeCount } : t));
       }
+      if (!stillCurrent(capKey, itemsKey, capGen, itemsGenRef)) return; // stale after registry sync
       setSimpleItems(nextItems);
       setItemsEditorOpen(false);
     } catch (e) {
@@ -7584,12 +7622,15 @@ function ShiftChecklistScreen({ businessConfig, saveBusinessConfig, bizId, busin
       itemStates: { ...(base.itemStates || {}), [itemId]: { done: !prevDone, updatedAt: now, updatedBy: ctx.userId } },
       updatedAt: now, updatedBy: ctx.userId,
     };
+    const capKey = simpleRunKey(ctxRef.current); const capGen = ++simpleRunGenRef.current;
     try {
       const { document, versionToken } = await apiSetChecklistDoc("simple-run", bizId, { businessDate: todayKey, templateId: tplId, doc: next, expectedVersionToken: simpleRunTokenRef.current });
+      if (!stillCurrent(capKey, simpleRunKey, capGen, simpleRunGenRef)) return; // stale: context switched or newer write superseded
       setSimpleRun(document); simpleRunTokenRef.current = versionToken;
     } catch (e) {
       console.error("[checklist] save simple run failed:", e);
-      if (e.conflict) { alert("הנתונים השתנו על ידי משתמש אחר. יש לטעון מחדש לפני שמירה נוספת."); try { const r = await apiGetChecklistDoc("simple-run", bizId, { businessDate: todayKey, templateId: tplId }); setSimpleRun(r.document || null); simpleRunTokenRef.current = r.versionToken; } catch (_) { setSimpleRun(prevRun || null); } }
+      if (!stillCurrent(capKey, simpleRunKey, capGen, simpleRunGenRef)) return; // stale response — no message/rollback in the new context
+      if (e.conflict) { alert("הנתונים השתנו על ידי משתמש אחר. יש לטעון מחדש לפני שמירה נוספת."); try { const r = await apiGetChecklistDoc("simple-run", bizId, { businessDate: todayKey, templateId: tplId }); if (!stillCurrent(capKey, simpleRunKey, capGen, simpleRunGenRef)) return; setSimpleRun(r.document || null); simpleRunTokenRef.current = r.versionToken; } catch (_) { if (stillCurrent(capKey, simpleRunKey, capGen, simpleRunGenRef)) setSimpleRun(prevRun || null); } }
       else { setSimpleRun(prevRun || null); alert("שמירת הסימון נכשלה — נסה שוב."); }
     }
   };
