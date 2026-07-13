@@ -3984,7 +3984,7 @@ function PilotDashboard() {
             })}
           </div>
         </nav>
-        <ShiftManagerEmbed currentUser={currentUser} setCurrentUser={setCurrentUser} onNavigate={s=>setScreen(s)} appUsers={appUsers} saveAppUsers={saveAppUsers} bizId={currentBizId||""}/>
+        <ShiftManagerEmbed currentUser={currentUser} setCurrentUser={setCurrentUser} onNavigate={s=>setScreen(s)} appUsers={appUsers} saveAppUsers={saveAppUsers} bizId={currentBizId||""} loggedInRole={loggedInUser?.role}/>
       </div>
     );
   }
@@ -5271,6 +5271,7 @@ function PilotDashboard() {
           appUsers={appUsers}
           saveAppUsers={saveAppUsers}
           bizId={currentBizId||""}
+          loggedInRole={loggedInUser?.role}
         />
       )}
 
@@ -6421,12 +6422,11 @@ const SM_CAT_BG    = {"פתיחה":"#F3F4F6","שוטף":"#F9FAFB","סגירה":"
 // בעתיד: להוסיף { id, name, permissions:["dashboard","forecast",...] } לכל מנהל
 // כרגע: מנהלים רואים רק ⚡ משמרות. בעלים רואה הכל.
 
-function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[], saveAppUsers, bizId="" }) {
+function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[], saveAppUsers, bizId="", loggedInRole=null }) {
   const [subScreen,  setSubScreen]  = useState("home");
   const [tasks,      setTasks]      = useState([]);
   const [logs,       setLogs]       = useState([]);
   const [activeLog,  setActiveLog]  = useState(null);
-  const [ownerPin,   setOwnerPin]   = useState("0000");
   const [ownerTab,   setOwnerTab]   = useState("tasks");
   const [ownerPinIn, setOwnerPinIn] = useState("");
   const [ownerErr,   setOwnerErr]   = useState(false);
@@ -6442,7 +6442,6 @@ function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[
         const sg2 = async k => { try{return await window.storage.get(k);}catch(_){return null;} };
         const r1=await sg2(`biz:${bizId}:tasks`);      if(r1) setTasks(JSON.parse(r1.value));
         const r2=await sg2(`biz:${bizId}:logs`);       if(r2) setLogs(JSON.parse(r2.value));
-        const r4=await sg2(`biz:${bizId}:pin`);        if(r4) setOwnerPin(r4.value);
         const r5=await sg2(`biz:${bizId}:active-log`); if(r5) setActiveLog(JSON.parse(r5.value));
       } catch(_){}
       setSmLoaded(true);
@@ -6471,7 +6470,10 @@ function ShiftManagerEmbed({ currentUser, setCurrentUser, onNavigate, appUsers=[
   };
 
   const tryOwnerLogin = () => {
-    if(ownerPinIn===ownerPin){ setOwnerErr(false); setOwnerPinIn(""); setSubScreen("owner"); }
+    // PIN is DEPRECATED as an authorization mechanism. Owner-only UI is gated on the
+    //   authoritative server role (loggedInRole). Real owner-only actions remain
+    //   server-enforced (requireTenantAccess), so knowing an old PIN grants nothing.
+    if(loggedInRole==="owner" || loggedInRole==="super_owner"){ setOwnerErr(false); setOwnerPinIn(""); setSubScreen("owner"); }
     else { setOwnerErr(true); setOwnerPinIn(""); }
   };
 
