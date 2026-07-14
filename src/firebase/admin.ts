@@ -19,9 +19,12 @@ import admin from "firebase-admin";
 import { getAdminDb } from "../../lib/adminSdk.js";
 
 export function getFirebaseAdmin(): admin.app.App {
-  // The shared app initialized inside lib/adminSdk.js. getAdminDb() is
-  // idempotent and guarantees the app exists before we read its handle.
-  return getAdminDb().app;
+  // getAdminDb() is idempotent and guarantees the single shared admin app is
+  // initialized. Return it via the admin namespace API (typed admin.app.App)
+  // rather than getAdminDb().app, which the firebase-admin RTDB types expose as
+  // the narrower, incompatible modular FirebaseApp.
+  getAdminDb();
+  return admin.app();
 }
 
 export function getDb(): admin.database.Database {

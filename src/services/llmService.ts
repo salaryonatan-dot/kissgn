@@ -1,3 +1,4 @@
+import { parseLlmResponse } from "../../lib/llmResponse.js";
 import { SYSTEM_PROMPT } from "../agent/prompts/systemPrompt.js";
 import { logger } from "../utils/logging.js";
 
@@ -48,13 +49,14 @@ export async function callLLM(req: LLMRequest): Promise<LLMResponse> {
     throw new Error(`LLM API error: ${resp.status}`);
   }
 
-  const data = await resp.json();
+  const data: unknown = await resp.json();
   const latency = Date.now() - startMs;
-  logger.info(`LLM call: ${latency}ms, in=${data.usage?.input_tokens}, out=${data.usage?.output_tokens}`);
+  const parsed = parseLlmResponse(data);
+  logger.info(`LLM call: ${latency}ms, in=${parsed.inputTokens}, out=${parsed.outputTokens}`);
 
   return {
-    text: data.content?.[0]?.text ?? "",
-    inputTokens: data.usage?.input_tokens ?? 0,
-    outputTokens: data.usage?.output_tokens ?? 0,
+    text: parsed.text,
+    inputTokens: parsed.inputTokens,
+    outputTokens: parsed.outputTokens,
   };
 }
