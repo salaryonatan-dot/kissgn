@@ -8,9 +8,10 @@
     "nodemailer": "^6.9.0"
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
     "@types/node": "^20.0.0",
-    "@vercel/node": "^3.0.0"
+    "@vercel/node": "^3.0.0",
+    "firebase-tools": "15.23.0",
+    "typescript": "^5.4.0"
   },
   "engines": {
     "node": ">=20"
