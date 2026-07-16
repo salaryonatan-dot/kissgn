@@ -1,0 +1,6 @@
+{
+  "note": "DRY-RUN TEMPLATE ONLY — NOT A PRODUCTION WRITE PAYLOAD. Populated by docs/production-readiness/biz-access-audit.mjs (read-only). Any backfill requires separate written authorization and must use scripts/backfill-biz-access.mjs (dry-run by default).",
+  "tenantId": "<tenantId>",
+  "generatedBy": "biz-access-audit.mjs (read-only)",
+  "proposedGrants": []
+}
