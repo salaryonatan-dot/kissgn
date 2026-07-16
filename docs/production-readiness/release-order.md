@@ -1,40 +1,53 @@
-# Release Order (Phase 5)
+# Release Order (Phase 5, corrected)
 
-## Incompatibility analysis (where things break if ordered wrong)
-| Scenario | Breaks? | Why |
+## Actual Vercel deployment structure (verified from vercel.json)
+This repo is a **single Vercel project**: the serverless functions under `api/**` and
+the static frontend (`index.html`, `landing.html`) build and deploy as **one immutable
+Vercel artifact**. There is **no** mechanism to promote the API separately from the
+frontend — a promotion swaps the entire deployment (functions + static + crons) atomically.
+The earlier "deploy API first, frontend later" step was fictional and is removed.
+
+The two coordinated surfaces are therefore:
+1. the **Vercel deployment** (API + frontend + crons, one artifact), and
+2. the **Firebase RTDB Rules** (`database.rules.json`), deployed separately via Firebase.
+
+## Incompatibility analysis
+| Scenario | Result | Why |
 |---|---|---|
-| New frontend + OLD Rules | Mostly OK | New client uses server-mediated `/api/admin` for parameterized checklist/analytics; old permissive Rules still allow legacy direct paths. Low risk. |
-| OLD frontend + NEW (restrictive) Rules | **BREAKS** | Old client writes biz-scoped data via direct RTDB; new Rules require `biz_access`. Without grants → PERMISSION_DENIED for managers/shift/viewers. |
-| New API + OLD data model | OK | `api/admin.js` reads/writes the same biz-scoped keys; version-token CAS + strict validation are backward-tolerant. |
-| **New Rules before biz_access backfill** | **LOCKOUT** | managers/shift_managers/viewers without `biz_access` grants lose access to their business data. |
+| NEW Vercel artifact (frontend+API) under OLD (permissive) Rules | **OK** | New frontend uses server-mediated `/api/admin` (Admin SDK bypasses Rules) for parameterized data and direct RTDB for fixed biz keys; old permissive Rules still allow member access. Isolation simply not-yet-enforced (== current Production state). |
+| OLD Vercel artifact (frontend) under NEW (restrictive) Rules | **BREAKS / LOCKOUT** | Old frontend writes biz-scoped data by direct RTDB; new Rules require `biz_access`. Managers/shift_managers/viewers without grants get PERMISSION_DENIED. |
+| New API under old data model | OK | Same biz-scoped keys; version-token CAS + strict validation are backward-tolerant. |
+| New Rules before biz_access backfill | **LOCKOUT** | scoped users without grants lose access. |
 
-The two hard constraints: (a) do **not** deploy restrictive Rules until `biz_access`
-coverage is READY (no NEEDS_BACKFILL for active users); (b) deploy Rules and the new
-frontend **together** (old frontend cannot live under new Rules).
+**Conclusion:** deploy **Vercel-first, then Rules** — the new frontend tolerates old Rules,
+but the old frontend does NOT tolerate new Rules. Vercel-first yields the strictly smaller,
+safer compatibility window (a brief period of not-yet-enforced isolation, identical to
+today's Production posture). Keep the gap between the two deploys short. Both are gated on
+biz_access coverage being green.
 
-## Recommended exact sequence
-1. **API/server + alert checkers first.** Promote the new Vercel deployment (build from
-   HEAD `a499c8d`) that contains `api/admin.js` + bundled server modules. This is
-   backward-compatible with the current frontend and current (permissive) Rules.
-2. **Verify new APIs while old frontend still live.** Authenticated read/write smoke of
-   `/api/admin` server-mediation, entry-exception ops, analytics reads (see smoke-tests.md,
-   API section). Confirm crons (proactive/run, alerts/run, daily-builder, daily-snapshot)
-   run without errors and send no unexpected mail.
-3. **biz_access dry-run approval.** Run `biz-access-audit.mjs` (read-only). Require READY
-   (or an explicitly approved backfill list). Do NOT proceed to Rules until coverage is green.
-4. **Approved biz_access backfill (only if separately authorized).** Run
-   `scripts/backfill-biz-access.mjs` — dry-run first, then apply ONLY under written
-   authorization. Re-run the audit to confirm READY.
-5. **Coordinated frontend + restrictive Rules window (maintenance window).** In one window:
-   deploy `database.rules.json` (Firebase) AND promote the new frontend (`index.html`)
-   together. Keep the window short; announce brief maintenance.
-6. **Post-deploy authenticated smoke tests** (smoke-tests.md) across roles + isolation.
-7. **Monitoring period** (≥24–48h): watch auth-denial rates, `/api/admin` 4xx/409, cron
-   logs, alert email volume, forecast insufficient-data rate.
-8. **Rollback criteria** (rollback-plan.md): trip on cross-tenant/business exposure,
-   mass PERMISSION_DENIED for legitimate users, cron failures, or unexpected mail/mutation.
+## Preferred safe sequence
+- **A. Live read-only baseline + coverage audits.** Operator (read-only creds) runs
+  `biz-access-audit.mjs` and `analytics-audit.mjs`, and verifies the Production baseline.
+- **B. Approve + execute biz_access backfill separately, only if needed.** If the audit
+  reports NEEDS_BACKFILL/AMBIGUOUS/ORPHANED/UNKNOWN/MISSING, obtain separate written
+  authorization and run `scripts/backfill-biz-access.mjs` (dry-run first). Re-run the audit
+  until coverage is green. **This audit proposes additive grants only and never removes.**
+- **C. Create one Vercel deployment (API + frontend) from the release HEAD.** Build the
+  single artifact; do not promote yet.
+- **D. Validate in Preview if possible WITHOUT Production mutation.** CAVEAT: a Vercel
+  Preview deployment uses the project's environment variables and therefore hits the SAME
+  Firebase project as Production unless a separate preview Firebase project is configured.
+  In Preview, run only READ-ONLY / login smoke; do NOT run mutating flows against Production
+  data. If a dedicated preview Firebase project exists, full smoke is safe there.
+- **E. Coordinated Production window (short):**
+  1. Promote the Vercel artifact to Production (frontend + API + crons swap atomically).
+  2. Immediately deploy the restrictive `database.rules.json` via Firebase.
+  Order is **Vercel-first, then Rules** (smaller window; see analysis above). Announce brief maintenance.
+- **F. Immediate authenticated smoke tests** (smoke-tests.md) across roles + isolation.
+- **G. Rollback thresholds** (rollback-plan.md): cross-tenant/business exposure (P0/P1),
+  mass PERMISSION_DENIED for legitimate users (P1), cron failures, or unexpected mail/mutation.
 
-## Safe-window notes
-- Steps 1–2 have no user-facing lockout risk.
-- The only lockout-risk step is 5; it is gated by 3–4 being green.
-- If backfill is NOT authorized, stop after step 2 and hold Rules+frontend (steps 5+).
+## If a true partial/preview mechanism exists
+Only use one if documented for this project (e.g., a separate preview Firebase project, or
+Firebase Rules staging). Do not assume it. As configured (single Vercel project, one Firebase
+project referenced by env), treat deployment as the atomic Vercel-artifact + Rules pair above.

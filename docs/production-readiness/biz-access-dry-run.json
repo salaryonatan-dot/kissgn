@@ -1,6 +1,8 @@
 {
-  "note": "DRY-RUN TEMPLATE ONLY — NOT A PRODUCTION WRITE PAYLOAD. Populated by docs/production-readiness/biz-access-audit.mjs (read-only). Any backfill requires separate written authorization and must use scripts/backfill-biz-access.mjs (dry-run by default).",
-  "tenantId": "<tenantId>",
-  "generatedBy": "biz-access-audit.mjs (read-only)",
-  "proposedGrants": []
+  "note": "DRY-RUN TEMPLATE (redacted) — NOT a Production write payload and NOT directly executable. Populated by docs/production-readiness/biz-access-audit.mjs which NEVER writes to Production (read-only). References are non-reversible hashes (userRef/businessRef/tenantRef) plus appUsersIndex source indexes; an operator reconciles them against their own access-controlled mapping. Any backfill requires separate written authorization and uses scripts/backfill-biz-access.mjs (additive, dry-run by default).",
+  "tenantRef": "tenant_<hash>",
+  "generatedBy": "biz-access-audit.mjs (read-only, redacted)",
+  "proposedGrants": [
+    { "tenantRef": "tenant_<hash>", "businessRef": "biz_<hash>", "userRef": "uid_<hash>", "appUsersIndex": 0, "role": "manager", "grant": true, "additiveOnly": true, "reason": "member+role with allowedBizId but no biz_access entry" }
+  ]
 }

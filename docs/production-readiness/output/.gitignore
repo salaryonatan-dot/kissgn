@@ -1,0 +1,4 @@
+# Local-only audit run artifacts must never be committed. Keep the directory, ignore contents.
+*
+!.gitignore
+!README.md

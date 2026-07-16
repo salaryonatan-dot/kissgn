@@ -1,7 +1,27 @@
 # Release Delta Inventory (Phase 2)
 
-26 commits: `origin/main` (`0130e66`) → HEAD (`a499c8d`). API function count **12**,
-unchanged; **no new Vercel function** (only `api/admin.js` modified among `api/*`).
+## Boundaries (avoid hardcoding a SHA that goes stale after this commit)
+- **origin/main (Production baseline):** `0130e66a6830c40c60cab25d5308356e222d24f5`.
+- **Readiness-documentation HEAD:** the current local `main` — verify live with
+  `git rev-parse HEAD` and total delta with `git rev-list --count origin/main..HEAD`.
+  It advances with every docs commit (including this readiness fix), so it is intentionally
+  not hardcoded here.
+- **Runtime release boundary (what actually deploys):** the current tree of the deployed
+  surfaces below. Commits touching ONLY `docs/**`, `test/**`, or dev tooling
+  (`package.json`/`package-lock.json` devDeps) do **not** change the deployed artifact.
+
+List the full delta at review time:
+```
+git rev-list --left-right --count origin/main...HEAD                 # 0 behind <TAB> N ahead
+git log --oneline origin/main..HEAD                                  # every commit through docs HEAD
+git diff --name-status 0130e66..HEAD -- index.html database.rules.json api/ lib/ src/   # runtime/Rules/frontend delta only
+```
+
+API function count **12**, unchanged; **no new Vercel function** (only `api/admin.js` modified
+among `api/*`). The runtime delta is stable across the docs/test/tooling commits that follow.
+
+The commit table below is historical (stable SHAs) and classifies each commit by area; use
+the commands above for the authoritative current count.
 
 ## Commit classification
 | Commit | Subject | Area(s) |

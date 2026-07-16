@@ -1,46 +1,48 @@
-# Analytics Coverage Validation (Phase 4)
+# Analytics Coverage Validation (Phase 4, hardened)
 
 ## What the release needs
-The forecast engine (`src/services/forecastService.ts`) and alert checkers
-(`src/alerts/checkers.ts`) read the **flat per-business** source
+The forecast engine (`src/services/forecastService.ts`, threshold **5** valid days) and
+alert checkers (`src/alerts/checkers.ts`) read the **flat per-business** source
 `tenants/{tid}/biz:{bizId}:analytics:daily:{YYYY-MM-DD}` with `revenue.{total, payroll,
-food_cost, ...}`. The legacy tenant-wide `tenants/{tid}/analytics/*` node is Rules-locked
-and no active reader remains (`getHourlyMetrics`/`dailyMetricsRef` removed; hourly workflow retired).
+food_cost}`. The legacy tenant-wide `tenants/{tid}/analytics/*` node is Rules-locked; no
+active reader remains. This audit **never writes to Production** and makes no POS/external calls.
 
-## Safety already built into the release (reduces coverage risk)
-- **Strict validation** (`lib/analytics/strictDailyMetrics.js`): a daily doc enters
-  alert math only if `total`, `payroll`, `food_cost` are all finite numerics; otherwise
-  the whole date is **skipped** — malformed/missing data cannot create a false alert.
-- **Forecast fail-closed**: `forecastService` needs ≥5 valid daily docs; fewer → returns
-  `null` (UI shows insufficient-data, never a fabricated forecast). Missing business id → `null`.
-- **Hourly-sales questions**: return the deterministic `unsupported_hourly` response (no fabrication).
+## Hardened semantics (pure `lib/analytics-model.mjs`, tested in `test/analytics-audit.test.mjs`)
+- **Complete enumeration:** active businesses = canonical `app/business` registry ∪ discovered
+  `biz:*:analytics:daily:*` keys ∪ other `biz:*` keys. **No business is silently omitted.**
+- **Unknown analytics businesses** (analytics data for a business not in the registry) are
+  surfaced separately (`inRegistry:false`, `unknownAnalyticsBusinessCount`).
+- **Strict metrics** (mirrors `strictDailyMetrics.js`): zero is valid; **missing key ≠ zero**
+  (→ MISSING_METRIC); present-but-non-finite (string/null/NaN/±Infinity/bool/object) → MALFORMED.
+- **Future-dated docs excluded**: "today" is computed in the business timezone
+  (default Asia/Jerusalem, injectable via `--today` for determinism). Future dates are excluded
+  from valid coverage, the 30/60/90-day counts, and the latest-valid-date — and reported as
+  suspicious evidence (`futureDated`). Invalid calendar dates are likewise excluded (`invalidDate`).
+- **Latest valid business date** is the newest VALID PAST date only.
+
+## Classifications
+| Category | Meaning |
+|---|---|
+| READY | ≥5 valid past daily docs; forecast computes; checkers get valid data |
+| INSUFFICIENT_HISTORY | 1–4 valid docs; forecast returns null (safe) |
+| MALFORMED_DATA | docs exist but present metrics are non-finite / only future/invalid-dated |
+| MISSING_METRIC | docs exist but a required metric key is absent |
+| LEGACY_ONLY | only the legacy tenant-wide node present; no flat data |
+| NO_DATA | no analytics docs for an active business |
+
+## Acceptance guidance
+- READY / INSUFFICIENT_HISTORY are safe to ship (both fail safe).
+- MALFORMED_DATA / MISSING_METRIC in volume → investigate the daily-builder; invalid days are
+  skipped by the runtime and cannot create false alerts.
+- LEGACY_ONLY / NO_DATA for an active business → no flat analytics yet; forecast/alerts are
+  inert for it (no regeneration performed here).
 
 ## How to run (operator, READ-ONLY)
 ```
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/readonly-sa.json \
 FIREBASE_DATABASE_URL="https://<project>.firebaseio.com" \
-node docs/production-readiness/analytics-audit.mjs --tenant <tenantId> --days 90
+node docs/production-readiness/analytics-audit.mjs --tenant <tenantId> [--today YYYY-MM-DD] [--tz Asia/Jerusalem]
 ```
-Reads only; no POS/external calls; no regeneration. Emits per-business coverage +
-latest business date + 30/60/90-day valid-doc counts + classification.
-
-## Classifications (filled in by the operator run)
-| Category | Meaning |
-|---|---|
-| READY | ≥5 valid daily docs; forecast will compute; checkers get valid data |
-| INSUFFICIENT_HISTORY | <5 valid docs; forecast returns insufficient-data (safe) |
-| MALFORMED_DATA | docs exist but revenue objects invalid (skipped by strict validation) |
-| MISSING_METRIC | docs missing total/payroll/food_cost (skipped) |
-| LEGACY_ONLY | only legacy tenant-wide analytics present (locked; no flat data) |
-| NO_DATA | no analytics docs for the business |
-
-## Acceptance guidance
-- `READY` / `INSUFFICIENT_HISTORY` are acceptable to ship (both fail safe: forecast null,
-  checkers emit no false alerts).
-- `MALFORMED_DATA` / `MISSING_METRIC` in significant volume → investigate the daily-builder
-  before relying on alerts, but they do **not** break the release (invalid days are skipped).
-- `LEGACY_ONLY` for an active business → that business has no flat analytics yet; forecast/alerts
-  will be inert for it until the daily-builder cron populates flat docs (no regeneration in this task).
 
 ## Planning-environment status
-Not executed here — no Production read credentials. Operator must run before Go.
+Not executed here (no Production read credentials). Operator must run before Go.

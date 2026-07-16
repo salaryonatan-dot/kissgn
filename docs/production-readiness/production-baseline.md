@@ -3,7 +3,13 @@
 ## Known baseline (to be verified read-only by an authenticated operator)
 - **Production alias:** https://kissgn.vercel.app
 - **Production source baseline:** `0130e66a6830c40c60cab25d5308356e222d24f5` (== `origin/main`)
-- **Release candidate HEAD:** `a499c8de29ae0e2e840e5475a238283ef03bf759` (local `main`, ahead 26, behind 0)
+- **Readiness-documentation HEAD:** moves with each docs commit — verify with
+  `git rev-parse HEAD` and `git rev-list --left-right --count origin/main...HEAD` (do NOT
+  hardcode; this readiness fix itself adds a docs-only commit).
+- **Runtime/Rules/frontend release boundary:** defined by *content*, not a single SHA — the
+  deployed artifact is the current tree of `index.html`, `database.rules.json`, `api/**`,
+  and the bundled `lib/**`+`src/**`. Subsequent docs-only / test-only / tooling commits do
+  NOT change what deploys. See release-delta.md for the runtime-vs-non-runtime split.
 - **API function inventory (expected, unchanged):** 12 Vercel serverless functions
   - `api/admin.js`, `api/agent/ask.ts`, `api/ai-chat.js`, `api/alerts/run.ts`,
     `api/analytics/daily-builder.ts`, `api/bootstrap-owner.js`, `api/config.js`,
