@@ -139,3 +139,60 @@ test("normalizeAllowedBizIds fail-closed", () => {
   assert.equal(normalizeAllowedBizIds([1]).ok, false);
   assert.deepEqual(normalizeAllowedBizIds(["a", "a", " b "]).ids, ["a", "b"]);
 });
+
+// ─── PR-005: deterministic ordering + biz-access safeguards ───────────────────
+import { byCodePoint } from "../lib/biz-access-model.mjs";
+
+test("PR-005: identical snapshot, different member/role insertion order -> byte-equal output", () => {
+  const build = (order) => {
+    const members = {}, roles = {}; const ba = { bizA: {}, bizB: {} };
+    for (const [u, r, b] of order) { members[u] = true; roles[u] = r; if (b) ba[b][u] = true; }
+    return classifyBizAccess({
+      tenantId: "tenantA", salt: "t",
+      appBusinessRaw: biz([{ id: "bizA", name: "A" }, { id: "bizB", name: "B" }]),
+      members, roles, bizAccess: ba,
+      appUsersRaw: users([
+        { firebaseUid: "uM1", role: "manager", allowedBizIds: ["bizA"] },
+        { firebaseUid: "uM2", role: "manager", allowedBizIds: ["bizB"] },
+        { firebaseUid: "uV", role: "viewer", allowedBizIds: ["bizA"] },
+      ]),
+    });
+  };
+  const fwd = [["uM1", "manager", null], ["uM2", "manager", null], ["uV", "viewer", "bizA"]];
+  const rev = [["uV", "viewer", "bizA"], ["uM2", "manager", null], ["uM1", "manager", null]];
+  const a = build(fwd), b = build(rev);
+  assert.deepEqual(a.findings, b.findings);
+  assert.deepEqual(a.proposedGrants, b.proposedGrants);
+  assert.equal(JSON.stringify(a), JSON.stringify(b)); // byte-equal
+});
+
+test("PR-005: findings + proposedGrants are code-point sorted", () => {
+  const r = classifyBizAccess({
+    tenantId: "tenantA", salt: "t", appBusinessRaw: biz([{ id: "bizA", name: "A" }, { id: "bizB", name: "B" }]),
+    members: { uZ: true, uA: true, uM: true }, roles: { uZ: "manager", uA: "manager", uM: "manager" }, bizAccess: {},
+    appUsersRaw: users([{ firebaseUid: "uZ", role: "manager", allowedBizIds: ["bizA"] }, { firebaseUid: "uA", role: "manager", allowedBizIds: ["bizB"] }, { firebaseUid: "uM", role: "manager", allowedBizIds: ["bizA"] }]),
+  });
+  const fkeys = r.findings.map((f) => [f.category, f.businessRef || "", f.userRef || ""].join(" "));
+  assert.deepEqual(fkeys, [...fkeys].sort(byCodePoint));
+  const gkeys = r.proposedGrants.map((g) => [g.businessRef || "", g.userRef || ""].join(" "));
+  assert.deepEqual(gkeys, [...gkeys].sort(byCodePoint));
+});
+
+test("safeguard: invalid/null role is never an automatic grant candidate", () => {
+  const r = run({ members: { uX: true }, roles: { uX: null }, appUsersRaw: users([{ firebaseUid: "uX", role: null, allowedBizIds: ["bizA"] }]) });
+  assert.equal(r.categories.INVALID_ROLE, 1);
+  assert.equal(r.proposedGrants.length, 0);
+});
+
+test("safeguard: missing app/users record is never an automatic grant candidate", () => {
+  const r = run({ members: { uM: true }, roles: { uM: "manager" }, appUsersRaw: users([]) });
+  assert.equal(r.categories.AMBIGUOUS_MAPPING >= 1, true);
+  assert.equal(r.proposedGrants.length, 0);
+});
+
+test("safeguard: proposed grants are additive-only recommendations (no removals)", () => {
+  const r = run({ members: { uM: true }, roles: { uM: "manager" }, bizAccess: {}, appUsersRaw: users([{ firebaseUid: "uM", role: "manager", allowedBizIds: ["bizA"] }]) });
+  assert.equal(r.proposedGrants.length, 1);
+  for (const g of r.proposedGrants) { assert.equal(g.grant, true); assert.equal(g.additiveOnly, true); }
+  assert.equal(JSON.stringify(r.proposedGrants).includes('"grant":false'), false);
+});

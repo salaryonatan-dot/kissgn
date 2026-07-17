@@ -17,6 +17,7 @@ import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { classifyBizAccess } from "./lib/biz-access-model.mjs";
+import { formatSafeError } from "./lib/redaction.mjs";
 
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : d; };
 
@@ -83,5 +84,5 @@ async function main() {
 
 // main() runs ONLY on direct execution — never on import (keeps tests side-effect free).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((e) => { console.error("AUDIT ERROR:", e && (e.message || e)); process.exit(2); });
+  main().catch((e) => { console.error(formatSafeError(e)); process.exit(2); });
 }

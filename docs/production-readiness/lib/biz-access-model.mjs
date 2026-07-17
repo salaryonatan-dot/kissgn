@@ -14,6 +14,13 @@ export const RTDB_FORBIDDEN = /[.#$\[\]\/]/;
 export const VALID_ROLES = new Set(["owner", "super_owner", "manager", "shift_manager", "viewer"]);
 export const isImplicitAllRole = (r) => r === "owner" || r === "super_owner";
 
+// Locale-independent, stable code-point comparator (PR-005 deterministic ordering).
+export const byCodePoint = (a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0);
+const findingSortKey = (f) => [f.category, f.subject || "", f.businessRef || "", f.userRef || "",
+  (f.appUsersIndex == null ? "" : String(f.appUsersIndex).padStart(8, "0")), f.role || "", f.note || ""].join("\u0000");
+const grantSortKey = (g) => [g.businessRef || "", g.userRef || "",
+  (g.appUsersIndex == null ? "" : String(g.appUsersIndex).padStart(8, "0")), g.role || ""].join("\u0000");
+
 // Canonical parse: {_v} | string | array -> array. Fail-closed on anything else.
 export function parseCanonicalArray(raw) {
   if (raw == null) return { ok: true, list: [] };
@@ -148,6 +155,9 @@ export function classifyBizAccess(input) {
   }
 
   const attention = cats.NEEDS_BACKFILL + cats.AMBIGUOUS_MAPPING + cats.ORPHANED_ACCESS + cats.INVALID_ROLE + cats.UNKNOWN_BUSINESS + cats.MISSING_MEMBERSHIP;
+  // PR-005: deterministic ordering — identical input snapshots produce byte-equal output.
+  findings.sort((a, b) => byCodePoint(findingSortKey(a), findingSortKey(b)));
+  proposedGrants.sort((a, b) => byCodePoint(grantSortKey(a), grantSortKey(b)));
   return {
     tenantRef,
     businessesDiscovered: businessUniverse.size,

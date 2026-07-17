@@ -11,6 +11,7 @@
 import admin from "firebase-admin";
 import { pathToFileURL } from "node:url";
 import { classifyAnalytics, isRealDateKey } from "./lib/analytics-model.mjs";
+import { formatSafeError } from "./lib/redaction.mjs";
 
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : d; };
 
@@ -24,6 +25,7 @@ async function main() {
   const TZ = arg("--tz", "Asia/Jerusalem");
   const TODAY = arg("--today", businessToday(TZ));
   const FORECAST_MIN = 5; // matches forecastService runtime threshold
+  const MAX_DATA_AGE_DAYS = Number(arg("--max-data-age-days", "3")); // PR-001 staleness threshold
   if (!TENANT) { console.error("ERROR: --tenant <tenantId> required"); process.exit(2); }
   if (!isRealDateKey(TODAY)) { console.error(`ERROR: --today must be a real YYYY-MM-DD date (got ${TODAY})`); process.exit(2); }
   if (!process.env.GOOGLE_APPLICATION_CREDENTIALS && !process.env.FIREBASE_DATABASE_EMULATOR_HOST) {
@@ -56,6 +58,7 @@ async function main() {
     legacyPresent,
     today: TODAY,
     forecastMin: FORECAST_MIN,
+    maxDataAgeDays: Number.isFinite(MAX_DATA_AGE_DAYS) && MAX_DATA_AGE_DAYS >= 0 ? MAX_DATA_AGE_DAYS : 3,
     salt: process.env.AUDIT_SALT,
   });
 
@@ -66,5 +69,5 @@ async function main() {
 
 // main() runs ONLY on direct execution — never on import.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((e) => { console.error("AUDIT ERROR:", e && (e.message || e)); process.exit(2); });
+  main().catch((e) => { console.error(formatSafeError(e)); process.exit(2); });
 }
