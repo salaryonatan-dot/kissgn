@@ -8,7 +8,7 @@
  * POST ?action=reset-password   → reset user password (super_owner only)
  * POST ?action=resend-invite    → resend Email invite with new temp password (super_owner only)
  * POST ?action=edit-client      → edit tenant details (super_owner only)
- * POST ?action=send-user-invite → send email invite to a new user (any owner)
+ * POST ?action=send-user-invite → REMOVED (security): unauthorized branded-email abuse; use create-user / resend-invite
  * POST ?action=create-user      → create a sub-user (owner only, atomic RTDB + rollback)
  * POST ?action=complete-profile  → first-login: update own email + password (authenticated user)
  * POST ?action=delete-user      → delete a user + Firebase Auth (owner only)
@@ -88,7 +88,16 @@ export default async function handler(req, res) {
   if (action === "delete-client")     return handleDeleteClient(req, res);
   if (action === "reset-password")    return handleResetPassword(req, res);
   if (action === "resend-invite")     return handleResendInvite(req, res);
-  if (action === "send-user-invite")  return handleSendUserInvite(req, res);
+  // BLOCKER-2 (security): `send-user-invite` is REMOVED. It gated on requireAuth only
+  // and let any authenticated user send Marjin-branded email to a caller-supplied
+  // recipient with caller-supplied credential text and link (spam / phishing / abuse).
+  // No frontend flow uses it; legitimate invites go through create-user and the
+  // super_owner-gated, server-derived resend-invite. Fail closed with a stable
+  // unsupported-action response BEFORE any auth lookup or email helper — no delivery.
+  if (action === "send-user-invite") {
+    res.status(410).json({ error: "unsupported_action", action: "send-user-invite" });
+    return;
+  }
   if (action === "create-user")       return handleCreateUser(req, res);
   if (action === "complete-profile")   return handleCompleteProfile(req, res);
   if (action === "delete-user")       return handleDeleteUser(req, res);
@@ -1548,41 +1557,6 @@ async function handleUpdateUser(req, res) {
     allowedBizIdsChanged: allowedBizIdsActuallyChanged,
     ...(selfHeal ? { selfHealed: true } : {}),
   });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// POST ?action=send-user-invite — send email invite to a new user (any owner)
-// ─────────────────────────────────────────────────────────────────────────────
-async function handleSendUserInvite(req, res) {
-  if (req.method !== "POST") {
-    res.status(405).json({ error: "Method not allowed" }); return;
-  }
-
-  let claims;
-  try { claims = await requireAuth(req); }
-  catch (e) {
-    res.status(401).json({ error: "unauthorized" }); return;
-  }
-
-  const { email, username, tempPass, bizName, inviteLink } = req.body || {};
-
-  if (!email || !username || !tempPass) {
-    res.status(400).json({ error: "missing required fields" }); return;
-  }
-
-  try {
-    const html = buildInviteEmailHtml(
-      bizName || "Marjin",
-      username,
-      tempPass,
-      inviteLink || APP_BASE_URL
-    );
-    await sendEmail(email, `הזמנה ל-${bizName || "Marjin"} — פרטי כניסה`, html);
-    res.status(200).json({ ok: true, emailSent: true });
-  } catch(e) {
-    console.error("[send-user-invite] email failed:", e.message);
-    res.status(200).json({ ok: true, emailSent: false, error: e.message });
-  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
