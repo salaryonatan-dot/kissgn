@@ -16,8 +16,14 @@ const indexHtml = readFileSync(join(REPO, "index.html"), "utf8");
 const landingHtml = readFileSync(join(REPO, "landing.html"), "utf8");
 
 let pass = 0, fail = 0;
-const T = (n, fn) => { try { fn(); console.log("PASS " + n); pass++; }
+// Async-aware runner: awaits the callback so a returned promise, async body,
+// thrown error, or rejected promise is captured as a real PASS/FAIL — a test can
+// never report success before its assertions finish.
+const T = async (n, fn) => { try { await fn(); console.log("PASS " + n); pass++; }
   catch (e) { console.log("FAIL " + n + " — " + (e && e.message)); fail++; } };
+// Any promise rejection that still escapes a test fails the whole run.
+process.on("unhandledRejection", (e) => { console.log("FAIL unhandledRejection — " + (e && e.message)); fail++; process.exitCode = 1; });
+process.on("uncaughtException", (e) => { console.log("FAIL uncaughtException — " + (e && e.message)); fail++; process.exitCode = 1; });
 
 function mkRes() {
   return { statusCode: null, body: null, ended: false, headers: {},
@@ -37,9 +43,8 @@ const mod = await import(join(REPO, "api", "admin.js"));
 const handler = mod.default;
 
 // ── Behavioral: dispatch-level fail-closed (offline) ────────────────────────
-await (async () => {
   // 1. Unauthenticated request (no Authorization header) is rejected, not delivered.
-  T("1: unauthenticated send-user-invite → 410 unsupported_action, no delivery", async () => {
+  await T("1: unauthenticated send-user-invite → 410 unsupported_action, no delivery", async () => {
     const res = mkRes();
     await handler(mkReq({ email: "a@evil.test", username: "u", tempPass: "SECRET" }), res);
     assert.strictEqual(res.statusCode, 410);
@@ -48,7 +53,7 @@ await (async () => {
     assert.ok(!res.body.ok, "must not return ok:true");
   });
   // 2. Ordinary 'authenticated-looking' request with a bearer header → same 410.
-  T("2: authenticated-looking request → identical 410 (no privileged path)", async () => {
+  await T("2: authenticated-looking request → identical 410 (no privileged path)", async () => {
     const res = mkRes();
     await handler(mkReq({ email: "a@evil.test", username: "u", tempPass: "SECRET" },
       { authorization: "Bearer fake.jwt.token" }), res);
@@ -56,7 +61,7 @@ await (async () => {
     assert.strictEqual(res.body.error, "unsupported_action");
   });
   // 3. Caller-supplied arbitrary recipient / credential / link / branded body cannot be delivered.
-  T("3: attacker-controlled recipient/tempPass/inviteLink/bizName never delivered", async () => {
+  await T("3: attacker-controlled recipient/tempPass/inviteLink/bizName never delivered", async () => {
     const res = mkRes();
     await handler(mkReq({ email: "victim@target.test", username: "victim",
       tempPass: "PLANTED-CREDENTIAL", bizName: "<b>Spoofed Bank</b>",
@@ -69,42 +74,41 @@ await (async () => {
       "response must not echo attacker-supplied sensitive fields");
   });
   // 4. Cross-tenant/scope body is irrelevant — still fails closed.
-  T("4: cross-tenant/extra scope fields → still 410", async () => {
+  await T("4: cross-tenant/extra scope fields → still 410", async () => {
     const res = mkRes();
     await handler(mkReq({ email: "a@evil.test", username: "u", tempPass: "x",
       tenantId: "other-tenant", bizId: "other-biz" }), res);
     assert.strictEqual(res.statusCode, 410);
     assert.strictEqual(res.body.error, "unsupported_action");
   });
-})();
 
 // ── Source guarantees ───────────────────────────────────────────────────────
-T("5: handleSendUserInvite function is removed entirely", () => {
+await T("5: handleSendUserInvite function is removed entirely", () => {
   assert.ok(!/function\s+handleSendUserInvite/.test(adminSrc), "handler must be gone");
 });
-T("6: send-user-invite no longer routes to any handler", () => {
+await T("6: send-user-invite no longer routes to any handler", () => {
   assert.ok(!/action === "send-user-invite"\)\s*return handle/.test(adminSrc));
   assert.ok(/action === "send-user-invite"[\s\S]{0,200}unsupported_action/.test(adminSrc),
     "must fail closed with unsupported_action");
 });
-T("7: the fail-closed branch returns before any auth/email call", () => {
+await T("7: the fail-closed branch returns before any auth/email call", () => {
   const i = adminSrc.indexOf('action === "send-user-invite"');
   const branch = adminSrc.slice(i, i + 260);
   assert.ok(/return;/.test(branch));
   assert.ok(!/sendEmail|requireAuth|buildInviteEmailHtml/.test(branch),
     "disabled branch must not reach auth or email helpers");
 });
-T("8: no frontend/runtime caller references send-user-invite", () => {
+await T("8: no frontend/runtime caller references send-user-invite", () => {
   assert.ok(!/send-user-invite/.test(indexHtml));
   assert.ok(!/send-user-invite/.test(landingHtml));
 });
-T("9: legitimate resend-invite remains super_owner-gated (unchanged)", () => {
+await T("9: legitimate resend-invite remains super_owner-gated (unchanged)", () => {
   assert.ok(/function handleResendInvite/.test(adminSrc));
   const i = adminSrc.indexOf("function handleResendInvite");
   const body = adminSrc.slice(i, i + 1400);
   assert.ok(/super_owner/.test(body), "resend-invite still requires super_owner");
 });
-T("10: create-user invite flow still present (server-derived)", () => {
+await T("10: create-user invite flow still present (server-derived)", () => {
   assert.ok(/function handleCreateUser/.test(adminSrc));
 });
 

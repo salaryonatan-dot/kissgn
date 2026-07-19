@@ -268,7 +268,7 @@ function withWar(d, status){ d.operational = { war_day:status }; return d; }
   const supplierFull = withWar(withAlerts(withWeather(day("2026-07-10",5,0,{food:5000,had:true,has_sales:false}), true, 20), true, 30, 2), "partial");
   const b = engine.buildInsights(supplierFull, priorFridays, NOW);
   const t = b.insights.map(i=>i.type);
-  ok("C3.12: supplier-only day emits none of weak_weekday/weather/alert/war_day", 
+  ok("C3.12: supplier-only day emits none of weak_weekday/weather/alert/war_day",
      !t.includes("weak_weekday") && !t.includes("weather_impact") && !t.includes("alert_impact") && !t.includes("war_day_impact"));
 }
 
