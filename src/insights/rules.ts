@@ -157,7 +157,9 @@ export function ruleRevenueSpike(t: AnalyticsDailyInput, history: AnalyticsDaily
 
 // ── 3. weak_weekday ──────────────────────────────────────────────────────────
 export function ruleWeakWeekday(t: AnalyticsDailyInput, history: AnalyticsDailyInput[], now: number): Insight | null {
-  if (!t.revenue?.had_entry || !t.calendar) return null;
+  // P0: guard the TARGET with the canonical eligibility helper — a supplier-only
+  // day (had_entry=true, total=0, has_sales=false) must never yield a -100% weak_weekday.
+  if (!isValidRevenueTarget(t) || !t.calendar) return null;
   const sw = sameWeekdayAvg(history, t.calendar.dow);
   if (sw.n < THRESHOLDS.MIN_WEEKDAY_SAMPLES || sw.avg === null) return null;
   const d = deltaPct(t.revenue.total, sw.avg);
@@ -182,7 +184,8 @@ export function ruleWeakWeekday(t: AnalyticsDailyInput, history: AnalyticsDailyI
 
 // ── 4. weather_impact ────────────────────────────────────────────────────────
 export function ruleWeatherImpact(t: AnalyticsDailyInput, history: AnalyticsDailyInput[], now: number): Insight | null {
-  if (!t.revenue?.had_entry || !t.weather || t.weather.is_rain_day !== true) return null;
+  // P0: only a valid real-selling target may produce a revenue-impact insight.
+  if (!isValidRevenueTarget(t) || !t.weather || t.weather.is_rain_day !== true) return null;
   const dry = condRevenueAvg(history, (d) => d.weather?.is_rain_day === false);
   if (dry.n < THRESHOLDS.MIN_CONTEXT_SAMPLES || dry.avg === null) return null;
   const d = deltaPct(t.revenue.total, dry.avg);
@@ -211,7 +214,8 @@ export function ruleWeatherImpact(t: AnalyticsDailyInput, history: AnalyticsDail
 
 // ── 5. alert_impact ──────────────────────────────────────────────────────────
 export function ruleAlertImpact(t: AnalyticsDailyInput, history: AnalyticsDailyInput[], now: number): Insight | null {
-  if (!t.revenue?.had_entry || !t.alerts) return null;
+  // P0: only a valid real-selling target may produce a revenue-impact insight.
+  if (!isValidRevenueTarget(t) || !t.alerts) return null;
   const isAlert = t.alerts.is_alert_day === true || (t.alerts.alert_minutes || 0) > 0;
   if (!isAlert) return null;
   const calm = condRevenueAvg(history, (d) => !!d.alerts && d.alerts.is_alert_day === false);
@@ -241,7 +245,8 @@ export function ruleAlertImpact(t: AnalyticsDailyInput, history: AnalyticsDailyI
 
 // ── 6. war_day_impact ────────────────────────────────────────────────────────
 export function ruleWarDayImpact(t: AnalyticsDailyInput, history: AnalyticsDailyInput[], now: number): Insight | null {
-  if (!t.revenue?.had_entry || !t.operational) return null;
+  // P0: only a valid real-selling target may produce a revenue-impact insight.
+  if (!isValidRevenueTarget(t) || !t.operational) return null;
   const wd = t.operational.war_day;
   if (wd !== "partial" && wd !== "full") return null;
   const regular = condRevenueAvg(history, (d) => d.operational?.war_day === "regular");

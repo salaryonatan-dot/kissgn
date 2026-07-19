@@ -200,6 +200,96 @@ function stubDb(entries){ return { ref:(p)=>({ once: async()=>({ val:()=> p.ends
   ok("C2.7: spike retains date+baseline+samples+weekday", sp.evidence.some(e=>/2026-07-10/.test(e)) && sp.evidence.some(e=>/ממוצע/.test(e)) && sp.evidence.some(e=>/דגימות/.test(e)) && sp.evidence.some(e=>/שישי/.test(e)));
 }
 
+// ---- CHANGE 3: target eligibility for the four context/weekday revenue rules ----
+// weak_weekday / weather_impact / alert_impact / war_day_impact must use the SAME
+// canonical isValidRevenueTarget guard as revenue_drop/spike. A supplier-only day
+// (had_entry=true, total=0, has_sales=false) must produce none of them.
+function withWeather(d, isRain, mm){ d.weather = { is_rain_day:isRain, rain_mm: mm ?? null }; return d; }
+function withAlerts(d, isAlert, minutes, count){ d.alerts = { is_alert_day:isAlert, alert_minutes:minutes??0, alert_count:count??0 }; return d; }
+function withWar(d, status){ d.operational = { war_day:status }; return d; }
+
+// -- weak_weekday --
+{
+  // priorFridays = 3 valid Fridays (avg 14552). Supplier-only Friday target => null.
+  const supplierFri = day("2026-07-10",5,0,{food:5000,had:true,has_sales:false});
+  ok("C3.1: supplier-only day emits NO weak_weekday (was -100%)", rules.ruleWeakWeekday(supplierFri, priorFridays, NOW)===null);
+  // point 2: supplier-only day never enters the same-weekday baseline as zero.
+  const withSupplier = [...priorFridays, day("2026-06-12",5,0,{food:5000,had:true,has_sales:false})];
+  const sw = baselines.sameWeekdayAvg(withSupplier, 5);
+  ok("C3.2: supplier-only day excluded from weekday baseline (n=3, avg 14552)", sw.n===3 && approx(sw.avg,14552));
+  // point 7: a genuinely weak valid Friday still fires.
+  const weakFri = day("2026-07-10",5,8000,{has_sales:true}); // -45% vs 14552
+  const wk = rules.ruleWeakWeekday(weakFri, priorFridays, NOW);
+  ok("C3.3: valid weak Friday still fires weak_weekday", wk && wk.deltaPct < -0.15);
+  // legacy valid (no has_sales, total>0) still fires.
+  ok("C3.4: legacy valid weak Friday (no has_sales) still fires", rules.ruleWeakWeekday(day("2026-07-10",5,8000), priorFridays, NOW)!==null);
+}
+
+// -- weather_impact --
+{
+  const dryHist = ["2026-06-01","2026-06-02","2026-06-03","2026-06-04","2026-06-05"]
+    .map((dt,i)=>withWeather(day(dt,(i%5)+1,10000,{has_sales:true}), false));
+  const supplierRain = withWeather(day("2026-07-10",5,0,{food:5000,had:true,has_sales:false}), true, 20);
+  ok("C3.5: supplier-only rain day emits NO weather_impact", rules.ruleWeatherImpact(supplierRain, dryHist, NOW)===null);
+  const validRain = withWeather(day("2026-07-10",5,7000,{has_sales:true}), true, 20); // -30% vs dry 10000
+  ok("C3.6: valid rain day still fires weather_impact", rules.ruleWeatherImpact(validRain, dryHist, NOW)!==null);
+}
+
+// -- alert_impact --
+{
+  const calmHist = ["2026-06-01","2026-06-02","2026-06-03","2026-06-04","2026-06-05"]
+    .map((dt,i)=>withAlerts(day(dt,(i%5)+1,10000,{has_sales:true}), false, 0, 0));
+  const supplierAlert = withAlerts(day("2026-07-10",5,0,{food:5000,had:true,has_sales:false}), true, 30, 2);
+  ok("C3.7: supplier-only alert day emits NO alert_impact", rules.ruleAlertImpact(supplierAlert, calmHist, NOW)===null);
+  const validAlert = withAlerts(day("2026-07-10",5,8000,{has_sales:true}), true, 30, 2); // -20% vs calm 10000
+  ok("C3.8: valid alert day still fires alert_impact", rules.ruleAlertImpact(validAlert, calmHist, NOW)!==null);
+}
+
+// -- war_day_impact --
+{
+  const regHist = ["2026-06-01","2026-06-02","2026-06-03","2026-06-04","2026-06-05"]
+    .map((dt,i)=>withWar(day(dt,(i%5)+1,10000,{has_sales:true}), "regular"));
+  const supplierWar = withWar(day("2026-07-10",5,0,{food:5000,had:true,has_sales:false}), "partial");
+  ok("C3.9: supplier-only war day emits NO war_day_impact", rules.ruleWarDayImpact(supplierWar, regHist, NOW)===null);
+  const validWar = withWar(day("2026-07-10",5,8000,{has_sales:true}), "partial"); // -20% vs regular 10000
+  ok("C3.10: valid war day still fires war_day_impact", rules.ruleWarDayImpact(validWar, regHist, NOW)!==null);
+}
+
+// -- mixed dataset: only eligible revenue dates are used --
+{
+  const mixed = [ day("2026-06-19",5,14000,{has_sales:true}), day("2026-06-26",5,14552,{has_sales:true}),
+                  day("2026-07-03",5,15104,{has_sales:true}), day("2026-06-12",5,0,{food:9000,had:true,has_sales:false}) ];
+  const sw = baselines.sameWeekdayAvg(mixed, 5);
+  ok("C3.11: mixed dataset uses only eligible revenue dates (n=3)", sw.n===3 && approx(sw.avg,14552));
+}
+
+// -- supplier-only day emits NONE of the four via the full engine --
+{
+  const supplierFull = withWar(withAlerts(withWeather(day("2026-07-10",5,0,{food:5000,had:true,has_sales:false}), true, 20), true, 30, 2), "partial");
+  const b = engine.buildInsights(supplierFull, priorFridays, NOW);
+  const t = b.insights.map(i=>i.type);
+  ok("C3.12: supplier-only day emits none of weak_weekday/weather/alert/war_day", 
+     !t.includes("weak_weekday") && !t.includes("weather_impact") && !t.includes("alert_impact") && !t.includes("war_day_impact"));
+}
+
+// -- point 9: insertion order does not change results --
+{
+  const weakFri = day("2026-07-10",5,8000,{has_sales:true});
+  const ordered = [ day("2026-06-19",5,14000,{has_sales:true}), day("2026-06-26",5,14552,{has_sales:true}), day("2026-07-03",5,15104,{has_sales:true}) ];
+  const shuffled = [ ordered[2], ordered[0], ordered[1] ];
+  const a = engine.buildInsights(weakFri, ordered, NOW).insights.map(i=>i.type).sort();
+  const c = engine.buildInsights(weakFri, shuffled, NOW).insights.map(i=>i.type).sort();
+  ok("C3.13: insertion order does not change the insight set", JSON.stringify(a)===JSON.stringify(c));
+}
+
+// -- point 10: no wall-clock dependency (now only affects timestamps) --
+{
+  const weakFri = day("2026-07-10",5,8000,{has_sales:true});
+  const t1 = engine.buildInsights(weakFri, priorFridays, 1000).insights.map(i=>i.type).sort();
+  const t2 = engine.buildInsights(weakFri, priorFridays, 5_000_000_000_000).insights.map(i=>i.type).sort();
+  ok("C3.14: result independent of wall-clock (now)", JSON.stringify(t1)===JSON.stringify(t2));
+}
+
 console.log("Total: "+(pass+fail)+"  Passed: "+pass+"  Failed: "+fail);
 console.log(results.join("\n"));
 process.exit(fail>0?1:0);
