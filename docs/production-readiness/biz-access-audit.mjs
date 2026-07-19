@@ -21,12 +21,17 @@ import { formatSafeError } from "./lib/redaction.mjs";
 
 const arg = (k, d) => { const i = process.argv.indexOf(k); return i >= 0 ? process.argv[i + 1] : d; };
 
-function assertLocalOutPath(out) {
+export function assertLocalOutPath(out) {
   const abs = resolve(process.cwd(), out);
   const allowed = [resolve(process.cwd(), "docs/production-readiness/output"), "/tmp"];
   if (!allowed.some((p) => abs === p || abs.startsWith(p + "/"))) {
-    console.error(`ERROR: --out must be under docs/production-readiness/output/ or /tmp (got ${abs})`);
-    process.exit(2);
+    // PR-003: never emit the raw or resolved path (home dir, username, repo path).
+    // Throw a stable, generic, path-free error; the CLI catch routes it through
+    // formatSafeError. `abs` stays a local variable and is never interpolated into
+    // any exception, log, stderr, stdout or persisted report.
+    const err = new Error("Output path is outside the allowed local output directory");
+    err.code = "INVALID_OUTPUT_PATH";
+    throw err;
   }
   return abs;
 }

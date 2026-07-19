@@ -2,6 +2,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { classifyBizAccess, parseAppUsers, parseAppBusiness, normalizeAllowedBizIds } from "../lib/biz-access-model.mjs";
+// PR-003 output-path validation: exercise the real CLI helper + subprocess.
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
+import { assertLocalOutPath } from "../biz-access-audit.mjs";
 
 const users = (arr) => ({ _v: JSON.stringify(arr) });      // canonical {_v:"<json array>"}
 const biz = (arr) => ({ _v: JSON.stringify(arr) });
@@ -195,4 +200,41 @@ test("safeguard: proposed grants are additive-only recommendations (no removals)
   assert.equal(r.proposedGrants.length, 1);
   for (const g of r.proposedGrants) { assert.equal(g.grant, true); assert.equal(g.additiveOnly, true); }
   assert.equal(JSON.stringify(r.proposedGrants).includes('"grant":false'), false);
+});
+
+
+// ============================================================================
+// PR-003 (final): invalid --out validation must never disclose the raw/resolved
+// filesystem path (home dir, username, canonical repo path). Uses synthetic paths.
+// ============================================================================
+const SYNTH_OUT = "/synthetic-marker-root-9x7/evil-out.json";
+
+test("PR-003: assertLocalOutPath rejects an out-of-tree path with a generic, path-free error", () => {
+  let threw = null;
+  try { assertLocalOutPath(SYNTH_OUT); } catch (e) { threw = e; }
+  assert.ok(threw, "invalid --out must be rejected");
+  assert.equal(threw.code, "INVALID_OUTPUT_PATH");
+  assert.match(threw.message, /allowed local output directory/);
+  assert.doesNotMatch(threw.message, /synthetic-marker-root-9x7/); // raw supplied path absent
+  assert.doesNotMatch(threw.message, /\//);                        // no path fragment at all
+});
+
+test("PR-003: assertLocalOutPath still accepts a valid path in the allowed output area", () => {
+  const ok = assertLocalOutPath("/tmp/synthetic-dry-run.json");
+  assert.equal(ok, "/tmp/synthetic-dry-run.json"); // validation not weakened
+});
+
+test("PR-003: CLI invalid --out reports failure with no supplied/resolved path leak, no output file, no network", () => {
+  const repoRoot = fileURLToPath(new URL("../../../", import.meta.url)).replace(/\/$/, "");
+  const r = spawnSync(process.execPath,
+    ["docs/production-readiness/biz-access-audit.mjs", "--tenant", "synthetic-tenant", "--out", SYNTH_OUT],
+    { cwd: repoRoot, encoding: "utf8", timeout: 20000,
+      env: { ...process.env, GOOGLE_APPLICATION_CREDENTIALS: "/tmp/synthetic-sa-does-not-exist.json" } });
+  const out = (r.stdout || "") + (r.stderr || "");
+  assert.notEqual(r.status, 0, "invalid --out must exit non-zero");
+  assert.match(out, /INVALID_OUTPUT_PATH/);              // stable safe marker present
+  assert.doesNotMatch(out, /synthetic-marker-root-9x7/); // raw supplied path absent
+  assert.doesNotMatch(out, /\/Users\//);               // no home-directory fragment
+  assert.ok(!out.includes(repoRoot), "resolved repository path must be absent");
+  assert.ok(!existsSync(SYNTH_OUT), "no output file may be created");
 });
