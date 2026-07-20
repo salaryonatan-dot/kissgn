@@ -10,7 +10,7 @@ import type {
 import { pickTopInsights } from "./prioritization.js";
 import { getMemoryEntries } from "./memoryManager.js";
 import { getRecentInsights } from "../../repositories/proactive/insightsRepo.js";
-import { todayIso } from "../../utils/dates.js";
+import { todayIso, daysAgoIso } from "../../utils/dates.js";
 import { logger } from "../../utils/logging.js";
 
 // --- Constants ---

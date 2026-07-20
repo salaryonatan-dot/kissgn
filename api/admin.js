@@ -8,7 +8,7 @@
  * POST ?action=reset-password   → reset user password (super_owner only)
  * POST ?action=resend-invite    → resend Email invite with new temp password (super_owner only)
  * POST ?action=edit-client      → edit tenant details (super_owner only)
- * POST ?action=send-user-invite → send email invite to a new user (any owner)
+ * POST ?action=send-user-invite → REMOVED (security): unauthorized branded-email abuse; use create-user / resend-invite
  * POST ?action=create-user      → create a sub-user (owner only, atomic RTDB + rollback)
  * POST ?action=complete-profile  → first-login: update own email + password (authenticated user)
  * POST ?action=delete-user      → delete a user + Firebase Auth (owner only)
@@ -18,7 +18,18 @@
 import { requireAuth } from "../lib/verifyToken.js";
 import { requireTenantAccess, isRateLimited,
   getIP, VALID_ROLES } from "../lib/helpers.js";
+import { isImplicitAllRole, normalizeAllowedBizIds, bizAccessSetUpdates,
+  bizAccessDiffUpdates, bizAccessClearUpdates, bizIdsForUid, parseAppUsers } from "../lib/bizAccess.js";
+import { ownerGuardPath, isOwnerAffecting, isOwnerLevel, ownersFromRolesMap,
+  opSignatureV2, guardPrepare, guardMirrorFields, guardCompensateClearPending } from "../lib/ownerGuard.js";
+import { randomUUID } from "node:crypto";
 import { getAdminDb, getAdminAuth } from "../lib/adminSdk.js";
+import { isValidBusinessDate, isValidOperationId, isValidExpectedRevision,
+  validateSetInput, requestHash as eeRequestHash, safeStateView,
+  dateRangeDays, MAX_LIST_RANGE_DAYS } from "../lib/entryExceptions.js";
+import { runEntryExceptionTxn, listEntryExceptions } from "../lib/repositories/entryExceptionsRepo.js";
+import { readBizDoc, writeBizDoc, readBizDailyRange, getBizDocWithToken, setBizDocGuarded } from "../lib/repositories/bizDataRepo.js";
+import { canonicalizeChecklistDocument } from "../lib/checklistVersion.js";
 import { sendEmail } from "../lib/sendEmail.js";
 
 const RTDB_FORBIDDEN = /[.#$\[\]\/]/;
@@ -77,12 +88,33 @@ export default async function handler(req, res) {
   if (action === "delete-client")     return handleDeleteClient(req, res);
   if (action === "reset-password")    return handleResetPassword(req, res);
   if (action === "resend-invite")     return handleResendInvite(req, res);
-  if (action === "send-user-invite")  return handleSendUserInvite(req, res);
+  // BLOCKER-2 (security): `send-user-invite` is REMOVED. It gated on requireAuth only
+  // and let any authenticated user send Marjin-branded email to a caller-supplied
+  // recipient with caller-supplied credential text and link (spam / phishing / abuse).
+  // No frontend flow uses it; legitimate invites go through create-user and the
+  // super_owner-gated, server-derived resend-invite. Fail closed with a stable
+  // unsupported-action response BEFORE any auth lookup or email helper — no delivery.
+  if (action === "send-user-invite") {
+    res.status(410).json({ error: "unsupported_action", action: "send-user-invite" });
+    return;
+  }
   if (action === "create-user")       return handleCreateUser(req, res);
   if (action === "complete-profile")   return handleCompleteProfile(req, res);
   if (action === "delete-user")       return handleDeleteUser(req, res);
   if (action === "update-user")       return handleUpdateUser(req, res);
   if (action === "roles")             return handleRoles(req, res);
+  if (action === "bootstrap-self")    return handleBootstrapSelf(req, res);
+  if (action === "list-entry-exceptions")  return handleListEntryExceptions(req, res);
+  if (action === "set-entry-exception")    return handleSetEntryException(req, res);
+  if (action === "clear-entry-exception")  return handleClearEntryException(req, res);
+  if (action === "get-checklist-template-items") return handleGetChecklistTemplateItems(req, res);
+  if (action === "set-checklist-template-items") return handleSetChecklistTemplateItems(req, res);
+  if (action === "get-checklist-run")            return handleGetChecklistRun(req, res);
+  if (action === "set-checklist-run")            return handleSetChecklistRun(req, res);
+  if (action === "get-checklist-simple-run")     return handleGetChecklistSimpleRun(req, res);
+  if (action === "set-checklist-simple-run")     return handleSetChecklistSimpleRun(req, res);
+  if (action === "get-analytics-daily")          return handleGetAnalyticsDaily(req, res);
+  if (action === "get-insights-daily")           return handleGetInsightsDaily(req, res);
   res.status(400).json({ error: "missing or invalid action" });
 }
 
@@ -720,7 +752,7 @@ async function handleCreateUser(req, res) {
   }
 
   // ── Phase 1: Validate input ───────────────────────────────────────────────
-  const { email: rawEmail, username: rawUsername, name, phone, role } = req.body || {};
+  const { email: rawEmail, username: rawUsername, name, phone, role, allowedBizIds } = req.body || {};
 
   if (!rawEmail?.trim() || !rawUsername?.trim() || !role) {
     res.status(400).json({ error: "שדות חובה: email, username, role" }); return;
@@ -744,6 +776,22 @@ async function handleCreateUser(req, res) {
   // Minimal email format check
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(safeEmail)) {
     res.status(400).json({ error: "כתובת אימייל לא תקינה" }); return;
+  }
+
+  // Path-character validation for tenantId (fail closed before any write/Auth).
+  if (RTDB_FORBIDDEN.test(tenantId)) {
+    res.status(400).json({ error: "invalid characters in tenantId" }); return;
+  }
+
+  // Validate allowedBizIds BEFORE creating the Auth user (fail closed — never
+  //   leave an orphan Auth account on malformed scope). create-user only creates
+  //   scoped roles, so an array (possibly empty) is expected; null/undefined ⇒ no scope.
+  let createBiz = [];
+  if (Array.isArray(allowedBizIds)) {
+    try { createBiz = normalizeAllowedBizIds(allowedBizIds); }
+    catch (be) { res.status(be?.status || 400).json({ error: be?.msg || "invalid allowedBizIds" }); return; }
+  } else if (allowedBizIds !== undefined && allowedBizIds !== null) {
+    res.status(400).json({ error: "invalid allowedBizIds" }); return;
   }
 
   // ── Phase 2: Create Firebase Auth user ────────────────────────────────────
@@ -779,6 +827,7 @@ async function handleCreateUser(req, res) {
     email:     safeEmail,
     phone:     phone?.trim() || "",
     role,
+    allowedBizIds: createBiz,
     createdAt: now,
     createdBy: claims.uid,
   };
@@ -786,6 +835,36 @@ async function handleCreateUser(req, res) {
   // Lookup indexes (needed for cross-browser login discovery)
   updates[`tenants/${tenantId}/lookup/${safeUsername}`] = { email: safeEmail, firebaseUid };
   updates[`username_index/${safeUsername}`] = { tenantId, email: safeEmail };
+
+  // app/users — server-authoritative append so app/users, users/{uid} and
+  //   biz_access are persisted in ONE atomic flow (no client/server divergence).
+  //   A malformed existing blob stops the create rather than guessing.
+  let appUsersList;
+  try {
+    const appUsersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
+    appUsersList = parseAppUsers(appUsersSnap.val());
+  } catch (be) {
+    try { await auth.deleteUser(firebaseUid); } catch (_) {}
+    res.status(500).json({ error: "רשימת המשתמשים פגומה — פנה לתמיכה" }); return;
+  }
+  appUsersList.push({
+    id: now,
+    name: name?.trim() || safeUsername,
+    username: safeUsername,
+    email: safeEmail,
+    phone: phone?.trim() || "",
+    role,
+    firebaseUid,
+    allowedBizIds: createBiz,
+    mustCompleteProfile: true,
+  });
+  updates[`tenants/${tenantId}/app/users`] = { _v: JSON.stringify(appUsersList) };
+
+  // biz_access — server-managed per-business authorization index. Scope was
+  //   validated ABOVE (before Auth creation); clients never write biz_access.
+  if (!isImplicitAllRole(role)) {
+    Object.assign(updates, bizAccessSetUpdates(tenantId, firebaseUid, createBiz));
+  }
 
   try {
     await db.ref().update(updates);
@@ -902,6 +981,11 @@ async function handleDeleteUser(req, res) {
     console.error(`[delete-user][debug] missing fields — tenantId=${tenantId}, firebaseUid=${firebaseUid}`);
     res.status(400).json({ error: "missing tenantId or firebaseUid" }); return;
   }
+  if (typeof tenantId !== "string" || typeof firebaseUid !== "string" ||
+      tenantId.length > 128 || firebaseUid.length > 128 ||
+      RTDB_FORBIDDEN.test(tenantId) || RTDB_FORBIDDEN.test(firebaseUid)) {
+    res.status(400).json({ error: "invalid tenantId or firebaseUid" }); return;
+  }
 
   // Verify caller is owner/super_owner in this tenant
   const callerRole = await db.ref(`tenants/${tenantId}/roles/${claims.uid}`).once("value");
@@ -915,46 +999,95 @@ async function handleDeleteUser(req, res) {
     res.status(400).json({ error: "לא ניתן למחוק את עצמך" }); return;
   }
 
-  // ── Phase 1: Delete Firebase Auth user FIRST (frees up the email) ─────
-  console.log(`[delete-user][debug] Phase 1: calling auth.deleteUser(${firebaseUid})`);
+  // Optional idempotency token (owner-affecting deletes should carry one; if absent
+  //   the server generates one — retry safety is documented as P1).
+  const requestId = (req.body && typeof req.body.requestId === "string") ? req.body.requestId : null;
+  if (requestId !== null && (requestId.length > 128 || RTDB_FORBIDDEN.test(requestId))) {
+    res.status(400).json({ error: "invalid requestId" }); return;
+  }
+  const opId = requestId || randomUUID();
+  const now = Date.now();
+
+  // ── Determine the target's TRUSTED current role + owner-affecting status ──
+  let targetRole = null, rolesMap = {};
+  try {
+    const rolesSnap = await db.ref(`tenants/${tenantId}/roles`).once("value");
+    rolesMap = (rolesSnap.val() && typeof rolesSnap.val() === "object") ? rolesSnap.val() : {};
+    targetRole = rolesMap[firebaseUid] ?? null;
+  } catch (e) {
+    res.status(503).json({ error: "role lookup failed" }); return;
+  }
+  const ownerAffecting = isOwnerLevel(targetRole); // owner OR super_owner (canonical helper)
+
+  // ── Build the RTDB removal mirror (roles/members/users/user_tenants/lookup/biz_access + audit). ──
+  const updates = {};
+  updates[`tenants/${tenantId}/members/${firebaseUid}`] = null;
+  updates[`tenants/${tenantId}/roles/${firebaseUid}`] = null;
+  updates[`tenants/${tenantId}/users/${firebaseUid}`] = null;
+  updates[`user_tenants/${firebaseUid}`] = null;
+  if (username) {
+    const uLower = String(username).toLowerCase();
+    updates[`tenants/${tenantId}/lookup/${uLower}`] = null;
+    updates[`username_index/${uLower}`] = null;
+  }
+  // app/users — drop the target entry (keep the human-facing list consistent).
+  try {
+    const appUsersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
+    const list = parseAppUsers(appUsersSnap.val());
+    const filtered = list.filter(u => !(u && u.firebaseUid === firebaseUid));
+    updates[`tenants/${tenantId}/app/users`] = { _v: JSON.stringify(filtered) };
+  } catch (be) {
+    console.error("[delete-user] app/users read failed (malformed?) — aborting to avoid guessing:", be?.message);
+    res.status(500).json({ error: "רשימת המשתמשים פגומה — פנה לתמיכה" }); return;
+  }
+  try {
+    const baTreeSnap = await db.ref(`tenants/${tenantId}/biz_access`).once("value");
+    Object.assign(updates, bizAccessClearUpdates(tenantId, firebaseUid, bizIdsForUid(baTreeSnap.val(), firebaseUid)));
+  } catch (be) { console.error("[delete-user] biz_access clear read failed:", be?.message); }
+  const auditKey = ownerAffecting ? opId : db.ref(`tenants/${tenantId}/audit/roles`).push().key;
+  updates[`tenants/${tenantId}/audit/roles/${auditKey}`] = {
+    ts: now, actorUid: claims.uid, targetUid: firebaseUid, role: "DELETED", opId,
+  };
+
+  // ── STEP 1+2: remove RTDB authorization FIRST (owner deletes go through the
+  //   durable guard — last-owner is rejected, guard↔roles stay consistent).
+  //   Firebase Auth is deleted LAST, only after RTDB authorization is gone. ──
+  if (ownerAffecting) {
+    const guardOp = { kind: "delete", targetUid: firebaseUid, prevRole: targetRole, nextRole: null,
+      opId, seedOwnerUids: ownersFromRolesMap(rolesMap), now };
+    const r = await runGuardedOwnerOp(db, tenantId, guardOp, updates);
+    if (!r.ok) { res.status(r.status).json({ error: r.code }); return; }
+    if (r.idempotent) {
+      // RTDB authorization already removed by the first attempt. Ensure the Auth
+      //   account is also gone (idempotent), then report success.
+      try { await auth.deleteUser(firebaseUid); } catch (e) { if (e.code !== "auth/user-not-found") { res.status(200).json({ ok: true, idempotent: true, authDeleted: false, retryableAuthCleanup: true }); return; } }
+      res.status(200).json({ ok: true, idempotent: true, authDeleted: true }); return;
+    }
+  } else {
+    try {
+      await db.ref().update(updates);
+    } catch (e) {
+      console.error("[delete-user] RTDB removal failed:", e?.message);
+      res.status(502).json({ error: "db write failed" }); return;
+    }
+  }
+
+  // ── STEP 3: delete the Firebase Auth user LAST. If this fails, the account
+  //   already has NO tenant role/membership/access (authorization is gone); we
+  //   report a retryable cleanup condition WITHOUT restoring authorization. ──
   try {
     await auth.deleteUser(firebaseUid);
-    console.log(`[delete-user][debug] auth.deleteUser SUCCEEDED for ${firebaseUid}`);
-  } catch(e) {
-    console.error(`[delete-user] auth.deleteUser FAILED for ${firebaseUid}:`, e.message, e.code);
-    console.error(`[delete-user][debug] Full auth delete error:`, e.stack || e);
-    res.status(500).json({ error: "מחיקת חשבון המשתמש נכשלה — האימייל עדיין תפוס" });
-    return;
-  }
-
-  // ── Phase 2: Clean up RTDB (only after Auth deletion succeeded) ─────
-  try {
-    const updates = {};
-
-    // Tenant references
-    updates[`tenants/${tenantId}/members/${firebaseUid}`] = null;
-    updates[`tenants/${tenantId}/roles/${firebaseUid}`] = null;
-    updates[`tenants/${tenantId}/users/${firebaseUid}`] = null;
-    updates[`user_tenants/${firebaseUid}`] = null;
-
-    // Username lookup/index
-    if (username) {
-      const uLower = username.toLowerCase();
-      updates[`tenants/${tenantId}/lookup/${uLower}`] = null;
-      updates[`username_index/${uLower}`] = null;
+  } catch (e) {
+    if (e.code === "auth/user-not-found") {
+      res.status(200).json({ ok: true, authDeleted: true }); return; // already gone — treat as success
     }
-
-    console.log(`[delete-user][debug] Phase 2: RTDB paths to null:`, Object.keys(updates));
-    await db.ref().update(updates);
-
-    console.log(`[delete-user] deleted user ${firebaseUid} (username=${username}) from tenant ${tenantId}`);
-    res.status(200).json({ ok: true, authDeleted: true, debug: { firebaseUidReceived: firebaseUid, tenantIdReceived: tenantId } });
-
-  } catch(e) {
-    // Auth user is already deleted but RTDB cleanup failed — log for manual repair
-    console.error(`[delete-user] RTDB cleanup FAILED (auth already deleted) for ${firebaseUid}:`, e.message);
-    res.status(500).json({ error: "החשבון נמחק אך ניקוי הנתונים נכשל — יש לפנות לתמיכה" });
+    console.error(`[delete-user] auth.deleteUser failed AFTER RTDB removal for ${firebaseUid}:`, e.message, e.code);
+    res.status(500).json({ ok: false, authDeleted: false, retryableAuthCleanup: true,
+      error: "הרשאות המשתמש הוסרו אך מחיקת חשבון ההתחברות נכשלה — נדרש ניקוי חוזר" }); return;
   }
+
+  console.log(`[delete-user] deleted user ${firebaseUid} (username=${username}) from tenant ${tenantId}`);
+  res.status(200).json({ ok: true, authDeleted: true, opId });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -990,6 +1123,11 @@ async function handleUpdateUser(req, res) {
 
   if (!tenantId || !firebaseUid) {
     res.status(400).json({ error: "missing tenantId or firebaseUid" }); return;
+  }
+  if (typeof tenantId !== "string" || typeof firebaseUid !== "string" ||
+      tenantId.length > 128 || firebaseUid.length > 128 ||
+      RTDB_FORBIDDEN.test(tenantId) || RTDB_FORBIDDEN.test(firebaseUid)) {
+    res.status(400).json({ error: "invalid tenantId or firebaseUid" }); return;
   }
 
   const db   = getAdminDb();
@@ -1107,6 +1245,13 @@ async function handleUpdateUser(req, res) {
         error: `תפקיד לא חוקי — ערכים מותרים: ${CREATE_USER_ALLOWED_ROLES.join(", ")}`
       });
       return;
+    }
+    // Owner-affecting role changes (e.g. downgrading an existing owner) must NOT
+    //   bypass the durable owner guard. update-user cannot set owner (not in
+    //   CREATE_USER_ALLOWED_ROLES); the only owner-affecting case is downgrading
+    //   a current owner — route those through the guarded roles endpoint.
+    if (isOwnerAffecting(currentUser.role, role)) {
+      res.status(409).json({ error: "owner_role_change_requires_roles_endpoint" }); return;
     }
     changedFields.role = role;
   }
@@ -1354,6 +1499,42 @@ async function handleUpdateUser(req, res) {
     res.status(500).json({ error: "שגיאה בעיבוד רשימת המשתמשים — פנה לתמיכה" }); return;
   }
 
+  // ── biz_access mirror — server-managed per-business authorization index ──
+  //   Merged into the SAME atomic update batch as app/users so the human-facing
+  //   list and the rule-readable index never diverge on a successful write.
+  //   Clients never write biz_access (database.rules.json `.write:false`).
+  {
+    const prevRoleBA = currentUser.role;
+    const effectiveRoleBA = changedFields.role || currentUser.role;
+    try {
+      if (isImplicitAllRole(effectiveRoleBA)) {
+        // owner/super_owner ⇒ implicit ALL-business; clear any lingering scoped entries.
+        const treeSnap = await db.ref(`tenants/${tenantId}/biz_access`).once("value");
+        Object.assign(updates, bizAccessClearUpdates(tenantId, firebaseUid, bizIdsForUid(treeSnap.val(), firebaseUid)));
+      } else {
+        const downgradeFromImplicit = isImplicitAllRole(prevRoleBA);
+        if (allowedBizIdsResolved === undefined) {
+          if (downgradeFromImplicit) {
+            res.status(400).json({ error: "יש להגדיר הרשאות עסק בעת שינוי לתפקיד מוגבל" }); return;
+          }
+          // no allowedBizIds change requested ⇒ leave biz_access untouched
+        } else {
+          const nextBiz = normalizeAllowedBizIds(allowedBizIdsResolved);
+          if (downgradeFromImplicit) {
+            Object.assign(updates, bizAccessSetUpdates(tenantId, firebaseUid, nextBiz));
+          } else {
+            const prevBiz = Array.isArray(currentUser.allowedBizIds) ? normalizeAllowedBizIds(currentUser.allowedBizIds) : [];
+            Object.assign(updates, bizAccessDiffUpdates(tenantId, firebaseUid, prevBiz, nextBiz));
+          }
+        }
+      }
+    } catch (be) {
+      if (be && be.status) { res.status(be.status).json({ error: be.msg }); return; }
+      console.error("[update-user] biz_access sync failed:", be?.message);
+      res.status(500).json({ error: "שגיאה בעדכון הרשאות עסק" }); return;
+    }
+  }
+
   try {
     await db.ref().update(updates);
   } catch (e) {
@@ -1379,37 +1560,94 @@ async function handleUpdateUser(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST ?action=send-user-invite — send email invite to a new user (any owner)
+// POST ?action=bootstrap-self — self-service first-owner bootstrap (Admin SDK).
+//   Writes the canonical roles/{uid}=super_owner + members/{uid}=true so that
+//   `roles` can be fully server-managed (clients no longer write roles directly).
+//   Only permitted on an UNINITIALIZED tenant (no existing roles) — equivalent to
+//   the old `!data.exists()` bootstrap rule, but enforced server-side and no
+//   weaker. Also seeds the owner guard so the first principal is authoritative.
 // ─────────────────────────────────────────────────────────────────────────────
-async function handleSendUserInvite(req, res) {
-  if (req.method !== "POST") {
-    res.status(405).json({ error: "Method not allowed" }); return;
-  }
-
+async function handleBootstrapSelf(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
   let claims;
   try { claims = await requireAuth(req); }
-  catch (e) {
-    res.status(401).json({ error: "unauthorized" }); return;
+  catch { res.status(401).json({ error: "unauthorized" }); return; }
+
+  const { tenantId } = req.body || {};
+  if (!tenantId || typeof tenantId !== "string" || tenantId.length > 128 || RTDB_FORBIDDEN.test(tenantId)) {
+    res.status(400).json({ error: "invalid tenantId" }); return;
   }
-
-  const { email, username, tempPass, bizName, inviteLink } = req.body || {};
-
-  if (!email || !username || !tempPass) {
-    res.status(400).json({ error: "missing required fields" }); return;
-  }
-
+  const db = getAdminDb();
   try {
-    const html = buildInviteEmailHtml(
-      bizName || "Marjin",
-      username,
-      tempPass,
-      inviteLink || APP_BASE_URL
-    );
-    await sendEmail(email, `הזמנה ל-${bizName || "Marjin"} — פרטי כניסה`, html);
-    res.status(200).json({ ok: true, emailSent: true });
-  } catch(e) {
-    console.error("[send-user-invite] email failed:", e.message);
-    res.status(200).json({ ok: true, emailSent: false, error: e.message });
+    const rolesSnap = await db.ref(`tenants/${tenantId}/roles`).once("value");
+    if (rolesSnap.exists() && rolesSnap.hasChildren()) {
+      res.status(409).json({ error: "tenant_already_initialized" }); return; // cannot claim an initialized tenant
+    }
+  } catch (e) {
+    console.error("[bootstrap-self] roles check failed:", e?.message);
+    res.status(503).json({ error: "bootstrap check failed" }); return;
+  }
+
+  const now = Date.now();
+  const uid = claims.uid;
+  const updates = {};
+  updates[`tenants/${tenantId}/roles/${uid}`]   = "super_owner";
+  updates[`tenants/${tenantId}/members/${uid}`] = true;
+  updates[`user_tenants/${uid}`] = tenantId;
+  // Seed the owner guard: the bootstrapping super_owner is an owner-level principal.
+  updates[`tenants/${tenantId}/access_meta/owner_guard`] = {
+    version: 1, ownerUids: { [uid]: true }, updatedAt: now, lastOpId: null, ops: {}, pending: null,
+  };
+  try { await db.ref().update(updates); }
+  catch (e) { console.error("[bootstrap-self] write failed:", e?.message); res.status(500).json({ error: "bootstrap failed" }); return; }
+
+  res.status(200).json({ ok: true, tenantId, role: "super_owner" });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared durable owner-operation runner (used by handleRoles + handleDeleteUser).
+//   PREPARE (transaction) → MIRROR (ONE atomic root update incl. guard finalize)
+//   → COMPENSATE on failure. Returns { ok, status, code, idempotent }.
+//   A crash between PREPARE and MIRROR leaves a durable `prepared` pending that a
+//   retry with the same requestId RESUMES; other owner ops are blocked meanwhile.
+// ─────────────────────────────────────────────────────────────────────────────
+async function runGuardedOwnerOp(db, tenantId, guardOp, baseUpdates) {
+  const gpath = ownerGuardPath(tenantId);
+  guardOp.sig = opSignatureV2(guardOp);
+
+  // ── PREPARE ──
+  let decision = null, code = null;
+  try {
+    const tx = await db.ref(gpath).transaction((cur) => {
+      const r = guardPrepare(cur, guardOp);
+      decision = r.decision; code = r.code || null;
+      return r.decision === "commit" ? r.value : undefined; // commit records prepared; others ABORT
+    }, undefined, false);
+    if (tx.committed) decision = "commit";
+  } catch (e) {
+    console.error("[owner-op] prepare transaction error:", e?.message);
+    return { ok: false, status: 503, code: "owner_guard_unavailable" };
+  }
+  const MAP = { last_owner: 409, stale_version: 409, opId_conflict: 409, owner_op_pending: 423 };
+  if (decision === "reject")     return { ok: false, status: MAP[code] || 409, code };
+  if (decision === "idempotent") return { ok: true, idempotent: true };
+
+  // decision is "commit" or "resume" → we own the prepared pending.
+  const preparedGuard = (await db.ref(gpath).once("value")).val();
+  let mirrorFields;
+  try { mirrorFields = guardMirrorFields(tenantId, guardOp, preparedGuard); }
+  catch (e) { return { ok: false, status: 409, code: "owner_op_pending" }; } // not prepared for us → never report success
+
+  // ── MIRROR: one atomic root update (base mirror + guard finalize together) ──
+  try {
+    await db.ref().update({ ...baseUpdates, ...mirrorFields });
+    return { ok: true };
+  } catch (e) {
+    console.error("[owner-op] mirror write failed:", e?.message);
+    // ── COMPENSATE: clear the prepared pending (ownerUids never advanced). ──
+    try { await db.ref(gpath).transaction((cur) => guardCompensateClearPending(cur, guardOp)); }
+    catch (ce) { console.error("[owner-op] compensation failed — pending remains for reconciliation:", ce?.message); }
+    return { ok: false, status: 502, code: "db_write_failed" };
   }
 }
 
@@ -1463,41 +1701,339 @@ async function handleRoles(req, res) {
 
   const db = getAdminDb();
 
-  if (role !== "owner") {
-    let committed = false, txError = null, txAbortReason = null;
-    try {
-      const result = await db.ref(`tenants/${tenantId}/roles`).transaction(currentRoles => {
-        const roles = currentRoles ?? {};
-        const owners = Object.entries(roles).filter(([, r]) => r === "owner").map(([uid]) => uid);
-        if (owners.length === 1 && owners[0] === targetUid) { txAbortReason = "last-owner"; return undefined; }
-        if (role === null) { const updated = { ...roles }; delete updated[targetUid]; return updated; }
-        return { ...roles, [targetUid]: role };
-      });
-      committed = result.committed;
-    } catch (e) { txError = e; }
+  // Optional idempotency token + optimistic version (both may be absent — see
+  //   the idempotency note in owner-invariant-implementation.md).
+  const requestId = (body && typeof body.requestId === "string") ? body.requestId : null;
+  if (requestId !== null && (requestId.length > 128 || RTDB_FORBIDDEN.test(requestId))) {
+    res.status(400).json({ error: "invalid requestId" }); return;
+  }
+  const expectedVersion = (body && Number.isInteger(body.expectedVersion)) ? body.expectedVersion : undefined;
+  const opId = requestId || randomUUID();
 
-    if (txError) { res.status(503).json({ error: "db transaction failed" }); return; }
-    if (!committed) {
-      res.status(409).json({ error: txAbortReason === "last-owner"
-        ? "cannot remove or downgrade the last owner" : "role update aborted" });
-      return;
+  // ── Prepare the atomic root mirror (roles + members + audit + biz_access +
+  //   app/users). Owner membership is guarded SEPARATELY below via a Firebase
+  //   transaction on tenants/{tid}/access_meta/owner_guard, which makes the
+  //   "at least one owner" invariant concurrency-safe (a plain pre-read of
+  //   `roles` is NOT). A malformed app/users blob stops the change (no guessing).
+  const updates = {};
+  let prevRole, rolesMap, ownerAffecting;
+  const guardOp = { kind: "roles", targetUid, nextRole: role, opId, expectedVersion, now: Date.now() };
+  try {
+    const [rolesSnap, baTreeSnap, appUsersSnap] = await Promise.all([
+      db.ref(`tenants/${tenantId}/roles`).once("value"),
+      db.ref(`tenants/${tenantId}/biz_access`).once("value"),
+      db.ref(`tenants/${tenantId}/app/users`).once("value"),
+    ]);
+    rolesMap = (rolesSnap.val() && typeof rolesSnap.val() === "object") ? rolesSnap.val() : {};
+    prevRole = rolesMap[targetUid];
+    guardOp.prevRole = prevRole;
+    guardOp.seedOwnerUids = ownersFromRolesMap(rolesMap);
+    ownerAffecting = isOwnerAffecting(prevRole, role);
+
+    // biz_access + resolved scope (validated FIRST so an invalid scope fails
+    //   closed BEFORE the owner-guard transaction — nothing to compensate).
+    const existingBiz = bizIdsForUid(baTreeSnap.val(), targetUid);
+    let resolvedScope; // undefined = leave app/users scope as-is; null = implicit-all; array = scoped
+    if (role === null) {
+      Object.assign(updates, bizAccessClearUpdates(tenantId, targetUid, existingBiz));
+    } else if (isImplicitAllRole(role)) {
+      Object.assign(updates, bizAccessClearUpdates(tenantId, targetUid, existingBiz));
+      resolvedScope = null;
+    } else if (isImplicitAllRole(prevRole)) {
+      let nextBiz;
+      try { nextBiz = normalizeAllowedBizIds(body.allowedBizIds); }
+      catch { res.status(400).json({ error: "יש להגדיר הרשאות עסק בעת הורדת תפקיד" }); return; }
+      if (nextBiz.length < 1) { res.status(400).json({ error: "יש להגדיר לפחות עסק אחד בעת הורדת תפקיד" }); return; }
+      Object.assign(updates, bizAccessDiffUpdates(tenantId, targetUid, existingBiz, nextBiz)); // clears stale, adds new
+      resolvedScope = nextBiz;
+    } else if (body.allowedBizIds !== undefined) {
+      const nextBiz = normalizeAllowedBizIds(body.allowedBizIds);
+      Object.assign(updates, bizAccessDiffUpdates(tenantId, targetUid, existingBiz, nextBiz));
+      resolvedScope = nextBiz;
     }
-  } else {
-    try { await db.ref(`tenants/${tenantId}/roles/${targetUid}`).set(role); }
-    catch (e) { res.status(502).json({ error: "db write failed" }); return; }
+    // scoped → scoped without allowedBizIds ⇒ preserve existing scope (no change).
+
+    // role + membership + audit. Audit key = opId for owner-affecting changes so
+    //   an identical retry overwrites the SAME event (no duplicate audit).
+    updates[`tenants/${tenantId}/roles/${targetUid}`]   = role; // null removes the key
+    updates[`tenants/${tenantId}/members/${targetUid}`] = role === null ? null : true;
+    const auditKey = ownerAffecting ? opId : db.ref(`tenants/${tenantId}/audit/roles`).push().key;
+    updates[`tenants/${tenantId}/audit/roles/${auditKey}`] = {
+      ts: Date.now(), actorUid: claims.uid, targetUid, role: role ?? "REMOVED", opId,
+    };
+
+    // app/users sync — keep the human-facing list consistent with roles + biz_access.
+    const list = parseAppUsers(appUsersSnap.val());
+    const idx = list.findIndex(u => u && u.firebaseUid === targetUid);
+    if (role === null) {
+      if (idx >= 0) list.splice(idx, 1);
+    } else if (idx >= 0) {
+      const merged = { ...list[idx], role };
+      if (resolvedScope !== undefined) merged.allowedBizIds = resolvedScope;
+      list[idx] = merged;
+    }
+    updates[`tenants/${tenantId}/app/users`] = { _v: JSON.stringify(list) };
+  } catch (be) {
+    if (be && be.status) { res.status(be.status).json({ error: be.msg }); return; }
+    console.error("[admin-roles] role change preparation failed:", be?.message);
+    res.status(500).json({ error: "role update failed" }); return;
+  }
+
+  // ── Owner-affecting changes go through the shared durable guard (prepare →
+  //   atomic mirror+finalize → compensate). Non-owner-affecting changes take the
+  //   plain atomic mirror (no guard).
+  if (ownerAffecting) {
+    const r = await runGuardedOwnerOp(db, tenantId, guardOp, updates);
+    if (!r.ok) { res.status(r.status).json({ error: r.code }); return; }
+    res.status(200).json({ ok: true, tenantId, targetUid, role, opId, ...(r.idempotent ? { idempotent: true } : {}) });
+    return;
   }
 
   try {
-    const auditRef = db.ref(`tenants/${tenantId}/audit/roles`).push();
-    await db.ref().update({
-      [`tenants/${tenantId}/members/${targetUid}`]: role === null ? null : true,
-      [`tenants/${tenantId}/audit/roles/${auditRef.key}`]: {
-        ts: Date.now(), actorUid: claims.uid, targetUid, role: role ?? "REMOVED"
-      },
-    });
+    await db.ref().update(updates);
   } catch (e) {
-    console.error("[admin-roles] membership/audit write failed:", e?.message);
+    console.error("[admin-roles] atomic role update failed:", e?.message);
+    res.status(502).json({ error: "db write failed" }); return;
   }
-
-  res.status(200).json({ ok: true, tenantId, targetUid, role });
+  res.status(200).json({ ok: true, tenantId, targetUid, role, opId });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Structured entry exceptions (schema v1) — server-authoritative, biz-scoped.
+//   Reads: viewer+ within authorized business. Writes: manager+ within authorized
+//   business. Business access is fail-closed via the structured biz_access index
+//   (owner/super_owner ⇒ implicit all-biz). user_tenants/user_active_biz grant no
+//   authority. Direct client writes are denied by Rules; Admin SDK bypasses.
+// ─────────────────────────────────────────────────────────────────────────────
+async function requireBizAccess(db, tenantId, bizId, uid, role) {
+  if (isImplicitAllRole(role)) return true; // owner / super_owner ⇒ all businesses
+  const snap = await db.ref(`tenants/${tenantId}/biz_access/${bizId}/${uid}`).once("value");
+  if (snap.val() === true) return true;      // structured, fail-closed
+  throw { status: 403, msg: "business_access_denied" };
+}
+function eeValidIds(tenantId, bizId) {
+  return typeof tenantId === "string" && typeof bizId === "string" &&
+    tenantId.length <= 128 && bizId.length <= 128 &&
+    !RTDB_FORBIDDEN.test(tenantId) && !RTDB_FORBIDDEN.test(bizId);
+}
+
+async function handleListEntryExceptions(req, res) {
+  if (req.method !== "GET") { res.status(405).json({ error: "Method not allowed" }); return; }
+  let claims;
+  try { claims = await requireAuth(req); } catch { res.status(401).json({ error: "unauthorized" }); return; }
+  const tenantId = req.query.tenantId, bizId = req.query.bizId;
+  const fromDate = req.query.fromDate, toDate = req.query.toDate;
+  if (!eeValidIds(tenantId, bizId)) { res.status(400).json({ error: "invalid tenantId or bizId" }); return; }
+  if (!isValidBusinessDate(fromDate)) { res.status(400).json({ error: "invalid_from_date" }); return; }
+  if (!isValidBusinessDate(toDate)) { res.status(400).json({ error: "invalid_to_date" }); return; }
+  const __rangeDays = dateRangeDays(fromDate, toDate);
+  if (__rangeDays < 0) { res.status(400).json({ error: "reversed_range" }); return; }
+  if (__rangeDays > MAX_LIST_RANGE_DAYS) { res.status(400).json({ error: "range_too_large" }); return; }
+  let role;
+  try { role = await requireTenantAccess(claims.uid, tenantId, "viewer"); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "forbidden" }); return; }
+  const db = getAdminDb();
+  try { await requireBizAccess(db, tenantId, bizId, claims.uid, role); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "business_access_denied" }); return; }
+  try {
+    const exceptions = await listEntryExceptions({ tenantId, bizId, fromDate, toDate });
+    res.status(200).json({ ok: true, tenantId, bizId, fromDate, toDate, exceptions });
+  } catch (e) {
+    console.error("[list-entry-exceptions]", e?.message);
+    res.status(500).json({ error: "list_failed" });
+  }
+}
+
+async function eeAuthorizeWrite(req, res) {
+  let claims;
+  try { claims = await requireAuth(req); } catch { res.status(401).json({ error: "unauthorized" }); return null; }
+  let body = req.body; if (typeof body === "string") { try { body = JSON.parse(body); } catch { res.status(400).json({ error: "invalid json" }); return null; } }
+  body = body || {};
+  const { tenantId, bizId, businessDate, expectedRevision, operationId } = body;
+  if (!eeValidIds(tenantId, bizId)) { res.status(400).json({ error: "invalid tenantId or bizId" }); return null; }
+  if (!isValidBusinessDate(businessDate)) { res.status(400).json({ error: "invalid_business_date" }); return null; }
+  if (!isValidOperationId(operationId)) { res.status(400).json({ error: "invalid_operation_id" }); return null; }
+  if (!isValidExpectedRevision(expectedRevision)) { res.status(400).json({ error: "invalid_expected_revision" }); return null; }
+  let role;
+  try { role = await requireTenantAccess(claims.uid, tenantId, "manager"); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "forbidden" }); return null; }
+  const db = getAdminDb();
+  try { await requireBizAccess(db, tenantId, bizId, claims.uid, role); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "business_access_denied" }); return null; }
+  return { claims, role, body, tenantId, bizId, businessDate, expectedRevision, operationId };
+}
+
+function eeRespond(res, outcome) {
+  if (outcome.outcome === "conflict") {
+    const map = { revision_conflict: 409, idempotency_conflict: 409, operation_owner_required: 409, operation_hard_limit_reached: 409, txn_failed: 502 };
+    res.status(map[outcome.code] || 409).json({ ok: false, error: outcome.code });
+    return;
+  }
+  const applied = outcome.outcome === "applied";
+  res.status(200).json({
+    ok: true,
+    exception: safeStateView(outcome.state),
+    revision: outcome.revision,
+    applied,
+    replayed: outcome.outcome === "replayed",
+    rebuildRequired: applied, // rebuild only when a NEW transition was applied (not on replay)
+  });
+}
+
+async function handleSetEntryException(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const ctx = await eeAuthorizeWrite(req, res); if (!ctx) return;
+  let normalized;
+  try { normalized = validateSetInput({ reasonCode: ctx.body.reasonCode, reasonText: ctx.body.reasonText }); }
+  catch (e) { res.status(400).json({ error: e?.code || "invalid_input" }); return; }
+  const cmd = {
+    action: "set", tenantId: ctx.tenantId, bizId: ctx.bizId, businessDate: ctx.businessDate,
+    reasonCode: normalized.reasonCode, reasonText: normalized.reasonText,
+    actorUid: ctx.claims.uid, actorRole: ctx.role,
+    expectedRevision: ctx.expectedRevision, operationId: ctx.operationId, now: Date.now(),
+  };
+  cmd.requestHash = eeRequestHash(cmd);
+  const outcome = await runEntryExceptionTxn(cmd);
+  eeRespond(res, outcome);
+}
+
+async function handleClearEntryException(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const ctx = await eeAuthorizeWrite(req, res); if (!ctx) return;
+  const cmd = {
+    action: "clear", tenantId: ctx.tenantId, bizId: ctx.bizId, businessDate: ctx.businessDate,
+    reasonCode: null, reasonText: null,
+    actorUid: ctx.claims.uid, actorRole: ctx.role,
+    expectedRevision: ctx.expectedRevision, operationId: ctx.operationId, now: Date.now(),
+  };
+  cmd.requestHash = eeRequestHash(cmd);
+  const outcome = await runEntryExceptionTxn(cmd);
+  eeRespond(res, outcome);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Server-mediated PARAMETERIZED business data (checklist_* + analytics/insights).
+//   Rules deny direct client access (bizId can't be extracted from these flat
+//   keys); the Admin SDK is the only reader/writer. Auth + tenant + authoritative
+//   biz_access are enforced; paths are CONSTRUCTED from validated ids only.
+// ─────────────────────────────────────────────────────────────────────────────
+const BIZDATA_MAX_DOC = 200000;
+function bizDataValidTemplateId(id) { return typeof id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(id) && !RTDB_FORBIDDEN.test(id); }
+
+// Shared read auth (GET): viewer+ within an authorized business.
+async function bizDataAuthRead(req, res, tenantId, bizId) {
+  let claims;
+  try { claims = await requireAuth(req); } catch { res.status(401).json({ error: "unauthorized" }); return null; }
+  if (!eeValidIds(tenantId, bizId)) { res.status(400).json({ error: "invalid tenantId or bizId" }); return null; }
+  let role;
+  try { role = await requireTenantAccess(claims.uid, tenantId, "viewer"); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "forbidden" }); return null; }
+  const db = getAdminDb();
+  try { await requireBizAccess(db, tenantId, bizId, claims.uid, role); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "business_access_denied" }); return null; }
+  return { claims, role, db };
+}
+// Shared write auth (POST): minRole ("manager" | "shift_manager") within an authorized business.
+async function bizDataAuthWrite(req, res, minRole) {
+  let claims;
+  try { claims = await requireAuth(req); } catch { res.status(401).json({ error: "unauthorized" }); return null; }
+  let body = req.body; if (typeof body === "string") { try { body = JSON.parse(body); } catch { res.status(400).json({ error: "invalid json" }); return null; } }
+  body = body || {};
+  const { tenantId, bizId } = body;
+  if (!eeValidIds(tenantId, bizId)) { res.status(400).json({ error: "invalid tenantId or bizId" }); return null; }
+  let role;
+  try { role = await requireTenantAccess(claims.uid, tenantId, minRole); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "forbidden" }); return null; }
+  const db = getAdminDb();
+  try { await requireBizAccess(db, tenantId, bizId, claims.uid, role); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "business_access_denied" }); return null; }
+  return { claims, role, db, body, tenantId, bizId };
+}
+function validVersionToken(t) { return typeof t === "string" && /^[a-f0-9]{64}$/.test(t); }
+function bizDataValidDoc(res, doc) {
+  // Checklist docs are OBJECTS (never null for set, never a top-level array).
+  if (doc == null || typeof doc !== "object" || Array.isArray(doc)) { res.status(400).json({ error: "invalid_doc" }); return false; }
+  let str; try { str = JSON.stringify(doc); } catch { res.status(400).json({ error: "invalid_doc" }); return false; } // cyclic
+  if (typeof str !== "string") { res.status(400).json({ error: "invalid_doc" }); return false; }
+  if (Buffer.byteLength(str, "utf8") > BIZDATA_MAX_DOC) { res.status(400).json({ error: "doc_too_large" }); return false; } // UTF-8 bytes
+  try { canonicalizeChecklistDocument(doc); } // rejects cyclic / non-JSON / prototype-pollution keys at any depth
+  catch (e) { res.status(400).json({ error: e && e.code === "forbidden_key" ? "forbidden_key" : "invalid_doc" }); return false; }
+  return true;
+}
+function bizDataConflictOrWrite(res, r, doc) {
+  if (r.conflict) { res.status(409).json({ ok: false, error: "checklist_conflict" }); return; }
+  if (!r.ok) { res.status(500).json({ error: "write_failed" }); return; }
+  res.status(200).json({ ok: true, document: doc, versionToken: r.versionToken });
+}
+
+async function handleGetChecklistTemplateItems(req, res) {
+  if (req.method !== "GET") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const { tenantId, bizId, templateId } = req.query;
+  if (!bizDataValidTemplateId(templateId)) { res.status(400).json({ error: "invalid_template_id" }); return; }
+  const ctx = await bizDataAuthRead(req, res, tenantId, bizId); if (!ctx) return;
+  try { const { document, versionToken } = await getBizDocWithToken(tenantId, bizId, `checklist_template_items:${templateId}`); res.status(200).json({ ok: true, document, versionToken }); }
+  catch (e) { res.status(500).json({ error: "read_failed" }); }
+}
+async function handleSetChecklistTemplateItems(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const ctx = await bizDataAuthWrite(req, res, "manager"); if (!ctx) return;
+  const { templateId, doc, expectedVersionToken } = ctx.body;
+  if (!bizDataValidTemplateId(templateId)) { res.status(400).json({ error: "invalid_template_id" }); return; }
+  if (!validVersionToken(expectedVersionToken)) { res.status(400).json({ error: "invalid_version_token" }); return; }
+  if (!bizDataValidDoc(res, doc)) return;
+  try { bizDataConflictOrWrite(res, await setBizDocGuarded(ctx.tenantId, ctx.bizId, `checklist_template_items:${templateId}`, doc, expectedVersionToken), doc); }
+  catch (e) { res.status(500).json({ error: "write_failed" }); }
+}
+async function handleGetChecklistRun(req, res) {
+  if (req.method !== "GET") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const { tenantId, bizId, businessDate } = req.query;
+  if (!isValidBusinessDate(businessDate)) { res.status(400).json({ error: "invalid_business_date" }); return; }
+  const ctx = await bizDataAuthRead(req, res, tenantId, bizId); if (!ctx) return;
+  try { const { document, versionToken } = await getBizDocWithToken(tenantId, bizId, `checklist_runs:${businessDate}`); res.status(200).json({ ok: true, document, versionToken }); }
+  catch (e) { res.status(500).json({ error: "read_failed" }); }
+}
+async function handleSetChecklistRun(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const ctx = await bizDataAuthWrite(req, res, "shift_manager"); if (!ctx) return;
+  const { businessDate, doc, expectedVersionToken } = ctx.body;
+  if (!isValidBusinessDate(businessDate)) { res.status(400).json({ error: "invalid_business_date" }); return; }
+  if (!validVersionToken(expectedVersionToken)) { res.status(400).json({ error: "invalid_version_token" }); return; }
+  if (!bizDataValidDoc(res, doc)) return;
+  try { bizDataConflictOrWrite(res, await setBizDocGuarded(ctx.tenantId, ctx.bizId, `checklist_runs:${businessDate}`, doc, expectedVersionToken), doc); }
+  catch (e) { res.status(500).json({ error: "write_failed" }); }
+}
+async function handleGetChecklistSimpleRun(req, res) {
+  if (req.method !== "GET") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const { tenantId, bizId, businessDate, templateId } = req.query;
+  if (!isValidBusinessDate(businessDate)) { res.status(400).json({ error: "invalid_business_date" }); return; }
+  if (!bizDataValidTemplateId(templateId)) { res.status(400).json({ error: "invalid_template_id" }); return; }
+  const ctx = await bizDataAuthRead(req, res, tenantId, bizId); if (!ctx) return;
+  try { const { document, versionToken } = await getBizDocWithToken(tenantId, bizId, `checklist_simple_runs:${businessDate}:${templateId}`); res.status(200).json({ ok: true, document, versionToken }); }
+  catch (e) { res.status(500).json({ error: "read_failed" }); }
+}
+async function handleSetChecklistSimpleRun(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const ctx = await bizDataAuthWrite(req, res, "shift_manager"); if (!ctx) return;
+  const { businessDate, templateId, doc, expectedVersionToken } = ctx.body;
+  if (!isValidBusinessDate(businessDate)) { res.status(400).json({ error: "invalid_business_date" }); return; }
+  if (!bizDataValidTemplateId(templateId)) { res.status(400).json({ error: "invalid_template_id" }); return; }
+  if (!validVersionToken(expectedVersionToken)) { res.status(400).json({ error: "invalid_version_token" }); return; }
+  if (!bizDataValidDoc(res, doc)) return;
+  try { bizDataConflictOrWrite(res, await setBizDocGuarded(ctx.tenantId, ctx.bizId, `checklist_simple_runs:${businessDate}:${templateId}`, doc, expectedVersionToken), doc); }
+  catch (e) { res.status(500).json({ error: "write_failed" }); }
+}
+// Derived analytics/insights — bounded date-range READ only (client write is impossible; server/Admin SDK writes them).
+async function bizDailyRangeGet(req, res, kind) {
+  if (req.method !== "GET") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const { tenantId, bizId, fromDate, toDate } = req.query;
+  if (!isValidBusinessDate(fromDate)) { res.status(400).json({ error: "invalid_from_date" }); return; }
+  if (!isValidBusinessDate(toDate)) { res.status(400).json({ error: "invalid_to_date" }); return; }
+  const rd = dateRangeDays(fromDate, toDate);
+  if (rd < 0) { res.status(400).json({ error: "reversed_range" }); return; }
+  if (rd > MAX_LIST_RANGE_DAYS) { res.status(400).json({ error: "range_too_large" }); return; }
+  const ctx = await bizDataAuthRead(req, res, tenantId, bizId); if (!ctx) return;
+  try { res.status(200).json({ ok: true, tenantId, bizId, kind, docs: await readBizDailyRange(tenantId, bizId, kind, fromDate, toDate) }); }
+  catch (e) { console.error(`[get-${kind}-daily]`, e?.message); res.status(500).json({ error: "read_failed" }); }
+}
+async function handleGetAnalyticsDaily(req, res) { return bizDailyRangeGet(req, res, "analytics"); }
+async function handleGetInsightsDaily(req, res) { return bizDailyRangeGet(req, res, "insights"); }

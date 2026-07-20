@@ -21,6 +21,8 @@ export function failSafeResponse(
       text = "אין מספיק היסטוריה כדי לנתח את זה בצורה אמינה";
     } else if (issue.code === "missing_baseline") {
       text = "אין מספיק נתונים היסטוריים להשוואה — צריך עוד כמה שבועות של מידע";
+    } else if (issue.code === "unsupported_hourly") {
+      text = "נתוני מכירות שעתיות (POS) אינם זמינים כרגע — לא ניתן לנתח ביצועים לפי שעה";
     }
   }
 

@@ -81,7 +81,8 @@ export type ValidationCode =
   | "insufficient_sample"
   | "missing_baseline"
   | "wrong_branch_scope"
-  | "wrong_time_range";
+  | "wrong_time_range"
+  | "unsupported_hourly";
 
 export type Severity = "low" | "medium" | "high";
 

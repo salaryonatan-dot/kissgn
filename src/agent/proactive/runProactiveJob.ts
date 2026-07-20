@@ -11,13 +11,13 @@ import { validateData } from "../validation/validateData.js";
 import { selectBaseline } from "../baseline/selectBaseline.js";
 import { scoreConfidence } from "../confidence/scoreConfidence.js";
 import { saveBusinessInsight } from "../memory/saveBusinessInsight.js";
+import { mapProactiveTypeToMemoryType } from "../../../lib/memoryInsightType.js";
 
 // Proactive layer modules — Phase 1 detectors
 import { detectDailyRevenueUnderperformance } from "./detectors/detectDailyRevenueUnderperformance.js";
 import { detectLaborInefficiency } from "./detectors/detectLaborInefficiency.js";
 import { detectWeakDayPattern } from "./detectors/detectWeakDayPattern.js";
 // Phase 2 detectors
-import { detectWeakHourPattern } from "./detectors/detectWeakHourPattern.js";
 import { detectPurchasesWithoutRevenueSupport } from "./detectors/detectPurchasesWithoutRevenueSupport.js";
 import { detectForecastRisk } from "./detectors/detectForecastRisk.js";
 // Dedup, suppression, repo
@@ -122,7 +122,8 @@ export async function runForBiz(
     { name: "labor_inefficiency", fn: () => detectLaborInefficiency(fetched, baseline) },
     { name: "weak_day_pattern", fn: () => detectWeakDayPattern(fetched, baseline) },
     // Phase 2 detectors
-    { name: "weak_hour_pattern", fn: () => detectWeakHourPattern(fetched, baseline) },
+    // weak_hour_pattern RETIRED — no valid per-business hourly POS source
+    // (Foundation Release). See "fix: retire unsupported hourly analytics workflow".
     { name: "purchases_without_revenue", fn: () => detectPurchasesWithoutRevenueSupport(fetched, baseline) },
     { name: "forecast_risk", fn: () => detectForecastRisk(fetched, baseline) },
   ];
@@ -293,15 +294,7 @@ async function processDetectorResult(
  */
 async function writeToAgentMemory(insight: ProactiveInsight): Promise<void> {
   try {
-    const memoryTypeMap: Record<string, string> = {
-      revenue_underperformance: "recurring_anomaly",
-      labor_inefficiency: "labor_inefficiency",
-      weak_day_pattern: "repeated_weak_day",
-      weak_hour_pattern: "repeated_weak_hour",
-      purchases_without_revenue: "purchase_anomaly",
-      forecast_risk: "forecast_risk",
-    };
-    const memoryType = memoryTypeMap[insight.type] || "recurring_anomaly";
+    const memoryType = mapProactiveTypeToMemoryType(insight.type);
 
     await saveBusinessInsight({
       tenantId: insight.tenantId,
@@ -359,8 +352,8 @@ function buildSyntheticContext(tenantId: string, bizId: string, branchId?: strin
 function buildProactivePlan(context: AgentContext): MetricsPlan {
   return {
     intent: "anomaly_detection",  // closest existing intent for baseline selection
-    metrics: ["daily_revenue", "labor_cost", "labor_pct", "hourly_revenue", "purchases", "food_cost"],
-    dimensions: ["date", "day_of_week", "hour"],
+    metrics: ["daily_revenue", "labor_cost", "labor_pct", "supplier_purchases", "food_cost"],
+    dimensions: ["date", "day_of_week"],
     filters: {},
     timeRange: {
       start: daysAgoIso(28),
@@ -490,8 +483,8 @@ function sanitizeFirebaseKey(raw: string): string {
 async function shallowReadKeys(url: string): Promise<string[]> {
   try {
     // Use Firebase Admin credential for REST auth
-    const { getDb } = await import("../../firebase/admin.js");
-    const app = getDb().app;
+    const { getFirebaseAdmin } = await import("../../firebase/admin.js");
+    const app = getFirebaseAdmin();
     const token = await app.options.credential?.getAccessToken();
 
     const authUrl = token

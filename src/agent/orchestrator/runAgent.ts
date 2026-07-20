@@ -11,6 +11,7 @@ import { failSafeResponse } from "../response/failSafeResponse.js";
 import { getRelevantBusinessMemory } from "../memory/getRelevantBusinessMemory.js";
 import { saveBusinessInsight } from "../memory/saveBusinessInsight.js";
 import { logger } from "../../utils/logging.js";
+import { isUnsupportedHourlySalesQuestion } from "../../../lib/analytics/hourlySalesQuestion.js";
 
 export async function runAgent(context: AgentContext): Promise<AgentResponse> {
   const startMs = Date.now();
@@ -19,6 +20,26 @@ export async function runAgent(context: AgentContext): Promise<AgentResponse> {
     // 1. Classify intent
     const intent = classifyIntent(context.userQuestion, context);
     logger.info(`intent=${intent} | question="${context.userQuestion.slice(0, 60)}"`);
+
+    // Hourly SALES / weak-hour-sales questions: POS hourly data is unsupported
+    // this release. Requires BOTH an hourly/time-of-day intent AND a sales/POS
+    // intent, so ordinary labor/payroll/opening-hours questions are NOT caught.
+    // Deterministic (no LLM), no fabrication, no daily-aggregate fallback, before
+    // any planner/analytics/LLM/database/external call. MUST run BEFORE the
+    // generic unknown_or_insufficient return, otherwise recognized hourly-sales
+    // questions whose general classifier is unknown (e.g. "transactions by hour",
+    // "tickets per hour", "באיזו שעה יש הכי מעט עסקאות") never reach this path.
+    if (isUnsupportedHourlySalesQuestion(context.userQuestion)) {
+      logger.info("hourly-sales question — unsupported data source; returning deterministic response");
+      return failSafeResponse(intent, {
+        ok: false,
+        completenessScore: 0,
+        freshnessScore: 0,
+        consistencyScore: 0,
+        sampleAdequacyScore: 0,
+        issues: [{ code: "unsupported_hourly", severity: "high", message: "hourly POS data is not available" }],
+      }, []);
+    }
 
     if (intent === "unknown_or_insufficient") {
       return failSafeResponse(intent, {

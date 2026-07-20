@@ -8,10 +8,6 @@ export function analyticsRef(tenantId: string) {
   return getDb().ref(`tenants/${tenantId}/analytics`);
 }
 
-export function dailyMetricsRef(tenantId: string) {
-  return getDb().ref(`tenants/${tenantId}/analytics/daily`);
-}
-
 export function hourlyMetricsRef(tenantId: string) {
   return getDb().ref(`tenants/${tenantId}/analytics/hourly`);
 }

@@ -17,8 +17,8 @@ import {
   deltaPct,
   round,
   sameWeekdayAvg,
+  sameWeekdayRecentAvg,
   trailingRatioAvg,
-  trailingRevenueAvg,
 } from "./baselines.js";
 
 // ── Tunable thresholds (documented; deterministic) ───────────────────────────
@@ -26,6 +26,8 @@ export const THRESHOLDS = {
   MIN_TREND_SAMPLES: 3, // min valid days for a trailing-average rule
   MIN_WEEKDAY_SAMPLES: 3, // min same-weekday valid days
   MIN_CONTEXT_SAMPLES: 5, // min baseline days for weather/alert/war/ratio rules
+  SAMEDOW_WINDOW: 4, // P0: compare a day only to its last N same-weekday days
+  MIN_SAMEDOW_SAMPLES: 3, // P0: need >=3 valid same-weekday samples, else suppress
   DROP_WARN: -0.15,
   DROP_CRIT: -0.3,
   SPIKE_FIRE: 0.2,
@@ -40,6 +42,8 @@ export const THRESHOLDS = {
 const ILS = (n: number) => "₪" + Math.round(n).toLocaleString("en-US");
 const PCT = (frac: number) => (frac >= 0 ? "+" : "") + Math.round(frac * 100) + "%";
 const PP = (frac: number) => (frac * 100).toFixed(1) + "%"; // percentage-point value
+const DOW_HE = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
+const dowName = (dow: number): string => DOW_HE[dow] ?? String(dow);
 
 function idFor(t: AnalyticsDailyInput, type: string): string {
   return `${t.bizId}_${t.date}_${type}`;
@@ -53,60 +57,109 @@ function base(
   return { id: idFor(t, type), date: t.date, bizId: t.bizId, type, source: "analytics:daily", createdAt: now };
 }
 
+// ── Shared revenue-target eligibility (P0 hardening) ─────────────────────────
+// A revenue anomaly (spike OR drop) may only be evaluated for a TARGET day that
+// is itself a valid, completed, real-selling day. This guards the target day
+// directly (not just the baseline): a supplier-only day (had_entry=true,
+// total=0, has_sales=false) must never yield a drop / -100% / any anomaly.
+// Legacy docs without `has_sales` remain eligible on total>0 (Formula Bible §2).
+// Exception / outlier / stale days are excluded where such metadata is present.
+function isValidRevenueTarget(t: AnalyticsDailyInput): boolean {
+  if (!t.revenue?.had_entry || !t.calendar) return false;
+  if (!(t.revenue.total > 0)) return false; // real selling day only (excludes total<=0 supplier-only)
+  if ((t.revenue as { has_sales?: boolean }).has_sales === false) return false;
+  const meta = t as {
+    is_exception?: boolean;
+    exception?: boolean;
+    is_outlier?: boolean;
+    outlier?: boolean;
+    stale?: boolean;
+  };
+  if (meta.is_exception === true || meta.exception === true) return false;
+  if (meta.is_outlier === true || meta.outlier === true) return false;
+  if (meta.stale === true) return false;
+  return true;
+}
+
 // ── 1. revenue_drop ──────────────────────────────────────────────────────────
 export function ruleRevenueDrop(t: AnalyticsDailyInput, history: AnalyticsDailyInput[], now: number): Insight | null {
-  if (!t.revenue?.had_entry) return null;
-  const t7 = trailingRevenueAvg(history, 7);
-  const t30 = trailingRevenueAvg(history, 30);
-  const use = t7.n >= THRESHOLDS.MIN_TREND_SAMPLES ? t7 : t30;
-  if (use.n < THRESHOLDS.MIN_TREND_SAMPLES || use.avg === null) return null;
-  const d = deltaPct(t.revenue.total, use.avg);
+  // P0: compare only against the last few VALID same-weekday days (never a
+  // generic trailing mix and never stale total<=0 days). If there are fewer
+  // than MIN_SAMEDOW_SAMPLES, suppress — do not fall back to a generic average.
+  // Target must itself be a valid real-selling day (guards supplier-only/exception
+  // days from producing a false -100% drop).
+  if (!isValidRevenueTarget(t) || !t.calendar) return null;
+  const sw = sameWeekdayRecentAvg(history, t.calendar.dow, THRESHOLDS.SAMEDOW_WINDOW);
+  if (sw.n < THRESHOLDS.MIN_SAMEDOW_SAMPLES || sw.avg === null) return null;
+  const d = deltaPct(t.revenue.total, sw.avg);
   if (d === null || d > THRESHOLDS.DROP_WARN) return null; // not a drop
   const severity: InsightSeverity = d <= THRESHOLDS.DROP_CRIT ? "critical" : "warning";
-  const win = use === t7 ? "7 ימים" : "30 ימים";
+  const dname = dowName(t.calendar.dow);
   return {
     ...base(t, "revenue_drop", now),
     severity,
     title: `ירידה במחזור (${PCT(d)})`,
-    summary: `המחזור אתמול נמוך מהממוצע של ${win}.`,
-    evidence: [`מחזור: ${ILS(t.revenue.total)}`, `ממוצע ${win}: ${ILS(use.avg)}`, `שינוי: ${PCT(d)} (n=${use.n})`],
+    summary: `המחזור נמוך מהממוצע של ימי ${dname} האחרונים.`,
+    // evidence[0] MUST be the numeric revenue summary (the dashboard shows only
+    // evidence[0]); the audit details follow it and are preserved.
+    evidence: [
+      `מחזור: ${ILS(t.revenue.total)}`,
+      `תאריך יעד: ${t.date}`,
+      `ממוצע בסיס (ימי ${dname}): ${ILS(sw.avg)}`,
+      `מספר דגימות: ${sw.n}`,
+      `יום בשבוע: ${dname}`,
+      `שינוי: ${PCT(d)}`,
+    ],
     recommendation: "בדוק גורמים אפשריים (מזג אוויר, אירוע, תמחור, איוש).",
     metric: "revenue_total",
     currentValue: round(t.revenue.total, 0),
-    baselineValue: round(use.avg, 0),
+    baselineValue: round(sw.avg, 0),
     deltaPct: d,
-    confidence: confidenceForSamples(use.n),
+    confidence: confidenceForSamples(sw.n),
   };
 }
 
 // ── 2. revenue_spike ─────────────────────────────────────────────────────────
 export function ruleRevenueSpike(t: AnalyticsDailyInput, history: AnalyticsDailyInput[], now: number): Insight | null {
-  if (!t.revenue?.had_entry) return null;
-  const t7 = trailingRevenueAvg(history, 7);
-  const t30 = trailingRevenueAvg(history, 30);
-  const use = t7.n >= THRESHOLDS.MIN_TREND_SAMPLES ? t7 : t30;
-  if (use.n < THRESHOLDS.MIN_TREND_SAMPLES || use.avg === null) return null;
-  const d = deltaPct(t.revenue.total, use.avg);
+  // P0: a positive spike may only fire on a real selling day (total>0) and only
+  // against the last few VALID same-weekday days. This prevents the previous
+  // false surges (e.g. +76%/+340%) that came from a baseline dragged toward zero
+  // by stale total=0 analytics days. No generic fallback: too few samples => no
+  // insight.
+  if (!isValidRevenueTarget(t) || !t.calendar) return null;
+  const sw = sameWeekdayRecentAvg(history, t.calendar.dow, THRESHOLDS.SAMEDOW_WINDOW);
+  if (sw.n < THRESHOLDS.MIN_SAMEDOW_SAMPLES || sw.avg === null) return null;
+  const d = deltaPct(t.revenue.total, sw.avg);
   if (d === null || d < THRESHOLDS.SPIKE_FIRE) return null;
-  const win = use === t7 ? "7 ימים" : "30 ימים";
+  const dname = dowName(t.calendar.dow);
   return {
     ...base(t, "revenue_spike", now),
     severity: "positive",
     title: `זינוק במחזור (${PCT(d)})`,
-    summary: `המחזור אתמול גבוה מהממוצע של ${win}.`,
-    evidence: [`מחזור: ${ILS(t.revenue.total)}`, `ממוצע ${win}: ${ILS(use.avg)}`, `שינוי: ${PCT(d)} (n=${use.n})`],
+    summary: `המחזור גבוה מהממוצע של ימי ${dname} האחרונים.`,
+    // evidence[0] MUST be the numeric revenue summary (dashboard shows only [0]).
+    evidence: [
+      `מחזור: ${ILS(t.revenue.total)}`,
+      `תאריך יעד: ${t.date}`,
+      `ממוצע בסיס (ימי ${dname}): ${ILS(sw.avg)}`,
+      `מספר דגימות: ${sw.n}`,
+      `יום בשבוע: ${dname}`,
+      `שינוי: ${PCT(d)}`,
+    ],
     recommendation: "זהה מה עבד (יום/מבצע/אירוע) לשחזור.",
     metric: "revenue_total",
     currentValue: round(t.revenue.total, 0),
-    baselineValue: round(use.avg, 0),
+    baselineValue: round(sw.avg, 0),
     deltaPct: d,
-    confidence: confidenceForSamples(use.n),
+    confidence: confidenceForSamples(sw.n),
   };
 }
 
 // ── 3. weak_weekday ──────────────────────────────────────────────────────────
 export function ruleWeakWeekday(t: AnalyticsDailyInput, history: AnalyticsDailyInput[], now: number): Insight | null {
-  if (!t.revenue?.had_entry || !t.calendar) return null;
+  // P0: guard the TARGET with the canonical eligibility helper — a supplier-only
+  // day (had_entry=true, total=0, has_sales=false) must never yield a -100% weak_weekday.
+  if (!isValidRevenueTarget(t) || !t.calendar) return null;
   const sw = sameWeekdayAvg(history, t.calendar.dow);
   if (sw.n < THRESHOLDS.MIN_WEEKDAY_SAMPLES || sw.avg === null) return null;
   const d = deltaPct(t.revenue.total, sw.avg);
@@ -131,7 +184,8 @@ export function ruleWeakWeekday(t: AnalyticsDailyInput, history: AnalyticsDailyI
 
 // ── 4. weather_impact ────────────────────────────────────────────────────────
 export function ruleWeatherImpact(t: AnalyticsDailyInput, history: AnalyticsDailyInput[], now: number): Insight | null {
-  if (!t.revenue?.had_entry || !t.weather || t.weather.is_rain_day !== true) return null;
+  // P0: only a valid real-selling target may produce a revenue-impact insight.
+  if (!isValidRevenueTarget(t) || !t.weather || t.weather.is_rain_day !== true) return null;
   const dry = condRevenueAvg(history, (d) => d.weather?.is_rain_day === false);
   if (dry.n < THRESHOLDS.MIN_CONTEXT_SAMPLES || dry.avg === null) return null;
   const d = deltaPct(t.revenue.total, dry.avg);
@@ -160,7 +214,8 @@ export function ruleWeatherImpact(t: AnalyticsDailyInput, history: AnalyticsDail
 
 // ── 5. alert_impact ──────────────────────────────────────────────────────────
 export function ruleAlertImpact(t: AnalyticsDailyInput, history: AnalyticsDailyInput[], now: number): Insight | null {
-  if (!t.revenue?.had_entry || !t.alerts) return null;
+  // P0: only a valid real-selling target may produce a revenue-impact insight.
+  if (!isValidRevenueTarget(t) || !t.alerts) return null;
   const isAlert = t.alerts.is_alert_day === true || (t.alerts.alert_minutes || 0) > 0;
   if (!isAlert) return null;
   const calm = condRevenueAvg(history, (d) => !!d.alerts && d.alerts.is_alert_day === false);
@@ -190,7 +245,8 @@ export function ruleAlertImpact(t: AnalyticsDailyInput, history: AnalyticsDailyI
 
 // ── 6. war_day_impact ────────────────────────────────────────────────────────
 export function ruleWarDayImpact(t: AnalyticsDailyInput, history: AnalyticsDailyInput[], now: number): Insight | null {
-  if (!t.revenue?.had_entry || !t.operational) return null;
+  // P0: only a valid real-selling target may produce a revenue-impact insight.
+  if (!isValidRevenueTarget(t) || !t.operational) return null;
   const wd = t.operational.war_day;
   if (wd !== "partial" && wd !== "full") return null;
   const regular = condRevenueAvg(history, (d) => d.operational?.war_day === "regular");
@@ -239,26 +295,19 @@ export function ruleLaborRisk(t: AnalyticsDailyInput, history: AnalyticsDailyInp
 
 // ── 8. supplier_spend_risk (food_cost / revenue) ─────────────────────────────
 export function ruleSupplierSpendRisk(t: AnalyticsDailyInput, history: AnalyticsDailyInput[], now: number): Insight | null {
-  if (!t.revenue?.had_entry || !(t.revenue.total > 0)) return null;
-  const b = trailingRatioAvg(history, (d) => d.revenue.food_cost, 30);
-  if (b.n < THRESHOLDS.MIN_CONTEXT_SAMPLES || b.avg === null) return null;
-  const cur = t.revenue.food_cost / t.revenue.total;
-  const gap = cur - b.avg;
-  if (gap < THRESHOLDS.RATIO_GAP_WARN) return null;
-  const severity: InsightSeverity = gap >= THRESHOLDS.RATIO_GAP_CRIT ? "critical" : "warning";
-  return {
-    ...base(t, "supplier_spend_risk", now),
-    severity,
-    title: `עלות ספקים גבוהה (${PP(cur)})`,
-    summary: `אחוז עלות הספקים מהמחזור גבוה מהממוצע האחרון.`,
-    evidence: [`ספקים/מחזור: ${PP(cur)}`, `ממוצע: ${PP(b.avg)}`, `פער: +${PP(gap)} (n=${b.n})`],
-    recommendation: "בדוק רכש/בזבוז מול מחזור.",
-    metric: "food_pct",
-    currentValue: round(cur, 4),
-    baselineValue: round(b.avg, 4),
-    deltaPct: round(gap, 4),
-    confidence: confidenceForSamples(b.n),
-  };
+  // P0: SUPPRESSED. A single day's supplier payments divided by that day's
+  // revenue is NOT Food Cost. Supplier payments are lumpy purchases (a whole
+  // delivery paid on one day), not same-day COGS, so this ratio swung 4%..103%
+  // and produced false "high supplier cost" criticals (e.g. 60.0% on 2026-07-10).
+  //
+  // True Food Cost requires inventory accounting:
+  //   food_cost = opening_inventory + purchases - closing_inventory
+  // A future, correctly-labeled "purchases / revenue" insight must aggregate
+  // over a PERIOD (e.g. trailing month) and be labeled as "purchases", not
+  // "Food Cost". Until then this rule emits nothing. The underlying
+  // revenue.food_cost analytics field is intentionally left intact for
+  // compatibility and for that future period insight.
+  return null;
 }
 
 /** All v1 rules, in a stable order (used as a deterministic tie-breaker). */

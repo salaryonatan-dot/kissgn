@@ -18,6 +18,14 @@ export async function forecastMonthEnd(
   branchId?: string
 ): Promise<ForecastResult | null> {
   try {
+    // Business isolation, fail-closed: a forecast requires an authoritative
+    // business/branch id. Never default to "main" and never infer another
+    // business — return the established insufficient-data result (null) instead.
+    if (typeof branchId !== "string" || branchId.trim() === "") {
+      logger.warn("[forecast] missing business/branch id — returning null (fail-closed)");
+      return null;
+    }
+
     const tz = "Asia/Jerusalem";
     const today = todayIso(tz);
     const monthStart = startOfMonthIso(tz);
