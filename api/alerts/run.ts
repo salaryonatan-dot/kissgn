@@ -1,23 +1,19 @@
-// Marjin — Alerts API Endpoint
-// Routes:
-//   GET  /api/alerts/run?tenantId=X&bizId=Y          → get active alerts
-//   GET  /api/alerts/run?tenantId=X&bizId=Y&config=1  → get current thresholds
-//   POST /api/alerts/run { action: "run", tenantId, bizId }     → manual trigger
-//   POST /api/alerts/run { action: "config", tenantId, bizId, thresholds: {...} }  → update config
-//   POST /api/alerts/run { action: "dismiss", tenantId, bizId, alertId }  → dismiss alert
-//   GET  /api/alerts/run  (Vercel cron / no params)  → run all businesses
-
+// api/alerts/run.ts — thin Vercel adapter (PR #2A).
+// CORS + real-dependency injection only; all control flow (dispatch,
+// authorization, cron authentication) lives in the behaviorally-tested core
+// lib/alertsCore.js. The cron branch authenticates via Bearer CRON_SECRET only
+// (requireCron); x-vercel-cron is NOT accepted as authorization. User branches
+// (GET read viewer+, POST run/config/dismiss manager+) are biz-authorized.
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { runAlertsForBiz, runAlertsForAll } from "../../src/alerts/runner.js";
 import { getActiveAlerts, dismissAlert } from "../../src/alerts/alertsRepo.js";
 import { getThresholds, saveThresholds } from "../../src/alerts/configRepo.js";
-
-const CRON_SECRET = process.env.CRON_SECRET;
-const ALLOWED_ORIGINS = ["https://kissgn.vercel.app", "http://localhost:3000"];
+import { handleAlerts } from "../../lib/alertsCore.js";
+import { requireCron, requireBizContext } from "../../lib/securityContext.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // CORS
   const origin = req.headers.origin || "";
+  const ALLOWED_ORIGINS = ["https://kissgn.vercel.app", "http://localhost:3000"];
   if (ALLOWED_ORIGINS.includes(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
   }
@@ -25,126 +21,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Vary", "Origin");
 
-  if (req.method === "OPTIONS") return res.status(204).end();
-
-  if (req.method === "GET") return handleGet(req, res);
-  if (req.method === "POST") return handlePost(req, res);
-
-  return res.status(405).json({ error: "Method not allowed" });
-}
-
-// ── GET ───────────────────────────────────────────────────────────────────────────
-
-async function handleGet(req: VercelRequest, res: VercelResponse) {
-  const tenantId = req.query.tenantId as string;
-  const bizId = req.query.bizId as string;
-
-  // No params = cron trigger for all businesses
-  if (!tenantId && !bizId) {
-    return handleCron(req, res);
-  }
-
-  if (!tenantId || !bizId) {
-    return res.status(400).json({ error: "Missing tenantId or bizId" });
-  }
-
-  // Return config
-  if (req.query.config === "1") {
-    const thresholds = await getThresholds(tenantId, bizId);
-    return res.status(200).json({ ok: true, thresholds });
-  }
-
-  // Return active alerts
-  try {
-    const alerts = await getActiveAlerts(tenantId, bizId);
-    const thresholds = await getThresholds(tenantId, bizId);
-    return res.status(200).json({
-      ok: true,
-      alerts: alerts.sort((a, b) => {
-        const sev = { critical: 0, warning: 1, info: 2 };
-        return (sev[a.severity] ?? 2) - (sev[b.severity] ?? 2);
-      }),
-      thresholds,
-    });
-  } catch (err: any) {
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-}
-
-// ── POST ──────────────────────────────────────────────────────────────────────────
-
-async function handlePost(req: VercelRequest, res: VercelResponse) {
-  const { action, tenantId, bizId, alertId, thresholds } = req.body || {};
-
-  if (!action) {
-    return res.status(400).json({ error: "Missing action" });
-  }
-
-  switch (action) {
-    case "run": {
-      if (!tenantId || !bizId) {
-        return res.status(400).json({ error: "Missing tenantId or bizId" });
-      }
-      try {
-        const result = await runAlertsForBiz(tenantId, bizId);
-        return res.status(200).json({ ok: true, result });
-      } catch (err: any) {
-        return res.status(500).json({ ok: false, error: err.message });
-      }
-    }
-
-    case "config": {
-      if (!tenantId || !bizId || !thresholds) {
-        return res.status(400).json({ error: "Missing tenantId, bizId, or thresholds" });
-      }
-      try {
-        await saveThresholds(tenantId, bizId, thresholds);
-        const updated = await getThresholds(tenantId, bizId);
-        return res.status(200).json({ ok: true, thresholds: updated });
-      } catch (err: any) {
-        return res.status(500).json({ ok: false, error: err.message });
-      }
-    }
-
-    case "dismiss": {
-      if (!tenantId || !bizId || !alertId) {
-        return res.status(400).json({ error: "Missing tenantId, bizId, or alertId" });
-      }
-      try {
-        await dismissAlert(tenantId, bizId, alertId);
-        return res.status(200).json({ ok: true });
-      } catch (err: any) {
-        return res.status(500).json({ ok: false, error: err.message });
-      }
-    }
-
-    default:
-      return res.status(400).json({ error: `Unknown action: ${action}` });
-  }
-}
-
-// ── Cron Handler ──────────────────────────────────────────────────────────────────
-
-async function handleCron(req: VercelRequest, res: VercelResponse) {
-  const vercelCron = req.headers["x-vercel-cron"];
-  const authHeader = req.headers.authorization;
-
-  if (!vercelCron && (!CRON_SECRET || authHeader !== `Bearer ${CRON_SECRET}`)) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
-  try {
-    const results = await runAlertsForAll();
-    const totalFired = results.reduce((s, r) => s + r.alertsFired, 0);
-    const totalEmails = results.filter(r => r.emailSent).length;
-    return res.status(200).json({
-      ok: true,
-      businessesChecked: results.length,
-      totalAlertsFired: totalFired,
-      totalEmailsSent: totalEmails,
-      results,
-    });
-  } catch (err: any) {
-    return res.status(500).json({ ok: false, error: err.message });
-  }
+  const repos = { runAlertsForBiz, runAlertsForAll, getActiveAlerts, dismissAlert, getThresholds, saveThresholds };
+  const logError = (where: string, err: unknown): void => {
+    console.error("[alerts]", where, (err as { message?: string })?.message ?? err);
+  };
+  const out = await handleAlerts(req, { requireCron, requireBizContext, repos, logError });
+  if (out.end) return res.status(out.status).end();
+  return res.status(out.status).json(out.json);
 }
