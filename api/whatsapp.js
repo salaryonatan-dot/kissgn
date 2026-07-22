@@ -1,6 +1,16 @@
-// /api/whatsapp — send WhatsApp message via Green API
-import { requireAuth } from "../lib/verifyToken.js";
-import { sendWhatsAppMessage } from "../lib/whatsappMessages.js";
+// api/whatsapp.js
+//
+// SECURITY (PR #2A): this route is DISABLED and fails closed.
+//
+// The previous handler exposed an authenticated-ONLY WhatsApp send backed by
+// SHARED provider credentials, with no tenant/business/role authorization, no
+// recipient allowlist, no template restriction, no rate limiting, no audit and
+// no attribution (tenantId was read but ignored) — a latent unauthorized-send
+// P0. It was also non-functional (imported a non-existent export, crashing the
+// function). Rather than repair the send path, the endpoint is disabled.
+//
+// This endpoint now returns a stable 410 for every method, BEFORE any auth or
+// provider/network call — no WhatsApp message is ever sent.
 
 export default async function handler(req, res) {
   const allowedOrigin = process.env.ALLOWED_ORIGIN || "https://kissgn.vercel.app";
@@ -11,43 +21,7 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Vary", "Origin");
+
   if (req.method === "OPTIONS") return res.status(204).end();
-
-  // GET — health check / status
-  if (req.method === "GET") {
-    const instanceId = process.env.GREENAPI_INSTANCE_ID;
-    const token = process.env.GREENAPI_TOKEN;
-    if (!instanceId || !token) {
-      return res.status(200).json({ status: "not_configured" });
-    }
-    try {
-      const resp = await fetch(
-        `https://api.green-api.com/waInstance${instanceId}/getStateInstance/${token}`
-      );
-      const data = await resp.json();
-      return res.status(200).json({ status: data.stateInstance || "unknown" });
-    } catch (err) {
-      return res.status(200).json({ status: "error", message: err.message });
-    }
-  }
-
-  // POST — send message
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
-  try {
-    await requireAuth(req);
-    const { phone, message, tenantId } = req.body || {};
-
-    if (!phone || !message) {
-      return res.status(400).json({ error: "phone and message are required" });
-    }
-
-    const result = await sendWhatsAppMessage(phone, message);
-    return res.status(200).json({ ok: true, ...result });
-  } catch (err) {
-    console.error("[whatsapp]", err);
-    return res.status(err.status || 500).json({ error: err.message || "Internal error" });
-  }
+  return res.status(410).json({ error: "unsupported_action", action: "whatsapp" });
 }
