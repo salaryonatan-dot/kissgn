@@ -1042,6 +1042,20 @@ const DOW_LABELS  = ["א׳","ב׳","ג׳","ד׳","ה׳","ו׳","ש׳"];
 
 // ─── Default business targets ──────────────────────────────────────────────────
 const VAT_RATE = 1.18; // Israeli VAT (18%)
+function grossToNetAmount(amount) {
+  return Math.round((Number(amount) || 0) / VAT_RATE);
+}
+function normalizeDailyEntryRevenueForVat(entry) {
+  if (!entry || entry.includeVat !== true) return entry;
+  return {
+    ...entry,
+    sales: grossToNetAmount(entry.sales),
+    deliveries: grossToNetAmount(entry.deliveries),
+    other_income: grossToNetAmount(entry.other_income),
+    includeVat: false,
+  };
+}
+window.MarjinVat = Object.freeze({ VAT_RATE, grossToNetAmount, normalizeDailyEntryRevenueForVat });
 const TARGETS = {
   salesGrowthPct: 5,
   foodCostPct:   33,
@@ -3462,13 +3476,7 @@ function PilotDashboard() {
     setDashboardInsightsWarning("");
     try {
       const formFinal = {...form};  // payroll stores manual entry only; global employees added in calcMetrics
-      const netForm = formFinal.includeVat ? {
-        ...formFinal,
-        sales:        Math.round((Number(formFinal.sales)||0)        / VAT_RATE),
-        deliveries:   Math.round((Number(formFinal.deliveries)||0)   / VAT_RATE),
-        other_income: Math.round((Number(formFinal.other_income)||0) / VAT_RATE),
-        includeVat: false,
-      } : formFinal;
+      const netForm = normalizeDailyEntryRevenueForVat(formFinal);
       // Exception governance is NEVER written into the entries blob as NEW state.
       //   `__applyExc(o, strip, prev)` strips exception fields; when NOT stripping
       //   (a legacy day with no confirmed structured mutation, or a non-editor), it
@@ -4869,7 +4877,7 @@ function PilotDashboard() {
             <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,padding:"10px 14px",background:form.includeVat?"#FFF7ED":"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8}}>
               <div style={{flex:1}}>
                 <div style={{fontSize:13,fontWeight:700,color:"#111827"}}>סכומים {form.includeVat?"כוללים":"אינם כוללים"} מעמ</div>
-                <div style={{fontSize:11,color:"#9CA3AF",marginTop:2}}>{form.includeVat?"המערכת תחשב נטו אוטומטית (÷1.18)":"הכנס סכומים נטו ללא מע״מ"}</div>
+                <div style={{fontSize:11,color:"#9CA3AF",marginTop:2}}>{form.includeVat?`המערכת תחשב נטו אוטומטית (÷${VAT_RATE})`:"הכנס סכומים נטו ללא מע״מ"}</div>
               </div>
               <button onClick={()=>setForm(f=>({...f,includeVat:!f.includeVat}))}
                 style={{padding:"6px 12px",borderRadius:5,border:"none",cursor:"pointer",fontFamily:"inherit",fontWeight:600,fontSize:12,background:"#111827",color:"#fff"}}>
@@ -5006,7 +5014,7 @@ function PilotDashboard() {
 
             {(()=>{
               const rawInc=(Number(form.sales)||0)+(Number(form.deliveries)||0)+(Number(form.other_income)||0);
-              const netInc = form.includeVat ? Math.round(rawInc/VAT_RATE) : rawInc;
+              const netInc = form.includeVat ? grossToNetAmount(rawInc) : rawInc;
               if(!rawInc) return null;
               return (
                 <div style={{...S.preview,background:"#F9FAFB",border:"1px solid #E5E7EB",marginBottom:4}}>
