@@ -26,4 +26,3 @@
 
 - This slice preserves the existing `requireBizContext` contract: owner and super_owner receive implicit all-business access; scoped roles require `biz_access`.
 - This slice does not migrate legacy permissions or alter role definitions.
-

@@ -34,4 +34,3 @@ Evidence:
 - Whether `CRON_SECRET` is configured in the Production environment.
 - Whether Vercel cron requests reach the functions exactly as represented by local route files and rewrite behavior.
 - Whether any external production monitor or manual operator still invokes removed `/api/whatsapp-daily`.
-
