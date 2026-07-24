@@ -1,4 +1,12 @@
-import { getAdminDb, getAdminAuth } from "../lib/adminSdk.js";
+// api/bootstrap-owner.js
+//
+// SECURITY: this legacy route is DISABLED and fails closed.
+//
+// The active first-owner setup flow uses `/api/admin?action=bootstrap-self`.
+// This legacy endpoint accepted a caller-supplied tenantId and wrote with the
+// Admin SDK, bypassing RTDB Rules. It now returns a stable 410 before any auth
+// or DB access, matching the disabled-endpoint pattern used by create-tenant
+// and whatsapp.
 
 export default async function handler(req, res) {
   const allowedOrigin = process.env.ALLOWED_ORIGIN || "https://kissgn.vercel.app";
@@ -10,44 +18,5 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   res.setHeader("Vary", "Origin");
   if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
-
-  try {
-    // Verify Firebase ID token
-    const authHeader = req.headers.authorization || "";
-    const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
-    if (!idToken) {
-      return res.status(401).json({ error: "Missing Authorization header" });
-    }
-
-    const auth = getAdminAuth();
-    const decoded = await auth.verifyIdToken(idToken);
-    const uid = decoded.uid;
-
-    const { tenantId, businessName, ownerName, phone } = req.body || {};
-    if (!tenantId || !businessName) {
-      return res.status(400).json({ error: "tenantId and businessName required" });
-    }
-
-    const db = getAdminDb();
-    const now = new Date().toISOString();
-
-    // Bootstrap: create tenant + owner using Admin SDK (bypasses RTDB rules)
-    const updates = {};
-    updates[`tenants/${tenantId}/businessName`] = businessName;
-    updates[`tenants/${tenantId}/createdAt`] = now;
-    updates[`tenants/${tenantId}/owner`] = uid;
-    updates[`tenants/${tenantId}/plan`] = "free";
-    updates[`tenants/${tenantId}/users/${uid}/role`] = "owner";
-    updates[`tenants/${tenantId}/users/${uid}/displayName`] = ownerName || decoded.name || "";
-    updates[`tenants/${tenantId}/users/${uid}/phone`] = phone || "";
-    updates[`tenants/${tenantId}/users/${uid}/joinedAt`] = now;
-
-    await db.ref().update(updates);
-
-    return res.status(200).json({ ok: true, tenantId });
-  } catch (err) {
-    console.error("[bootstrap-owner]", err);
-    return res.status(err.status || 500).json({ error: err.message || "Internal error" });
-  }
+  return res.status(410).json({ error: "unsupported_action", action: "bootstrap-owner" });
 }

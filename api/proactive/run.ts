@@ -8,8 +8,8 @@ import { getTopActiveInsights } from "../../src/agent/proactive/getTopActiveInsi
 import { buildWeeklySummary } from "../../src/agent/proactive/digestBuilder.js";
 import { tenantRef } from "../../src/firebase/refs.js";
 import { getDb } from "../../src/firebase/admin.js";
-import { requireAuth } from "../../lib/verifyToken.js";
-import { requireTenantAccess } from "../../lib/helpers.js";
+import { requireBizContext } from "../../lib/securityContext.js";
+import { handleProactiveRead } from "../../lib/proactiveCore.js";
 
 // Shared secret for cron authentication
 const CRON_SECRET = process.env.CRON_SECRET;
@@ -30,160 +30,46 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // --- Route: Dashboard insights retrieval ---
   if (req.query.action === "insights" && req.method === "GET") {
-    return handleInsights(req, res);
+    return handleRead(req, res);
   }
 
   // --- Route: Daily digest retrieval (Phase 2) ---
   if (req.query.action === "digest" && req.method === "GET") {
-    return handleDigest(req, res);
+    return handleRead(req, res);
   }
 
   // --- Route: Weekly summary (Phase 2) ---
   if (req.query.action === "weekly" && req.method === "GET") {
-    return handleWeeklySummary(req, res);
+    return handleRead(req, res);
   }
 
   // --- Route: Cron / scan (requires auth) ---
   return handleCronScan(req, res);
 }
 
-// ── Auth helper ───────────────────────────────────────────────────────────────
-
-async function verifyAccess(req: VercelRequest, res: VercelResponse, tenantId: string): Promise<boolean> {
-  let claims;
-  try {
-    claims = await requireAuth(req);
-  } catch {
-    res.status(401).json({ error: "Authentication required" });
-    return false;
-  }
-  try {
-    await requireTenantAccess(claims.uid, tenantId, "viewer");
-  } catch (e: any) {
-    res.status(e?.status || 403).json({ error: e?.msg || "Access denied" });
-    return false;
-  }
-  return true;
-}
-
-/**
- * Dashboard insights retrieval.
- * GET /api/proactive/run?action=insights&tenantId=X&bizId=Y&limit=5
- */
-async function handleInsights(req: VercelRequest, res: VercelResponse) {
-  const tenantId = req.body?.tenantId || (req.query?.tenantId as string);
-  const bizId = req.body?.bizId || (req.query?.bizId as string);
-  const limit = Math.min(Number(req.query.limit) || 5, 10);
-
-  if (!tenantId) {
-    return res.status(400).json({ error: "Missing tenantId" });
-  }
-  if (!bizId) {
-    return res.status(400).json({ error: "Missing bizId" });
-  }
-
-  if (!(await verifyAccess(req, res, tenantId))) return;
-
-  try {
-    // Verify tenant exists in Firebase
-    // Existence check uses `members` (present for every real tenant). The
-    // previous `config` node is never written anywhere, so this always failed
-    // and returned a spurious 404.
-    const tenantSnap = await tenantRef(tenantId).child("members").once("value");
-    if (!tenantSnap.exists()) {
-      return res.status(404).json({ error: "Tenant not found" });
-    }
-
-    const insights = await getTopActiveInsights(tenantId, bizId, limit);
-    return res.status(200).json({ ok: true, insights });
-  } catch (err: any) {
-    console.error("[Marjin AI] Insights retrieval failed:", err);
-    return res.status(500).json({
-      ok: false,
-      insights: [],
-      error: "Failed to load insights",
-    });
-  }
-}
-
-/**
- * Daily digest retrieval (Phase 2).
- * GET /api/proactive/run?action=digest&tenantId=X&bizId=Y&date=2026-03-29
- */
-async function handleDigest(req: VercelRequest, res: VercelResponse) {
-  const tenantId = req.body?.tenantId || (req.query?.tenantId as string);
-  const bizId = req.body?.bizId || (req.query?.bizId as string);
-  const date = req.query.date as string; // optional — defaults to today
-
-  if (!tenantId) {
-    return res.status(400).json({ error: "Missing tenantId" });
-  }
-  if (!bizId) {
-    return res.status(400).json({ error: "Missing bizId" });
-  }
-
-  if (!(await verifyAccess(req, res, tenantId))) return;
-
-  try {
-    // Verify tenant exists
-    // Existence check uses `members` (present for every real tenant). The
-    // previous `config` node is never written anywhere, so this always failed
-    // and returned a spurious 404.
-    const tenantSnap = await tenantRef(tenantId).child("members").once("value");
-    if (!tenantSnap.exists()) {
-      return res.status(404).json({ error: "Tenant not found" });
-    }
-
-    const targetDate = date || new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
-    const snap = await getDb()
-      .ref(`tenants/${tenantId}/proactive_digests/${bizId}/daily/${targetDate}`)
-      .once("value");
-
-    const digest = snap.val();
-    if (!digest) {
-      return res.status(200).json({ ok: true, digest: null, message: "No digest for this date" });
-    }
-
-    return res.status(200).json({ ok: true, digest });
-  } catch (err: any) {
-    console.error("[Marjin AI] Digest retrieval failed:", err);
-    return res.status(500).json({ ok: false, error: "Failed to load digest" });
-  }
-}
-
-/**
- * Weekly summary (Phase 2).
- * GET /api/proactive/run?action=weekly&tenantId=X&bizId=Y
- */
-async function handleWeeklySummary(req: VercelRequest, res: VercelResponse) {
-  const tenantId = req.body?.tenantId || (req.query?.tenantId as string);
-  const bizId = req.body?.bizId || (req.query?.bizId as string);
-
-  if (!tenantId) {
-    return res.status(400).json({ error: "Missing tenantId" });
-  }
-  if (!bizId) {
-    return res.status(400).json({ error: "Missing bizId" });
-  }
-
-  if (!(await verifyAccess(req, res, tenantId))) return;
-
-  try {
-    // Verify tenant exists
-    // Existence check uses `members` (present for every real tenant). The
-    // previous `config` node is never written anywhere, so this always failed
-    // and returned a spurious 404.
-    const tenantSnap = await tenantRef(tenantId).child("members").once("value");
-    if (!tenantSnap.exists()) {
-      return res.status(404).json({ error: "Tenant not found" });
-    }
-
-    const summary = await buildWeeklySummary(tenantId, bizId);
-    return res.status(200).json({ ok: true, summary });
-  } catch (err: any) {
-    console.error("[Marjin AI] Weekly summary failed:", err);
-    return res.status(500).json({ ok: false, error: "Failed to build weekly summary" });
-  }
+async function handleRead(req: VercelRequest, res: VercelResponse) {
+  const repos = {
+    tenantExists: async (tenantId: string): Promise<boolean> => {
+      const tenantSnap = await tenantRef(tenantId).child("members").once("value");
+      return tenantSnap.exists();
+    },
+    getInsights: getTopActiveInsights,
+    getDigest: async (tenantId: string, bizId: string, date: string): Promise<unknown> => {
+      const snap = await getDb()
+        .ref(`tenants/${tenantId}/proactive_digests/${bizId}/daily/${date}`)
+        .once("value");
+      return snap.val();
+    },
+    getWeeklySummary: buildWeeklySummary,
+  };
+  const out = await handleProactiveRead(req, {
+    requireBizContext,
+    repos,
+    logError: (where: string, err: unknown) => {
+      console.error("[Marjin AI] Proactive read failed:", where, (err as { message?: string })?.message ?? err);
+    },
+  });
+  return res.status(out.status).json(out.json);
 }
 
 /**

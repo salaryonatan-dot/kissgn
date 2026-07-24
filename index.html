@@ -5252,7 +5252,7 @@ function PilotDashboard() {
       {/* ═══ FORECAST ═══ */}
       {screen==="forecast" && (
         <div className="screen">
-          <ForecastScreen entries={entries} businessConfig={businessConfig} metrics={metrics} lastYear={lastYear} saveLastYear={saveLastYear} currentMonth={MONTH} />
+          <ForecastScreen tenantId={window._currentTenantId || ""} bizId={currentBizId || ""} entries={entries} businessConfig={businessConfig} metrics={metrics} lastYear={lastYear} saveLastYear={saveLastYear} currentMonth={MONTH} />
         </div>
       )}
 
@@ -8689,7 +8689,7 @@ function Td({ children, align, colSpan, style }) {
   return <td colSpan={colSpan} style={{padding:"8px 10px",textAlign:align||"right",color:"#111827",...style}}>{children}</td>;
 }
 
-function ForecastScreen({ metrics, lastYear, saveLastYear, currentMonth, entries=[], businessConfig={}, TARGETS={salesGrowthPct:5,foodCostPct:33,laborCostPct:27} }) {
+function ForecastScreen({ tenantId="", bizId="", metrics, lastYear, saveLastYear, currentMonth, entries=[], businessConfig={}, TARGETS={salesGrowthPct:5,foodCostPct:33,laborCostPct:27} }) {
   const fileRef = useRef();
   const [mode, setMode] = useState("view"); // view | manual | mapCols
   const [lyDraft, setLyDraft] = useState(() => lastYear.map(m=>({...m})));

@@ -57,6 +57,37 @@ test("whatsapp: GET/POST → 410; OPTIONS → 204; no provider call in source", 
   assert.ok(!/green-api|sendWhatsApp|GREENAPI|fetch\(|requireAuth\(/.test(src));
 });
 
+// ── bootstrap-owner 410 ─────────────────────────────────────────────────────
+test("bootstrap-owner: unauthenticated callers cannot use it", async () => {
+  const h = await load("api/bootstrap-owner.js");
+  const res = mkRes();
+  await h(mkReq("POST", { body: { tenantId: "tenant-victim", businessName: "Victim" } }), res);
+  assert.equal(res._status, 410);
+  assert.deepEqual(res._json, { error: "unsupported_action", action: "bootstrap-owner" });
+});
+
+test("bootstrap-owner: authenticated callers and caller-supplied tenantId still cannot write", async () => {
+  const h = await load("api/bootstrap-owner.js");
+  const res = mkRes();
+  await h(mkReq("POST", {
+    headers: { authorization: "Bearer fake-user-token" },
+    body: { tenantId: "tenant-victim", businessName: "Victim", ownerName: "Mallory" },
+  }), res);
+  assert.equal(res._status, 410);
+  assert.deepEqual(res._json, { error: "unsupported_action", action: "bootstrap-owner" });
+  assert.ok(!JSON.stringify(res._json).includes("tenant-victim"));
+});
+
+test("bootstrap-owner: OPTIONS → 204; no auth/Admin SDK write path remains", async () => {
+  const h = await load("api/bootstrap-owner.js");
+  const res = mkRes();
+  await h(mkReq("OPTIONS"), res);
+  assert.equal(res._status, 204);
+  assert.equal(res._json, undefined);
+  const src = codeOnly(read("api/bootstrap-owner.js"));
+  assert.ok(!/adminSdk|getAdminDb|getAdminAuth|verifyIdToken|requireAuth\(|\.ref\(|\.set\(|\.update\(/.test(src));
+});
+
 // ── supplemental wiring (regression guards) ──────────────────────────────────
 test("ask.ts delegates to the core and injects requireBizContext + routeQuestion", () => {
   const src = read("api/agent/ask.ts");
@@ -75,7 +106,7 @@ test("cron branch in the core uses requireCron, not x-vercel-cron", () => {
 });
 
 // ── js/.d.ts value-export parity for the new modules ─────────────────────────
-for (const base of ["securityContext", "apiScope", "agentAskCore", "alertsCore"]) {
+for (const base of ["securityContext", "apiScope", "agentAskCore", "alertsCore", "proactiveCore"]) {
   test(`parity: lib/${base}.js exports === lib/${base}.d.ts value exports`, () => {
     const js = read(`lib/${base}.js`);
     const dts = read(`lib/${base}.d.ts`);

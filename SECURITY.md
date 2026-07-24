@@ -119,13 +119,12 @@ ALLOWED_ORIGIN              ← e.g. https://your-app.vercel.app
 - [ ] Deploy `database.rules.json` to Firebase RTDB → Rules
 - [ ] Enable **Firebase Auth → Anonymous** sign-in method
 - [ ] Register **Firebase App Check** with reCAPTCHA v3 site key — set to **Enforce** (not Monitoring) on RTDB in Firebase Console
-- [ ] Create first owner via **`POST /api/bootstrap-owner`** (never manually in RTDB):
-  1. Set `BOOTSTRAP_ENABLED=true` in Vercel → **Production** environment temporarily
-  2. Check Vercel logs — you will see a `WARNING: BOOTSTRAP_ENABLED=true in production` line (confirms flag is active)
-  3. Call endpoint once — uses RTDB transaction (race-safe zero-owner check), writes role + membership + audit atomically
-  4. **Immediately** delete `BOOTSTRAP_ENABLED` env var — trigger a redeploy
-  5. Confirm endpoint returns `404` (test with curl)
-  - ⚠️ Never leave `BOOTSTRAP_ENABLED=true` after bootstrap is complete
+- [ ] Create first owner via **`POST /api/admin?action=bootstrap-self`** (never manually in RTDB):
+  1. Sign in as the Firebase Auth user that should become the first owner.
+  2. Call endpoint once with `Authorization: Bearer <Firebase ID token>` and body `{ "tenantId": "<tenantId>" }`.
+  3. Confirm it writes `super_owner`, membership, `user_tenants`, and owner-guard state atomically.
+  4. Confirm a second call for the same initialized tenant returns `409 tenant_already_initialized`.
+  5. Confirm legacy `POST /api/bootstrap-owner` returns `410 unsupported_action`.
 - [ ] Verify `ALLOWED_ORIGIN` matches your exact deployment URL
 - [ ] Test RTDB rules in Firebase Console → Rules Playground for each role
 - [ ] Rotate all API keys after first successful test
@@ -175,7 +174,7 @@ _(see Ongoing section above)_
 
 Backfill endpoint (`POST /api/analytics/backfill`) restricted to **manager+**.
 Check endpoint (`GET /api/analytics/check`) restricted to **manager+**.
-Daily builder (`/api/analytics/daily-builder`) protected by `CRON_SECRET` header.
+Daily builder (`/api/analytics/daily-builder`) protected by Vercel cron header or `CRON_SECRET` bearer auth.
 
 ### Secrets + logs
 - `CRON_SECRET` in Vercel env (Production only) — rotate quarterly

@@ -90,6 +90,29 @@ for (const [label, opts] of [
   const fds=MF.entriesToForecastDays([{date:"2026-07-01",sales:"100",supplier_payments:{a:"50"}},{date:"2026-07-02",sales:0,supplier_payments:{a:"500"}}]);
   ok("mapper: sales day => has_sales true; supplier-only => has_sales false", fds[0].has_sales===true && fds[0].total===100 && fds[1].has_sales===false && fds[1].total===0 && fds[1].had_entry===true);
 }
+// ForecastScreen runtime-scope regression: the component must receive selected
+// tenant/business as props, so its forecast calculation has lexical bindings and
+// cannot throw the previous ReferenceError.
+{
+  const sigStart = html.indexOf("function ForecastScreen");
+  const sigLine = html.slice(sigStart, html.indexOf("\n", sigStart));
+  const sig = sigLine.match(/function ForecastScreen\(\{(.+)\}\)/)?.[1] || "";
+  ok("ForecastScreen declares tenantId/bizId props", /tenantId\s*=/.test(sig) && /bizId\s*=/.test(sig));
+  ok("ForecastScreen caller passes selected tenant/business", /<ForecastScreen[^>]*tenantId=\{window\._currentTenantId \|\| ""\}[^>]*bizId=\{currentBizId \|\| ""\}/.test(html));
+
+  const marker2 = html.indexOf("const __mf = window.MarjinForecast.computeRevenueForecast", html.indexOf("function ForecastScreen"));
+  const lineEnd = html.indexOf("\n", marker2);
+  const calcLine = html.slice(marker2, lineEnd).trim();
+  const fakeWindow = {
+    MarjinForecast: {
+      entriesToForecastDays: () => [],
+      computeRevenueForecast: (opts) => opts,
+    },
+  };
+  const exercise = new Function("window", "tenantId", "bizId", "entries", "__mfToday", `${calcLine}; return __mf;`);
+  const opts = exercise(fakeWindow, "tenant-1", "biz-1", [], "2026-07-24");
+  ok("ForecastScreen calculation uses selected tenant/business without ReferenceError", opts.tenantId==="tenant-1" && opts.bizId==="biz-1");
+}
 // ---- EXCEPTION helpers (26-38) ----
 ok("26/27/28: manager/owner/super_owner can edit exception", MF.canEditException("manager")&&MF.canEditException("owner")&&MF.canEditException("super_owner"));
 ok("29/30/48: shift_manager/viewer cannot; no admin role", !MF.canEditException("shift_manager")&&!MF.canEditException("viewer")&&!MF.canEditException("admin"));

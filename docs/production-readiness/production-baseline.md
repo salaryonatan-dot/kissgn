@@ -15,8 +15,8 @@
     `api/analytics/daily-builder.ts`, `api/bootstrap-owner.js`, `api/config.js`,
     `api/create-tenant.js`, `api/daily-snapshot/run.ts`, `api/oref.js`,
     `api/proactive/run.ts`, `api/whatsapp.js`
-- **Cron schedule (vercel.json, unchanged):** daily-builder 23:00, whatsapp-daily 21:00,
-  proactive/run 03:00, alerts/run 04:00, daily-snapshot/run 04:05.
+- **Cron schedule (vercel.json):** daily-builder 23:00, proactive/run 03:00,
+  alerts/run 04:00, daily-snapshot/run 04:05. There is no WhatsApp daily cron.
 
 ## Verification (read-only; run from an authenticated operator machine)
 1. `vercel inspect https://kissgn.vercel.app` (or Vercel dashboard) → confirm the

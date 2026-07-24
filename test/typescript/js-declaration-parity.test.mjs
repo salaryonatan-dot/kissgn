@@ -29,6 +29,7 @@ const PAIRS = [
   ["lib/analytics/sources.js", "lib/analytics/sources.d.ts"],
   ["lib/memoryInsightType.js", "lib/memoryInsightType.d.ts"],
   ["lib/llmResponse.js", "lib/llmResponse.d.ts"],
+  ["lib/proactiveCore.js", "lib/proactiveCore.d.ts"],
 ];
 
 for (const [jsRel, dtsRel] of PAIRS) {
