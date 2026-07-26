@@ -1066,10 +1066,13 @@ window.MarjinVat = Object.freeze({ VAT_RATE, grossToNetAmount, normalizeDailyEnt
 //   • An explicit save WINS WHOLESALE: upsertEntryByDate replaces any existing
 //     same-date row with the saved entry. No field merging. Revenue is never summed.
 //   • Legacy hydrated duplicates (same date appearing twice in a stored blob)
-//     merge via mergeLegacyDuplicateEntries — the pre-existing listener semantics,
-//     preserved verbatim: earliest row wins for non-zero scalar fields (revenue is
-//     NEVER summed); supplier_payments are summed per supplier (heals historical
-//     split rows); for non-numeric fields the first truthy value wins.
+//     merge via mergeLegacyDuplicateEntries: earliest row wins for non-zero scalar
+//     fields (revenue, payroll — NEVER summed); nested maps (supplier_payments,
+//     hourly_payroll) merge by DETERMINISTIC KEY UNION with earliest-value-wins per
+//     key — a repeated key is NEVER added (R2: an identical row delivered twice can
+//     no longer double supplier purchases / Food Cost); for non-numeric fields the
+//     first truthy value wins. Canonicalization is idempotent AND replay-safe:
+//     canonicalize(x + x) === canonicalize(x).
 //   • Rows with a missing/blank date are dropped (identical to the previous
 //     listener behavior); a save with an empty date never appends an unkeyed row.
 function entryDateKey(date) {
@@ -1077,19 +1080,24 @@ function entryDateKey(date) {
   const t = date.trim();
   return t.length ? t : null;
 }
+// Deterministic key union for nested per-key amount maps (supplier_payments,
+// hourly_payroll): every key from both rows is kept; when the SAME key appears in
+// both, the earlier row's value wins. Values are never arithmetically added —
+// duplicate delivery of the same daily record must not inflate any amount.
+function mergeEntryMaps(ap, bp) {
+  const out = {...(ap || {})};
+  Object.keys(bp || {}).forEach(k => {
+    if (!(k in out)) out[k] = bp[k];
+  });
+  return out;
+}
 function mergeLegacyDuplicateEntries(a, b) {
   const merged = {...a};
   Object.keys(b).forEach(k => {
     if(k === 'date') return;
-    if(k === 'supplier_payments') {
-      // Merge supplier payments — sum amounts for same supplier
-      const ap = a.supplier_payments || {};
-      const bp = b.supplier_payments || {};
-      const sp = {...ap};
-      Object.keys(bp).forEach(sid => {
-        sp[sid] = (Number(sp[sid])||0) + (Number(bp[sid])||0);
-      });
-      merged.supplier_payments = sp;
+    if(k === 'supplier_payments' || k === 'hourly_payroll') {
+      // Nested maps: deterministic key union, earliest-value-wins per key, NO addition
+      merged[k] = mergeEntryMaps(a[k], b[k]);
     } else if(typeof b[k] === 'number') {
       // For numeric fields: keep the first non-zero value — never sum
       if(!merged[k] || merged[k] === 0) merged[k] = b[k];
@@ -1110,12 +1118,21 @@ function canonicalizeEntries(list) {
   });
   return [...seen.values()].sort((a,b)=>a.date.localeCompare(b.date));
 }
-// Replace-by-date upsert. `replaceIndex` (the current editingId, or null) marks the
-// row being edited: it is removed FIRST, so an edit that changes the date onto an
-// already-existing date deterministically leaves exactly ONE row for the final date
-// (the saved entry), and new-entry mode can never append a second row for a date.
-function upsertEntryByDate(list, entry, replaceIndex) {
-  const base = Array.isArray(list) ? list.filter((_, i) => i !== replaceIndex) : [];
+// Replace-by-date upsert. `originalDate` is the STABLE edit identity: the canonical
+// business date the entry had when the editor was opened (null for new-entry mode).
+// R2: identity is NEVER an array position — a mutable index could point at an
+// unrelated day after hydration/insertion/reordering and delete it. The row for the
+// original date is removed by DATE, any row already occupying the final date is
+// removed by DATE, and the saved entry is inserted — so an edit that changes the
+// date onto an existing date deterministically leaves exactly ONE row for the final
+// date (the explicit save wins wholesale) and no unrelated day is ever touched.
+// A non-string third argument (e.g. a legacy index) is ignored — positional
+// deletion is structurally impossible.
+function upsertEntryByDate(list, entry, originalDate) {
+  const originalKey = entryDateKey(originalDate);
+  const base = Array.isArray(list)
+    ? list.filter(e => entryDateKey(e && e.date) !== originalKey || originalKey === null)
+    : [];
   const key = entryDateKey(entry && entry.date);
   if (!key) return canonicalizeEntries(base); // unsavable date: never append an unkeyed row
   const without = base.filter(e => entryDateKey(e && e.date) !== key);
@@ -2778,6 +2795,7 @@ function PilotDashboard() {
   const [entrySaveError, setEntrySaveError] = useState("");
   const entrySaveInFlightRef = useRef(false);
   const activeBizIdRef = useRef(null); // P0-DATA-01: current business selection, for stale-async guards
+  const editingDateRef = useRef(null); // R2: stable edit identity — canonical business date captured at editor-open (never an array index)
   const suppressNextDashboardInsightsLoadForBizRef = useRef(null);
   const setCurrentBizId = id => {
     setCurrentBizId_(id);
@@ -2942,8 +2960,16 @@ function PilotDashboard() {
   useEffect(()=>{
     activeBizIdRef.current = currentBizId; // P0-DATA-01: reflects the live selection even when null
     if(!currentBizId) return;
+    // R2: generation + tenant binding for every listener callback and self-heal
+    // write created by THIS effect run — a queued callback from an old
+    // subscription must never update (or write for) a newer selection.
+    let live = true;
+    const tenantAtSetup = window._currentTenantId;
 
     // ── Clear stale data immediately on business switch ──
+    // R2: switching selection invalidates any open edit context.
+    setEditingId(null);
+    editingDateRef.current = null;
     setEntries([]);
     setFixedList(FIXED_EXPENSES_DEFAULT);
     setSuppliers([]);
@@ -2957,6 +2983,7 @@ function PilotDashboard() {
     const sub = (key, setter, shared=false) => {
       if(!window.storage.subscribe) return;
       unsubs.push(window.storage.subscribe(key, r => {
+        if(!live) return; // R2: queued callback from an unsubscribed/old selection — ignore
         try { setter(JSON.parse(r.value)); } catch(_){}
       }, shared));
     };
@@ -2964,9 +2991,9 @@ function PilotDashboard() {
     (async()=>{
       const bizAtLoad = currentBizId;
       const rly = await sg(`biz:${bizAtLoad}:lastyear`);
-      // P0-DATA-01: a load that resolves after the business changed is discarded —
-      // an old selection's async result cannot mutate the current selection.
-      if (activeBizIdRef.current !== bizAtLoad) return;
+      // P0-DATA-01/R2: a load that resolves after the business OR tenant changed is
+      // discarded — an old selection's async result cannot mutate the current one.
+      if (activeBizIdRef.current !== bizAtLoad || window._currentTenantId !== tenantAtSetup || !live) return;
       if(rly) setLastYear(JSON.parse(rly.value));
       setSetupDone(true);
     })();
@@ -2979,8 +3006,10 @@ function PilotDashboard() {
       // hydrated state always fully replaces local entries state.
       const deduped = window.MarjinEntries.canonicalizeEntries(val);
       setEntries(deduped);
-      // If duplicates were found — write merged version back to Firebase
-      if(deduped.length < val.length) {
+      // If duplicates were found — write merged version back to Firebase.
+      // R2: the self-heal write stays bound to the selection that produced its
+      // source payload — never after unsubscribe or a tenant switch.
+      if(deduped.length < val.length && live && window._currentTenantId === tenantAtSetup) {
         console.log(`[dedup] merged ${val.length - deduped.length} duplicate entries, saving back`);
         window.storage.set(`biz:${currentBizId}:entries`, JSON.stringify(deduped), true).catch(()=>{});
       }
@@ -3035,7 +3064,7 @@ function PilotDashboard() {
     fetchOref();
     const orefInterval = setInterval(fetchOref, 30000); // poll every 30s
 
-    return () => { unsubs.forEach(u => typeof u==="function" && u()); clearInterval(orefInterval); };
+    return () => { live = false; unsubs.forEach(u => typeof u==="function" && u()); clearInterval(orefInterval); };
   },[currentBizId]);
 
   const israelDateKey = (offsetDays=0) => {
@@ -3463,23 +3492,12 @@ function PilotDashboard() {
     try { await window.storage.set(`biz:${currentBizId}:tasks`, JSON.stringify(t), true); } catch(_){}
   };
 
-  const setSupPay = (sid, val) => setForm(f=>({...f, supplier_payments:{...f.supplier_payments,[sid]:val}}));
-
-  const saveRevenueStep = () => {
-    // Save with current supplier data (empty if new entry)
-    let updated = editingId!==null
-      ? entries.map((e,i)=>i===editingId?{...form}:e)
-      : [...entries,{...form}];
-    updated.sort((a,b)=>a.date.localeCompare(b.date));
-    setEntries(updated); persist(updated,null);
-    if(editingId!==null) {
-      // editing: go straight to done
-      setForm({...EMPTY_ENTRY}); setEditingId(null); setSaved(true);
-      setTimeout(()=>{setSaved(false); setEntryStep('idle'); setScreen("dashboard");},1000);
-    } else {
-      setEntryStep('suppliers');
-    }
-  };
+  // R2: the dead two-step wizard remnants (`setSupPay`, `saveRevenueStep`) were
+  // removed. `saveRevenueStep` was an index-keyed append/replace writer with zero
+  // references anywhere in the repository (its 'suppliers' step screen no longer
+  // exists); retaining a duplicate-shaped entries writer — even unreachable — was
+  // an integrity hazard. All entry saves flow through `saveEntry`'s date-keyed
+  // upsert.
 
   const loadEntryExceptions = async (bizId) => {
     if (!bizId || !window._currentTenantId || typeof window.apiFetch !== "function") return;
@@ -3528,6 +3546,8 @@ function PilotDashboard() {
     setDashboardInsightsWarning("");
     try {
       const __saveForBizId = currentBizId; // P0-DATA-01: bind this save to the business it started for
+      const __saveForTenantId = window._currentTenantId; // R2: and to the tenant it started for
+      const __editingDate = editingDateRef.current; // R2: STABLE edit identity — the canonical date at editor-open (never an index)
       const formFinal = {...form};  // payroll stores manual entry only; global employees added in calcMetrics
       const netForm = normalizeDailyEntryRevenueForVat(formFinal);
       // Exception governance is NEVER written into the entries blob as NEW state.
@@ -3547,7 +3567,12 @@ function PilotDashboard() {
         }
         return c;
       };
-      const __prevEntry = editingId!==null ? entries[editingId] : null;
+      // R2: the previous entry is located by its ORIGINAL business date, never by a
+      // mutable array index (the array may have been re-hydrated/reordered since
+      // the editor opened).
+      const __prevEntry = __editingDate !== null
+        ? (entries.find(e => window.MarjinEntries.entryDateKey(e && e.date) === __editingDate) || null)
+        : null;
 
       // ── SAVE ORDER (review Part 3): execute the structured exception command
       //   FIRST; stop on any non-OK; only AFTER confirmed structured success do we
@@ -3607,16 +3632,26 @@ function PilotDashboard() {
       //   PRESERVE the prior entry's legacy fields — no silent loss.
       const __structuredGoverns = !!(__loaded && __loaded.source==="structured");
       const __stripException = __structuredGoverns || (__exResponse != null);
-      // P0-DATA-01: entry identity is the business date, never the array position.
-      // An explicit save deterministically REPLACES any existing row for the same
+      // P0-DATA-01/R2: entry identity is the business date, never the array
+      // position. The edited logical day is removed by its ORIGINAL date; an
+      // explicit save deterministically REPLACES any existing row for the final
       // date (new-entry mode included — no [...entries, e] append), and an edit
       // whose date was changed onto an existing date collapses to exactly ONE row
       // for the final date. The helper also sorts and canonicalizes.
       let updated = window.MarjinEntries.upsertEntryByDate(
         entries,
         __applyExc(netForm, __stripException, __prevEntry),
-        editingId
+        __editingDate
       );
+
+      // R2: if the business or tenant selection changed while this save awaited the
+      // structured-exception step, ABORT before any persist — a save begun for one
+      // selection must never write another selection's storage path or state.
+      if (activeBizIdRef.current !== __saveForBizId || window._currentTenantId !== __saveForTenantId) {
+        setSaved(false);
+        setEntrySaveError("העסק או החשבון הוחלפו במהלך השמירה — הנתונים לא נשמרו. פתח את היום מחדש ונסה שוב.");
+        return;
+      }
 
       // Revenue persist AFTER confirmed structured success.
       const persistResult = await persist(updated, null);
@@ -3630,10 +3665,9 @@ function PilotDashboard() {
       }
       // Full success → the operationId for this date is consumed.
       delete entryExceptionOpIdRef.current[__exDate];
-      // P0-DATA-01: a stale async save from a previous business selection must not
-      // mutate the current selection's state (the persist above already targeted
-      // the business captured when the save started).
-      if (activeBizIdRef.current === __saveForBizId) setEntries(updated);
+      // P0-DATA-01/R2: a stale async save from a previous business OR tenant
+      // selection must not mutate the current selection's state.
+      if (activeBizIdRef.current === __saveForBizId && window._currentTenantId === __saveForTenantId) setEntries(updated);
 
       // ── ONE rebuild decision after all required saves succeed (review Part 4):
       //   shouldRebuild = revenueChanged OR (exceptionApplied && rebuildRequired).
@@ -3669,7 +3703,7 @@ function PilotDashboard() {
       }
       }
 
-      setForm({...EMPTY_ENTRY}); setEditingId(null); setSaved(true);
+      setForm({...EMPTY_ENTRY}); setEditingId(null); editingDateRef.current = null; setSaved(true);
       setTimeout(()=>{setSaved(false); setEntryStep('idle'); setScreen("dashboard");}, insightsRefreshed ? 1200 : 2000);
       // Check anomalies
       if(currentBizId) {
@@ -3688,6 +3722,16 @@ function PilotDashboard() {
   };
 
   const deleteEntry = i => { const u=entries.filter((_,idx)=>idx!==i); setEntries(u); persist(u,null); };
+  // R2: UI deletion is keyed by the business DATE, never by a render-time array
+  // index — the current index for the date is resolved fresh inside the click
+  // handler, so a stale index can never remove the wrong logical day.
+  const deleteEntryByDate = date => {
+    const key = window.MarjinEntries.entryDateKey(date);
+    if(!key) return;
+    const idx = entries.findIndex(e => window.MarjinEntries.entryDateKey(e && e.date) === key);
+    if(idx === -1) return;
+    deleteEntry(idx);
+  };
 
   // Filter entries to current month only -- dashboard always shows current month
   // Derive which businesses this user can see
@@ -4203,7 +4247,7 @@ function PilotDashboard() {
         {/* Row 2: CTA + secondary action */}
         {!currentUser && (
           <div className="mhd-row2">
-            <button className="mhd-cta" onClick={()=>{setForm({...EMPTY_ENTRY,date:YESTERDAY_STR,security_event:false});setEditingId(null);setEntryStep('revenue');setScreen("entry");}}>
+            <button className="mhd-cta" onClick={()=>{setForm({...EMPTY_ENTRY,date:YESTERDAY_STR,security_event:false});setEditingId(null);editingDateRef.current=null;setEntryStep('revenue');setScreen("entry");}}>
               + הזנת יום
             </button>
             {businesses.length>1 && (
@@ -4878,6 +4922,7 @@ function PilotDashboard() {
                                 setEntryStep(existing?'revenue':'revenue');
                                 setForm(formWithException(existing?{...existing}:{...EMPTY_ENTRY,date}, date));
                                 setEditingId(existing?entries.indexOf(existing):null);
+                                editingDateRef.current = existing ? (window.MarjinEntries.entryDateKey(existing.date)) : null; // R2 stable edit identity
                                 setScreen("entry");
                               }}>
                               {s.name} ←
@@ -5090,7 +5135,7 @@ function PilotDashboard() {
             {saved && <div style={{background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:6,padding:"10px 14px",textAlign:"center",fontWeight:600,color:"#16A34A",fontSize:13,marginBottom:8}}>נשמר בהצלחה</div>}
             <div style={{display:"flex",gap:10,marginTop:12}}>
               <button className="btn btn-primary" disabled={saved || entrySaveInFlight} style={{ opacity: (saved || entrySaveInFlight) ? 0.6 : 1}} onClick={()=>!(saved || entrySaveInFlight) && saveEntry()}>{entrySaveInFlight ? "שומר..." : saved ? "נשמר..." : "שמור"}</button>
-              <button className="btn btn-secondary" disabled={entrySaveInFlight} style={{ opacity: entrySaveInFlight ? 0.6 : 1}} onClick={()=>{if(entrySaveInFlight)return;setForm({...EMPTY_ENTRY});setEditingId(null);setEntryStep('idle');setScreen("dashboard");}}>ביטול</button>
+              <button className="btn btn-secondary" disabled={entrySaveInFlight} style={{ opacity: entrySaveInFlight ? 0.6 : 1}} onClick={()=>{if(entrySaveInFlight)return;setForm({...EMPTY_ENTRY});setEditingId(null);editingDateRef.current=null;setEntryStep('idle');setScreen("dashboard");}}>ביטול</button>
             </div>
           </div>
         </div>
@@ -5169,6 +5214,7 @@ function PilotDashboard() {
 		                    const {_idx, __missing, __key, ...cleanEntry} = e;
 		                    setForm(formWithException(isMissing ? {...EMPTY_ENTRY,date:e.date} : cleanEntry, e.date));
 		                    setEditingId(isMissing ? null : i);
+		                    editingDateRef.current = isMissing ? null : (window.MarjinEntries.entryDateKey(e.date)); // R2 stable edit identity
 		                    setEntryStep('revenue');
 		                    setScreen("entry");
 	                  };
@@ -5257,7 +5303,7 @@ function PilotDashboard() {
 	                        )}
 	                        {!isMissing&&(
 	                          <button
-	                            onClick={()=>deleteEntry(i)}
+	                            onClick={()=>deleteEntryByDate(e.date)}
 	                            style={{marginRight:"auto",background:"none",border:"none",color:"#CBD5E1",cursor:"pointer",padding:"4px 6px",fontFamily:"inherit",fontSize:12}}>
 	                            מחק
 	                          </button>

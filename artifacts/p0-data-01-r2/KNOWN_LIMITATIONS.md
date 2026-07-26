@@ -1,0 +1,7 @@
+# P0-DATA-01 R2 Known Limitations
+
+- Lifecycle rows F43–F48 are enforced by source-level guards on the exact runtime code plus behavioral tests of the extracted primitives; a full DOM/React session simulation of tab-switching and queued Firebase callbacks would require a browser harness the task forbids building. The guards are structural (generation flag + captured selection identity), not timing-dependent.
+- Legacy same-key conflicts (same date, same supplier key, different values in a stored blob) resolve by earliest-value-wins; if a business genuinely recorded two partial payments to the same supplier as two duplicate DATE rows (rather than two keys), the second partial value is no longer added — that healing heuristic was the replay-doubling vector and was deliberately removed. The correct future home for richer conflict semantics is the S2 contract.
+- `editingId` (array index) still exists for display purposes; logical mutation can no longer use it.
+- Validation `node_modules` is symlinked from the S0 worktree; plain `tsc` therefore reports 22 TS2742 symlink-path artifacts (0 with `--preserveSymlinks`; 0 with a real install per S0's accepted validation).
+- Device-VM git quirk: files under `.git` cannot be unlinked; stale zero-byte locks created by this task's own operations were renamed aside (`*.mv_<ts>`), never deleted; a benign `worktrees/kissgn-p0-data-01-r2/locked` marker may remain.
