@@ -1056,6 +1056,72 @@ function normalizeDailyEntryRevenueForVat(entry) {
   };
 }
 window.MarjinVat = Object.freeze({ VAT_RATE, grossToNetAmount, normalizeDailyEntryRevenueForVat });
+// ── P0-DATA-01: canonical daily-entries identity & upsert helpers ──────────────
+// Identity for a daily entry is (tenant, business, business-date). Tenant+business
+// scope is carried by the storage path (tenants/{tid}/biz:{bizId}:entries); inside
+// one entries blob the canonical key is the entry's trimmed date string. Dates are
+// compared as exact strings only — never parsed through Date() — so Asia/Jerusalem
+// business days can never shift (2026-07-25 can never collide with 2026-07-24).
+// Documented precedence (deterministic):
+//   • An explicit save WINS WHOLESALE: upsertEntryByDate replaces any existing
+//     same-date row with the saved entry. No field merging. Revenue is never summed.
+//   • Legacy hydrated duplicates (same date appearing twice in a stored blob)
+//     merge via mergeLegacyDuplicateEntries — the pre-existing listener semantics,
+//     preserved verbatim: earliest row wins for non-zero scalar fields (revenue is
+//     NEVER summed); supplier_payments are summed per supplier (heals historical
+//     split rows); for non-numeric fields the first truthy value wins.
+//   • Rows with a missing/blank date are dropped (identical to the previous
+//     listener behavior); a save with an empty date never appends an unkeyed row.
+function entryDateKey(date) {
+  if (typeof date !== "string") return null;
+  const t = date.trim();
+  return t.length ? t : null;
+}
+function mergeLegacyDuplicateEntries(a, b) {
+  const merged = {...a};
+  Object.keys(b).forEach(k => {
+    if(k === 'date') return;
+    if(k === 'supplier_payments') {
+      // Merge supplier payments — sum amounts for same supplier
+      const ap = a.supplier_payments || {};
+      const bp = b.supplier_payments || {};
+      const sp = {...ap};
+      Object.keys(bp).forEach(sid => {
+        sp[sid] = (Number(sp[sid])||0) + (Number(bp[sid])||0);
+      });
+      merged.supplier_payments = sp;
+    } else if(typeof b[k] === 'number') {
+      // For numeric fields: keep the first non-zero value — never sum
+      if(!merged[k] || merged[k] === 0) merged[k] = b[k];
+    } else if(b[k] && !merged[k]) {
+      merged[k] = b[k];
+    }
+  });
+  return merged;
+}
+function canonicalizeEntries(list) {
+  if (!Array.isArray(list)) return [];
+  const seen = new Map();
+  list.forEach(e => {
+    const key = entryDateKey(e && e.date);
+    if (!key) return; // no usable date — dropped (matches previous listener behavior)
+    if (seen.has(key)) seen.set(key, mergeLegacyDuplicateEntries(seen.get(key), e));
+    else seen.set(key, e.date === key ? e : {...e, date: key});
+  });
+  return [...seen.values()].sort((a,b)=>a.date.localeCompare(b.date));
+}
+// Replace-by-date upsert. `replaceIndex` (the current editingId, or null) marks the
+// row being edited: it is removed FIRST, so an edit that changes the date onto an
+// already-existing date deterministically leaves exactly ONE row for the final date
+// (the saved entry), and new-entry mode can never append a second row for a date.
+function upsertEntryByDate(list, entry, replaceIndex) {
+  const base = Array.isArray(list) ? list.filter((_, i) => i !== replaceIndex) : [];
+  const key = entryDateKey(entry && entry.date);
+  if (!key) return canonicalizeEntries(base); // unsavable date: never append an unkeyed row
+  const without = base.filter(e => entryDateKey(e && e.date) !== key);
+  return canonicalizeEntries([...without, entry.date === key ? entry : {...entry, date: key}]);
+}
+window.MarjinEntries = Object.freeze({ entryDateKey, mergeLegacyDuplicateEntries, canonicalizeEntries, upsertEntryByDate });
 const TARGETS = {
   salesGrowthPct: 5,
   foodCostPct:   33,
@@ -2711,6 +2777,7 @@ function PilotDashboard() {
   const [entrySaveInFlight, setEntrySaveInFlight] = useState(false);
   const [entrySaveError, setEntrySaveError] = useState("");
   const entrySaveInFlightRef = useRef(false);
+  const activeBizIdRef = useRef(null); // P0-DATA-01: current business selection, for stale-async guards
   const suppressNextDashboardInsightsLoadForBizRef = useRef(null);
   const setCurrentBizId = id => {
     setCurrentBizId_(id);
@@ -2873,6 +2940,7 @@ function PilotDashboard() {
 
   // useEffect 2: business-specific data -- live listeners
   useEffect(()=>{
+    activeBizIdRef.current = currentBizId; // P0-DATA-01: reflects the live selection even when null
     if(!currentBizId) return;
 
     // ── Clear stale data immediately on business switch ──
@@ -2894,46 +2962,22 @@ function PilotDashboard() {
     };
     // Initial load -- only for data without live listeners
     (async()=>{
-      const rly = await sg(`biz:${currentBizId}:lastyear`);
+      const bizAtLoad = currentBizId;
+      const rly = await sg(`biz:${bizAtLoad}:lastyear`);
+      // P0-DATA-01: a load that resolves after the business changed is discarded —
+      // an old selection's async result cannot mutate the current selection.
+      if (activeBizIdRef.current !== bizAtLoad) return;
       if(rly) setLastYear(JSON.parse(rly.value));
       setSetupDone(true);
     })();
     // Live listeners -- fire immediately with current value AND on every change
     sub(`biz:${currentBizId}:entries`, (val) => {
       if(!Array.isArray(val)) return;
-      // Merge duplicates by date — combine all fields, prefer non-zero values
-      const mergeEntries = (a, b) => {
-        const merged = {...a};
-        Object.keys(b).forEach(k => {
-          if(k === 'date') return;
-          if(k === 'supplier_payments') {
-            // Merge supplier payments — sum amounts for same supplier
-            const ap = a.supplier_payments || {};
-            const bp = b.supplier_payments || {};
-            const sp = {...ap};
-            Object.keys(bp).forEach(sid => {
-              sp[sid] = (Number(sp[sid])||0) + (Number(bp[sid])||0);
-            });
-            merged.supplier_payments = sp;
-          } else if(typeof b[k] === 'number') {
-            // For numeric fields: take whichever is non-zero, or sum if both non-zero
-            if(!merged[k] || merged[k] === 0) merged[k] = b[k];
-          } else if(b[k] && !merged[k]) {
-            merged[k] = b[k];
-          }
-        });
-        return merged;
-      };
-      const seen = new Map();
-      val.forEach(e => {
-        if(!e?.date) return;
-        if(seen.has(e.date)) {
-          seen.set(e.date, mergeEntries(seen.get(e.date), e));
-        } else {
-          seen.set(e.date, e);
-        }
-      });
-      const deduped = [...seen.values()].sort((a,b)=>a.date.localeCompare(b.date));
+      // P0-DATA-01: canonicalize by business-date through the shared helper
+      // (same precedence as before — revenue never summed; supplier payments
+      // summed per supplier to heal legacy split rows). Wholesale replacement:
+      // hydrated state always fully replaces local entries state.
+      const deduped = window.MarjinEntries.canonicalizeEntries(val);
       setEntries(deduped);
       // If duplicates were found — write merged version back to Firebase
       if(deduped.length < val.length) {
@@ -3113,6 +3157,14 @@ function PilotDashboard() {
       const error = new Error("missing bizId");
       console.warn("[persist] no bizId");
       return { ok:false, error };
+    }
+    // P0-DATA-01 defensive invariant at the central persistence boundary: no
+    // full-blob write may persist duplicate business dates, regardless of which
+    // caller assembled the array (save, delete, supplier grid, clear-all).
+    const rawEntryRowCount = Array.isArray(e) ? e.length : 0;
+    e = window.MarjinEntries.canonicalizeEntries(e);
+    if (rawEntryRowCount !== e.length) {
+      console.warn(`[persist] canonicalized ${rawEntryRowCount - e.length} duplicate/undated entry rows before write`);
     }
     try { await window.storage.set(`biz:${currentBizId}:entries`, JSON.stringify(e), true); }
     catch(err) {
@@ -3475,6 +3527,7 @@ function PilotDashboard() {
     setEntrySaveError("");
     setDashboardInsightsWarning("");
     try {
+      const __saveForBizId = currentBizId; // P0-DATA-01: bind this save to the business it started for
       const formFinal = {...form};  // payroll stores manual entry only; global employees added in calcMetrics
       const netForm = normalizeDailyEntryRevenueForVat(formFinal);
       // Exception governance is NEVER written into the entries blob as NEW state.
@@ -3554,10 +3607,16 @@ function PilotDashboard() {
       //   PRESERVE the prior entry's legacy fields — no silent loss.
       const __structuredGoverns = !!(__loaded && __loaded.source==="structured");
       const __stripException = __structuredGoverns || (__exResponse != null);
-      let updated = editingId!==null
-        ? entries.map((e,i)=>i===editingId?__applyExc(netForm, __stripException, __prevEntry):e)
-        : [...entries,__applyExc(netForm, __stripException, __prevEntry)];
-      updated.sort((a,b)=>a.date.localeCompare(b.date));
+      // P0-DATA-01: entry identity is the business date, never the array position.
+      // An explicit save deterministically REPLACES any existing row for the same
+      // date (new-entry mode included — no [...entries, e] append), and an edit
+      // whose date was changed onto an existing date collapses to exactly ONE row
+      // for the final date. The helper also sorts and canonicalizes.
+      let updated = window.MarjinEntries.upsertEntryByDate(
+        entries,
+        __applyExc(netForm, __stripException, __prevEntry),
+        editingId
+      );
 
       // Revenue persist AFTER confirmed structured success.
       const persistResult = await persist(updated, null);
@@ -3571,7 +3630,10 @@ function PilotDashboard() {
       }
       // Full success → the operationId for this date is consumed.
       delete entryExceptionOpIdRef.current[__exDate];
-      setEntries(updated);
+      // P0-DATA-01: a stale async save from a previous business selection must not
+      // mutate the current selection's state (the persist above already targeted
+      // the business captured when the save started).
+      if (activeBizIdRef.current === __saveForBizId) setEntries(updated);
 
       // ── ONE rebuild decision after all required saves succeed (review Part 4):
       //   shouldRebuild = revenueChanged OR (exceptionApplied && rebuildRequired).
