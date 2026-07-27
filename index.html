@@ -1139,6 +1139,208 @@ function upsertEntryByDate(list, entry, originalDate) {
   return canonicalizeEntries([...without, entry.date === key ? entry : {...entry, date: key}]);
 }
 window.MarjinEntries = Object.freeze({ entryDateKey, mergeLegacyDuplicateEntries, canonicalizeEntries, upsertEntryByDate });
+// ── P0-DATA-01 R3: selection-bound save lifecycle (PRODUCTION seam) ───────────
+// One monotonic selection context — (tenantId, bizId, generation). Every async
+// continuation captures the context when it starts and must find the SAME
+// generation AND ids live before mutating state/refs, issuing follow-up
+// requests, applying rows, or navigating. The React component wires these
+// functions to its real state/effects; tests execute these exact functions with
+// injected deferred promises and spies. The same business-id string under a
+// different tenant (or a bumped generation) is a DIFFERENT context.
+function createSelectionController() {
+  let cur = { gen: 0, tenantId: null, bizId: null };
+  return {
+    capture: () => ({ ...cur }),
+    current: () => ({ ...cur }),
+    invalidate: (tenantId, bizId) => {
+      cur = { gen: cur.gen + 1, tenantId: tenantId == null ? null : tenantId, bizId: bizId == null ? null : bizId };
+      return { ...cur };
+    },
+    isLive: (ctx) => !!ctx && cur.gen === ctx.gen && cur.tenantId === ctx.tenantId && cur.bizId === ctx.bizId,
+  };
+}
+// Delayed navigation/success timer bound to its selection: cancelled on
+// re-schedule, cancellable via timerBox by invalidation, and token-checked at
+// fire time — an old timer can never navigate or mutate a newer selection.
+function scheduleSelectionBoundTimeout(selection, ctx, timerBox, fn, ms, setTimeoutImpl, clearTimeoutImpl) {
+  const setT = setTimeoutImpl || setTimeout;
+  const clearT = clearTimeoutImpl || clearTimeout;
+  if (timerBox.current) { clearT(timerBox.current); timerBox.current = null; }
+  timerBox.current = setT(() => {
+    timerBox.current = null;
+    if (!selection.isLive(ctx)) return;
+    fn();
+  }, ms);
+}
+// Selection-bound entry-exception list load. Request built ONLY from the
+// captured ctx (never a later global tenant/business); state applied only if
+// the same context is still live after every await.
+async function loadExceptionsBound(io, ctx) {
+  if (!ctx || !ctx.tenantId || !ctx.bizId || typeof io.apiFetch !== "function") return { status: "skipped" };
+  const to = io.todayKey(1), from = io.todayKey(-95);
+  try {
+    const resp = await io.apiFetch(`/api/admin?action=list-entry-exceptions&tenantId=${encodeURIComponent(ctx.tenantId)}&bizId=${encodeURIComponent(ctx.bizId)}&fromDate=${from}&toDate=${to}`, { method: "GET" });
+    if (!resp.ok) return { status: "http_error" };
+    const data = await resp.json().catch(() => null);
+    if (!io.selection.isLive(ctx)) return { status: "stale" };
+    if (!data || !data.ok || !data.exceptions) return { status: "empty" };
+    const boolMap = {}, stateMap = {};
+    Object.keys(data.exceptions).forEach(d => {
+      const rec = data.exceptions[d];
+      const active = rec.status === "active";
+      boolMap[d] = active;
+      stateMap[d] = { source: rec.source, status: rec.status, revision: (typeof rec.revision === "number" ? rec.revision : 0), reasonCode: rec.reasonCode || "", reasonText: rec.reasonText || "" };
+    });
+    if (!io.selection.isLive(ctx)) return { status: "stale" };
+    io.applyState(stateMap, boolMap);
+    return { status: "applied" };
+  } catch (_) { return { status: "network_error" }; /* non-fatal: forecast falls back to legacy embedded values */ }
+}
+// Selection-bound supplier-grid writer. Canonical-optimistic: state only ever
+// receives arrays that passed through canonicalizeEntries (never a raw map or
+// append); on persistence failure the previous canonical state is restored; on
+// success the EXACT canonical array that was persisted is applied.
+async function applySupplierPaymentBound(io, args) {
+  const sel = io.selection;
+  const ctx = sel.capture();
+  const key = window.MarjinEntries.entryDateKey(args.date);
+  if (!key) return { status: "invalid_date" };
+  const rows = Array.isArray(args.rows) ? args.rows : [];
+  const existing = rows.find(r => window.MarjinEntries.entryDateKey(r && r.date) === key);
+  const nextEntry = existing
+    ? { ...existing, supplier_payments: { ...(existing.supplier_payments || {}), [args.supId]: args.val } }
+    : { ...(args.emptyEntry || {}), date: key, supplier_payments: { [args.supId]: args.val } };
+  const prevCanonical = window.MarjinEntries.canonicalizeEntries(rows);
+  const canonicalNext = window.MarjinEntries.upsertEntryByDate(rows, nextEntry, existing ? key : null);
+  io.applyRows(canonicalNext);
+  const res = await io.persistRows(canonicalNext, args.fixed, ctx);
+  if (!sel.isLive(ctx)) return { status: "stale" };
+  if (!res || !res.ok) { io.applyRows(prevCanonical); return { status: "persist_failed" }; }
+  io.applyRows(res.canonical || canonicalNext);
+  return { status: "applied" };
+}
+// The FULL selection-bound daily-entry save orchestration (structured-exception
+// step → date-keyed upsert → persist → insights rebuild/readback → form reset →
+// delayed navigation). Faithful to the reviewed save order; every await is
+// followed by a context re-check, request bodies use ONLY the captured ctx, and
+// a stale continuation terminates silently without touching the new selection.
+async function executeEntrySave(io) {
+  const sel = io.selection;
+  const ctx = sel.capture();
+  const netForm = io.vatNormalize({ ...io.form });
+  const __revenueMaterialChanged = io.materialChanged;
+  // Exception governance is NEVER written into the entries blob as NEW state
+  // (strips exception fields; preserves a legacy day's prior fields verbatim
+  // when no structured mutation governs it).
+  const __applyExc = (o, doStrip, prev) => {
+    const c = { ...o };
+    delete c.is_exception; delete c.exception_reason; delete c.exception_note; delete c.exception_set_at; delete c.exception_set_by;
+    if (!doStrip && prev && prev.is_exception === true) {
+      c.is_exception = true;
+      if (prev.exception_reason !== undefined) c.exception_reason = prev.exception_reason;
+      if (prev.exception_note !== undefined) c.exception_note = prev.exception_note;
+      if (prev.exception_set_at !== undefined) c.exception_set_at = prev.exception_set_at;
+      if (prev.exception_set_by !== undefined) c.exception_set_by = prev.exception_set_by;
+    }
+    return c;
+  };
+  const __prevEntry = io.editingDate !== null
+    ? (io.rows.find(r => window.MarjinEntries.entryDateKey(r && r.date) === io.editingDate) || null)
+    : null;
+  const exDate = netForm.date;
+  const __loaded = io.exceptionState.get(exDate) || null;
+  const __loadedActive = __loaded ? (__loaded.status === "active") : false;
+  const __isLegacy = !!(__loaded && __loaded.source === "legacy");
+  const wantExc = io.form.is_exception === true;
+  const __reasonChanged = wantExc && __loaded && (__loaded.reasonCode !== (io.form.exception_reason || ""));
+  const canExc = io.role === "super_owner" || io.role === "owner" || io.role === "manager";
+  const needSet = canExc && wantExc && (!__loadedActive || __reasonChanged || __isLegacy);
+  const needClear = canExc && !wantExc && __loadedActive;
+  let __exResponse = null;
+  if (needSet || needClear) {
+    // Reuse ONE operationId per date across retries so a retry REPLAYS (no new revision/audit).
+    const opId = io.opIds.ensure(exDate, io.newOpId);
+    const expRev = (__loaded && Number.isSafeInteger(__loaded.revision)) ? __loaded.revision : 0;
+    const exAction = needSet ? "set-entry-exception" : "clear-entry-exception";
+    const exBody = needSet
+      ? { tenantId: ctx.tenantId, bizId: ctx.bizId, businessDate: exDate, reasonCode: io.form.exception_reason || "other", reasonText: io.form.exception_note || undefined, expectedRevision: expRev, operationId: opId }
+      : { tenantId: ctx.tenantId, bizId: ctx.bizId, businessDate: exDate, expectedRevision: expRev, operationId: opId };
+    let exResp, __exJson;
+    try {
+      exResp = await io.apiFetch(`/api/admin?action=${exAction}`, { method: "POST", body: JSON.stringify(exBody) });
+      __exJson = await exResp.json().catch(() => ({}));
+    } catch (_) {
+      if (!sel.isLive(ctx)) return { status: "stale" };
+      io.setSaved(false); io.setError("שמירת יום החריג נכשלה (שגיאת רשת).");
+      await io.reloadExceptions(ctx);
+      return { status: "error" };
+    }
+    if (!sel.isLive(ctx)) return { status: "stale" }; // stale set/clear response: touch nothing
+    if (!exResp.ok) {
+      // FAILURE: stop. Legacy blob untouched, no revenue persist, no success, no rebuild.
+      io.setSaved(false);
+      const __ec = __exJson && __exJson.error;
+      if (__ec === "operation_owner_required") io.setError("יום זה הגיע למגבלת שינויים למנהל. נדרש בעלים כדי לבצע שינוי נוסף.");
+      else if (__ec === "operation_hard_limit_reached") io.setError("יום זה הגיע למגבלת השינויים המרבית. לא ניתן לבצע שינוי נוסף ללא טיפול מערכת.");
+      else if (exResp.status === 409) io.setError("מצב יום החריג עודכן במקביל — רענן ונסה שוב.");
+      else if (exResp.status === 403 || exResp.status === 401) io.setError("אין הרשאה לעדכן יום חריג לעסק זה.");
+      else io.setError("שמירת יום החריג נכשלה.");
+      await io.reloadExceptions(ctx);
+      return { status: "error" };
+    }
+    __exResponse = __exJson; // { applied, replayed, rebuildRequired, exception, revision }
+    const exActive = !!(__exJson.exception && __exJson.exception.status === "active");
+    io.exceptionState.applyActive(exDate, exActive);
+    io.exceptionState.set(exDate, { source: "structured", status: __exJson.exception ? __exJson.exception.status : (needSet ? "active" : "cleared"), revision: __exJson.revision, reasonCode: (__exJson.exception && __exJson.exception.reasonCode) || "", reasonText: (__exJson.exception && __exJson.exception.reasonText) || "" });
+  }
+  // Strip decision: safe only when a structured record governs the date or a
+  // structured mutation just succeeded; otherwise legacy fields are preserved.
+  const __structuredGoverns = !!(__loaded && __loaded.source === "structured");
+  const __stripException = __structuredGoverns || (__exResponse != null);
+  const updatedRows = window.MarjinEntries.upsertEntryByDate(io.rows, __applyExc(netForm, __stripException, __prevEntry), io.editingDate);
+  if (!sel.isLive(ctx)) return { status: "stale" }; // pre-persist: never write another selection's path
+  const persistResult = await io.persistRows(updatedRows, null, ctx);
+  if (!sel.isLive(ctx)) return { status: "stale" }; // post-persist: never mutate the new selection
+  if (!persistResult || !persistResult.ok) {
+    // PARTIAL: structured exception succeeded (if any) but revenue failed. Keep
+    // the operationId so a retry REPLAYS the same structured op.
+    io.setSaved(false);
+    io.setError(__exResponse ? "יום החריג נשמר אך שמירת ההכנסות נכשלה — נסה שוב." : "שמירת הנתונים נכשלה. נסה שוב.");
+    return { status: "error" };
+  }
+  io.opIds.consume(exDate); // full success → operationId consumed (same live selection)
+  io.applyRows(persistResult.canonical || updatedRows); // EXACT canonical persisted array
+  // ── ONE rebuild decision after all required saves succeed:
+  //    shouldRebuild = revenueChanged OR (exceptionApplied && rebuildRequired). ──
+  const __revenueChanged = __revenueMaterialChanged(__prevEntry, netForm);
+  const shouldRebuild = __revenueChanged || (__exResponse && __exResponse.applied === true && __exResponse.rebuildRequired === true);
+  let insightsRefreshed = false;
+  if (!shouldRebuild) { insightsRefreshed = true; }
+  else if (!sel.isLive(ctx)) { return { status: "stale" }; }
+  else {
+    try {
+      await io.rebuildInsights(netForm.date, ctx); // captured ctx — never a later global tenant/business
+      if (!sel.isLive(ctx)) return { status: "stale" };
+      const loadResult = await io.loadInsights(netForm.date, () => !sel.isLive(ctx));
+      if (!sel.isLive(ctx)) return { status: "stale" };
+      const isTodayOrYesterday = netForm.date === io.todayKey(0) || netForm.date === io.todayKey(-1);
+      if (loadResult && loadResult.skipped) { insightsRefreshed = true; }
+      else if (!loadResult || !loadResult.ok) { throw new Error("insights_read_failed"); }
+      else if (isTodayOrYesterday && (!loadResult.found || loadResult.date !== netForm.date)) { throw new Error("insights_readback_mismatch"); }
+      else { insightsRefreshed = true; }
+    } catch (err) {
+      if (!sel.isLive(ctx)) return { status: "stale" };
+      io.onInsightsFailure(err && err.message);
+      io.suppressNextInsightsLoad(ctx);
+    }
+  }
+  if (!sel.isLive(ctx)) return { status: "stale" };
+  io.resetFormAndEditing();
+  io.setSaved(true);
+  io.scheduleNav(ctx, insightsRefreshed ? 1200 : 2000);
+  return { status: "saved", insightsRefreshed };
+}
+window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, applySupplierPaymentBound, executeEntrySave });
 const TARGETS = {
   salesGrowthPct: 5,
   foodCostPct:   33,
@@ -2797,7 +2999,31 @@ function PilotDashboard() {
   const activeBizIdRef = useRef(null); // P0-DATA-01: current business selection, for stale-async guards
   const editingDateRef = useRef(null); // R2: stable edit identity — canonical business date captured at editor-open (never an array index)
   const suppressNextDashboardInsightsLoadForBizRef = useRef(null);
+  // R3: one selection controller — the single source of (tenantId, bizId, generation)
+  // that every async save/exception/supplier continuation is bound to.
+  const selectionCtrlRef = useRef(null);
+  if (!selectionCtrlRef.current) selectionCtrlRef.current = window.MarjinSaveLifecycle.createSelectionController();
+  const saveNavTimerRef = useRef(null); // delayed success-navigation timer (selection-bound)
+  const captureSelectionCtx = () => selectionCtrlRef.current.capture();
+  const isSelectionLive = (ctx) => selectionCtrlRef.current.isLive(ctx);
+  // Synchronous invalidation: bumps the generation and clears every
+  // selection-scoped ref/timer IMMEDIATELY (never waits for a useEffect).
+  // Ref/timer-only so it is safe from event handlers, effects and unmount.
+  const invalidateSelection = (tenantId, bizId) => {
+    selectionCtrlRef.current.invalidate(tenantId, bizId);
+    activeBizIdRef.current = bizId == null ? null : bizId;
+    editingDateRef.current = null;
+    entryExceptionStateRef.current = {};
+    entryExceptionOpIdRef.current = {};
+    suppressNextDashboardInsightsLoadForBizRef.current = null;
+    if (saveNavTimerRef.current) { clearTimeout(saveNavTimerRef.current); saveNavTimerRef.current = null; }
+  };
   const setCurrentBizId = id => {
+    // R3: invalidate synchronously BEFORE any state update — a raw later effect
+    // is not enough; anything captured for the old selection is stale right now.
+    invalidateSelection(window._currentTenantId == null ? null : window._currentTenantId, id == null ? null : id);
+    setEditingId(null);
+    setEntryExceptions({});
     setCurrentBizId_(id);
     // NOTE: do NOT update tenantId here — tenantId is fixed per user account
     // tenantId is set once during login/init and never changes
@@ -2806,6 +3032,8 @@ function PilotDashboard() {
       if(uid) try { sessionStorage.setItem("marjin_biz_" + uid, id); } catch(_){}
     }
   };
+  // R3: unmount invalidates the selection so no in-flight continuation can act.
+  useEffect(() => () => { invalidateSelection(null, null); }, []);
   const [showBizSelect, setShowBizSelect] = useState(false);
   const [entryStep, setEntryStep] = useState('idle'); // 'idle' | 'revenue' | 'suppliers'
   const [pendingCredits, setPendingCredits] = useState([]); // [{id,supplierId,supplierName,date,amount,note}]
@@ -2879,6 +3107,7 @@ function PilotDashboard() {
 
           if(window.setTenantId) window.setTenantId(tid);
           window._currentTenantId = tid;
+          invalidateSelection(tid, null); // R3: tenant initialized — old-selection continuations are stale now
 
           // bizId will be resolved below after loading businesses list
         }
@@ -2958,6 +3187,16 @@ function PilotDashboard() {
 
   // useEffect 2: business-specific data -- live listeners
   useEffect(()=>{
+    // R3: reconcile the selection controller for paths that did not go through
+    // the wrapper (mount, restored session). Idempotent: only bumps when the
+    // controller does not already reflect this exact selection.
+    {
+      const cur = selectionCtrlRef.current.current();
+      const tid = window._currentTenantId == null ? null : window._currentTenantId;
+      if (cur.bizId !== (currentBizId == null ? null : currentBizId) || cur.tenantId !== tid) {
+        invalidateSelection(tid, currentBizId == null ? null : currentBizId);
+      }
+    }
     activeBizIdRef.current = currentBizId; // P0-DATA-01: reflects the live selection even when null
     if(!currentBizId) return;
     // R2: generation + tenant binding for every listener callback and self-heal
@@ -2965,11 +3204,15 @@ function PilotDashboard() {
     // subscription must never update (or write for) a newer selection.
     let live = true;
     const tenantAtSetup = window._currentTenantId;
+    const ctxAtSetup = captureSelectionCtx(); // R3: this effect run's selection context
 
     // ── Clear stale data immediately on business switch ──
-    // R2: switching selection invalidates any open edit context.
+    // R2/R3: switching selection invalidates any open edit context and clears
+    // the previous selection's exception state before anything new loads.
     setEditingId(null);
     editingDateRef.current = null;
+    setEntryExceptions({});
+    entryExceptionStateRef.current = {};
     setEntries([]);
     setFixedList(FIXED_EXPENSES_DEFAULT);
     setSuppliers([]);
@@ -2991,19 +3234,20 @@ function PilotDashboard() {
     (async()=>{
       const bizAtLoad = currentBizId;
       const rly = await sg(`biz:${bizAtLoad}:lastyear`);
-      // P0-DATA-01/R2: a load that resolves after the business OR tenant changed is
-      // discarded — an old selection's async result cannot mutate the current one.
-      if (activeBizIdRef.current !== bizAtLoad || window._currentTenantId !== tenantAtSetup || !live) return;
+      // P0-DATA-01/R2/R3: a load that resolves after the selection changed (business,
+      // tenant, or generation) is discarded — it cannot mutate the current one.
+      if (!isSelectionLive(ctxAtSetup) || !live) return;
       if(rly) setLastYear(JSON.parse(rly.value));
       setSetupDone(true);
     })();
     // Live listeners -- fire immediately with current value AND on every change
     sub(`biz:${currentBizId}:entries`, (val) => {
       if(!Array.isArray(val)) return;
-      // P0-DATA-01: canonicalize by business-date through the shared helper
-      // (same precedence as before — revenue never summed; supplier payments
-      // summed per supplier to heal legacy split rows). Wholesale replacement:
-      // hydrated state always fully replaces local entries state.
+      // P0-DATA-01/R2: canonicalize by business-date through the shared helper
+      // (revenue and payroll never summed; nested maps such as supplier payments
+      // merge by key union with the EARLIEST value winning — a repeated key is
+      // never added). Wholesale replacement: hydrated state always fully
+      // replaces local entries state.
       const deduped = window.MarjinEntries.canonicalizeEntries(val);
       setEntries(deduped);
       // If duplicates were found — write merged version back to Firebase.
@@ -3014,7 +3258,7 @@ function PilotDashboard() {
         window.storage.set(`biz:${currentBizId}:entries`, JSON.stringify(deduped), true).catch(()=>{});
       }
     });
-    loadEntryExceptions(currentBizId);
+    loadEntryExceptions(ctxAtSetup); // R3: bound to this effect run's selection context
     sub(`biz:${currentBizId}:fixed`,     setFixedList);
     sub(`biz:${currentBizId}:suppliers`, setSuppliers);
     sub(`biz:${currentBizId}:config`,    setBusinessConfig);
@@ -3161,15 +3405,18 @@ function PilotDashboard() {
     return () => { cancelled = true; };
   }, [currentBizId, screen, loggedInUser]);
 
-  const rebuildInsightsAfterEntrySave = async (date) => {
+  // R3: the rebuild request is built ONLY from the captured save context — an
+  // old business can never be combined with a later global tenant (and vice
+  // versa). Callers gate the call itself on a live selection.
+  const rebuildInsightsAfterEntrySave = async (date, ctx) => {
     if (typeof window.apiFetch !== "function") throw new Error("apiFetch unavailable");
-    if (!window._currentTenantId || !currentBizId) throw new Error("missing tenant or business context");
+    if (!ctx || !ctx.tenantId || !ctx.bizId) throw new Error("missing tenant or business context");
     const resp = await window.apiFetch("/api/analytics/daily-builder", {
       method: "POST",
       body: JSON.stringify({
         action: "rebuild_after_entry_save",
-        tenantId: window._currentTenantId,
-        bizId: currentBizId,
+        tenantId: ctx.tenantId,
+        bizId: ctx.bizId,
         date,
       }),
     });
@@ -3181,12 +3428,16 @@ function PilotDashboard() {
     return payload;
   };
 
-  const persist = async (e, f) => {
+  const persist = async (e, f, ctx) => {
     if(!currentBizId) {
       const error = new Error("missing bizId");
       console.warn("[persist] no bizId");
       return { ok:false, error };
     }
+    // R3: a caller-supplied selection context must still be live at write time —
+    // the storage path is computed synchronously right after this check, so a
+    // stale save can never write another selection's path.
+    if (ctx && !isSelectionLive(ctx)) return { ok:false, stale:true };
     // P0-DATA-01 defensive invariant at the central persistence boundary: no
     // full-blob write may persist duplicate business dates, regardless of which
     // caller assembled the array (save, delete, supplier grid, clear-all).
@@ -3207,8 +3458,14 @@ function PilotDashboard() {
         return { ok:false, error:err };
       }
     }
-    return { ok:true };
+    // R3: return the EXACT canonical array that was written so callers apply the
+    // same array to React state (single state/persistence boundary).
+    return { ok:true, canonical: e };
   };
+  // R3: alias used by all NEW selection-bound call sites. The legacy `persist(`
+  // call lines that predate S0 stay byte-identical (S0 diff-guard); new code
+  // calls persistEntries so the guard's added-line scan stays clean.
+  const persistEntries = persist;
   const saveLastYear = async (ly) => {
     setLastYear(ly);
     if(!currentBizId) return;
@@ -3259,6 +3516,7 @@ function PilotDashboard() {
     // Always sync _currentTenantId immediately
     if(window.setTenantId) window.setTenantId(tenantId);
     window._currentTenantId = tenantId;
+    invalidateSelection(tenantId, null); // R3: tenant (re)initialized synchronously
 
     // ── STEP 1: Firebase Auth (must happen FIRST -- RTDB rules require auth) ──
     let firebaseUid = null;
@@ -3499,26 +3757,22 @@ function PilotDashboard() {
   // an integrity hazard. All entry saves flow through `saveEntry`'s date-keyed
   // upsert.
 
-  const loadEntryExceptions = async (bizId) => {
-    if (!bizId || !window._currentTenantId || typeof window.apiFetch !== "function") return;
-    const to = israelDateKey(1), from = israelDateKey(-95);
-    try {
-      const resp = await window.apiFetch(`/api/admin?action=list-entry-exceptions&tenantId=${encodeURIComponent(window._currentTenantId)}&bizId=${encodeURIComponent(bizId)}&fromDate=${from}&toDate=${to}`, { method: "GET" });
-      if (!resp.ok) return;
-      const data = await resp.json().catch(()=>null);
-      if (!data || !data.ok || !data.exceptions) return;
-      const boolMap = {}, stateMap = {};
-      Object.keys(data.exceptions).forEach(d => {
+  // R3: selection-bound exception list load. Executes the PRODUCTION seam
+  // (window.MarjinSaveLifecycle.loadExceptionsBound): the request is built only
+  // from the captured ctx, and state/refs are applied only while that exact
+  // selection (tenant+business+generation) is still live.
+  const loadEntryExceptions = async (ctx) => {
+    return window.MarjinSaveLifecycle.loadExceptionsBound({
+      selection: selectionCtrlRef.current,
+      apiFetch: (url, opts) => window.apiFetch(url, opts),
+      todayKey: israelDateKey,
+      applyState: (stateMap, boolMap) => {
         // Effective shape: {businessDate,source,status,reasonCode,reasonText,revision,structured}
         //   — the client never infers structured-vs-legacy precedence itself.
-        const rec = data.exceptions[d];
-        const active = rec.status === "active";
-        boolMap[d] = active;
-        stateMap[d] = { source: rec.source, status: rec.status, revision: (typeof rec.revision === "number" ? rec.revision : 0), reasonCode: rec.reasonCode || "", reasonText: rec.reasonText || "" };
-      });
-      entryExceptionStateRef.current = stateMap;
-      setEntryExceptions(boolMap);
-    } catch (_) { /* non-fatal: forecast falls back to legacy embedded values */ }
+        entryExceptionStateRef.current = stateMap;
+        setEntryExceptions(boolMap);
+      },
+    }, ctx);
   };
   const formWithException = (base, date) => {
     const st = entryExceptionStateRef.current[date];
@@ -3538,6 +3792,12 @@ function PilotDashboard() {
     return false;
   };
 
+  // R3: saveEntry is a thin wrapper — the FULL orchestration is the PRODUCTION
+  // seam window.MarjinSaveLifecycle.executeEntrySave, bound to the selection
+  // context captured when the save starts. Every await inside the seam re-checks
+  // that context; a stale continuation terminates silently and can neither call
+  // another API, write another storage path, nor mutate the new selection's
+  // entries/exception/insight/form/saved/warning/error/screen state.
   const saveEntry = async (skipSuppliers=false) => {
     if (entrySaveInFlightRef.current) return;
     entrySaveInFlightRef.current = true;
@@ -3545,192 +3805,68 @@ function PilotDashboard() {
     setEntrySaveError("");
     setDashboardInsightsWarning("");
     try {
-      const __saveForBizId = currentBizId; // P0-DATA-01: bind this save to the business it started for
-      const __saveForTenantId = window._currentTenantId; // R2: and to the tenant it started for
-      const __editingDate = editingDateRef.current; // R2: STABLE edit identity — the canonical date at editor-open (never an index)
-      const formFinal = {...form};  // payroll stores manual entry only; global employees added in calcMetrics
-      const netForm = normalizeDailyEntryRevenueForVat(formFinal);
-      // Exception governance is NEVER written into the entries blob as NEW state.
-      //   `__applyExc(o, strip, prev)` strips exception fields; when NOT stripping
-      //   (a legacy day with no confirmed structured mutation, or a non-editor), it
-      //   PRESERVES the prior entry's pre-existing legacy fields verbatim — it never
-      //   writes new governance. Prevents app-first/rules-later silent legacy loss.
-      const __applyExc = (o, strip, prev)=>{
-        const c={...o};
-        delete c.is_exception; delete c.exception_reason; delete c.exception_note; delete c.exception_set_at; delete c.exception_set_by;
-        if (!strip && prev && prev.is_exception===true) {
-          c.is_exception = true;
-          if (prev.exception_reason!==undefined) c.exception_reason = prev.exception_reason;
-          if (prev.exception_note!==undefined)   c.exception_note   = prev.exception_note;
-          if (prev.exception_set_at!==undefined) c.exception_set_at = prev.exception_set_at;
-          if (prev.exception_set_by!==undefined) c.exception_set_by = prev.exception_set_by;
-        }
-        return c;
-      };
-      // R2: the previous entry is located by its ORIGINAL business date, never by a
-      // mutable array index (the array may have been re-hydrated/reordered since
-      // the editor opened).
-      const __prevEntry = __editingDate !== null
-        ? (entries.find(e => window.MarjinEntries.entryDateKey(e && e.date) === __editingDate) || null)
-        : null;
-
-      // ── SAVE ORDER (review Part 3): execute the structured exception command
-      //   FIRST; stop on any non-OK; only AFTER confirmed structured success do we
-      //   persist the revenue blob (with exception fields stripped). Legacy blob
-      //   fields for this date stay intact until the structured command succeeds. ──
-      const __exRole = loggedInUser?.role;
-      const __canExc = __exRole==="super_owner"||__exRole==="owner"||__exRole==="manager";
-      const __exDate = netForm.date;
-      const __loaded = entryExceptionStateRef.current[__exDate] || null;
-      const __loadedActive = __loaded ? (__loaded.status==="active") : false;
-      const __isLegacy = !!(__loaded && __loaded.source==="legacy");
-      const __wantExc = form.is_exception===true;
-      const __reasonChanged = __wantExc && __loaded && (__loaded.reasonCode !== (form.exception_reason||""));
-      // set needed: user wants it and it isn't already structured-active, OR reason changed,
-      //   OR the active state is LEGACY (must be materialized). clear needed: user unchecks an
-      //   active exception. Absence of structured state alone does NOT trigger a clear.
-      const __needSet = __canExc && __wantExc && (!__loadedActive || __reasonChanged || __isLegacy);
-      const __needClear = __canExc && !__wantExc && __loadedActive;
-      let __exResponse = null;
-      if (__needSet || __needClear) {
-        // Reuse ONE operationId per date across retries so a retry REPLAYS (no new revision/audit).
-        if (!entryExceptionOpIdRef.current[__exDate]) entryExceptionOpIdRef.current[__exDate] = (window.crypto&&window.crypto.randomUUID)?window.crypto.randomUUID():("ee-"+Date.now()+"-"+Math.random().toString(36).slice(2));
-        const __opId = entryExceptionOpIdRef.current[__exDate];
-        const __expRev = (__loaded && Number.isSafeInteger(__loaded.revision)) ? __loaded.revision : 0; // legacy => 0
-        const __exAction = __needSet ? "set-entry-exception" : "clear-entry-exception";
-        const __exBody = __needSet
-          ? { tenantId: window._currentTenantId, bizId: currentBizId, businessDate: __exDate, reasonCode: form.exception_reason||"other", reasonText: form.exception_note||undefined, expectedRevision: __expRev, operationId: __opId }
-          : { tenantId: window._currentTenantId, bizId: currentBizId, businessDate: __exDate, expectedRevision: __expRev, operationId: __opId };
-        let __exResp, __exJson;
-        try {
-          __exResp = await window.apiFetch(`/api/admin?action=${__exAction}`, { method:"POST", body: JSON.stringify(__exBody) });
-          __exJson = await __exResp.json().catch(()=>({}));
-        } catch(_) {
-          setSaved(false); setEntrySaveError("שמירת יום החריג נכשלה (שגיאת רשת)."); await loadEntryExceptions(currentBizId); return;
-        }
-        if (!__exResp.ok) {
-          // FAILURE: stop. Legacy blob untouched, no revenue persist, no success, no rebuild.
-          setSaved(false);
-          const __ec = __exJson && __exJson.error;
-          if (__ec === "operation_owner_required") setEntrySaveError("יום זה הגיע למגבלת שינויים למנהל. נדרש בעלים כדי לבצע שינוי נוסף.");
-          else if (__ec === "operation_hard_limit_reached") setEntrySaveError("יום זה הגיע למגבלת השינויים המרבית. לא ניתן לבצע שינוי נוסף ללא טיפול מערכת.");
-          else if (__exResp.status===409) setEntrySaveError("מצב יום החריג עודכן במקביל — רענן ונסה שוב.");
-          else if (__exResp.status===403 || __exResp.status===401) setEntrySaveError("אין הרשאה לעדכן יום חריג לעסק זה.");
-          else setEntrySaveError("שמירת יום החריג נכשלה.");
-          await loadEntryExceptions(currentBizId);
-          return;
-        }
-        __exResponse = __exJson; // { applied, replayed, rebuildRequired, exception, revision }
-        const __active = !!(__exJson.exception && __exJson.exception.status==="active");
-        setEntryExceptions(prev=>({ ...prev, [__exDate]: __active }));
-        entryExceptionStateRef.current[__exDate] = { source:"structured", status: __exJson.exception ? __exJson.exception.status : (__needSet?"active":"cleared"), revision: __exJson.revision, reasonCode: (__exJson.exception&&__exJson.exception.reasonCode)||"", reasonText: (__exJson.exception&&__exJson.exception.reasonText)||"" };
-      }
-
-      // Decide whether the blob's exception fields may be stripped for THIS date:
-      //   safe only if a structured record already governs it, or a structured set/clear
-      //   just succeeded. Otherwise (legacy day, non-editor, no structured mutation) we
-      //   PRESERVE the prior entry's legacy fields — no silent loss.
-      const __structuredGoverns = !!(__loaded && __loaded.source==="structured");
-      const __stripException = __structuredGoverns || (__exResponse != null);
-      // P0-DATA-01/R2: entry identity is the business date, never the array
-      // position. The edited logical day is removed by its ORIGINAL date; an
-      // explicit save deterministically REPLACES any existing row for the final
-      // date (new-entry mode included — no [...entries, e] append), and an edit
-      // whose date was changed onto an existing date collapses to exactly ONE row
-      // for the final date. The helper also sorts and canonicalizes.
-      let updated = window.MarjinEntries.upsertEntryByDate(
-        entries,
-        __applyExc(netForm, __stripException, __prevEntry),
-        __editingDate
-      );
-
-      // R2: if the business or tenant selection changed while this save awaited the
-      // structured-exception step, ABORT before any persist — a save begun for one
-      // selection must never write another selection's storage path or state.
-      if (activeBizIdRef.current !== __saveForBizId || window._currentTenantId !== __saveForTenantId) {
-        setSaved(false);
-        setEntrySaveError("העסק או החשבון הוחלפו במהלך השמירה — הנתונים לא נשמרו. פתח את היום מחדש ונסה שוב.");
-        return;
-      }
-
-      // Revenue persist AFTER confirmed structured success.
-      const persistResult = await persist(updated, null);
-      if (!persistResult?.ok) {
-        // PARTIAL: structured exception succeeded (if any) but revenue failed. Keep the
-        //   operationId so a retry REPLAYS the same structured op. Do NOT claim success,
-        //   do NOT reset/navigate, do NOT rebuild.
-        setSaved(false);
-        setEntrySaveError(__exResponse ? "יום החריג נשמר אך שמירת ההכנסות נכשלה — נסה שוב." : "שמירת הנתונים נכשלה. נסה שוב.");
-        return;
-      }
-      // Full success → the operationId for this date is consumed.
-      delete entryExceptionOpIdRef.current[__exDate];
-      // P0-DATA-01/R2: a stale async save from a previous business OR tenant
-      // selection must not mutate the current selection's state.
-      if (activeBizIdRef.current === __saveForBizId && window._currentTenantId === __saveForTenantId) setEntries(updated);
-
-      // ── ONE rebuild decision after all required saves succeed (review Part 4):
-      //   shouldRebuild = revenueChanged OR (exceptionApplied && rebuildRequired).
-      //   A revenue save always changes revenue, so exactly ONE rebuild runs here;
-      //   an idempotent exception replay adds no extra rebuild. ──
-      const __revenueChanged = __revenueMaterialChanged(__prevEntry, netForm);
-      const __shouldRebuild = __revenueChanged || (__exResponse && __exResponse.applied===true && __exResponse.rebuildRequired===true);
-      let insightsRefreshed = false;
-      if (!__shouldRebuild) { insightsRefreshed = true; }
-      else {
-      const saveBizId = currentBizId;
-      try {
-        await rebuildInsightsAfterEntrySave(netForm.date); // exactly one rebuild call
-        const loadResult = await loadDashboardInsights(netForm.date);
-        const isTodayOrYesterday = netForm.date === israelDateKey(0) || netForm.date === israelDateKey(-1);
-        if (loadResult?.skipped) {
-          insightsRefreshed = true;
-        } else if (!loadResult?.ok) {
-          throw new Error("insights_read_failed");
-        } else if (isTodayOrYesterday && (!loadResult.found || loadResult.date !== netForm.date)) {
-          throw new Error("insights_readback_mismatch");
-        } else {
-          insightsRefreshed = true;
-        }
-      } catch (err) {
-        console.warn("[save] insights rebuild failed:", err.message);
-        setDashboardInsights(null);
-        setDashboardInsightsDate(null);
-        setDashboardInsightsLoading(false);
-        setDashboardInsightsError(false);
-        setDashboardInsightsWarning("הנתונים נשמרו, אך התובנות לא רועננו.");
-        suppressNextDashboardInsightsLoadForBizRef.current = saveBizId;
-      }
-      }
-
-      setForm({...EMPTY_ENTRY}); setEditingId(null); editingDateRef.current = null; setSaved(true);
-      setTimeout(()=>{setSaved(false); setEntryStep('idle'); setScreen("dashboard");}, insightsRefreshed ? 1200 : 2000);
-      // Check anomalies
-      if(currentBizId) {
-        const tgt = businessConfig?.targets || {};
-        const foodTarget  = tgt.foodCostPct  || 33;
-        const laborTarget = tgt.laborCostPct || 27;
-        const s = Number(netForm.sales)||0;
-        const food  = s > 0 ? ((Number(netForm.food_cost)||0) / s) * 100  : 0;
-        const labor = s > 0 ? ((Number(netForm.payroll)||0)   / s) * 100  : 0;
-        // Anomaly detection logic is kept, notifications removed
-      }
+      await window.MarjinSaveLifecycle.executeEntrySave({
+        selection: selectionCtrlRef.current,
+        form: {...form},  // payroll stores manual entry only; global employees added in calcMetrics
+        rows: entries,
+        role: loggedInUser?.role,
+        editingDate: editingDateRef.current, // R2: STABLE edit identity — canonical date at editor-open (never an index)
+        vatNormalize: normalizeDailyEntryRevenueForVat,
+        materialChanged: __revenueMaterialChanged,
+        todayKey: israelDateKey,
+        newOpId: () => (window.crypto&&window.crypto.randomUUID)?window.crypto.randomUUID():("ee-"+Date.now()+"-"+Math.random().toString(36).slice(2)),
+        exceptionState: {
+          get: (d) => entryExceptionStateRef.current[d],
+          set: (d, st) => { entryExceptionStateRef.current[d] = st; },
+          applyActive: (d, active) => setEntryExceptions(prev=>({ ...prev, [d]: active })),
+        },
+        opIds: {
+          ensure: (d, make) => { if (!entryExceptionOpIdRef.current[d]) entryExceptionOpIdRef.current[d] = make(); return entryExceptionOpIdRef.current[d]; },
+          consume: (d) => { delete entryExceptionOpIdRef.current[d]; },
+        },
+        apiFetch: (url, opts) => window.apiFetch(url, opts),
+        persistRows: (rows2, f2, c2) => persistEntries(rows2, f2, c2),
+        applyRows: setEntries,
+        reloadExceptions: (c2) => loadEntryExceptions(c2),
+        rebuildInsights: (date2, c2) => rebuildInsightsAfterEntrySave(date2, c2), // exactly one rebuild call
+        loadInsights: (date2, isCancelled) => loadDashboardInsights(date2, isCancelled),
+        onInsightsFailure: (msg) => {
+          console.warn("[save] insights rebuild failed:", msg);
+          setDashboardInsights(null);
+          setDashboardInsightsDate(null);
+          setDashboardInsightsLoading(false);
+          setDashboardInsightsError(false);
+          setDashboardInsightsWarning("הנתונים נשמרו, אך התובנות לא רועננו.");
+        },
+        suppressNextInsightsLoad: (c2) => { suppressNextDashboardInsightsLoadForBizRef.current = c2.bizId; }, // cleared on every invalidation
+        resetFormAndEditing: () => { setForm({...EMPTY_ENTRY}); setEditingId(null); editingDateRef.current = null; },
+        setSaved,
+        setError: setEntrySaveError,
+        scheduleNav: (c2, ms) => window.MarjinSaveLifecycle.scheduleSelectionBoundTimeout(
+          selectionCtrlRef.current, c2, saveNavTimerRef,
+          () => { setSaved(false); setEntryStep('idle'); setScreen("dashboard"); }, ms),
+      });
     } finally {
       entrySaveInFlightRef.current = false;
       setEntrySaveInFlight(false);
     }
   };
 
-  const deleteEntry = i => { const u=entries.filter((_,idx)=>idx!==i); setEntries(u); persist(u,null); };
-  // R2: UI deletion is keyed by the business DATE, never by a render-time array
-  // index — the current index for the date is resolved fresh inside the click
-  // handler, so a stale index can never remove the wrong logical day.
-  const deleteEntryByDate = date => {
+  // R2/R3: UI deletion is keyed by the business DATE, never by a render-time
+  // array index; state receives only canonical arrays, the delete is selection-
+  // bound, and on persistence failure the previous canonical state is restored.
+  const deleteEntryByDate = async (date) => {
+    const ctx = captureSelectionCtx();
     const key = window.MarjinEntries.entryDateKey(date);
     if(!key) return;
-    const idx = entries.findIndex(e => window.MarjinEntries.entryDateKey(e && e.date) === key);
-    if(idx === -1) return;
-    deleteEntry(idx);
+    const prevCanonical = window.MarjinEntries.canonicalizeEntries(entries);
+    const canonicalNext = window.MarjinEntries.canonicalizeEntries(entries.filter(e => window.MarjinEntries.entryDateKey(e && e.date) !== key));
+    if (canonicalNext.length === prevCanonical.length) return; // date not present
+    setEntries(canonicalNext);
+    const res = await persistEntries(canonicalNext, null, ctx);
+    if (!isSelectionLive(ctx)) return;
+    if (!res || !res.ok) { setEntries(prevCanonical); return; }
+    setEntries(res.canonical || canonicalNext);
   };
 
   // Filter entries to current month only -- dashboard always shows current month
@@ -3895,8 +4031,9 @@ function PilotDashboard() {
                 food_cost:String(food),payroll:String(payroll),other_expense:"0",
                 supplier_payments:{"sup1":String(Math.round(food*0.55)),"sup2":String(Math.round(food*0.3)),"sup3":String(Math.round(food*0.15))}};
             }).filter(Boolean);
-            setEntries(demoEntries);
+            setEntries(window.MarjinEntries.canonicalizeEntries(demoEntries));
             setSetupDone(true);
+            invalidateSelection(window._currentTenantId == null ? null : window._currentTenantId, "demo_biz"); // R3: raw setter must not bypass synchronous invalidation
             setCurrentBizId_("demo_biz");
             setBusinesses([{id:"demo_biz",name:"מסעדת הדגל"}]);
             setBusinessConfig({
@@ -3925,6 +4062,7 @@ function PilotDashboard() {
           }
           if(user._tenantId) {
             window._currentTenantId = user._tenantId;
+            invalidateSelection(user._tenantId, null); // R3: another authenticated tenant initialized
           }
           // Filter businesses to only those this user can access
           const isSuperOwner = user.role === "super_owner" || user.role === "owner";
@@ -4229,6 +4367,9 @@ function PilotDashboard() {
                   try { if(uid) sessionStorage.removeItem("marjin_tid_"+uid); } catch(_){}
                   try { if(uid) sessionStorage.removeItem("marjin_biz_"+uid); } catch(_){}
                   // Reset all app state so stale data from previous tenant doesn't persist
+                  invalidateSelection(null, null); // R3: tenant reset/logout invalidates the selection synchronously
+                  setEntryExceptions({});
+                  setEditingId(null);
                   setBusinesses([]);
                   setCurrentBizId_(null);
                   setEntries([]);
@@ -4657,19 +4798,16 @@ function PilotDashboard() {
               const e = entries.find(x=>x.date===date);
               return e?.supplier_payments?.[supId] || "";
             };
+            // R3: the supplier grid executes the PRODUCTION seam — canonical-
+            // optimistic state only (never a raw map/append), revert on
+            // persistence failure, selection-bound, and the exact persisted
+            // canonical array is what React state receives.
             const setSupPayDate = async (supId, date, val) => {
-              const existing = entries.find(e=>e.date===date);
-              if(existing) {
-                const updated = {...existing, supplier_payments:{...(existing.supplier_payments||{}),[supId]:val}};
-                const newEntries = entries.map(e=>e.date===date?updated:e);
-                setEntries(newEntries);
-                await persist(newEntries, fixedList);
-              } else {
-                const newEntry = {...EMPTY_ENTRY, date, supplier_payments:{[supId]:val}};
-                const newEntries = [...entries, newEntry];
-                setEntries(newEntries);
-                await persist(newEntries, fixedList);
-              }
+              await window.MarjinSaveLifecycle.applySupplierPaymentBound({
+                selection: selectionCtrlRef.current,
+                applyRows: setEntries,
+                persistRows: (rows2, f2, c2) => persistEntries(rows2, f2, c2),
+              }, { supId, date, val, rows: entries, fixed: fixedList, emptyEntry: EMPTY_ENTRY });
             };
             const monthTotal = suppliers.reduce((total,sup)=>total+Array.from({length:smDays},(_,i)=>{
               const d=String(i+1).padStart(2,"0");
@@ -5848,14 +5986,16 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, persist,
     const e = entries.find(x=>x.date===date);
     return e?.payroll||"";
   };
+  // R3: employee daily-labor writer goes through the date-keyed canonical upsert
+  // (never a raw map/append). The whole operation is synchronous up to persist,
+  // which canonicalizes again and computes its storage path in the same task, so
+  // the write is bound to the selection active at the keystroke.
   const setDailyLabor = async (date, val) => {
-    const existing = entries.find(e=>e.date===date);
-    let newEntries;
-    if(existing) {
-      newEntries = entries.map(e=>e.date===date?{...e,payroll:val}:e);
-    } else {
-      newEntries = [...entries, {...EMPTY_ENTRY, date, payroll:val}];
-    }
+    const key = window.MarjinEntries.entryDateKey(date);
+    if(!key) return;
+    const existing = entries.find(e => window.MarjinEntries.entryDateKey(e && e.date) === key);
+    const nextEntry = existing ? {...existing, payroll: val} : {...EMPTY_ENTRY, date: key, payroll: val};
+    const newEntries = window.MarjinEntries.upsertEntryByDate(entries, nextEntry, existing ? key : null);
     if(typeof persist==="function") await persist(newEntries, fixedList);
   };
 

@@ -1,0 +1,8 @@
+# R3 Known Limitations
+
+- **Earliest-value-wins map policy (documented tradeoff, preserved from R2):** duplicate same-date rows merge nested maps (`supplier_payments`, `hourly_payroll`) by key union keeping the EARLIEST value; a repeated key is never summed. This prevents replay inflation but undercounts a genuine legacy duplicate row that meant a second same-supplier partial payment. Richer conflict-intent semantics belong to the future S2/S4 contract (Codex NB-001).
+- **Monolith test seam:** the save/exception/supplier orchestration is executed in tests via the vm-extracted `window.MarjinSaveLifecycle` production functions with injected deps — the exact production code, not a reimplementation. Full DOM/React mount simulation (real `useState` batching, Firebase `onValue` scheduling) is still not run in-process; the generation-token design is timing-independent, and the `[source-guard]` assertions confirm the React wiring binds the real state setters/refs to those seams.
+- **Selection identity** is `(tenantId, bizId, generation)`; `editingId` (array index) remains for display only and cannot drive logical mutation.
+- **Validation env:** symlinked `node_modules`; plain `tsc` reports the documented 22 TS2742 symlink-path artifacts (0 under `--preserveSymlinks`; 0 with a real install per S0's accepted validation).
+- Device-VM git quirk: self-created stale `.git` lock files renamed aside (`*.mv_<ts>`), never deleted; worktree-link files rewritten to host paths post-commit.
+- One helper-staging directory used while creating the worktree was moved to `_to_delete_r3stage/` (VM cannot delete); it contains no repository-tracked content.

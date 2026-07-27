@@ -1,0 +1,10 @@
+index.html
+test/dashboard/entries-lifecycle.test.mjs
+artifacts/p0-data-01-r3/CHANGE_SUMMARY.md
+artifacts/p0-data-01-r3/ROOT_CAUSE_AND_INVARIANTS.md
+artifacts/p0-data-01-r3/TEST_RESULTS.md
+artifacts/p0-data-01-r3/REVIEW_GUIDE.md
+artifacts/p0-data-01-r3/KNOWN_LIMITATIONS.md
+artifacts/p0-data-01-r3/SCOPE_COMPLIANCE.md
+artifacts/p0-data-01-r3/WRITER_AND_ASYNC_MATRIX.md
+artifacts/p0-data-01-r3/FILES_CHANGED.txt
