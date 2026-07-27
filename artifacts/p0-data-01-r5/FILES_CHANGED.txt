@@ -1,0 +1,50 @@
+P0-DATA-01 R5 — Files Changed
+Branch: claude/p0-data-01-r5-final-lifecycle-convergence
+Base (R4): 6c4d9eb1c7faf31d75fcea1649f92aaa130ea506
+Commit subject: fix: converge production entry lifecycle
+
+MODIFIED (runtime, allowed):
+  index.html
+    - createEntriesWriteCoordinator REWRITTEN to a GLOBAL single-flight terminal-write pump
+      with per-generation lanes (desiredRev/committedRev/attemptedRev/expectedEchoes/waiters),
+      own-echo drain, and settled {status,rev,latest} results. Removed the shared pending counter.
+    - onListenerEcho(rows, ctx): stale-ctx reject, pending ignore, own-echo drain, apply+self-heal
+      routed through the same pump (captured-tenant persistence).
+    - NEW seams: createInsightUiLoader (dashboard insight setter orchestration), createSaveUiRunner
+      (ownership + observable in-flight), createExceptionOwnership (selection-bound op-ID/state store),
+      applySupplierWriteResult (supplier failure arbitration). Freeze exports updated.
+    - Component wiring: exceptionOwnershipRef replaces entryExceptionStateRef/OpIdRef; saveUiRunnerRef,
+      insightUiLoaderRef added; invalidateSelection resets exception ownership; setCurrentBizId +
+      useEffect2 clear supplierWriteError. saveEntry delegates to createSaveUiRunner; loadDashboardInsights
+      delegates to createInsightUiLoader; setSupPayDate inspects the result and delegates to
+      applySupplierWriteResult; the entries listener delegates to onListenerEcho(val, ctxAtSetup) and the
+      raw mutable-tenant self-heal write was removed. New supplierWriteError state + alert banner in the
+      supplier grid.
+
+MODIFIED (test, allowed):
+  test/dashboard/entries-lifecycle.test.mjs
+    - 53 tests (38 [prod-helper], 9 [prod-entries], 6 [source-guard]); extraction needle updated to the
+      R5 freeze line. Supplier tests compose the REAL coordinator + REAL createPersistence + a COMMITTING
+      deferred store and assert terminal persisted storage. New: PROBE A/B/C, switch-away-and-back,
+      createSaveUiRunner (S19-24), createInsightUiLoader (S14), createExceptionOwnership (S17/S18/S18b),
+      applySupplierWriteResult, storage.setFor (H).
+
+ADDED (artifacts, allowed):
+  artifacts/p0-data-01-r5/CHANGE_SUMMARY.md
+  artifacts/p0-data-01-r5/CODEX_R4_REMEDIATION_CLOSURE.md
+  artifacts/p0-data-01-r5/ROOT_CAUSE_AND_INVARIANTS.md
+  artifacts/p0-data-01-r5/PRODUCTION_BOUNDARY_TEST_MATRIX.md
+  artifacts/p0-data-01-r5/WRITER_AND_ASYNC_MATRIX.md
+  artifacts/p0-data-01-r5/R2_R3_R4_R5_TEST_MAPPING.md
+  artifacts/p0-data-01-r5/TEST_RESULTS.md
+  artifacts/p0-data-01-r5/REVIEW_GUIDE.md
+  artifacts/p0-data-01-r5/KNOWN_LIMITATIONS.md
+  artifacts/p0-data-01-r5/SCOPE_COMPLIANCE.md
+  artifacts/p0-data-01-r5/FILES_CHANGED.txt
+
+UNCHANGED (byte-identical to R4):
+  package.json, package-lock.json
+
+NOT TOUCHED:
+  database.rules.json, vercel.json, api/, lib/, src/, docs/, scripts/, all other runtime files;
+  R4/R3/R2/original-P0/S0/R1.1 worktrees; canonical repo; AgentBrothers. R4 artifacts preserved unchanged.

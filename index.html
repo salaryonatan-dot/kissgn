@@ -1256,57 +1256,112 @@ function createPersistence(io) {
     },
   };
 }
-// R4 (P0-DATA-01-R3-006/007): serialized ENTRIES-ONLY supplier write coordinator.
-// A monotonic operation sequence guarantees an OLDER completion (or failure) can
-// never overwrite a NEWER same-selection edit, each queued edit is built from the
-// LATEST desired canonical state (not a pre-edit snapshot, so distinct suppliers
-// both survive), and listener echoes are neutralized while any local write is in
-// flight (so an old server echo cannot regress a newer pending value) and accepted
-// once quiescent (so the newest confirmed write converges normally). Supplier
-// writes NEVER pass fixed — entries only.
+// R5 (P0-DATA-01-R3-007): SINGLE-FLIGHT terminal-write coordinator with generation
+// lanes. Closes the R4 gap where overlapping supplier edits dispatched competing
+// terminal writes and only React state was sequence-gated (older storage could
+// commit last). Guarantees:
+//  • At most ONE terminal entries write is in flight per destination. A later edit
+//    updates the optimistic desired rows but does NOT dispatch a competing write;
+//    when the in-flight write settles, the pump persists the LATEST desired
+//    revision. Terminal storage therefore commits in dispatch order and ends at the
+//    newest payload — never an older one, regardless of transport completion order.
+//  • All accounting lives in a per-generation LANE object captured by each op.
+//    invalidate() installs a fresh lane; an old completion mutates only its retired
+//    lane, so it can never corrupt (or drive negative) the new generation's counters,
+//    and a stale echo cannot apply while the new lane has a write pending.
+//  • Listener echoes from our OWN committed writes are drained (consumed, not
+//    applied) via expectedEchoes, so a delayed OLDER echo cannot regress the UI;
+//    once no own-echoes are outstanding, an external echo applies (convergence
+//    preserved). A stale-context callback is rejected outright.
+//  • submitSupplierEdit resolves with the settled result for THIS edit's revision
+//    ({status, rev, latest}), so the production caller can surface a latest failure.
+//  • Supplier writes are ENTRIES-ONLY; terminal identity is the captured ctx.
 function createEntriesWriteCoordinator(io) {
-  let seq = 0, pending = 0, desired = null, ctxAtDesired = null;
+  const newLane = (gen) => ({ gen, desiredRows: null, desiredRev: 0, committedRev: 0,
+                              attemptedRev: 0, expectedEchoes: 0, waiters: [] });
+  let lane = newLane(0);
+  // GLOBAL single-flight: at most one terminal write to the destination is in flight
+  // at any time, ACROSS generations. So an old in-flight write (from a retired lane,
+  // e.g. after switch-away-and-back to the same business) always settles before the
+  // new lane's write is dispatched — the newest write commits last and wins; an older
+  // terminal write can never beat newer data.
+  let writing = false;
+  const resolveWaiters = (ln, uptoRev, base) => {
+    const done = ln.waiters.filter(w => w.rev <= uptoRev);
+    ln.waiters = ln.waiters.filter(w => w.rev > uptoRev);
+    done.forEach(w => w.resolve({ ...base, rev: w.rev, latest: w.rev === ln.desiredRev }));
+  };
+  const pump = async () => {
+    if (writing) return;                          // one terminal write at a time, globally
+    const ln = lane;                              // always drive the CURRENT lane
+    if (ln.desiredRev <= ln.attemptedRev) return; // nothing new since the last attempt
+    writing = true;
+    const ctx = io.selection.capture();            // terminal identity from the live captured ctx
+    const rev = ln.desiredRev;
+    const snapshot = ln.desiredRows;
+    ln.attemptedRev = rev;
+    const writeLane = ln;                           // finalize THIS lane's accounting on settle
+    let res;
+    try { res = await io.persistEntries(snapshot, ctx); }
+    finally { writing = false; }
+    if (res && res.ok) {
+      writeLane.committedRev = rev;
+      writeLane.expectedEchoes++;                   // RTDB will echo this committed write
+      resolveWaiters(writeLane, rev, { status: "applied" });
+    } else {
+      resolveWaiters(writeLane, rev, { status: (res && res.stale) ? "stale" : "persist_failed" });
+    }
+    pump();                                         // drive the CURRENT lane's newest queued revision
+  };
   return {
-    submitSupplierEdit: async (args) => {
+    submitSupplierEdit: (args) => {
       const sel = io.selection;
       const ctx = sel.capture();
+      const ln = lane;
       const key = io.entryDateKey(args.date);
-      if (!key) return { status: "invalid_date" };
-      // Build on the LATEST desired canonical state when it belongs to this live
-      // selection; otherwise fall back to the caller's current rows (canonicalized).
-      const base = (desired && ctxAtDesired && sel.isLive(ctxAtDesired)) ? desired : io.canonicalize(args.rows);
+      if (!key) return Promise.resolve({ status: "invalid_date" });
+      // Build on the LATEST desired canonical state for this live lane; otherwise the
+      // caller's current rows (canonicalized) — so distinct suppliers both survive.
+      const base = (ln.desiredRows && sel.isLive(ctx)) ? ln.desiredRows : io.canonicalize(args.rows);
       const existing = base.find(r => io.entryDateKey(r && r.date) === key);
       const nextEntry = existing
         ? { ...existing, supplier_payments: { ...(existing.supplier_payments || {}), [args.supId]: args.val } }
         : { ...(args.emptyEntry || {}), date: key, supplier_payments: { [args.supId]: args.val } };
       const canonicalNext = io.upsert(base, nextEntry, existing ? key : null);
-      const mySeq = ++seq;
-      desired = canonicalNext; ctxAtDesired = ctx; pending++;
-      io.applyRows(canonicalNext); // optimistic, canonical
-      let res;
-      try { res = await io.persistEntries(canonicalNext, ctx); }
-      finally { pending--; }
-      if (!sel.isLive(ctx)) return { status: "stale", seq: mySeq };
-      if (!res || !res.ok) {
-        // Failure: never regress. An OLDER op (mySeq<seq) does nothing; the LATEST
-        // failed op keeps its optimistic desired value and reports the failure.
-        return { status: "persist_failed", seq: mySeq, latest: mySeq === seq };
-      }
-      if (mySeq === seq) io.applyRows(res.canonical || canonicalNext); // apply exact canonical ONLY if still latest
-      return { status: "applied", seq: mySeq, latest: mySeq === seq };
+      ln.desiredRows = canonicalNext;
+      const myRev = ++ln.desiredRev;
+      io.applyRows(canonicalNext);                  // optimistic UI is always the newest edit
+      const settled = new Promise(resolve => ln.waiters.push({ rev: myRev, resolve }));
+      pump();
+      return settled;
     },
-    // Listener echo: ignore while local writes are pending (an echo can only carry
-    // an equal-or-older value then); apply+converge once quiescent (R2 canonical
-    // hydration preserved). Returns the applied canonical so self-heal can proceed.
-    onListenerEcho: (rows) => {
-      if (pending > 0) return { status: "ignored_pending" };
+    // Production listener echo handler. `ctx` = the listener's captured selection.
+    onListenerEcho: (rows, ctx) => {
+      const sel = io.selection;
+      if (ctx && !sel.isLive(ctx)) return { status: "stale" };  // stale tenant/business/generation
+      const ln = lane;
+      if (writing || ln.desiredRev > ln.attemptedRev) return { status: "ignored_pending" };
+      if (ln.expectedEchoes > 0) { ln.expectedEchoes--; return { status: "ignored_own_echo" }; }
       const canonical = io.canonicalize(rows);
-      desired = canonical; ctxAtDesired = io.selection.capture();
       io.applyRows(canonical);
+      ln.desiredRows = canonical;
+      const rawLen = Array.isArray(rows) ? rows.length : 0;
+      if (canonical.length < rawLen) {
+        // Duplicates hydrated → self-heal write-back through the SAME single-flight
+        // pump (captured-tenant persistence), so it cannot race a supplier write.
+        ln.desiredRev++;
+        pump();
+      } else {
+        ln.committedRev = ln.desiredRev;            // in sync with server; no write-back
+        ln.attemptedRev = ln.desiredRev;
+      }
       return { status: "applied", canonical };
     },
-    invalidate: () => { seq = 0; pending = 0; desired = null; ctxAtDesired = null; },
-    _state: () => ({ seq, pending, desired }),
+    invalidate: () => { lane = newLane(lane.gen + 1); }, // fresh accounting; old lane retired
+    _state: () => ({ gen: lane.gen, desiredRev: lane.desiredRev, committedRev: lane.committedRev,
+                     attemptedRev: lane.attemptedRev, writing,
+                     pending: lane.desiredRev - lane.committedRev, expectedEchoes: lane.expectedEchoes,
+                     desired: lane.desiredRows }),
   };
 }
 // R4 (P0-DATA-01-R3-005): generation-bound SAVE OWNERSHIP token. begin() blocks a
@@ -1355,6 +1410,76 @@ function createInsightReadback(io) {
       return { ok: true, found: false, date: null, insights: null };
     },
   };
+}
+// R5 (P0-DATA-01-R3-003): production insight-UI loader. Orchestrates the dashboard
+// insight SETTERS (loading/data/date/error/warning) around the ctx-bound readback,
+// checking cancellation (explicit OR bumped selection) BEFORE the first setter and
+// AFTER the readback — so a stale/cancelled load performs ZERO setter mutations.
+// The React loadDashboardInsights delegates to this; tests spy the ports directly.
+function createInsightUiLoader(io) {
+  // io: { readback, candidatesReady(ctx), isCancelled(ctx), ports:{ clearAll,setLoading,setError,setWarning,setData,setDate } }
+  return {
+    load: async (ctx, preferredDate, isCancelled) => {
+      const cancelled = () => (typeof isCancelled === "function" && !!isCancelled()) || io.isCancelled(ctx);
+      if (!io.candidatesReady(ctx)) { io.ports.clearAll(); return { ok: false, skipped: true }; }
+      if (cancelled()) return { ok: false, cancelled: true };   // stale entry: zero setter mutation
+      io.ports.setLoading(true); io.ports.setError(false); io.ports.setWarning(""); io.ports.setData(null); io.ports.setDate(null);
+      const res = await io.readback.loadRange(ctx, preferredDate, isCancelled);
+      if (cancelled() || res.cancelled) return { ok: false, cancelled: true }; // stale after readback: no result setters
+      if (res.error) { io.ports.setData(null); io.ports.setDate(null); io.ports.setError(true); io.ports.setLoading(false); return { ok: false }; }
+      io.ports.setData(res.insights); io.ports.setDate(res.date); io.ports.setLoading(false);
+      return { ok: true, found: !!res.found, date: res.date, insights: res.insights };
+    },
+  };
+}
+// R5 (P0-DATA-01-R3-005): production save-UI runner. Wraps ownership acquisition,
+// the OBSERVABLE in-flight setter, and the owns-gated finally into one executable
+// helper the React saveEntry delegates to — so tests exercise the real in-flight
+// state transitions across business/tenant switch, logout and unmount, not a
+// simulated boolean. A duplicate same-selection submit is blocked (started:false);
+// a stale finally can never clear a newer selection's in-flight flag/token.
+function createSaveUiRunner(io) {
+  // io: { ownership, selection, setInFlight(bool), makeOpId() }
+  return {
+    run: async (ctx, execute) => {
+      const token = io.ownership.begin(io.selection, ctx, io.makeOpId);
+      if (!token) return { started: false, reason: "duplicate" };
+      io.setInFlight(true);
+      try { return { started: true, result: await execute(token) }; }
+      finally {
+        if (io.ownership.owns(token)) io.setInFlight(false);
+        io.ownership.settle(token);
+      }
+    },
+  };
+}
+// R5 (P0-DATA-01-R3-003): selection-bound exception op-ID + effective-state store.
+// Op IDs and effective-exception state live in a generation lane; invalidate()
+// installs a fresh store, so an op ID minted under T1/A can never be reused,
+// consumed or read by T2/A (same business date, different tenant/generation).
+// Replay within ONE live selection is preserved (the same date reuses its op ID).
+function createExceptionOwnership() {
+  let store = { states: {}, ops: {} };
+  return {
+    getState: (d) => store.states[d],
+    setState: (d, st) => { store.states[d] = st; },
+    replaceStates: (m) => { store.states = m || {}; },
+    ensureOpId: (d, make) => { if (!store.ops[d]) store.ops[d] = make(); return store.ops[d]; },
+    consumeOpId: (d) => { delete store.ops[d]; },
+    invalidate: () => { store = { states: {}, ops: {} }; },
+    _state: () => ({ ops: { ...store.ops }, states: { ...store.states } }),
+  };
+}
+// R5 (P0-DATA-01-R3-006): production supplier-result → visible-error arbitration.
+// ONLY the latest live op touches the error surface: a latest failure sets it, a
+// latest success clears it, and an older result (latest:false) leaves it untouched
+// — so overlapping edits cannot corrupt the surfaced error. This is the exact
+// function the production setSupPayDate caller invokes.
+function applySupplierWriteResult(res, ports) {
+  if (!res || !res.latest) return { action: "none" };
+  if (res.status === "persist_failed") { ports.setError(); return { action: "set" }; }
+  if (res.status === "applied") { ports.clearError(); return { action: "clear" }; }
+  return { action: "none" };
 }
 // The FULL selection-bound daily-entry save orchestration (structured-exception
 // step → date-keyed upsert → persist → insights rebuild/readback → form reset →
@@ -1477,7 +1602,7 @@ async function executeEntrySave(io) {
   io.scheduleNav(ctx, insightsRefreshed ? 1200 : 2000);
   return { status: "saved", insightsRefreshed };
 }
-window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, createPersistence, createEntriesWriteCoordinator, createSaveOwnership, createInsightReadback, executeEntrySave });
+window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, createPersistence, createEntriesWriteCoordinator, createSaveOwnership, createInsightReadback, createInsightUiLoader, createSaveUiRunner, createExceptionOwnership, applySupplierWriteResult, executeEntrySave });
 const TARGETS = {
   salesGrowthPct: 5,
   foodCostPct:   33,
@@ -3089,8 +3214,14 @@ function PilotDashboard() {
   //   + loaded state map (date→{revision,reasonCode,reasonText,status}) for the form and
   //   optimistic concurrency. Loaded from the server list action — NEVER the entries blob.
   const [entryExceptions, setEntryExceptions] = useState({});
-  const entryExceptionStateRef = useRef({});
-  const entryExceptionOpIdRef = useRef({}); // date→operationId, reused across retries of the SAME save (replay-safe)
+  // R5: latest supplier-write failure, selection-scoped and owned by the latest op
+  // (an older failure never sets it; a newer owned success clears it).
+  const [supplierWriteError, setSupplierWriteError] = useState("");
+  // R5: selection-bound exception op-ID + effective-state store. Op IDs/state cannot
+  // cross tenant/business (invalidation installs a fresh store); replay within one
+  // live selection is preserved. This is the exact store the tests execute.
+  const exceptionOwnershipRef = useRef(null);
+  if (!exceptionOwnershipRef.current) exceptionOwnershipRef.current = window.MarjinSaveLifecycle.createExceptionOwnership();
   const [fixedList, setFixedList] = useState(FIXED_EXPENSES_DEFAULT);
   const [lastYear, setLastYear] = useState(LAST_YEAR_2025);
   const [saved, setSaved] = useState(false);
@@ -3169,6 +3300,15 @@ function PilotDashboard() {
   });
   const saveOwnershipCtrlRef = useRef(null);
   if (!saveOwnershipCtrlRef.current) saveOwnershipCtrlRef.current = window.MarjinSaveLifecycle.createSaveOwnership();
+  // R5: production save-UI runner — the exact ownership+in-flight wrapper saveEntry
+  // delegates to (tests exercise its observable setInFlight transitions).
+  const saveUiRunnerRef = useRef(null);
+  if (!saveUiRunnerRef.current) saveUiRunnerRef.current = window.MarjinSaveLifecycle.createSaveUiRunner({
+    ownership: saveOwnershipCtrlRef.current,
+    selection: selectionCtrlRef.current,
+    setInFlight: setEntrySaveInFlight,
+    makeOpId: () => (window.crypto&&window.crypto.randomUUID)?window.crypto.randomUUID():("save-"+Date.now()+"-"+Math.random().toString(36).slice(2)),
+  });
   // Synchronous invalidation: bumps the generation and clears every
   // selection-scoped ref/timer IMMEDIATELY (never waits for a useEffect).
   // Ref/timer-only so it is safe from event handlers, effects and unmount.
@@ -3176,8 +3316,9 @@ function PilotDashboard() {
     selectionCtrlRef.current.invalidate(tenantId, bizId);
     activeBizIdRef.current = bizId == null ? null : bizId;
     editingDateRef.current = null;
-    entryExceptionStateRef.current = {};
-    entryExceptionOpIdRef.current = {};
+    // R5: fresh exception op-ID/state store — old op IDs cannot cross into the new
+    // selection (same business date under a new tenant is isolated).
+    if (exceptionOwnershipRef.current) exceptionOwnershipRef.current.invalidate();
     suppressNextDashboardInsightsLoadForBizRef.current = null;
     // R4: a pending old save loses ownership and pending supplier writes are
     // neutralized synchronously — an old finally/completion becomes a no-op for
@@ -3193,6 +3334,7 @@ function PilotDashboard() {
     setEditingId(null);
     setEntryExceptions({});
     setEntrySaveInFlight(false); // R4: an orphaned old-selection save no longer owns the UI in-flight flag
+    setSupplierWriteError(""); // R5: selection-scoped supplier error cleared on business switch
     setCurrentBizId_(id);
     // NOTE: do NOT update tenantId here — tenantId is fixed per user account
     // tenantId is set once during login/init and never changes
@@ -3381,7 +3523,8 @@ function PilotDashboard() {
     setEditingId(null);
     editingDateRef.current = null;
     setEntryExceptions({});
-    entryExceptionStateRef.current = {};
+    exceptionOwnershipRef.current.replaceStates({});
+    setSupplierWriteError(""); // R5: selection-scoped supplier error cleared on selection load
     setEntries([]);
     setFixedList(FIXED_EXPENSES_DEFAULT);
     setSuppliers([]);
@@ -3412,23 +3555,17 @@ function PilotDashboard() {
     // Live listeners -- fire immediately with current value AND on every change
     sub(`biz:${currentBizId}:entries`, (val) => {
       if(!Array.isArray(val)) return;
-      // P0-DATA-01/R2/R4: hydration/echo goes through the entries-write coordinator.
-      // It canonicalizes by business-date through the shared helper (revenue and
-      // payroll never summed; nested maps such as supplier payments merge by key
-      // union with the EARLIEST value winning — a repeated key is never added) and
-      // applies it WHOLESALE — EXCEPT while a local supplier write is still pending,
-      // when an older server echo is ignored so it cannot regress a newer pending
-      // value. Once quiescent it converges normally.
-      const echo = entriesWriteCoordRef.current.onListenerEcho(val);
-      if (echo.status !== "applied") return; // ignored while local writes pending
-      const deduped = echo.canonical;
-      // If duplicates were found — write merged version back to Firebase.
-      // R2: the self-heal write stays bound to the selection that produced its
-      // source payload — never after unsubscribe or a tenant switch.
-      if(deduped.length < val.length && live && window._currentTenantId === tenantAtSetup) {
-        console.log(`[dedup] merged ${val.length - deduped.length} duplicate entries, saving back`);
-        window.storage.set(`biz:${currentBizId}:entries`, JSON.stringify(deduped), true).catch(()=>{});
-      }
+      // R5: hydration/echo AND duplicate self-heal go through the production entries-
+      // write coordinator, bound to THIS effect run's captured selection context.
+      //  • canonicalizes by business-date through the shared helper (revenue/payroll
+      //    never summed; nested maps merge by key union, earliest value wins);
+      //  • a STALE callback (tenant/business/generation changed) applies nothing;
+      //  • an older echo cannot regress a newer pending/committed value (own-echoes
+      //    are drained; external echoes converge once quiescent);
+      //  • a detected duplicate is self-healed via the SAME single-flight pump using
+      //    captured-tenant persistence (persistEntries → the explicit-tenant transport),
+      //    never the mutable-tenant global write, so it cannot race a supplier write.
+      entriesWriteCoordRef.current.onListenerEcho(val, ctxAtSetup);
     });
     loadEntryExceptions(ctxAtSetup); // R3: bound to this effect run's selection context
     sub(`biz:${currentBizId}:fixed`,     setFixedList);
@@ -3519,38 +3656,30 @@ function PilotDashboard() {
     candidateDates: (pref) => dashboardInsightCandidateDates(pref),
     apiGetRange: ({ tenantId, bizId, fromDate, toDate }) => apiGetDailyRange("insights", bizId, fromDate, toDate, tenantId),
   });
+  // R5 (P0-DATA-01-R3-003): the insight-UI SETTER orchestration lives in the
+  // production seam createInsightUiLoader — the exact wrapper loadDashboardInsights
+  // delegates to. A stale/cancelled load performs ZERO setter mutations
+  // (loading/data/date/error/warning). Tests spy these ports directly.
+  const insightUiLoaderRef = useRef(null);
+  if (!insightUiLoaderRef.current) insightUiLoaderRef.current = window.MarjinSaveLifecycle.createInsightUiLoader({
+    readback: insightReadbackRef.current,
+    isCancelled: (ctx) => !isSelectionLive(ctx),
+    candidatesReady: (ctx) => ["super_owner","owner","manager"].includes(loggedInUser?.role) && !!(ctx && ctx.bizId),
+    ports: {
+      clearAll: clearDashboardInsightState,
+      setLoading: setDashboardInsightsLoading,
+      setError: setDashboardInsightsError,
+      setWarning: setDashboardInsightsWarning,
+      setData: setDashboardInsights,
+      setDate: setDashboardInsightsDate,
+    },
+  });
 
-  const loadDashboardInsights = async (preferredDate=null, isCancelled=()=>false, ctx=null) => {
-    const roleOk = ["super_owner", "owner", "manager"].includes(loggedInUser?.role);
+  const loadDashboardInsights = (preferredDate=null, isCancelled=()=>false, ctx=null) => {
     // The save-readback path supplies the captured save ctx; the dashboard-view
     // path supplies none and binds to the current live selection.
     const effCtx = (ctx && ctx.tenantId && ctx.bizId) ? ctx : captureSelectionCtx();
-    const bizId = effCtx.bizId;
-    if (!bizId || !roleOk) {
-      clearDashboardInsightState();
-      return { ok: false, skipped: true };
-    }
-    const cancelled = () => (typeof isCancelled === "function" && isCancelled()) || !isSelectionLive(effCtx);
-    if (cancelled()) return { ok: false, cancelled: true }; // never mutate loading/data/error on a stale entry
-    setDashboardInsightsLoading(true);
-    setDashboardInsightsError(false);
-    setDashboardInsightsWarning("");
-    setDashboardInsights(null);
-    setDashboardInsightsDate(null);
-    const res = await insightReadbackRef.current.loadRange(effCtx, preferredDate, isCancelled);
-    if (cancelled() || res.cancelled) return { ok: false, cancelled: true }; // stale path: no state mutation
-    if (res.error) {
-      // Silent fallback: never surface payloads, never break the dashboard.
-      setDashboardInsights(null);
-      setDashboardInsightsDate(null);
-      setDashboardInsightsError(true);
-      setDashboardInsightsLoading(false);
-      return { ok: false };
-    }
-    setDashboardInsights(res.insights);
-    setDashboardInsightsDate(res.date);
-    setDashboardInsightsLoading(false);
-    return { ok: true, found: !!res.found, date: res.date, insights: res.insights };
+    return insightUiLoaderRef.current.load(effCtx, preferredDate, isCancelled);
   };
 
   // ── Insight Engine v1 — load daily insights for the dashboard card ─────────
@@ -3905,13 +4034,13 @@ function PilotDashboard() {
       applyState: (stateMap, boolMap) => {
         // Effective shape: {businessDate,source,status,reasonCode,reasonText,revision,structured}
         //   — the client never infers structured-vs-legacy precedence itself.
-        entryExceptionStateRef.current = stateMap;
+        exceptionOwnershipRef.current.replaceStates(stateMap);
         setEntryExceptions(boolMap);
       },
     }, ctx);
   };
   const formWithException = (base, date) => {
-    const st = entryExceptionStateRef.current[date];
+    const st = exceptionOwnershipRef.current.getState(date);
     const active = st && st.status === "active";
     return { ...base, is_exception: !!active, exception_reason: active ? (st.reasonCode||"") : "", exception_note: active ? (st.reasonText||"") : "" };
   };
@@ -3935,21 +4064,15 @@ function PilotDashboard() {
   // another API, write another storage path, nor mutate the new selection's
   // entries/exception/insight/form/saved/warning/error/screen state.
   const saveEntry = async (skipSuppliers=false) => {
-    // R4 (P0-DATA-01-R3-005): generation-bound ownership. begin() blocks a
-    // same-selection duplicate but NOT a save in a newer selection; the finally
-    // clears in-flight UI state only if THIS token is still current, so a stale
-    // save can never unblock, clear, or mutate a newer selection's save state.
-    const ownership = saveOwnershipCtrlRef.current;
+    // R5 (P0-DATA-01-R3-005): the ownership + OBSERVABLE in-flight orchestration is
+    // the production seam createSaveUiRunner. run() blocks a same-selection duplicate
+    // (started:false), sets the in-flight flag, and clears it in a finally ONLY if
+    // THIS token still owns — so a stale finally (business/tenant switch, logout,
+    // unmount) can never clear a newer selection's in-flight flag or token.
     const ownCtx = captureSelectionCtx();
-    const saveToken = ownership.begin(
-      selectionCtrlRef.current, ownCtx,
-      () => (window.crypto&&window.crypto.randomUUID)?window.crypto.randomUUID():("save-"+Date.now()+"-"+Math.random().toString(36).slice(2))
-    );
-    if (!saveToken) return; // same live selection already saving — duplicate submission blocked
-    setEntrySaveInFlight(true);
     setEntrySaveError("");
     setDashboardInsightsWarning("");
-    try {
+    await saveUiRunnerRef.current.run(ownCtx, async () => {
       await window.MarjinSaveLifecycle.executeEntrySave({
         selection: selectionCtrlRef.current,
         form: {...form},  // payroll stores manual entry only; global employees added in calcMetrics
@@ -3961,13 +4084,13 @@ function PilotDashboard() {
         todayKey: israelDateKey,
         newOpId: () => (window.crypto&&window.crypto.randomUUID)?window.crypto.randomUUID():("ee-"+Date.now()+"-"+Math.random().toString(36).slice(2)),
         exceptionState: {
-          get: (d) => entryExceptionStateRef.current[d],
-          set: (d, st) => { entryExceptionStateRef.current[d] = st; },
+          get: (d) => exceptionOwnershipRef.current.getState(d),
+          set: (d, st) => { exceptionOwnershipRef.current.setState(d, st); },
           applyActive: (d, active) => setEntryExceptions(prev=>({ ...prev, [d]: active })),
         },
         opIds: {
-          ensure: (d, make) => { if (!entryExceptionOpIdRef.current[d]) entryExceptionOpIdRef.current[d] = make(); return entryExceptionOpIdRef.current[d]; },
-          consume: (d) => { delete entryExceptionOpIdRef.current[d]; },
+          ensure: (d, make) => exceptionOwnershipRef.current.ensureOpId(d, make),
+          consume: (d) => exceptionOwnershipRef.current.consumeOpId(d),
         },
         apiFetch: (url, opts) => window.apiFetch(url, opts),
         persistRows: (rows2, c2) => persistEntries(rows2, c2), // R4: entries-only, mandatory captured ctx
@@ -3991,12 +4114,7 @@ function PilotDashboard() {
           selectionCtrlRef.current, c2, saveNavTimerRef,
           () => { setSaved(false); setEntryStep('idle'); setScreen("dashboard"); }, ms),
       });
-    } finally {
-      // Only the still-owning operation clears the in-flight UI state. A stale
-      // finally (selection changed, or a newer save took ownership) is a no-op.
-      if (ownership.owns(saveToken)) setEntrySaveInFlight(false);
-      ownership.settle(saveToken);
-    }
+    });
   };
 
   // R2/R3: UI deletion is keyed by the business DATE, never by a render-time
@@ -4950,10 +5068,16 @@ function PilotDashboard() {
             // persistence failure, selection-bound, and the exact persisted
             // canonical array is what React state receives.
             const setSupPayDate = async (supId, date, val) => {
-              // R4: entries-ONLY, sequenced through the production write coordinator.
-              // No fixedList is passed; an older completion/failure or a listener
-              // echo can never overwrite a newer supplier value.
-              await entriesWriteCoordRef.current.submitSupplierEdit({ supId, date, val, rows: entries, emptyEntry: EMPTY_ENTRY });
+              // R5: entries-ONLY, single-flight through the production write coordinator
+              // (no fixedList). The caller INSPECTS the settled result and surfaces a
+              // LATEST-write failure in a visible supplier error state; only the latest
+              // op touches that state (an older failure never sets it, a newer owned
+              // success clears it), so overlapping edits cannot corrupt the surface.
+              const res = await entriesWriteCoordRef.current.submitSupplierEdit({ supId, date, val, rows: entries, emptyEntry: EMPTY_ENTRY });
+              window.MarjinSaveLifecycle.applySupplierWriteResult(res, {
+                setError: () => setSupplierWriteError("שמירת התשלום לספק נכשלה. הערך מוצג אך לא נשמר — נסה שוב."),
+                clearError: () => setSupplierWriteError(""),
+              });
             };
             const monthTotal = suppliers.reduce((total,sup)=>total+Array.from({length:smDays},(_,i)=>{
               const d=String(i+1).padStart(2,"0");
@@ -4966,6 +5090,13 @@ function PilotDashboard() {
             }).sort((a,b)=>b.total-a.total)[0];
             return (
               <div>
+                {/* R5: visible supplier-write failure surface (latest live op only) */}
+                {supplierWriteError&&(
+                  <div role="alert" style={{background:"#FEF2F2",border:"1px solid #FECACA",color:"#B91C1C",borderRadius:12,padding:"10px 14px",marginBottom:12,fontSize:13,fontWeight:600,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                    <span>{supplierWriteError}</span>
+                    <button onClick={()=>setSupplierWriteError("")} style={{background:"none",border:"none",color:"#B91C1C",cursor:"pointer",fontSize:16,lineHeight:1,fontFamily:"inherit"}}>×</button>
+                  </div>
+                )}
                 {/* Summary strip — total + food cost % + top supplier */}
                 {monthTotal>0&&(
                   <div style={{background:"#EEF2FF",borderRadius:12,padding:"12px 16px",marginBottom:14,border:"1px solid #E0E7FF"}}>
