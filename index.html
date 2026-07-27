@@ -1256,36 +1256,38 @@ function createPersistence(io) {
     },
   };
 }
-// R5 (P0-DATA-01-R3-007): SINGLE-FLIGHT terminal-write coordinator with generation
-// lanes. Closes the R4 gap where overlapping supplier edits dispatched competing
-// terminal writes and only React state was sequence-gated (older storage could
-// commit last). Guarantees:
-//  • At most ONE terminal entries write is in flight per destination. A later edit
-//    updates the optimistic desired rows but does NOT dispatch a competing write;
-//    when the in-flight write settles, the pump persists the LATEST desired
-//    revision. Terminal storage therefore commits in dispatch order and ends at the
-//    newest payload — never an older one, regardless of transport completion order.
-//  • All accounting lives in a per-generation LANE object captured by each op.
-//    invalidate() installs a fresh lane; an old completion mutates only its retired
-//    lane, so it can never corrupt (or drive negative) the new generation's counters,
-//    and a stale echo cannot apply while the new lane has a write pending.
-//  • Listener echoes from our OWN committed writes are drained (consumed, not
-//    applied) via expectedEchoes, so a delayed OLDER echo cannot regress the UI;
-//    once no own-echoes are outstanding, an external echo applies (convergence
-//    preserved). A stale-context callback is rejected outright.
-//  • submitSupplierEdit resolves with the settled result for THIS edit's revision
-//    ({status, rev, latest}), so the production caller can surface a latest failure.
-//  • Supplier writes are ENTRIES-ONLY; terminal identity is the captured ctx.
+// R6 (P0-DATA-01-R3-007): ONE DESTINATION-WIDE entries lane. Closes the R5 gap where
+// only supplier edits entered the coordinator while main-save / delete / clear-all /
+// employee-labor / self-heal called persistEntries directly and could overlap the SAME
+// biz:{bizId}:entries destination. EVERY full-blob entries writer now routes through
+// this one lane via submit(op); the raw persistence transport (io.persist) is called
+// ONLY here. Guarantees:
+//  • GLOBAL single-flight per destination: at most one terminal write is in flight,
+//    across generations. Logical operation order (not transport completion order)
+//    determines the terminal result; a newer op never dispatches before an older
+//    terminal write to the same destination settles; on settle the pump persists the
+//    latest non-cancelled desired revision → newest wins, older can never overwrite.
+//  • Intent semantics: `replace` sets desired wholesale (main save wins wholesale,
+//    clear-all → []); `transform(desired)` maps the LATEST desired canonical rows
+//    (supplier, labor, delete) so no logical edit is computed from a stale snapshot.
+//  • Per-generation lanes; invalidate() settles every NOT-YET-DISPATCHED waiter exactly
+//    once (`cancelled_selection_changed`) and installs a fresh lane. The active write
+//    finishes against its captured destination and finalizes only its retired lane.
+//  • Content-FINGERPRINT echo ownership (Firebase local-before-ack safe): each dispatch
+//    registers the canonical payload fingerprint BEFORE the write acks; an echo whose
+//    fingerprint matches an unconsumed own record is our own (local OR post-ack) and is
+//    consumed+ignored; a non-matching payload is external (applied when quiescent,
+//    deferred while a local op is pending) — never consumed by a blind counter. Own
+//    fingerprints are bounded (last 16) so an identical FUTURE remote payload is not
+//    permanently blacklisted.
+//  • Terminal identity is always the captured ctx (never mutable _currentTenantId).
 function createEntriesWriteCoordinator(io) {
   const newLane = (gen) => ({ gen, desiredRows: null, desiredRev: 0, committedRev: 0,
-                              attemptedRev: 0, expectedEchoes: 0, waiters: [] });
+                              attemptedRev: 0, retired: false, waiters: [] });
   let lane = newLane(0);
-  // GLOBAL single-flight: at most one terminal write to the destination is in flight
-  // at any time, ACROSS generations. So an old in-flight write (from a retired lane,
-  // e.g. after switch-away-and-back to the same business) always settles before the
-  // new lane's write is dispatched — the newest write commits last and wins; an older
-  // terminal write can never beat newer data.
   let writing = false;
+  const ownPending = [];                            // [{fp, rev}] own-write fingerprints (bounded)
+  const fp = (rows) => io.fingerprint(rows);
   const resolveWaiters = (ln, uptoRev, base) => {
     const done = ln.waiters.filter(w => w.rev <= uptoRev);
     ln.waiters = ln.waiters.filter(w => w.rev > uptoRev);
@@ -1300,55 +1302,76 @@ function createEntriesWriteCoordinator(io) {
     const rev = ln.desiredRev;
     const snapshot = ln.desiredRows;
     ln.attemptedRev = rev;
+    ownPending.push({ fp: fp(snapshot), rev });    // register BEFORE ack (local-before-ack safe)
+    while (ownPending.length > 16) ownPending.shift(); // bounded — never permanently blacklists
     const writeLane = ln;                           // finalize THIS lane's accounting on settle
     let res;
-    try { res = await io.persistEntries(snapshot, ctx); }
+    try { res = await io.commit(snapshot, ctx); }   // raw entries transport (private to this lane)
     finally { writing = false; }
     if (res && res.ok) {
       writeLane.committedRev = rev;
-      writeLane.expectedEchoes++;                   // RTDB will echo this committed write
-      resolveWaiters(writeLane, rev, { status: "applied" });
+      resolveWaiters(writeLane, rev, { status: "applied", canonical: snapshot });
     } else {
-      resolveWaiters(writeLane, rev, { status: (res && res.stale) ? "stale" : "persist_failed" });
+      resolveWaiters(writeLane, rev, { status: (res && res.stale) ? "stale" : "persist_failed", canonical: snapshot });
     }
     pump();                                         // drive the CURRENT lane's newest queued revision
   };
+  // Generic destination submit. op = { rows?, transform?, baseRows?, apply(bool, default true) }.
+  // `rows` → wholesale REPLACE; `transform(desired)` → map the latest desired canonical rows.
+  const submit = (op) => {
+    const sel = io.selection;
+    const ln = lane;
+    let next;
+    if (op.transform) {
+      const base = (ln.desiredRows && !ln.retired) ? ln.desiredRows : io.canonicalize(op.baseRows || []);
+      const mapped = op.transform(base);
+      if (mapped == null) return Promise.resolve({ status: "noop" });
+      next = io.canonicalize(mapped);
+    } else {
+      next = io.canonicalize(op.rows || []);       // wholesale replace
+    }
+    ln.desiredRows = next;
+    const myRev = ++ln.desiredRev;
+    if (op.apply !== false) io.applyRows(next);     // optimistic UI is always the newest intent
+    const settled = new Promise(resolve => ln.waiters.push({ rev: myRev, resolve }));
+    pump();
+    return settled;
+  };
   return {
+    submit,
+    // Supplier edit: transform the LATEST desired canonical rows (entries only).
     submitSupplierEdit: (args) => {
-      const sel = io.selection;
-      const ctx = sel.capture();
-      const ln = lane;
       const key = io.entryDateKey(args.date);
       if (!key) return Promise.resolve({ status: "invalid_date" });
-      // Build on the LATEST desired canonical state for this live lane; otherwise the
-      // caller's current rows (canonicalized) — so distinct suppliers both survive.
-      const base = (ln.desiredRows && sel.isLive(ctx)) ? ln.desiredRows : io.canonicalize(args.rows);
-      const existing = base.find(r => io.entryDateKey(r && r.date) === key);
-      const nextEntry = existing
-        ? { ...existing, supplier_payments: { ...(existing.supplier_payments || {}), [args.supId]: args.val } }
-        : { ...(args.emptyEntry || {}), date: key, supplier_payments: { [args.supId]: args.val } };
-      const canonicalNext = io.upsert(base, nextEntry, existing ? key : null);
-      ln.desiredRows = canonicalNext;
-      const myRev = ++ln.desiredRev;
-      io.applyRows(canonicalNext);                  // optimistic UI is always the newest edit
-      const settled = new Promise(resolve => ln.waiters.push({ rev: myRev, resolve }));
-      pump();
-      return settled;
+      return submit({
+        baseRows: args.rows,
+        transform: (base) => {
+          const existing = base.find(r => io.entryDateKey(r && r.date) === key);
+          const nextEntry = existing
+            ? { ...existing, supplier_payments: { ...(existing.supplier_payments || {}), [args.supId]: args.val } }
+            : { ...(args.emptyEntry || {}), date: key, supplier_payments: { [args.supId]: args.val } };
+          return io.upsert(base, nextEntry, existing ? key : null);
+        },
+      });
     },
     // Production listener echo handler. `ctx` = the listener's captured selection.
+    // Firebase local-before-ack safe: own-payload identity is by content fingerprint.
     onListenerEcho: (rows, ctx) => {
       const sel = io.selection;
       if (ctx && !sel.isLive(ctx)) return { status: "stale" };  // stale tenant/business/generation
       const ln = lane;
-      if (writing || ln.desiredRev > ln.attemptedRev) return { status: "ignored_pending" };
-      if (ln.expectedEchoes > 0) { ln.expectedEchoes--; return { status: "ignored_own_echo" }; }
       const canonical = io.canonicalize(rows);
+      const echoFp = fp(canonical);
+      const oi = ownPending.findIndex(r => r.fp === echoFp);
+      if (oi !== -1) { ownPending.splice(oi, 1); return { status: "ignored_own_echo" }; } // our own write's echo
+      // Non-matching external payload:
+      if (writing || ln.desiredRev > ln.attemptedRev) return { status: "deferred_pending_local" }; // never consumed as own
       io.applyRows(canonical);
       ln.desiredRows = canonical;
       const rawLen = Array.isArray(rows) ? rows.length : 0;
       if (canonical.length < rawLen) {
-        // Duplicates hydrated → self-heal write-back through the SAME single-flight
-        // pump (captured-tenant persistence), so it cannot race a supplier write.
+        // Duplicates hydrated → conditional self-heal through the SAME lane (captured
+        // tenant persistence); its own echo is recognised by fingerprint (no loop).
         ln.desiredRev++;
         pump();
       } else {
@@ -1357,10 +1380,19 @@ function createEntriesWriteCoordinator(io) {
       }
       return { status: "applied", canonical };
     },
-    invalidate: () => { lane = newLane(lane.gen + 1); }, // fresh accounting; old lane retired
+    invalidate: () => {
+      const old = lane;
+      old.retired = true;
+      // Settle every NOT-YET-DISPATCHED waiter exactly once; the in-flight write (rev ==
+      // attemptedRev) stays to settle naturally against its captured destination.
+      const queued = old.waiters.filter(w => w.rev > old.attemptedRev);
+      old.waiters = old.waiters.filter(w => w.rev <= old.attemptedRev);
+      queued.forEach(w => w.resolve({ status: "cancelled_selection_changed", rev: w.rev, latest: false }));
+      lane = newLane(old.gen + 1);                  // fresh accounting; old lane retired
+    },
     _state: () => ({ gen: lane.gen, desiredRev: lane.desiredRev, committedRev: lane.committedRev,
                      attemptedRev: lane.attemptedRev, writing,
-                     pending: lane.desiredRev - lane.committedRev, expectedEchoes: lane.expectedEchoes,
+                     pending: lane.desiredRev - lane.committedRev, ownPending: ownPending.length,
                      desired: lane.desiredRows }),
   };
 }
@@ -1440,17 +1472,50 @@ function createInsightUiLoader(io) {
 // a stale finally can never clear a newer selection's in-flight flag/token.
 function createSaveUiRunner(io) {
   // io: { ownership, selection, setInFlight(bool), makeOpId() }
+  let mounted = true;
   return {
     run: async (ctx, execute) => {
       const token = io.ownership.begin(io.selection, ctx, io.makeOpId);
       if (!token) return { started: false, reason: "duplicate" };
-      io.setInFlight(true);
+      if (mounted) io.setInFlight(true);
       try { return { started: true, result: await execute(token) }; }
       finally {
-        if (io.ownership.owns(token)) io.setInFlight(false);
+        if (mounted && io.ownership.owns(token)) io.setInFlight(false); // stale finally is a no-op; post-unmount is a no-op
         io.ownership.settle(token);
       }
     },
+    // R6: business / tenant / logout invalidation calls this to clear the OBSERVABLE
+    // in-flight flag for the still-mounted UI (an orphaned old save no longer owns it).
+    clearInFlight: () => { if (mounted) io.setInFlight(false); },
+    // R6: unmount marks the UI port dead BEFORE any later completion, so no React state
+    // update ever runs after unmount.
+    unmount: () => { mounted = false; },
+    isMounted: () => mounted,
+  };
+}
+// R6 (P0-DATA-01-R3-006): supplier RESULT/ERROR ownership bound to tenant+business+
+// generation (via the captured ctx) AND an operation token AND mount state — NOT the
+// lane-local `latest` flag. A result may mutate the supplier error surface only if the
+// component is mounted, its captured selection is still live, and its token still owns
+// the current supplier UI result. So an old-selection or superseded result can never
+// set or clear the current selection's error.
+function createSupplierResultOwnership() {
+  let currentToken = null;
+  let mounted = true;
+  let idc = 0;
+  return {
+    begin: (ctx) => { const t = { ctx, id: ++idc }; currentToken = t; return t; },
+    settle: (token, res, selection, ports) => {
+      if (!mounted) return { action: "unmounted" };
+      if (!token || !selection.isLive(token.ctx)) return { action: "stale" };
+      if (currentToken !== token) return { action: "superseded" };
+      if (res && res.status === "persist_failed") { ports.setError(); return { action: "set" }; }
+      if (res && res.status === "applied") { ports.clearError(); return { action: "clear" }; }
+      return { action: "none" };
+    },
+    invalidate: () => { currentToken = null; }, // selection change: old results are superseded
+    unmount: () => { mounted = false; },
+    _state: () => ({ current: currentToken && currentToken.id, mounted }),
   };
 }
 // R5 (P0-DATA-01-R3-003): selection-bound exception op-ID + effective-state store.
@@ -1602,7 +1667,7 @@ async function executeEntrySave(io) {
   io.scheduleNav(ctx, insightsRefreshed ? 1200 : 2000);
   return { status: "saved", insightsRefreshed };
 }
-window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, createPersistence, createEntriesWriteCoordinator, createSaveOwnership, createInsightReadback, createInsightUiLoader, createSaveUiRunner, createExceptionOwnership, applySupplierWriteResult, executeEntrySave });
+window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, createPersistence, createEntriesWriteCoordinator, createSaveOwnership, createInsightReadback, createInsightUiLoader, createSaveUiRunner, createExceptionOwnership, createSupplierResultOwnership, applySupplierWriteResult, executeEntrySave });
 const TARGETS = {
   salesGrowthPct: 5,
   foodCostPct:   33,
@@ -3284,20 +3349,41 @@ function PilotDashboard() {
     storageSetFor: (tenantId, key, valueStr) => window.storage.setFor(tenantId, key, valueStr, true),
     warn: (n) => { try { console.warn(`[persistEntries] canonicalized ${n} duplicate/undated entry rows before write`); } catch(_){} },
   });
-  const persistEntries = (rows, ctx) => persistenceRef.current.persistEntries(rows, ctx);
+  // R6: the raw entries transport is PRIVATE to the destination lane. UI/runtime
+  // callers must not call it directly — every full-blob entries write goes through
+  // entriesWriteCoordRef.current.submit(...). (persistFixed stays direct: fixed is a
+  // different destination.)
+  const persistEntriesRaw = (rows, ctx) => persistenceRef.current.persistEntries(rows, ctx);
   const persistFixed = (fixed, ctx) => persistenceRef.current.persistFixed(fixed, ctx);
-  // R4: serialized entries-only supplier write coordinator (sequencing + listener
-  // echo coordination) and the generation-bound save-ownership token — both are
-  // production seam factories the UI delegates to and the tests execute directly.
+  // R6: ONE destination-wide entries lane. supplier / main-save / delete / clear-all /
+  // employee-labor / self-heal all route through this single instance, so no two
+  // full-blob writes to biz:{bizId}:entries can overlap. It is the exact code the
+  // tests execute (via window.MarjinSaveLifecycle.createEntriesWriteCoordinator).
   const entriesWriteCoordRef = useRef(null);
   if (!entriesWriteCoordRef.current) entriesWriteCoordRef.current = window.MarjinSaveLifecycle.createEntriesWriteCoordinator({
     selection: selectionCtrlRef.current,
     canonicalize: window.MarjinEntries.canonicalizeEntries,
     upsert: window.MarjinEntries.upsertEntryByDate,
     entryDateKey: window.MarjinEntries.entryDateKey,
+    fingerprint: (rows) => JSON.stringify(rows), // deterministic: rows are already canonical
     applyRows: setEntries,
-    persistEntries: (rows, ctx) => persistEntries(rows, ctx),
+    commit: (rows, ctx) => persistEntriesRaw(rows, ctx),
   });
+  // R6: employee daily-labor is an ENTRIES transform routed through the SAME lane —
+  // it upserts payroll onto the LATEST desired canonical rows (never a stale snapshot)
+  // and can never overlap a concurrent supplier / main-save / delete write.
+  const submitLaborEntry = (date, val) => {
+    const key = window.MarjinEntries.entryDateKey(date);
+    if (!key) return Promise.resolve({ status: "invalid_date" });
+    return entriesWriteCoordRef.current.submit({
+      baseRows: entries,
+      transform: (desired) => {
+        const existing = desired.find(e => window.MarjinEntries.entryDateKey(e && e.date) === key);
+        const nextEntry = existing ? { ...existing, payroll: val } : { ...EMPTY_ENTRY, date: key, payroll: val };
+        return window.MarjinEntries.upsertEntryByDate(desired, nextEntry, existing ? key : null);
+      },
+    });
+  };
   const saveOwnershipCtrlRef = useRef(null);
   if (!saveOwnershipCtrlRef.current) saveOwnershipCtrlRef.current = window.MarjinSaveLifecycle.createSaveOwnership();
   // R5: production save-UI runner — the exact ownership+in-flight wrapper saveEntry
@@ -3309,6 +3395,14 @@ function PilotDashboard() {
     setInFlight: setEntrySaveInFlight,
     makeOpId: () => (window.crypto&&window.crypto.randomUUID)?window.crypto.randomUUID():("save-"+Date.now()+"-"+Math.random().toString(36).slice(2)),
   });
+  // R6: supplier RESULT/ERROR ownership bound to tenant+business+generation+token+mount.
+  const supplierResultOwnershipRef = useRef(null);
+  if (!supplierResultOwnershipRef.current) supplierResultOwnershipRef.current = window.MarjinSaveLifecycle.createSupplierResultOwnership();
+  // R6: role port updated EVERY render — the once-created insight loader reads current
+  // eligibility at call time, so a null-role mount that later logs in as owner is not
+  // stuck skipping insight loads (the R5 useRef-closed-over-initial-role defect).
+  const insightRoleRef = useRef(null);
+  insightRoleRef.current = loggedInUser?.role;
   // Synchronous invalidation: bumps the generation and clears every
   // selection-scoped ref/timer IMMEDIATELY (never waits for a useEffect).
   // Ref/timer-only so it is safe from event handlers, effects and unmount.
@@ -3325,7 +3419,13 @@ function PilotDashboard() {
     // the new selection, and no pending local value can regress the next one.
     if (saveOwnershipCtrlRef.current) saveOwnershipCtrlRef.current.invalidate();
     if (entriesWriteCoordRef.current) entriesWriteCoordRef.current.invalidate();
+    if (supplierResultOwnershipRef.current) supplierResultOwnershipRef.current.invalidate();
     if (saveNavTimerRef.current) { clearTimeout(saveNavTimerRef.current); saveNavTimerRef.current = null; }
+    // R6: clear the OBSERVABLE save/supplier UI state for the still-mounted UI on EVERY
+    // invalidation path (business/tenant/logout). clearInFlight is a no-op after unmount
+    // (runner.unmount() runs first), so no post-unmount React state update ever occurs.
+    if (saveUiRunnerRef.current) saveUiRunnerRef.current.clearInFlight();
+    if (saveUiRunnerRef.current && saveUiRunnerRef.current.isMounted()) setSupplierWriteError("");
   };
   const setCurrentBizId = id => {
     // R3: invalidate synchronously BEFORE any state update — a raw later effect
@@ -3343,8 +3443,14 @@ function PilotDashboard() {
       if(uid) try { sessionStorage.setItem("marjin_biz_" + uid, id); } catch(_){}
     }
   };
-  // R3: unmount invalidates the selection so no in-flight continuation can act.
-  useEffect(() => () => { invalidateSelection(null, null); }, []);
+  // R3/R6: unmount marks the observable UI ports dead FIRST (so no later completion
+  // performs a post-unmount React state update), then invalidates the selection so no
+  // in-flight continuation can act.
+  useEffect(() => () => {
+    if (saveUiRunnerRef.current) saveUiRunnerRef.current.unmount();
+    if (supplierResultOwnershipRef.current) supplierResultOwnershipRef.current.unmount();
+    invalidateSelection(null, null);
+  }, []);
   const [showBizSelect, setShowBizSelect] = useState(false);
   const [entryStep, setEntryStep] = useState('idle'); // 'idle' | 'revenue' | 'suppliers'
   const [pendingCredits, setPendingCredits] = useState([]); // [{id,supplierId,supplierName,date,amount,note}]
@@ -3664,7 +3770,7 @@ function PilotDashboard() {
   if (!insightUiLoaderRef.current) insightUiLoaderRef.current = window.MarjinSaveLifecycle.createInsightUiLoader({
     readback: insightReadbackRef.current,
     isCancelled: (ctx) => !isSelectionLive(ctx),
-    candidatesReady: (ctx) => ["super_owner","owner","manager"].includes(loggedInUser?.role) && !!(ctx && ctx.bizId),
+    candidatesReady: (ctx) => ["super_owner","owner","manager"].includes(insightRoleRef.current) && !!(ctx && ctx.bizId), // R6: current role read at CALL time (null-to-owner login safe)
     ports: {
       clearAll: clearDashboardInsightState,
       setLoading: setDashboardInsightsLoading,
@@ -4093,7 +4199,11 @@ function PilotDashboard() {
           consume: (d) => exceptionOwnershipRef.current.consumeOpId(d),
         },
         apiFetch: (url, opts) => window.apiFetch(url, opts),
-        persistRows: (rows2, c2) => persistEntries(rows2, c2), // R4: entries-only, mandatory captured ctx
+        // R6: main save is a WHOLESALE REPLACE routed through the ONE destination lane
+        // (apply:false — executeEntrySave applies canonical itself). It is serialized
+        // behind any pending supplier/other entries write and, being newest, wins.
+        persistRows: (rows2, c2) => entriesWriteCoordRef.current.submit({ rows: rows2, apply: false })
+          .then(r => ({ ok: r.status === "applied", canonical: r.canonical || rows2, stale: r.status === "stale" || r.status === "cancelled_selection_changed" })),
         applyRows: setEntries,
         reloadExceptions: (c2) => loadEntryExceptions(c2),
         rebuildInsights: (date2, c2) => rebuildInsightsAfterEntrySave(date2, c2), // exactly one rebuild call
@@ -4117,21 +4227,23 @@ function PilotDashboard() {
     });
   };
 
-  // R2/R3: UI deletion is keyed by the business DATE, never by a render-time
-  // array index; state receives only canonical arrays, the delete is selection-
-  // bound, and on persistence failure the previous canonical state is restored.
+  // R2/R3/R6: UI deletion is keyed by the business DATE, never a render-time index.
+  // It is a TRANSFORM routed through the ONE destination lane — it removes the date
+  // from the LATEST desired canonical rows (never a stale React snapshot), so it can
+  // never overlap or be overwritten by a concurrent supplier/main-save/labor write.
   const deleteEntryByDate = async (date) => {
-    const ctx = captureSelectionCtx();
     const key = window.MarjinEntries.entryDateKey(date);
     if(!key) return;
-    const prevCanonical = window.MarjinEntries.canonicalizeEntries(entries);
-    const canonicalNext = window.MarjinEntries.canonicalizeEntries(entries.filter(e => window.MarjinEntries.entryDateKey(e && e.date) !== key));
-    if (canonicalNext.length === prevCanonical.length) return; // date not present
-    setEntries(canonicalNext);
-    const res = await persistEntries(canonicalNext, ctx);
-    if (!isSelectionLive(ctx)) return;
-    if (!res || !res.ok) { setEntries(prevCanonical); return; }
-    setEntries(res.canonical || canonicalNext);
+    if (!entries.some(e => window.MarjinEntries.entryDateKey(e && e.date) === key)) return; // not present in current view
+    const res = await entriesWriteCoordRef.current.submit({
+      baseRows: entries,
+      transform: (desired) => desired.filter(e => window.MarjinEntries.entryDateKey(e && e.date) !== key),
+    });
+    if (res && res.status === "persist_failed" && res.latest) {
+      // Never revert to an older value; a failed delete converges on the next listener
+      // echo. Surface, do not silently ignore.
+      try { console.warn("[delete] entries write failed; will reconcile on next sync"); } catch(_){}
+    }
   };
 
   // Filter entries to current month only -- dashboard always shows current month
@@ -5068,13 +5180,14 @@ function PilotDashboard() {
             // persistence failure, selection-bound, and the exact persisted
             // canonical array is what React state receives.
             const setSupPayDate = async (supId, date, val) => {
-              // R5: entries-ONLY, single-flight through the production write coordinator
-              // (no fixedList). The caller INSPECTS the settled result and surfaces a
-              // LATEST-write failure in a visible supplier error state; only the latest
-              // op touches that state (an older failure never sets it, a newer owned
-              // success clears it), so overlapping edits cannot corrupt the surface.
+              // R6: entries-ONLY through the ONE destination lane. The result mutates the
+              // visible supplier error ONLY through the ownership wrapper, which requires
+              // the component mounted, the captured selection still live, AND this
+              // submission's token still current — so an OLD-selection or superseded
+              // result can never set/clear the CURRENT selection's error surface.
+              const token = supplierResultOwnershipRef.current.begin(captureSelectionCtx());
               const res = await entriesWriteCoordRef.current.submitSupplierEdit({ supId, date, val, rows: entries, emptyEntry: EMPTY_ENTRY });
-              window.MarjinSaveLifecycle.applySupplierWriteResult(res, {
+              supplierResultOwnershipRef.current.settle(token, res, selectionCtrlRef.current, {
                 setError: () => setSupplierWriteError("שמירת התשלום לספק נכשלה. הערך מוצג אך לא נשמר — נסה שוב."),
                 clearError: () => setSupplierWriteError(""),
               });
@@ -5566,7 +5679,7 @@ function PilotDashboard() {
 	              <div style={{fontSize:12,color:"#94A3B8",marginTop:3}}>{monthEntries.length} ימים מוזנים · {MONTH_NAMES[MONTH]}</div>
             </div>
             {entries.length>0&&(
-              <button onClick={()=>{if(window.confirm("למחוק את כל הרשומות?")){ const u=[];setEntries(u);persistEntries(u,captureSelectionCtx());}}}
+              <button onClick={()=>{if(window.confirm("למחוק את כל הרשומות?")){ entriesWriteCoordRef.current.submit({ rows: [] }); }}}
                 style={{background:"none",border:"none",color:"#CBD5E1",padding:"4px 8px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
                 מחק הכל
               </button>
@@ -6006,7 +6119,7 @@ function PilotDashboard() {
 
       {screen==="employees" && !currentUser && (
         <div className="screen">
-          <EmployeesScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig} entries={entries} persistEntries={persistEntries} captureCtx={captureSelectionCtx}/>
+          <EmployeesScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig} entries={entries} submitLaborEntry={submitLaborEntry}/>
         </div>
       )}
 
@@ -6245,7 +6358,7 @@ function PilotDashboard() {
 
 
 // ─── Employees Screen ─────────────────────────────────────────────────────────
-function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, persistEntries, captureCtx }) {
+function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLaborEntry }) {
   const employees = businessConfig.employees || [];
   const ROLES_EMP = ["מנהל משמרת","טבח","עוזר טבח","מלצר","ברמן","קופאי","כלים","ניקיון","אחר"];
   const globalEmps = employees.filter(e=>e.type==="global"&&Number(e.monthlySalary)>0);
@@ -6263,17 +6376,11 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, persistE
     const e = entries.find(x=>x.date===date);
     return e?.payroll||"";
   };
-  // R4: employee daily-labor is an ENTRIES-only edit (it changes payroll, a
-  // per-day entries field). It goes through the date-keyed canonical upsert and
-  // persists ENTRIES ONLY with the selection context captured at the keystroke —
-  // it never rewrites fixed expenses.
+  // R6: employee daily-labor is an ENTRIES transform routed through the ONE shared
+  // destination lane (submitLaborEntry). It upserts payroll onto the latest desired
+  // canonical rows, never writes fixed, and cannot overlap another entries writer.
   const setDailyLabor = async (date, val) => {
-    const key = window.MarjinEntries.entryDateKey(date);
-    if(!key) return;
-    const existing = entries.find(e => window.MarjinEntries.entryDateKey(e && e.date) === key);
-    const nextEntry = existing ? {...existing, payroll: val} : {...EMPTY_ENTRY, date: key, payroll: val};
-    const newEntries = window.MarjinEntries.upsertEntryByDate(entries, nextEntry, existing ? key : null);
-    if(typeof persistEntries==="function") await persistEntries(newEntries, captureCtx());
+    if (typeof submitLaborEntry === "function") await submitLaborEntry(date, val);
   };
 
   const globalDailyTotal = globalEmps.reduce((a,e)=>a+Math.round(Number(e.monthlySalary)/emDays),0);

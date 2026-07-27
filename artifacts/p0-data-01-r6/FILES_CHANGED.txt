@@ -1,0 +1,51 @@
+P0-DATA-01 R6 — Files Changed
+Branch: claude/p0-data-01-r6-destination-lifecycle-convergence
+Base (R5): 088310c3bd2d597cc9ed0f6e2e8bcf38568f7d10
+Commit subject: fix: unify entries destination lifecycle
+
+MODIFIED (runtime, allowed):
+  index.html
+    - createEntriesWriteCoordinator REWRITTEN into ONE destination-wide lane: generic submit(op)
+      (replace via op.rows / transform via op.transform(desired)); global single-flight across
+      generations; per-generation lanes; explicit waiter settlement on invalidate
+      (cancelled_selection_changed); content-FINGERPRINT own-echo ownership registered at dispatch
+      (removes the scalar expectedEchoes; Firebase local-before-ack safe; bounded to 16;
+      deferred_pending_local for external-while-pending); io.commit = raw transport (private).
+    - NEW seam: createSupplierResultOwnership (tenant+business+generation+token+mount-bound supplier
+      error arbitration). createSaveUiRunner extended with mounted + clearInFlight() + unmount().
+    - Component wiring: persistEntriesRaw is private to the lane; main-save / delete / clear-all /
+      employee-labor / self-heal all route through entriesWriteCoordRef.current.submit(...);
+      EmployeesScreen receives submitLaborEntry; setSupPayDate delegates to supplierResultOwnership;
+      insightRoleRef updated every render and read by the insight loader at call time;
+      invalidateSelection clears the observable entrySaveInFlight + supplier error for the mounted UI
+      and invalidates supplier ownership; the unmount effect marks the save-UI and supplier-ownership
+      ports dead BEFORE invalidating. New supplierWriteError banner retained from R5.
+
+MODIFIED (test, allowed):
+  test/dashboard/entries-lifecycle.test.mjs
+    - 55 tests (~44 [prod-helper], 8 [prod-entries], 3 [source-guard]); extraction needle updated to
+      the R6 freeze line. Destination-lane harness composes the REAL coordinator + REAL createPersistence
+      + a COMMITTING deferred store; own echoes are read back from the store (fingerprint-exact). New:
+      R6-1 cross-writer ordering; R6-2 all intents; R6-3 transform preservation; R6-4 queued settlement;
+      R6-5 switch-back; R6-6/6b local-before-ack; R6-7 listener race; R6-8/8b convergence; R6-9/9b/9c
+      supplier error ownership; R6-10/10b insight role; R6-11 save-UI (business/tenant/logout/unmount);
+      R6-12 exception composed with executeEntrySave; R6-13 explicit-tenant storage; plus S-series
+      persistence/exception/readback/entries carried forward.
+
+ADDED (artifacts, allowed):
+  artifacts/p0-data-01-r6/CHANGE_SUMMARY.md
+  artifacts/p0-data-01-r6/CODEX_R5_REMEDIATION_CLOSURE.md
+  artifacts/p0-data-01-r6/ROOT_CAUSE_AND_INVARIANTS.md
+  artifacts/p0-data-01-r6/DESTINATION_WRITER_MODEL.md
+  artifacts/p0-data-01-r6/LISTENER_EVENT_ORDERING.md
+  artifacts/p0-data-01-r6/PRODUCTION_BOUNDARY_TEST_MATRIX.md
+  artifacts/p0-data-01-r6/R2_R3_R4_R5_R6_TEST_MAPPING.md
+  artifacts/p0-data-01-r6/TEST_RESULTS.md
+  artifacts/p0-data-01-r6/REVIEW_GUIDE.md
+  artifacts/p0-data-01-r6/KNOWN_LIMITATIONS.md
+  artifacts/p0-data-01-r6/SCOPE_COMPLIANCE.md
+  artifacts/p0-data-01-r6/FILES_CHANGED.txt
+
+UNCHANGED (byte-identical to R5): package.json, package-lock.json
+NOT TOUCHED: database.rules.json, vercel.json, api/, lib/, src/, docs/, scripts/, all other runtime
+  files; R5/R4/R3/R2/S0/R1.1 worktrees; canonical repo; AgentBrothers. R5 artifacts preserved unchanged.
