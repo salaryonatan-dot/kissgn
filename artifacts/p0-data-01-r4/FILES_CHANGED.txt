@@ -1,0 +1,49 @@
+P0-DATA-01 R4 — Files Changed
+Branch: claude/p0-data-01-r4-production-lifecycle-hardening
+Base (R3): eed85e23e95b98a6b2d2ce00425ea3faeb8f63d0
+Commit subject: fix: harden production entry lifecycle
+
+MODIFIED (runtime, allowed):
+  index.html
+    - Added window.storage.setFor (explicit-tenant write; additive, backward-compatible;
+      set/get/subscribe unchanged; identical RTDB path semantics).
+    - MarjinSaveLifecycle seam: added createPersistence, createEntriesWriteCoordinator,
+      createSaveOwnership, createInsightReadback; loadExceptionsBound preflight liveness gate;
+      executeEntrySave persistRows arity (entries-only) + loadInsights ctx threading;
+      updated freeze exports; removed applySupplierPaymentBound.
+    - Component: persistenceRef/entriesWriteCoordRef/saveOwnershipCtrlRef/insightReadbackRef;
+      persistEntries/persistFixed delegators; removed central persist(e,f,ctx) + alias;
+      invalidateSelection frees save ownership + coordinator; setCurrentBizId clears in-flight;
+      entries listener routes echoes through the coordinator; loadDashboardInsights runs the
+      production readback with ctx; apiGetDailyRange gains an explicit tenantId param; saveEntry
+      uses the ownership token with an owns-gated finally.
+    - Callers: fixed-expense modal + compact UI -> persistFixed(u, ctx); clear-all -> persistEntries;
+      supplier grid -> coordinator.submitSupplierEdit (entries only); EmployeesScreen daily labor ->
+      persistEntries(newEntries, ctx) (fixedList dropped); deleteEntryByDate -> persistEntries(next, ctx).
+
+MODIFIED (test, allowed):
+  test/dashboard/entries-lifecycle.test.mjs
+    - 46 tests (30 [prod-helper] runtime, 9 [prod-entries], 7 [source-guard]); extraction needle
+      updated to the R4 freeze line; covers all 43 mandatory scenarios; asserts prohibited
+      calls/setters NOT invoked.
+
+ADDED (artifacts, allowed):
+  artifacts/p0-data-01-r4/CHANGE_SUMMARY.md
+  artifacts/p0-data-01-r4/ROOT_CAUSE_AND_INVARIANTS.md
+  artifacts/p0-data-01-r4/CODEX_FINDINGS_CLOSURE.md
+  artifacts/p0-data-01-r4/WRITER_AND_ASYNC_MATRIX.md
+  artifacts/p0-data-01-r4/PRODUCTION_BOUNDARY_TEST_MATRIX.md
+  artifacts/p0-data-01-r4/R2_R3_R4_TEST_MAPPING.md
+  artifacts/p0-data-01-r4/TEST_RESULTS.md
+  artifacts/p0-data-01-r4/REVIEW_GUIDE.md
+  artifacts/p0-data-01-r4/KNOWN_LIMITATIONS.md
+  artifacts/p0-data-01-r4/SCOPE_COMPLIANCE.md
+  artifacts/p0-data-01-r4/FILES_CHANGED.txt
+
+UNCHANGED (verified byte-identical to R2):
+  package.json (sha256 db386420...)
+  package-lock.json (sha256 44f81f5d...)
+
+NOT TOUCHED:
+  database.rules.json, vercel.json, api/, lib/, src/, docs/, scripts/, all other runtime files;
+  R3/R2/original-P0/S0/R1.1 worktrees; canonical repo; AgentBrothers.

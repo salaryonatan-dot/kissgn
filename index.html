@@ -749,6 +749,29 @@
       },
     };
 
+    // R4 (P0-DATA-01): explicit-tenant write path. Derives the RTDB path from an
+    // EXPLICIT tenantId argument (the captured selection context) instead of the
+    // mutable _currentTenantId global — so a write dispatched after a tenant switch
+    // still lands in the originating tenant's namespace and can never be retargeted
+    // by a later selection. Path semantics are byte-identical to set(): same
+    // `tenants/{tenantId}/...` layout, same shared-key mapping, same {_v} envelope.
+    // Additive/backward-compatible: set()/get()/subscribe() are unchanged.
+    const fkeySharedForTenant = (tenantId, k) => {
+      const safe = k.replace(/[.#$\[\]]/g, "_");
+      if (safe === "app-users")      return `tenants/${tenantId}/app/users`;
+      if (safe === "app-businesses") return `tenants/${tenantId}/app/business`;
+      return `tenants/${tenantId}/${safe}`;
+    };
+    window.storage.setFor = async (tenantId, key, value, shared=false) => {
+      if (!tenantId) throw new Error("explicit tenant required");
+      const str = typeof value === "string" ? value : JSON.stringify(value);
+      const path = shared ? fkeySharedForTenant(tenantId, key) : ("tenants/" + tenantId + "/" + key.replace(/[.#$\[\]]/g, "_"));
+      if (!path) throw new Error("tenant not set for shared key: " + key);
+      const tenantRef = ref(db, path);
+      await set(tenantRef, { _v: str });
+      return { key, value: str, shared };
+    };
+
     // Live listener -- calls callback whenever any key changes
     window.storage.subscribe = (key, callback, shared=false) => {
       const path = shared ? fkeyShared(key) : fkey(key);
@@ -1177,6 +1200,10 @@ function scheduleSelectionBoundTimeout(selection, ctx, timerBox, fn, ms, setTime
 // the same context is still live after every await.
 async function loadExceptionsBound(io, ctx) {
   if (!ctx || !ctx.tenantId || !ctx.bizId || typeof io.apiFetch !== "function") return { status: "skipped" };
+  // R4 (P0-DATA-01-R3-004): preflight liveness gate. If the supplied context is
+  // ALREADY stale at invocation, send NO request — the URL is built and apiFetch
+  // is issued only while this exact selection is still live.
+  if (!io.selection.isLive(ctx)) return { status: "stale" };
   const to = io.todayKey(1), from = io.todayKey(-95);
   try {
     const resp = await io.apiFetch(`/api/admin?action=list-entry-exceptions&tenantId=${encodeURIComponent(ctx.tenantId)}&bizId=${encodeURIComponent(ctx.bizId)}&fromDate=${from}&toDate=${to}`, { method: "GET" });
@@ -1196,28 +1223,138 @@ async function loadExceptionsBound(io, ctx) {
     return { status: "applied" };
   } catch (_) { return { status: "network_error" }; /* non-fatal: forecast falls back to legacy embedded values */ }
 }
-// Selection-bound supplier-grid writer. Canonical-optimistic: state only ever
-// receives arrays that passed through canonicalizeEntries (never a raw map or
-// append); on persistence failure the previous canonical state is restored; on
-// success the EXACT canonical array that was persisted is applied.
-async function applySupplierPaymentBound(io, args) {
-  const sel = io.selection;
-  const ctx = sel.capture();
-  const key = window.MarjinEntries.entryDateKey(args.date);
-  if (!key) return { status: "invalid_date" };
-  const rows = Array.isArray(args.rows) ? args.rows : [];
-  const existing = rows.find(r => window.MarjinEntries.entryDateKey(r && r.date) === key);
-  const nextEntry = existing
-    ? { ...existing, supplier_payments: { ...(existing.supplier_payments || {}), [args.supId]: args.val } }
-    : { ...(args.emptyEntry || {}), date: key, supplier_payments: { [args.supId]: args.val } };
-  const prevCanonical = window.MarjinEntries.canonicalizeEntries(rows);
-  const canonicalNext = window.MarjinEntries.upsertEntryByDate(rows, nextEntry, existing ? key : null);
-  io.applyRows(canonicalNext);
-  const res = await io.persistRows(canonicalNext, args.fixed, ctx);
-  if (!sel.isLive(ctx)) return { status: "stale" };
-  if (!res || !res.ok) { io.applyRows(prevCanonical); return { status: "persist_failed" }; }
-  io.applyRows(res.canonical || canonicalNext);
-  return { status: "applied" };
+// R4 (P0-DATA-01-R3-001/002/006): MANDATORY-CONTEXT, DOMAIN-SPECIFIC persistence.
+// Both helpers reject a missing/invalid context, derive the storage tenant AND
+// business key from the CAPTURED ctx (never a render closure or mutable global),
+// re-check liveness immediately before dispatch, and issue EXACTLY ONE write in a
+// SINGLE data domain — entries writers never touch fixed, and vice versa, so the
+// old entries→fixed multi-write (which could retarget the fixed write to a stale
+// tenant) is structurally impossible. `io.storageSetFor(tenantId, key, valueStr)`
+// is the explicit-tenant transport (window.storage.setFor in production).
+function createPersistence(io) {
+  const validCtx = (ctx) => !!(ctx && ctx.tenantId && ctx.bizId);
+  return {
+    persistEntries: async (rows, ctx) => {
+      if (!validCtx(ctx)) return { ok: false, error: "missing_context" };
+      if (!io.selection.isLive(ctx)) return { ok: false, stale: true }; // pre-canonicalize gate
+      const rawCount = Array.isArray(rows) ? rows.length : 0;
+      const canonical = io.canonicalize(rows); // canonicalize EXACTLY once at the production boundary
+      if (rawCount !== canonical.length && io.warn) io.warn(rawCount - canonical.length);
+      if (!io.selection.isLive(ctx)) return { ok: false, stale: true }; // immediately-before-dispatch gate
+      try { await io.storageSetFor(ctx.tenantId, `biz:${ctx.bizId}:entries`, JSON.stringify(canonical)); }
+      catch (err) { return { ok: false, error: (err && err.message) || "write_failed" }; }
+      // Write confirmed. If the selection changed DURING the await, the write still
+      // landed in the originating namespace; callers re-check liveness before applying.
+      return io.selection.isLive(ctx) ? { ok: true, canonical } : { ok: true, canonical, staleAfterWrite: true };
+    },
+    persistFixed: async (fixed, ctx) => {
+      if (!validCtx(ctx)) return { ok: false, error: "missing_context" };
+      if (!io.selection.isLive(ctx)) return { ok: false, stale: true };
+      try { await io.storageSetFor(ctx.tenantId, `biz:${ctx.bizId}:fixed`, JSON.stringify(fixed)); }
+      catch (err) { return { ok: false, error: (err && err.message) || "write_failed" }; }
+      return io.selection.isLive(ctx) ? { ok: true } : { ok: true, staleAfterWrite: true };
+    },
+  };
+}
+// R4 (P0-DATA-01-R3-006/007): serialized ENTRIES-ONLY supplier write coordinator.
+// A monotonic operation sequence guarantees an OLDER completion (or failure) can
+// never overwrite a NEWER same-selection edit, each queued edit is built from the
+// LATEST desired canonical state (not a pre-edit snapshot, so distinct suppliers
+// both survive), and listener echoes are neutralized while any local write is in
+// flight (so an old server echo cannot regress a newer pending value) and accepted
+// once quiescent (so the newest confirmed write converges normally). Supplier
+// writes NEVER pass fixed — entries only.
+function createEntriesWriteCoordinator(io) {
+  let seq = 0, pending = 0, desired = null, ctxAtDesired = null;
+  return {
+    submitSupplierEdit: async (args) => {
+      const sel = io.selection;
+      const ctx = sel.capture();
+      const key = io.entryDateKey(args.date);
+      if (!key) return { status: "invalid_date" };
+      // Build on the LATEST desired canonical state when it belongs to this live
+      // selection; otherwise fall back to the caller's current rows (canonicalized).
+      const base = (desired && ctxAtDesired && sel.isLive(ctxAtDesired)) ? desired : io.canonicalize(args.rows);
+      const existing = base.find(r => io.entryDateKey(r && r.date) === key);
+      const nextEntry = existing
+        ? { ...existing, supplier_payments: { ...(existing.supplier_payments || {}), [args.supId]: args.val } }
+        : { ...(args.emptyEntry || {}), date: key, supplier_payments: { [args.supId]: args.val } };
+      const canonicalNext = io.upsert(base, nextEntry, existing ? key : null);
+      const mySeq = ++seq;
+      desired = canonicalNext; ctxAtDesired = ctx; pending++;
+      io.applyRows(canonicalNext); // optimistic, canonical
+      let res;
+      try { res = await io.persistEntries(canonicalNext, ctx); }
+      finally { pending--; }
+      if (!sel.isLive(ctx)) return { status: "stale", seq: mySeq };
+      if (!res || !res.ok) {
+        // Failure: never regress. An OLDER op (mySeq<seq) does nothing; the LATEST
+        // failed op keeps its optimistic desired value and reports the failure.
+        return { status: "persist_failed", seq: mySeq, latest: mySeq === seq };
+      }
+      if (mySeq === seq) io.applyRows(res.canonical || canonicalNext); // apply exact canonical ONLY if still latest
+      return { status: "applied", seq: mySeq, latest: mySeq === seq };
+    },
+    // Listener echo: ignore while local writes are pending (an echo can only carry
+    // an equal-or-older value then); apply+converge once quiescent (R2 canonical
+    // hydration preserved). Returns the applied canonical so self-heal can proceed.
+    onListenerEcho: (rows) => {
+      if (pending > 0) return { status: "ignored_pending" };
+      const canonical = io.canonicalize(rows);
+      desired = canonical; ctxAtDesired = io.selection.capture();
+      io.applyRows(canonical);
+      return { status: "applied", canonical };
+    },
+    invalidate: () => { seq = 0; pending = 0; desired = null; ctxAtDesired = null; },
+    _state: () => ({ seq, pending, desired }),
+  };
+}
+// R4 (P0-DATA-01-R3-005): generation-bound SAVE OWNERSHIP token. begin() blocks a
+// same-selection duplicate submission but NOT a save in a newer selection (after
+// invalidate() the old token is no longer current). owns()/settle() let only the
+// still-owning operation clear in-flight UI state; a stale finally is a no-op for a
+// newer selection, and an old operation can never clear a newer op's state.
+function createSaveOwnership() {
+  let current = null; // { opId, ctx }
+  return {
+    begin: (selection, ctx, makeOpId) => {
+      if (current && selection.isLive(current.ctx)) return null; // same live selection: duplicate blocked
+      current = { opId: makeOpId(), ctx };
+      return current;
+    },
+    owns: (token) => current !== null && current === token,
+    settle: (token) => { if (current === token) current = null; },
+    invalidate: () => { current = null; },
+    current: () => current,
+  };
+}
+// R4 (P0-DATA-01-R3-003): cancellation- AND identity-safe insight readback. Every
+// candidate request derives tenant+business from the CAPTURED ctx; cancellation
+// (explicit isCancelled OR a bumped selection) is checked BEFORE each request and
+// again AFTER each await, so a stale "not found" can never trigger a second
+// candidate request, and no request ever combines a new global tenant with an old
+// business. `io.apiGetRange({tenantId,bizId,fromDate,toDate})` is the transport.
+function createInsightReadback(io) {
+  return {
+    loadRange: async (ctx, preferredDate, isCancelled) => {
+      if (!ctx || !ctx.tenantId || !ctx.bizId) return { ok: false, error: "missing_context" };
+      const cancelled = () => (typeof isCancelled === "function" ? !!isCancelled() : false) || !io.selection.isLive(ctx);
+      for (const date of io.candidateDates(preferredDate)) {
+        if (cancelled()) return { ok: false, cancelled: true };           // before the request
+        let map;
+        try { map = await io.apiGetRange({ tenantId: ctx.tenantId, bizId: ctx.bizId, fromDate: date, toDate: date }); }
+        catch (err) {
+          if (cancelled()) return { ok: false, cancelled: true };
+          if (err && err.message === "not found") { continue; }
+          return { ok: false, error: "read_failed" };
+        }
+        if (cancelled()) return { ok: false, cancelled: true };            // immediately after it resolves
+        const doc = map && map[date];
+        if (doc) return { ok: true, found: true, date, insights: doc.insights || [] };
+      }
+      return { ok: true, found: false, date: null, insights: null };
+    },
+  };
 }
 // The FULL selection-bound daily-entry save orchestration (structured-exception
 // step → date-keyed upsert → persist → insights rebuild/readback → form reset →
@@ -1299,7 +1436,7 @@ async function executeEntrySave(io) {
   const __stripException = __structuredGoverns || (__exResponse != null);
   const updatedRows = window.MarjinEntries.upsertEntryByDate(io.rows, __applyExc(netForm, __stripException, __prevEntry), io.editingDate);
   if (!sel.isLive(ctx)) return { status: "stale" }; // pre-persist: never write another selection's path
-  const persistResult = await io.persistRows(updatedRows, null, ctx);
+  const persistResult = await io.persistRows(updatedRows, ctx); // R4: entries-only, mandatory captured ctx
   if (!sel.isLive(ctx)) return { status: "stale" }; // post-persist: never mutate the new selection
   if (!persistResult || !persistResult.ok) {
     // PARTIAL: structured exception succeeded (if any) but revenue failed. Keep
@@ -1321,7 +1458,7 @@ async function executeEntrySave(io) {
     try {
       await io.rebuildInsights(netForm.date, ctx); // captured ctx — never a later global tenant/business
       if (!sel.isLive(ctx)) return { status: "stale" };
-      const loadResult = await io.loadInsights(netForm.date, () => !sel.isLive(ctx));
+      const loadResult = await io.loadInsights(netForm.date, () => !sel.isLive(ctx), ctx); // R4: captured ctx threads tenant/biz into the readback chain
       if (!sel.isLive(ctx)) return { status: "stale" };
       const isTodayOrYesterday = netForm.date === io.todayKey(0) || netForm.date === io.todayKey(-1);
       if (loadResult && loadResult.skipped) { insightsRefreshed = true; }
@@ -1340,7 +1477,7 @@ async function executeEntrySave(io) {
   io.scheduleNav(ctx, insightsRefreshed ? 1200 : 2000);
   return { status: "saved", insightsRefreshed };
 }
-window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, applySupplierPaymentBound, executeEntrySave });
+window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, createPersistence, createEntriesWriteCoordinator, createSaveOwnership, createInsightReadback, executeEntrySave });
 const TARGETS = {
   salesGrowthPct: 5,
   foodCostPct:   33,
@@ -2995,7 +3132,6 @@ function PilotDashboard() {
   const [dashboardInsightsWarning, setDashboardInsightsWarning] = useState("");
   const [entrySaveInFlight, setEntrySaveInFlight] = useState(false);
   const [entrySaveError, setEntrySaveError] = useState("");
-  const entrySaveInFlightRef = useRef(false);
   const activeBizIdRef = useRef(null); // P0-DATA-01: current business selection, for stale-async guards
   const editingDateRef = useRef(null); // R2: stable edit identity — canonical business date captured at editor-open (never an array index)
   const suppressNextDashboardInsightsLoadForBizRef = useRef(null);
@@ -3006,6 +3142,33 @@ function PilotDashboard() {
   const saveNavTimerRef = useRef(null); // delayed success-navigation timer (selection-bound)
   const captureSelectionCtx = () => selectionCtrlRef.current.capture();
   const isSelectionLive = (ctx) => selectionCtrlRef.current.isLive(ctx);
+  // R4: mandatory-context domain-specific persistence, wired to the explicit-tenant
+  // storage transport. persistEntries/persistFixed derive tenant+key from the
+  // captured ctx and write a single domain. These are the EXACT helpers the tests
+  // execute (via window.MarjinSaveLifecycle.createPersistence).
+  const persistenceRef = useRef(null);
+  if (!persistenceRef.current) persistenceRef.current = window.MarjinSaveLifecycle.createPersistence({
+    selection: selectionCtrlRef.current,
+    canonicalize: window.MarjinEntries.canonicalizeEntries,
+    storageSetFor: (tenantId, key, valueStr) => window.storage.setFor(tenantId, key, valueStr, true),
+    warn: (n) => { try { console.warn(`[persistEntries] canonicalized ${n} duplicate/undated entry rows before write`); } catch(_){} },
+  });
+  const persistEntries = (rows, ctx) => persistenceRef.current.persistEntries(rows, ctx);
+  const persistFixed = (fixed, ctx) => persistenceRef.current.persistFixed(fixed, ctx);
+  // R4: serialized entries-only supplier write coordinator (sequencing + listener
+  // echo coordination) and the generation-bound save-ownership token — both are
+  // production seam factories the UI delegates to and the tests execute directly.
+  const entriesWriteCoordRef = useRef(null);
+  if (!entriesWriteCoordRef.current) entriesWriteCoordRef.current = window.MarjinSaveLifecycle.createEntriesWriteCoordinator({
+    selection: selectionCtrlRef.current,
+    canonicalize: window.MarjinEntries.canonicalizeEntries,
+    upsert: window.MarjinEntries.upsertEntryByDate,
+    entryDateKey: window.MarjinEntries.entryDateKey,
+    applyRows: setEntries,
+    persistEntries: (rows, ctx) => persistEntries(rows, ctx),
+  });
+  const saveOwnershipCtrlRef = useRef(null);
+  if (!saveOwnershipCtrlRef.current) saveOwnershipCtrlRef.current = window.MarjinSaveLifecycle.createSaveOwnership();
   // Synchronous invalidation: bumps the generation and clears every
   // selection-scoped ref/timer IMMEDIATELY (never waits for a useEffect).
   // Ref/timer-only so it is safe from event handlers, effects and unmount.
@@ -3016,6 +3179,11 @@ function PilotDashboard() {
     entryExceptionStateRef.current = {};
     entryExceptionOpIdRef.current = {};
     suppressNextDashboardInsightsLoadForBizRef.current = null;
+    // R4: a pending old save loses ownership and pending supplier writes are
+    // neutralized synchronously — an old finally/completion becomes a no-op for
+    // the new selection, and no pending local value can regress the next one.
+    if (saveOwnershipCtrlRef.current) saveOwnershipCtrlRef.current.invalidate();
+    if (entriesWriteCoordRef.current) entriesWriteCoordRef.current.invalidate();
     if (saveNavTimerRef.current) { clearTimeout(saveNavTimerRef.current); saveNavTimerRef.current = null; }
   };
   const setCurrentBizId = id => {
@@ -3024,6 +3192,7 @@ function PilotDashboard() {
     invalidateSelection(window._currentTenantId == null ? null : window._currentTenantId, id == null ? null : id);
     setEditingId(null);
     setEntryExceptions({});
+    setEntrySaveInFlight(false); // R4: an orphaned old-selection save no longer owns the UI in-flight flag
     setCurrentBizId_(id);
     // NOTE: do NOT update tenantId here — tenantId is fixed per user account
     // tenantId is set once during login/init and never changes
@@ -3243,13 +3412,16 @@ function PilotDashboard() {
     // Live listeners -- fire immediately with current value AND on every change
     sub(`biz:${currentBizId}:entries`, (val) => {
       if(!Array.isArray(val)) return;
-      // P0-DATA-01/R2: canonicalize by business-date through the shared helper
-      // (revenue and payroll never summed; nested maps such as supplier payments
-      // merge by key union with the EARLIEST value winning — a repeated key is
-      // never added). Wholesale replacement: hydrated state always fully
-      // replaces local entries state.
-      const deduped = window.MarjinEntries.canonicalizeEntries(val);
-      setEntries(deduped);
+      // P0-DATA-01/R2/R4: hydration/echo goes through the entries-write coordinator.
+      // It canonicalizes by business-date through the shared helper (revenue and
+      // payroll never summed; nested maps such as supplier payments merge by key
+      // union with the EARLIEST value winning — a repeated key is never added) and
+      // applies it WHOLESALE — EXCEPT while a local supplier write is still pending,
+      // when an older server echo is ignored so it cannot regress a newer pending
+      // value. Once quiescent it converges normally.
+      const echo = entriesWriteCoordRef.current.onListenerEcho(val);
+      if (echo.status !== "applied") return; // ignored while local writes pending
+      const deduped = echo.canonical;
       // If duplicates were found — write merged version back to Firebase.
       // R2: the self-heal write stays bound to the selection that produced its
       // source payload — never after unsubscribe or a tenant switch.
@@ -3335,46 +3507,39 @@ function PilotDashboard() {
     setDashboardInsightsWarning("");
   };
 
-  const readDashboardInsightCandidate = async (date) => {
-    try {
-      const map = await apiGetDailyRange("insights", currentBizId, date, date);
-      const doc = map[date];
-      if (!doc) return { ok: true, found: false, date, insights: null };
-      // RTDB drops empty arrays, so `insights` may be absent → coerce to [].
-      return { ok: true, found: true, date, insights: doc.insights || [] };
-    } catch (err) {
-      if (err?.message === "not found") {
-        return { ok: true, found: false, date, insights: null };
-      }
-      return { ok: false, error: "read_failed" };
-    }
-  };
+  // R4 (P0-DATA-01-R3-003): the candidate loop + request identity live in the
+  // production seam factory createInsightReadback — the exact helper the tests
+  // execute. Each request derives tenant+business from the CAPTURED ctx, and
+  // cancellation is checked before AND after every candidate await, so a stale
+  // "not found" can never trigger a second request or combine a new global tenant
+  // with an old business. apiGetDailyRange takes an EXPLICIT tenantId here.
+  const insightReadbackRef = useRef(null);
+  if (!insightReadbackRef.current) insightReadbackRef.current = window.MarjinSaveLifecycle.createInsightReadback({
+    selection: selectionCtrlRef.current,
+    candidateDates: (pref) => dashboardInsightCandidateDates(pref),
+    apiGetRange: ({ tenantId, bizId, fromDate, toDate }) => apiGetDailyRange("insights", bizId, fromDate, toDate, tenantId),
+  });
 
-  const loadDashboardInsights = async (preferredDate=null, isCancelled=()=>false) => {
+  const loadDashboardInsights = async (preferredDate=null, isCancelled=()=>false, ctx=null) => {
     const roleOk = ["super_owner", "owner", "manager"].includes(loggedInUser?.role);
-    if (!currentBizId || !roleOk) {
+    // The save-readback path supplies the captured save ctx; the dashboard-view
+    // path supplies none and binds to the current live selection.
+    const effCtx = (ctx && ctx.tenantId && ctx.bizId) ? ctx : captureSelectionCtx();
+    const bizId = effCtx.bizId;
+    if (!bizId || !roleOk) {
       clearDashboardInsightState();
       return { ok: false, skipped: true };
     }
+    const cancelled = () => (typeof isCancelled === "function" && isCancelled()) || !isSelectionLive(effCtx);
+    if (cancelled()) return { ok: false, cancelled: true }; // never mutate loading/data/error on a stale entry
     setDashboardInsightsLoading(true);
     setDashboardInsightsError(false);
     setDashboardInsightsWarning("");
     setDashboardInsights(null);
     setDashboardInsightsDate(null);
-    try {
-      let foundInsights = null, foundDate = null;
-      for (const key of dashboardInsightCandidateDates(preferredDate)) {
-        const result = await readDashboardInsightCandidate(key);
-        if (!result.ok) throw new Error("read_failed");
-        if (result.found) { foundInsights = result.insights; foundDate = result.date; break; }
-      }
-      if (isCancelled()) return { ok: false, cancelled: true };
-      setDashboardInsights(foundInsights);
-      setDashboardInsightsDate(foundDate);
-      setDashboardInsightsLoading(false);
-      return { ok: true, found: !!foundDate, date: foundDate, insights: foundInsights };
-    } catch (_e) {
-      if (isCancelled()) return { ok: false, cancelled: true };
+    const res = await insightReadbackRef.current.loadRange(effCtx, preferredDate, isCancelled);
+    if (cancelled() || res.cancelled) return { ok: false, cancelled: true }; // stale path: no state mutation
+    if (res.error) {
       // Silent fallback: never surface payloads, never break the dashboard.
       setDashboardInsights(null);
       setDashboardInsightsDate(null);
@@ -3382,6 +3547,10 @@ function PilotDashboard() {
       setDashboardInsightsLoading(false);
       return { ok: false };
     }
+    setDashboardInsights(res.insights);
+    setDashboardInsightsDate(res.date);
+    setDashboardInsightsLoading(false);
+    return { ok: true, found: !!res.found, date: res.date, insights: res.insights };
   };
 
   // ── Insight Engine v1 — load daily insights for the dashboard card ─────────
@@ -3428,44 +3597,11 @@ function PilotDashboard() {
     return payload;
   };
 
-  const persist = async (e, f, ctx) => {
-    if(!currentBizId) {
-      const error = new Error("missing bizId");
-      console.warn("[persist] no bizId");
-      return { ok:false, error };
-    }
-    // R3: a caller-supplied selection context must still be live at write time —
-    // the storage path is computed synchronously right after this check, so a
-    // stale save can never write another selection's path.
-    if (ctx && !isSelectionLive(ctx)) return { ok:false, stale:true };
-    // P0-DATA-01 defensive invariant at the central persistence boundary: no
-    // full-blob write may persist duplicate business dates, regardless of which
-    // caller assembled the array (save, delete, supplier grid, clear-all).
-    const rawEntryRowCount = Array.isArray(e) ? e.length : 0;
-    e = window.MarjinEntries.canonicalizeEntries(e);
-    if (rawEntryRowCount !== e.length) {
-      console.warn(`[persist] canonicalized ${rawEntryRowCount - e.length} duplicate/undated entry rows before write`);
-    }
-    try { await window.storage.set(`biz:${currentBizId}:entries`, JSON.stringify(e), true); }
-    catch(err) {
-      console.error("[persist] entries save failed:", err.message);
-      return { ok:false, error:err };
-    }
-    if(f) {
-      try { await window.storage.set(`biz:${currentBizId}:fixed`, JSON.stringify(f), true); }
-      catch(err) {
-        console.error("[persist] fixed save failed:", err.message);
-        return { ok:false, error:err };
-      }
-    }
-    // R3: return the EXACT canonical array that was written so callers apply the
-    // same array to React state (single state/persistence boundary).
-    return { ok:true, canonical: e };
-  };
-  // R3: alias used by all NEW selection-bound call sites. The legacy `persist(`
-  // call lines that predate S0 stay byte-identical (S0 diff-guard); new code
-  // calls persistEntries so the guard's added-line scan stays clean.
-  const persistEntries = persist;
+  // R4: the central multi-write persistence helper was REMOVED. It is replaced by
+  // mandatory-context, domain-specific persistEntries(rows, ctx) and persistFixed(
+  // fixed, ctx) (defined near the selection controller above via
+  // window.MarjinSaveLifecycle.createPersistence). No production writer may issue
+  // an entries+fixed multi-write or omit the captured selection context.
   const saveLastYear = async (ly) => {
     setLastYear(ly);
     if(!currentBizId) return;
@@ -3799,8 +3935,17 @@ function PilotDashboard() {
   // another API, write another storage path, nor mutate the new selection's
   // entries/exception/insight/form/saved/warning/error/screen state.
   const saveEntry = async (skipSuppliers=false) => {
-    if (entrySaveInFlightRef.current) return;
-    entrySaveInFlightRef.current = true;
+    // R4 (P0-DATA-01-R3-005): generation-bound ownership. begin() blocks a
+    // same-selection duplicate but NOT a save in a newer selection; the finally
+    // clears in-flight UI state only if THIS token is still current, so a stale
+    // save can never unblock, clear, or mutate a newer selection's save state.
+    const ownership = saveOwnershipCtrlRef.current;
+    const ownCtx = captureSelectionCtx();
+    const saveToken = ownership.begin(
+      selectionCtrlRef.current, ownCtx,
+      () => (window.crypto&&window.crypto.randomUUID)?window.crypto.randomUUID():("save-"+Date.now()+"-"+Math.random().toString(36).slice(2))
+    );
+    if (!saveToken) return; // same live selection already saving — duplicate submission blocked
     setEntrySaveInFlight(true);
     setEntrySaveError("");
     setDashboardInsightsWarning("");
@@ -3825,11 +3970,11 @@ function PilotDashboard() {
           consume: (d) => { delete entryExceptionOpIdRef.current[d]; },
         },
         apiFetch: (url, opts) => window.apiFetch(url, opts),
-        persistRows: (rows2, f2, c2) => persistEntries(rows2, f2, c2),
+        persistRows: (rows2, c2) => persistEntries(rows2, c2), // R4: entries-only, mandatory captured ctx
         applyRows: setEntries,
         reloadExceptions: (c2) => loadEntryExceptions(c2),
         rebuildInsights: (date2, c2) => rebuildInsightsAfterEntrySave(date2, c2), // exactly one rebuild call
-        loadInsights: (date2, isCancelled) => loadDashboardInsights(date2, isCancelled),
+        loadInsights: (date2, isCancelled, c2) => loadDashboardInsights(date2, isCancelled, c2), // R4: threads captured ctx into the readback
         onInsightsFailure: (msg) => {
           console.warn("[save] insights rebuild failed:", msg);
           setDashboardInsights(null);
@@ -3847,8 +3992,10 @@ function PilotDashboard() {
           () => { setSaved(false); setEntryStep('idle'); setScreen("dashboard"); }, ms),
       });
     } finally {
-      entrySaveInFlightRef.current = false;
-      setEntrySaveInFlight(false);
+      // Only the still-owning operation clears the in-flight UI state. A stale
+      // finally (selection changed, or a newer save took ownership) is a no-op.
+      if (ownership.owns(saveToken)) setEntrySaveInFlight(false);
+      ownership.settle(saveToken);
     }
   };
 
@@ -3863,7 +4010,7 @@ function PilotDashboard() {
     const canonicalNext = window.MarjinEntries.canonicalizeEntries(entries.filter(e => window.MarjinEntries.entryDateKey(e && e.date) !== key));
     if (canonicalNext.length === prevCanonical.length) return; // date not present
     setEntries(canonicalNext);
-    const res = await persistEntries(canonicalNext, null, ctx);
+    const res = await persistEntries(canonicalNext, ctx);
     if (!isSelectionLive(ctx)) return;
     if (!res || !res.ok) { setEntries(prevCanonical); return; }
     setEntries(res.canonical || canonicalNext);
@@ -4321,13 +4468,13 @@ function PilotDashboard() {
                       <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:f.rentPct||f.royaltyPct?0:8}}>
                         <input style={{flex:1,border:"1px solid #E5E7EB",borderRadius:8,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:"#111827",background:"transparent",textDecoration:f.disabled?"line-through":"none"}}
                           value={f.name}
-                          onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,name:e.target.value}:x);setFixedList(u);persist(entries,u);}}/>
-                        <button onClick={()=>{const u=fixedList.map((x,j)=>j===i?{...x,disabled:!x.disabled}:x);setFixedList(u);persist(entries,u);}}
+                          onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,name:e.target.value}:x);setFixedList(u);persistFixed(u,captureSelectionCtx());}}/>
+                        <button onClick={()=>{const u=fixedList.map((x,j)=>j===i?{...x,disabled:!x.disabled}:x);setFixedList(u);persistFixed(u,captureSelectionCtx());}}
                           style={{padding:"6px 10px",background:"#F1F5F9",border:"none",borderRadius:7,fontSize:11,cursor:"pointer",color:"#64748B",fontFamily:"inherit",flexShrink:0,fontWeight:500}}>
                           {f.disabled?"הפעל":"בטל"}
                         </button>
                         {!f.rentPct&&!f.royaltyPct&&(
-                          <button onClick={()=>{if(window.confirm(`למחוק "${f.name}"?`)){const u=fixedList.filter((_,j)=>j!==i);setFixedList(u);persist(entries,u);}}}
+                          <button onClick={()=>{if(window.confirm(`למחוק "${f.name}"?`)){const u=fixedList.filter((_,j)=>j!==i);setFixedList(u);persistFixed(u,captureSelectionCtx());}}}
                             style={{padding:"6px 8px",background:"#FEF2F2",border:"none",borderRadius:7,cursor:"pointer",color:"#EF4444",flexShrink:0}}>
                             <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
                           </button>
@@ -4338,7 +4485,7 @@ function PilotDashboard() {
                           <span style={{fontSize:13,color:"#94A3B8",flexShrink:0}}>₪</span>
                           <input style={{flex:1,border:"1px solid #E5E7EB",borderRadius:8,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:"#111827",background:"transparent"}}
                             type="number" inputMode="decimal" placeholder="סכום חודשי" value={f.amount||""}
-                            onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,amount:Number(e.target.value)}:x);setFixedList(u);persist(entries,u);}}/>
+                            onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,amount:Number(e.target.value)}:x);setFixedList(u);persistFixed(u,captureSelectionCtx());}}/>
                           <span style={{fontSize:11,color:"#94A3B8",flexShrink:0}}>/ חודש</span>
                         </div>
                       )}
@@ -4350,7 +4497,7 @@ function PilotDashboard() {
                       )}
                     </div>
                   ))}
-                  <button onClick={()=>{const u=[...fixedList,{id:Date.now(),name:"הוצאה חדשה",amount:0,dueDay:1,rentPct:false}];setFixedList(u);persist(entries,u);}}
+                  <button onClick={()=>{const u=[...fixedList,{id:Date.now(),name:"הוצאה חדשה",amount:0,dueDay:1,rentPct:false}];setFixedList(u);persistFixed(u,captureSelectionCtx());}}
                     style={{width:"100%",padding:"12px",background:"#F8FAFC",border:"1px dashed #CBD5E1",borderRadius:12,color:"#64748B",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit",marginTop:8}}>
                     + הוסף הוצאה קבועה
                   </button>
@@ -4803,11 +4950,10 @@ function PilotDashboard() {
             // persistence failure, selection-bound, and the exact persisted
             // canonical array is what React state receives.
             const setSupPayDate = async (supId, date, val) => {
-              await window.MarjinSaveLifecycle.applySupplierPaymentBound({
-                selection: selectionCtrlRef.current,
-                applyRows: setEntries,
-                persistRows: (rows2, f2, c2) => persistEntries(rows2, f2, c2),
-              }, { supId, date, val, rows: entries, fixed: fixedList, emptyEntry: EMPTY_ENTRY });
+              // R4: entries-ONLY, sequenced through the production write coordinator.
+              // No fixedList is passed; an older completion/failure or a listener
+              // echo can never overwrite a newer supplier value.
+              await entriesWriteCoordRef.current.submitSupplierEdit({ supId, date, val, rows: entries, emptyEntry: EMPTY_ENTRY });
             };
             const monthTotal = suppliers.reduce((total,sup)=>total+Array.from({length:smDays},(_,i)=>{
               const d=String(i+1).padStart(2,"0");
@@ -5289,7 +5435,7 @@ function PilotDashboard() {
 	              <div style={{fontSize:12,color:"#94A3B8",marginTop:3}}>{monthEntries.length} ימים מוזנים · {MONTH_NAMES[MONTH]}</div>
             </div>
             {entries.length>0&&(
-              <button onClick={()=>{if(window.confirm("למחוק את כל הרשומות?")){ const u=[];setEntries(u);persist(u,null);}}}
+              <button onClick={()=>{if(window.confirm("למחוק את כל הרשומות?")){ const u=[];setEntries(u);persistEntries(u,captureSelectionCtx());}}}
                 style={{background:"none",border:"none",color:"#CBD5E1",padding:"4px 8px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
                 מחק הכל
               </button>
@@ -5729,7 +5875,7 @@ function PilotDashboard() {
 
       {screen==="employees" && !currentUser && (
         <div className="screen">
-          <EmployeesScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig} entries={entries} persist={persist} fixedList={fixedList}/>
+          <EmployeesScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig} entries={entries} persistEntries={persistEntries} captureCtx={captureSelectionCtx}/>
         </div>
       )}
 
@@ -5778,15 +5924,15 @@ function PilotDashboard() {
                   {f.rentPct&&<span style={{fontSize:10,color:"#6B7280",background:"#F3F4F6",padding:"1px 6px",borderRadius:3,flexShrink:0}}>שכ״ד {businessConfig.rentType==="fixed"?`${(businessConfig.rentFixed||0).toLocaleString()}₪`:`${businessConfig.rentPct||0}%`}</span>}
                   {f.royaltyPct&&businessConfig.hasRoyalty&&<span style={{fontSize:10,color:"#6B7280",background:"#F3F4F6",padding:"1px 6px",borderRadius:3,flexShrink:0}}>תמלוגים {businessConfig.royaltyPct||0}%</span>}
                   <input className="input" style={{marginBottom:0,flex:1,padding:"5px 9px",fontSize:12,textDecoration:f.disabled?"line-through":"none",color:f.disabled?"#9CA3AF":"#111827"}} value={f.name}
-                    onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,name:e.target.value}:x);setFixedList(u);persist(entries,u);}}/>
+                    onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,name:e.target.value}:x);setFixedList(u);persistFixed(u,captureSelectionCtx());}}/>
                   <button title={f.disabled?"הפעל":"בטל"}
-                    onClick={()=>{const u=fixedList.map((x,j)=>j===i?{...x,disabled:!x.disabled}:x);setFixedList(u);persist(entries,u);}}
+                    onClick={()=>{const u=fixedList.map((x,j)=>j===i?{...x,disabled:!x.disabled}:x);setFixedList(u);persistFixed(u,captureSelectionCtx());}}
                     style={{background:"none",border:`1px solid ${"#E5E7EB"}`,borderRadius:5,padding:"3px 7px",cursor:"pointer",fontSize:11,flexShrink:0,color:"#6B7280",fontFamily:"inherit"}}>
                     {f.disabled?"הפעל":"בטל"}
                   </button>
                   {!f.rentPct&&!f.royaltyPct&&(
                     <button title="מחק"
-                      onClick={()=>{if(window.confirm(`למחוק "${f.name}"?`)){const u=fixedList.filter((_,j)=>j!==i);setFixedList(u);persist(entries,u);}}}
+                      onClick={()=>{if(window.confirm(`למחוק "${f.name}"?`)){const u=fixedList.filter((_,j)=>j!==i);setFixedList(u);persistFixed(u,captureSelectionCtx());}}}
                       style={{background:"none",border:"none",padding:"3px 5px",cursor:"pointer",fontSize:11,flexShrink:0,color:"#9CA3AF",fontFamily:"inherit"}}><IcoTrash/></button>
                   )}
                 </div>
@@ -5796,18 +5942,18 @@ function PilotDashboard() {
                     : f.royaltyPct
                     ? <div className="input" style={{padding:"5px 9px",flex:1,marginBottom:0,color:"#6B7280",fontSize:12}}>≈ {fmt(Math.round(metrics.totalSales*(businessConfig.royaltyPct||0)/100))}</div>
                     : <input className="input" style={{padding:"5px 9px",flex:1,marginBottom:0}} type="number" inputMode="decimal" placeholder="₪" value={f.amount||""}
-                        onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,amount:Number(e.target.value)}:x);setFixedList(u);persist(entries,u);}}/>
+                        onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,amount:Number(e.target.value)}:x);setFixedList(u);persistFixed(u,captureSelectionCtx());}}/>
                   }
                   <div style={{display:"flex",alignItems:"center",gap:4,flexShrink:0}}>
                     <span style={{color:"#9CA3AF",fontSize:11}}>יום</span>
                     <input className="input" style={{padding:"5px 7px",width:44,marginBottom:0,textAlign:"center",fontSize:12}} type="number" min={1} max={31} value={f.dueDay}
-                      onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,dueDay:Number(e.target.value)}:x);setFixedList(u);persist(entries,u);}}/>
+                      onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,dueDay:Number(e.target.value)}:x);setFixedList(u);persistFixed(u,captureSelectionCtx());}}/>
                   </div>
                 </div>
               </div>
             ))}
             <button style={{...S.cancelBtn,width:"100%",marginTop:4,textAlign:"center"}}
-              onClick={()=>{const u=[...fixedList,{id:Date.now(),name:"הוצאה חדשה",amount:0,dueDay:1,rentPct:false}];setFixedList(u);persist(entries,u);}}>
+              onClick={()=>{const u=[...fixedList,{id:Date.now(),name:"הוצאה חדשה",amount:0,dueDay:1,rentPct:false}];setFixedList(u);persistFixed(u,captureSelectionCtx());}}>
               + הוסף הוצאה
             </button>
           </div>
@@ -5968,7 +6114,7 @@ function PilotDashboard() {
 
 
 // ─── Employees Screen ─────────────────────────────────────────────────────────
-function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, persist, fixedList }) {
+function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, persistEntries, captureCtx }) {
   const employees = businessConfig.employees || [];
   const ROLES_EMP = ["מנהל משמרת","טבח","עוזר טבח","מלצר","ברמן","קופאי","כלים","ניקיון","אחר"];
   const globalEmps = employees.filter(e=>e.type==="global"&&Number(e.monthlySalary)>0);
@@ -5986,17 +6132,17 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, persist,
     const e = entries.find(x=>x.date===date);
     return e?.payroll||"";
   };
-  // R3: employee daily-labor writer goes through the date-keyed canonical upsert
-  // (never a raw map/append). The whole operation is synchronous up to persist,
-  // which canonicalizes again and computes its storage path in the same task, so
-  // the write is bound to the selection active at the keystroke.
+  // R4: employee daily-labor is an ENTRIES-only edit (it changes payroll, a
+  // per-day entries field). It goes through the date-keyed canonical upsert and
+  // persists ENTRIES ONLY with the selection context captured at the keystroke —
+  // it never rewrites fixed expenses.
   const setDailyLabor = async (date, val) => {
     const key = window.MarjinEntries.entryDateKey(date);
     if(!key) return;
     const existing = entries.find(e => window.MarjinEntries.entryDateKey(e && e.date) === key);
     const nextEntry = existing ? {...existing, payroll: val} : {...EMPTY_ENTRY, date: key, payroll: val};
     const newEntries = window.MarjinEntries.upsertEntryByDate(entries, nextEntry, existing ? key : null);
-    if(typeof persist==="function") await persist(newEntries, fixedList);
+    if(typeof persistEntries==="function") await persistEntries(newEntries, captureCtx());
   };
 
   const globalDailyTotal = globalEmps.reduce((a,e)=>a+Math.round(Number(e.monthlySalary)/emDays),0);
@@ -7376,8 +7522,10 @@ async function apiSetChecklistDoc(kind, bizId, body) {
   if (!resp.ok) { const e = new Error(d.error || ("write_" + resp.status)); e.status = resp.status; e.conflict = (resp.status === 409 && d.error === "checklist_conflict"); throw e; }
   return { document: d.document ?? null, versionToken: d.versionToken || null };
 }
-async function apiGetDailyRange(kind, bizId, fromDate, toDate) {
-  const q = new URLSearchParams({ tenantId: window._currentTenantId || "", bizId: bizId || "", fromDate, toDate });
+async function apiGetDailyRange(kind, bizId, fromDate, toDate, tenantId) {
+  // R4: tenant identity may be supplied EXPLICITLY (captured selection ctx). When
+  // omitted, falls back to the mutable global (analytics-range view path).
+  const q = new URLSearchParams({ tenantId: tenantId != null ? tenantId : (window._currentTenantId || ""), bizId: bizId || "", fromDate, toDate });
   const resp = await window.apiFetch(`/api/admin?action=get-${kind}-daily&` + q.toString(), { method: "GET" });
   if (!resp.ok) throw new Error("read_" + resp.status);
   const d = await resp.json().catch(() => ({}));

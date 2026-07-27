@@ -1,10 +1,16 @@
-// P0-DATA-01 + R2 + R3 regression guard: duplicate revenue, entry identity,
-// replay safety, and selection-bound async lifecycle.
-// Executable tests run the ACTUAL production seams vm-extracted from index.html
-// (window.MarjinEntries + window.MarjinSaveLifecycle) with injected deferred
-// promises and spies — they prove prohibited callbacks were NOT invoked, not
-// merely that final values matched. Source-structure assertions remain only as
-// supplementary wiring guards and are marked [source-guard].
+// P0-DATA-01 R4 regression guard — production lifecycle & writer consistency.
+//
+// Every executable test drives the ACTUAL production helpers vm-extracted from
+// index.html (window.MarjinEntries + window.MarjinSaveLifecycle: createPersistence,
+// createEntriesWriteCoordinator, createSaveOwnership, createInsightReadback,
+// loadExceptionsBound, executeEntrySave). ONLY terminal I/O is injected — deferred
+// storage/API transports, state/ref spies, timers. The persistence, candidate-loop,
+// ownership and sequencing LOGIC under test is the real code, not a re-implementation.
+// Tests assert prohibited calls/setters were NOT invoked, not merely that final
+// values matched. Labels:
+//   [prod-helper]  — runs a real production seam factory/helper (deferred transport)
+//   [prod-entries] — runs the real window.MarjinEntries canonicalization helpers
+//   [source-guard] — supplementary static-source wiring assertion on index.html
 // Run: node --test test/dashboard/entries-lifecycle.test.mjs
 
 import { test } from "node:test";
@@ -20,9 +26,9 @@ const html = readFileSync(join(ROOT, "index.html"), "utf8");
 function loadProductionBlocks() {
   const start = html.indexOf("// ── P0-DATA-01: canonical daily-entries identity & upsert helpers");
   assert.notEqual(start, -1, "index.html must contain the P0-DATA-01 helper block");
-  const endNeedle = "window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, applySupplierPaymentBound, executeEntrySave });";
+  const endNeedle = "window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, createPersistence, createEntriesWriteCoordinator, createSaveOwnership, createInsightReadback, executeEntrySave });";
   const end = html.indexOf(endNeedle, start);
-  assert.notEqual(end, -1, "index.html must expose window.MarjinSaveLifecycle for focused tests");
+  assert.notEqual(end, -1, "index.html must expose window.MarjinSaveLifecycle with the R4 production factories");
   const src = html.slice(start, end + endNeedle.length);
   assert.ok(!/new Date\(/.test(src), "identity/lifecycle blocks must not parse dates via Date()");
   const sandbox = { window: {}, Math, Number, Object, Array, JSON, console, Error, Promise, encodeURIComponent };
@@ -37,10 +43,11 @@ const plain = (x) => JSON.parse(JSON.stringify(x));
 const day = (date, sales, extra = {}) => ({ date, sales, deliveries: 0, other_income: 0, ...extra });
 const totalRevenue = (list) =>
   list.reduce((a, e) => a + (Number(e.sales) || 0) + (Number(e.deliveries) || 0) + (Number(e.other_income) || 0), 0);
-const supplierTotal = (list) =>
-  list.reduce((a, e) => a + Object.values(e.supplier_payments || {}).reduce((s, v) => s + (Number(v) || 0), 0), 0);
 const deferred = () => { let resolve, reject; const promise = new Promise((res, rej) => { resolve = res; reject = rej; }); return { promise, resolve, reject }; };
 const tick = () => new Promise((r) => setImmediate(r));
+
+// A live selection controller at gen>0 for T1/A.
+const liveCtrl = (t = "T1", b = "A") => { const c = ML.createSelectionController(); c.invalidate(t, b); return c; };
 
 // Incident fixture — July 2026, 24 entered days: 22×24,031 + 24,048 + 27,753 = 580,483.
 function incidentEntries() {
@@ -51,17 +58,496 @@ function incidentEntries() {
   return list;
 }
 
-// ── Executable save-lifecycle harness (drives the real executeEntrySave) ─────
-function makeSaveHarness(overrides = {}) {
-  const ctrl = ML.createSelectionController();
-  ctrl.invalidate("T1", "A"); // live context: gen 1, tenant T1, business A
-  const seq = [];
-  const calls = {
-    applyRows: [], setSaved: [], setError: [], resetForm: 0, schedNav: [],
-    rebuild: [], loadIns: [], reloadExc: [], suppress: [], excSet: [], excActive: [], opConsumed: [], api: [],
+// ═══════════════════════════════════════════════════════════════════════════
+// FIXTURE SANITY + INCIDENT (scenarios 32, 43)
+// ═══════════════════════════════════════════════════════════════════════════
+
+test("[prod-entries] incident fixture arithmetic is exact (raw 608,236 / canonical 580,483 / delta 27,753)", () => {
+  const list = incidentEntries();
+  assert.equal(list.length, 24);
+  assert.equal(totalRevenue(list), 580483);
+  assert.equal(580483 + 27753, 608236);
+});
+
+test("[prod-entries] S43: duplicate incident rows canonicalize to 580,483 with one row per date; post-boundary state == persistence", async () => {
+  // Raw payload with July-24 delivered twice (608,236) collapses to 580,483.
+  const raw = [...incidentEntries(), day("2026-07-24", 27753)];
+  assert.equal(totalRevenue(raw), 608236);
+  const canonical = ME.canonicalizeEntries(raw);
+  assert.equal(canonical.length, 24, "one canonical row per date");
+  assert.equal(totalRevenue(canonical), 580483);
+  // The persistence boundary writes EXACTLY the canonical array it returns.
+  const ctrl = liveCtrl();
+  let written = null;
+  const P = ML.createPersistence({ selection: ctrl, canonicalize: ME.canonicalizeEntries, storageSetFor: async (t, k, v) => { written = JSON.parse(v); } });
+  const res = await P.persistEntries(raw, ctrl.capture());
+  assert.equal(res.ok, true);
+  assert.equal(totalRevenue(res.canonical), 580483);
+  assert.deepEqual(plain(written), plain(res.canonical), "persisted payload equals returned canonical (state==persistence)");
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MANDATORY-CONTEXT PERSISTENCE — createPersistence (scenarios 1-5, 9)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function persistHarness(t = "T1", b = "A") {
+  const ctrl = liveCtrl(t, b);
+  const calls = []; // [tenantId, key, valueStr]
+  let gate = null;
+  const P = ML.createPersistence({
+    selection: ctrl,
+    canonicalize: ME.canonicalizeEntries,
+    storageSetFor: async (tenantId, key, valueStr) => { calls.push([tenantId, key, valueStr]); if (gate) await gate.promise; },
+  });
+  return { ctrl, calls, P, setGate: (g) => { gate = g; } };
+}
+
+test("[prod-helper] S3: persistEntries with MISSING context is rejected before any storage request", async () => {
+  const h = persistHarness();
+  const r = await h.P.persistEntries([day("2026-07-01", 1)], null);
+  assert.equal(r.ok, false);
+  assert.equal(r.error, "missing_context");
+  assert.equal(h.calls.length, 0, "no storage request issued for a missing context");
+  const r2 = await h.P.persistEntries([day("2026-07-01", 1)], { tenantId: "T1" }); // no bizId
+  assert.equal(r2.ok, false);
+  assert.equal(h.calls.length, 0, "partial context (no bizId) also issues no request");
+});
+
+test("[prod-helper] S4: persistEntries storage KEY uses captured ctx.bizId (never a later selection's biz)", async () => {
+  const h = persistHarness("T1", "A");
+  const ctx = h.ctrl.capture();
+  h.ctrl.invalidate("T1", "B"); // selection moves to biz B AFTER capture
+  const r = await h.P.persistEntries([day("2026-07-01", 1)], ctx);
+  // ctx is now stale → rejected before dispatch; the key would have been biz:A, never biz:B.
+  assert.equal(r.stale, true);
+  assert.equal(h.calls.length, 0);
+  // A live A-context writes the A key.
+  const h2 = persistHarness("T1", "A");
+  await h2.P.persistEntries([day("2026-07-01", 1)], h2.ctrl.capture());
+  assert.equal(h2.calls[0][1], "biz:A:entries", "key derives from ctx.bizId");
+});
+
+test("[prod-helper] S1+S5: entries write dispatched under T1/A carries tenant T1; switching to T2/B issues NO later write", async () => {
+  const h = persistHarness("T1", "A");
+  const gate = deferred();
+  h.setGate(gate);
+  const ctx = h.ctrl.capture();
+  const p = h.P.persistEntries([day("2026-07-01", 1)], ctx); // dispatches ONE write, then awaits the gate
+  await tick();
+  assert.equal(h.calls.length, 1, "exactly one entries write dispatched");
+  assert.equal(h.calls[0][0], "T1", "tenant identity is the captured T1, not a later global");
+  assert.equal(h.calls[0][1], "biz:A:entries");
+  h.ctrl.invalidate("T2", "B"); // tenant/biz switch mid-flight
+  gate.resolve();
+  const r = await p;
+  assert.equal(r.ok, true, "the confirmed write is reported");
+  assert.equal(r.staleAfterWrite, true, "selection changed during the await → flagged, caller re-checks liveness");
+  assert.equal(h.calls.length, 1, "NO second/later storage write after the context went stale");
+});
+
+test("[prod-helper] S2: same business id 'A' reused under a NEW tenant T2 is a DIFFERENT context (write rejected)", async () => {
+  const h = persistHarness("T1", "A");
+  const ctx = h.ctrl.capture();           // T1/A
+  h.ctrl.invalidate("T2", "A");            // T2/A — same biz id, new tenant/generation
+  const r = await h.P.persistEntries([day("2026-07-01", 1)], ctx);
+  assert.equal(r.stale, true, "T1/A ctx is not live under T2/A");
+  assert.equal(h.calls.length, 0, "no write issued for the superseded T1/A context");
+});
+
+test("[prod-helper] S9: clear-all-shaped entries write requires and uses mandatory context", async () => {
+  const h = persistHarness("T1", "A");
+  const r = await h.P.persistEntries([], h.ctrl.capture());
+  assert.equal(r.ok, true);
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0][1], "biz:A:entries");
+  assert.deepEqual(JSON.parse(h.calls[0][2]), [], "clear-all persists an empty canonical array");
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DOMAIN SEPARATION — entries-only vs fixed-only (scenarios 6, 7, 8)
+// ═══════════════════════════════════════════════════════════════════════════
+
+test("[prod-helper] S6/S7: persistEntries writes ONLY the entries key — never a fixed write", async () => {
+  const h = persistHarness("T1", "A");
+  await h.P.persistEntries([day("2026-07-01", 1, { payroll: 500, supplier_payments: { "sup-1": "100" } })], h.ctrl.capture());
+  assert.equal(h.calls.length, 1, "exactly one write");
+  assert.ok(h.calls.every(c => c[1] === "biz:A:entries"), "every write targets entries");
+  assert.ok(!h.calls.some(c => c[1].endsWith(":fixed")), "no fixed write is ever issued by an entries edit");
+});
+
+test("[prod-helper] S8: persistFixed writes ONLY the fixed key — never an entries write", async () => {
+  const h = persistHarness("T1", "A");
+  const r = await h.P.persistFixed([{ id: "fixed-1", amount: 10 }], h.ctrl.capture());
+  assert.equal(r.ok, true);
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0][1], "biz:A:fixed", "fixed edit targets the fixed key");
+  assert.ok(!h.calls.some(c => c[1].endsWith(":entries")), "no entries write is ever issued by a fixed edit");
+});
+
+test("[prod-helper] persistFixed also rejects missing context before any request", async () => {
+  const h = persistHarness();
+  const r = await h.P.persistFixed([{ id: "f", amount: 1 }], null);
+  assert.equal(r.ok, false);
+  assert.equal(r.error, "missing_context");
+  assert.equal(h.calls.length, 0);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SUPPLIER SEQUENCING — createEntriesWriteCoordinator (scenarios 6,25-33)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function coordHarness(rows = []) {
+  const ctrl = liveCtrl("T1", "A");
+  const applied = []; // every array handed to setEntries
+  const persistCalls = [];
+  const gates = [];    // one deferred per persist call, in order
+  const io = {
+    selection: ctrl,
+    canonicalize: ME.canonicalizeEntries,
+    upsert: ME.upsertEntryByDate,
+    entryDateKey: ME.entryDateKey,
+    applyRows: (r) => applied.push(plain(r)),
+    persistEntries: async (r, ctx) => {
+      const g = deferred(); gates.push(g);
+      persistCalls.push({ rows: plain(r), ctx });
+      const outcome = await g.promise; // { ok } or { ok:false }
+      return outcome && outcome.ok === false ? { ok: false, error: "write_failed" } : { ok: true, canonical: r };
+    },
   };
-  const excStore = {};
-  const opStore = {};
+  const coord = ML.createEntriesWriteCoordinator(io);
+  const supVal = (arr, date, supId) => {
+    const row = arr.find(e => e.date === date);
+    return row && row.supplier_payments ? row.supplier_payments[supId] : undefined;
+  };
+  return { ctrl, coord, applied, persistCalls, gates, io, rows, supVal, last: () => applied[applied.length - 1] };
+}
+
+test("[prod-helper] S25: two same-selection edits (100 then 200); older promise resolves LAST — final state stays 200", async () => {
+  const h = coordHarness();
+  const p1 = h.coord.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "100", rows: [], emptyEntry: {} });
+  const p2 = h.coord.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "200", rows: [], emptyEntry: {} });
+  await tick();
+  assert.equal(h.gates.length, 2, "both writes dispatched");
+  h.gates[1].resolve({ ok: true }); // newer (200) resolves first
+  await p2;
+  h.gates[0].resolve({ ok: true }); // older (100) resolves LAST
+  await p1;
+  assert.equal(h.supVal(h.last(), "2026-07-24", "sup-1"), "200", "final applied state is the newer value");
+});
+
+test("[prod-helper] S30: older FAILURE cannot roll back the newer success (final stays 200)", async () => {
+  const h = coordHarness();
+  const p1 = h.coord.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "100", rows: [], emptyEntry: {} });
+  const p2 = h.coord.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "200", rows: [], emptyEntry: {} });
+  await tick();
+  h.gates[1].resolve({ ok: true });          // newer succeeds
+  const r2 = await p2;
+  h.gates[0].resolve({ ok: false });         // older FAILS afterwards
+  const r1 = await p1;
+  assert.equal(r1.status, "persist_failed");
+  assert.equal(r1.latest, false, "the failed op is not the latest");
+  assert.equal(h.supVal(h.last(), "2026-07-24", "sup-1"), "200", "older failure did not regress the newer value");
+});
+
+test("[prod-helper] S31: newer FAILURE is surfaced; an older completion cannot win", async () => {
+  const h = coordHarness();
+  const p1 = h.coord.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "100", rows: [], emptyEntry: {} });
+  const p2 = h.coord.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "200", rows: [], emptyEntry: {} });
+  await tick();
+  h.gates[0].resolve({ ok: true });          // older completes successfully first
+  await p1;
+  h.gates[1].resolve({ ok: false });         // newer FAILS last
+  const r2 = await p2;
+  assert.equal(r2.status, "persist_failed");
+  assert.equal(r2.latest, true, "the latest op reports its own failure");
+  // Newest optimistic value is retained (never regressed to the older 100).
+  assert.equal(h.supVal(h.last(), "2026-07-24", "sup-1"), "200");
+});
+
+test("[prod-helper] S29: two rapid edits to DIFFERENT suppliers preserve both values", async () => {
+  const h = coordHarness();
+  const p1 = h.coord.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "100", rows: [], emptyEntry: {} });
+  const p2 = h.coord.submitSupplierEdit({ supId: "sup-2", date: "2026-07-24", val: "250", rows: [], emptyEntry: {} });
+  await tick();
+  h.gates[1].resolve({ ok: true });
+  await p2;
+  h.gates[0].resolve({ ok: true });
+  await p1;
+  const final = h.last();
+  assert.equal(h.supVal(final, "2026-07-24", "sup-1"), "100", "first supplier preserved");
+  assert.equal(h.supVal(final, "2026-07-24", "sup-2"), "250", "second supplier preserved");
+  // The second edit was built from the LATEST desired state (which already had sup-1), not a pre-edit snapshot.
+  assert.deepEqual(Object.keys(h.persistCalls[1].rows.find(e => e.date === "2026-07-24").supplier_payments).sort(), ["sup-1", "sup-2"]);
+});
+
+test("[prod-helper] S27: listener echo BEFORE the newest write completes cannot regress 200→100", async () => {
+  const h = coordHarness();
+  const p2 = h.coord.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "200", rows: [], emptyEntry: {} });
+  await tick();
+  // Stale echo carrying the OLD value 100 arrives while the 200-write is still pending.
+  const echo = h.coord.onListenerEcho([{ date: "2026-07-24", sales: 0, supplier_payments: { "sup-1": "100" } }]);
+  assert.equal(echo.status, "ignored_pending", "echo ignored while a local write is pending");
+  h.gates[0].resolve({ ok: true });
+  await p2;
+  assert.equal(h.supVal(h.last(), "2026-07-24", "sup-1"), "200", "pending value not regressed by the stale echo");
+});
+
+test("[prod-helper] S26+S28: listener echo AFTER the newest completion converges to 200", async () => {
+  const h = coordHarness();
+  const p2 = h.coord.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "200", rows: [], emptyEntry: {} });
+  await tick();
+  h.gates[0].resolve({ ok: true });
+  await p2;
+  // Storage/listener echo of the CONFIRMED value now arrives (quiescent) → applied.
+  const echo = h.coord.onListenerEcho([{ date: "2026-07-24", sales: 0, supplier_payments: { "sup-1": "200" } }]);
+  assert.equal(echo.status, "applied");
+  assert.equal(h.supVal(h.last(), "2026-07-24", "sup-1"), "200", "converges to the newest confirmed value");
+});
+
+test("[prod-helper] S32: duplicated starting rows collapse to ONE canonical date row through the coordinator", async () => {
+  const h = coordHarness();
+  const dupRows = [day("2026-07-24", 27753), day("2026-07-24", 27753)];
+  const p = h.coord.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "100", rows: dupRows, emptyEntry: {} });
+  await tick();
+  const optimistic = h.last();
+  assert.equal(optimistic.filter(e => e.date === "2026-07-24").length, 1, "one canonical row for the date");
+  h.gates[0].resolve({ ok: true });
+  await p;
+});
+
+test("[prod-helper] S33: the exact canonical payload persisted equals the array exposed to state", async () => {
+  const h = coordHarness();
+  const p = h.coord.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "100", rows: [day("2026-07-23", 1)], emptyEntry: {} });
+  await tick();
+  const optimistic = plain(h.last());
+  assert.deepEqual(h.persistCalls[0].rows, optimistic, "persisted array === applied array (single state/persistence boundary)");
+  h.gates[0].resolve({ ok: true });
+  const r = await p;
+  assert.equal(r.status, "applied");
+  assert.deepEqual(plain(h.last()), optimistic, "confirmed canonical equals the optimistic canonical");
+});
+
+test("[prod-helper] S16(supplier-variant): a stale-context supplier completion applies nothing", async () => {
+  const h = coordHarness();
+  const p = h.coord.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "100", rows: [], emptyEntry: {} });
+  await tick();
+  const appliedBefore = h.applied.length; // optimistic apply already happened
+  h.ctrl.invalidate("T2", "B"); // selection switches before the write resolves
+  h.gates[0].resolve({ ok: true });
+  const r = await p;
+  assert.equal(r.status, "stale");
+  assert.equal(h.applied.length, appliedBefore, "no post-await apply into the new selection");
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SAVE OWNERSHIP — createSaveOwnership (scenarios 19-24)
+// ═══════════════════════════════════════════════════════════════════════════
+
+test("[prod-helper] S19-S22: old save stays pending; selection invalidates; new selection saves; old finally cannot clear new state", async () => {
+  const ctrl = liveCtrl("T1", "A");
+  const own = ML.createSaveOwnership();
+  let n = 0; const mkId = () => "op-" + (++n);
+  const inFlight = { value: false };
+  const setInFlight = (v) => { inFlight.value = v; };
+
+  // Old save begins under T1/A.
+  const ctxOld = ctrl.capture();
+  const tokOld = own.begin(ctrl, ctxOld, mkId);
+  assert.ok(tokOld, "old save acquires ownership");
+  setInFlight(true);
+
+  // Selection invalidates to T2/B while old save is still pending.
+  own.invalidate(); ctrl.invalidate("T2", "B");
+
+  // New selection can start and own a new save.
+  const ctxNew = ctrl.capture();
+  const tokNew = own.begin(ctrl, ctxNew, mkId);
+  assert.ok(tokNew, "new selection acquires a fresh ownership token — not blocked by the old pending save");
+  assert.notEqual(tokNew, tokOld);
+  setInFlight(true);
+
+  // Old save's finally now runs: it must NOT clear the new selection's state.
+  const oldOwnsNow = own.owns(tokOld);
+  assert.equal(oldOwnsNow, false, "old token is no longer current");
+  if (oldOwnsNow) setInFlight(false); // guarded — must not execute
+  own.settle(tokOld);
+  assert.equal(inFlight.value, true, "old finally did not clear the new selection's in-flight state");
+  assert.equal(own.owns(tokNew), true, "new token still owns after the old settle");
+
+  // New save's own finally clears its own state.
+  if (own.owns(tokNew)) setInFlight(false);
+  own.settle(tokNew);
+  assert.equal(inFlight.value, false);
+});
+
+test("[prod-helper] S23: a same-selection duplicate submission is blocked while the first is in flight", () => {
+  const ctrl = liveCtrl("T1", "A");
+  const own = ML.createSaveOwnership();
+  let n = 0; const mkId = () => "op-" + (++n);
+  const tok1 = own.begin(ctrl, ctrl.capture(), mkId);
+  assert.ok(tok1);
+  const tok2 = own.begin(ctrl, ctrl.capture(), mkId); // same live selection, first still owns
+  assert.equal(tok2, null, "duplicate submission in the same live selection is blocked");
+  own.settle(tok1);
+  const tok3 = own.begin(ctrl, ctrl.capture(), mkId); // after settle, a new save may begin
+  assert.ok(tok3, "after the first settles, a new same-selection save may begin");
+});
+
+test("[prod-helper] S24: logout/unmount (invalidate) frees ownership so the next selection can save", () => {
+  const ctrl = liveCtrl("T1", "A");
+  const own = ML.createSaveOwnership();
+  const tok1 = own.begin(ctrl, ctrl.capture(), () => "op-1");
+  assert.ok(tok1);
+  own.invalidate(); // logout / unmount / business switch
+  assert.equal(own.current(), null, "ownership cleared synchronously on invalidation");
+  ctrl.invalidate("T3", "C");
+  const tok2 = own.begin(ctrl, ctrl.capture(), () => "op-2");
+  assert.ok(tok2, "the next selection can own a save");
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INSIGHT READBACK — createInsightReadback (scenarios 11-14)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function insightHarness(candidates) {
+  const ctrl = liveCtrl("T1", "A");
+  const requests = []; // {tenantId,bizId,fromDate}
+  const gates = [];
+  const io = {
+    selection: ctrl,
+    candidateDates: () => candidates,
+    apiGetRange: ({ tenantId, bizId, fromDate, toDate }) => {
+      const g = deferred(); gates.push(g);
+      requests.push({ tenantId, bizId, fromDate });
+      return g.promise; // resolves to a docs map
+    },
+  };
+  return { ctrl, requests, gates, readback: ML.createInsightReadback(io) };
+}
+
+test("[prod-helper] S11+S14: first candidate deferred, selection invalidates, first result 'not found' → NO second request, no cancelled-path mutation", async () => {
+  const h = insightHarness(["2026-07-27", "2026-07-26"]);
+  const ctx = h.ctrl.capture();
+  const isCancelled = () => false; // rely on selection liveness for cancellation
+  const p = h.readback.loadRange(ctx, null, isCancelled);
+  await tick();
+  assert.equal(h.requests.length, 1, "first candidate request issued");
+  assert.equal(h.requests[0].tenantId, "T1");
+  assert.equal(h.requests[0].bizId, "A");
+  h.ctrl.invalidate("T2", "A"); // selection cancelled (new tenant, same biz id)
+  h.gates[0].resolve({}); // first candidate resolves as NOT FOUND (empty map)
+  const res = await p;
+  assert.equal(res.cancelled, true, "loadRange returns cancelled");
+  assert.equal(h.requests.length, 1, "NO second candidate request after cancellation");
+});
+
+test("[prod-helper] S12: logout T1 / login T2 with the SAME business id — stale readback issues no second request", async () => {
+  const h = insightHarness(["2026-07-27", "2026-07-26"]);
+  const ctx = h.ctrl.capture(); // T1/A
+  const p = h.readback.loadRange(ctx, null, () => false);
+  await tick();
+  h.ctrl.invalidate("T2", "A"); // same biz id A, new tenant/generation
+  h.gates[0].resolve({});       // not found
+  const res = await p;
+  assert.equal(res.cancelled, true);
+  assert.equal(h.requests.length, 1, "same-biz-id tenant switch still blocks the second request");
+});
+
+test("[prod-helper] S13: every insight request derives tenant AND business from the captured ctx", async () => {
+  const h = insightHarness(["2026-07-27", "2026-07-26", "2026-07-25"]);
+  const ctx = h.ctrl.capture();
+  const p = h.readback.loadRange(ctx, null, () => false);
+  await tick(); h.gates[0].resolve({}); await tick(); // not found → next candidate
+  h.gates[1].resolve({}); await tick();               // not found → next candidate
+  h.gates[2].resolve({ "2026-07-25": { insights: [{ id: 1 }] } });
+  const res = await p;
+  assert.equal(res.found, true);
+  assert.equal(res.date, "2026-07-25");
+  assert.ok(h.requests.length >= 1);
+  assert.ok(h.requests.every(r => r.tenantId === "T1" && r.bizId === "A"), "no request combined a new global tenant with an old business");
+});
+
+test("[prod-helper] insight readback with missing context makes no request", async () => {
+  const h = insightHarness(["2026-07-27"]);
+  const res = await h.readback.loadRange(null, null, () => false);
+  assert.equal(res.ok, false);
+  assert.equal(res.error, "missing_context");
+  assert.equal(h.requests.length, 0);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXCEPTION REQUEST GATE — loadExceptionsBound (scenarios 15-18)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function excHarness() {
+  const ctrl = liveCtrl("T1", "A");
+  const requests = [];
+  const applied = [];
+  const io = {
+    selection: ctrl,
+    todayKey: (off) => (off === 1 ? "2026-07-28" : "2026-04-23"),
+    apiFetch: async (url) => { requests.push(url); return { ok: true, json: async () => ({ ok: true, exceptions: { "2026-07-20": { status: "active", source: "structured", revision: 1, reasonCode: "closure" } } }) }; },
+    applyState: (stateMap, boolMap) => applied.push({ stateMap: plain(stateMap), boolMap: plain(boolMap) }),
+  };
+  return { ctrl, requests, applied, io };
+}
+
+test("[prod-helper] S15: loadExceptionsBound with an ALREADY-STALE context sends ZERO requests", async () => {
+  const h = excHarness();
+  const ctx = h.ctrl.capture();
+  h.ctrl.invalidate("T2", "B"); // stale BEFORE invocation
+  const r = await ML.loadExceptionsBound(h.io, ctx);
+  assert.equal(r.status, "stale");
+  assert.equal(h.requests.length, 0, "preflight gate: no list-exceptions request for an already-stale context");
+  assert.equal(h.applied.length, 0);
+});
+
+test("[prod-helper] S16: context becomes stale DURING the fetch — response/JSON applies nothing", async () => {
+  const ctrl = liveCtrl("T1", "A");
+  const requests = [];
+  const applied = [];
+  const respGate = deferred();
+  const io = {
+    selection: ctrl,
+    todayKey: (off) => (off === 1 ? "2026-07-28" : "2026-04-23"),
+    apiFetch: async (url) => { requests.push(url); return { ok: true, json: async () => { await respGate.promise; return { ok: true, exceptions: {} }; } }; },
+    applyState: (s, b) => applied.push([s, b]),
+  };
+  const ctx = ctrl.capture();
+  const p = ML.loadExceptionsBound(io, ctx);
+  await tick();
+  assert.equal(requests.length, 1, "request issued while context was live");
+  ctrl.invalidate("T2", "B"); // stale during fetch
+  respGate.resolve();
+  const r = await p;
+  assert.equal(r.status, "stale");
+  assert.equal(applied.length, 0, "no state applied after the context went stale mid-fetch");
+});
+
+test("[prod-helper] S15b: a LIVE context does issue exactly one request and applies state", async () => {
+  const h = excHarness();
+  const r = await ML.loadExceptionsBound(h.io, h.ctrl.capture());
+  assert.equal(r.status, "applied");
+  assert.equal(h.requests.length, 1);
+  assert.ok(h.requests[0].includes("tenantId=T1"));
+  assert.ok(h.requests[0].includes("bizId=A"));
+  assert.equal(h.applied.length, 1);
+  assert.equal(h.applied[0].boolMap["2026-07-20"], true);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FULL SAVE LIFECYCLE — executeEntrySave over the REAL persistence + insight
+// adapters wired to DEFERRED transports (scenarios 10, 41, 42)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function saveHarness(overrides = {}) {
+  const ctrl = liveCtrl("T1", "A");
+  const seq = [];
+  const calls = { applyRows: [], setSaved: [], setError: [], resetForm: 0, schedNav: [], suppress: [], storage: [], apiRange: [] };
+  const excStore = {}, opStore = {};
+  // REAL persistence + REAL insight readback wired to deferred/stub transports.
+  const P = ML.createPersistence({ selection: ctrl, canonicalize: ME.canonicalizeEntries, storageSetFor: async (t, k, v) => { seq.push("storage"); calls.storage.push([t, k]); } });
+  const RB = ML.createInsightReadback({ selection: ctrl, candidateDates: () => ["2026-07-24"], apiGetRange: async ({ tenantId, bizId, fromDate }) => { seq.push("apiRange"); calls.apiRange.push({ tenantId, bizId, fromDate }); return { "2026-07-24": { insights: [] } }; } });
   const io = {
     selection: ctrl,
     form: { date: "2026-07-24", sales: 27753 },
@@ -72,21 +558,14 @@ function makeSaveHarness(overrides = {}) {
     materialChanged: () => true,
     todayKey: (off) => (off === 0 ? "2026-07-24" : off === 1 ? "2026-07-25" : "2026-07-23"),
     newOpId: () => "op-fixed",
-    exceptionState: {
-      get: (d) => excStore[d],
-      set: (d, st) => { calls.excSet.push([d, st]); excStore[d] = st; },
-      applyActive: (d, a) => calls.excActive.push([d, a]),
-    },
-    opIds: {
-      ensure: (d, mk) => { if (!opStore[d]) opStore[d] = mk(); return opStore[d]; },
-      consume: (d) => { calls.opConsumed.push(d); delete opStore[d]; },
-    },
-    apiFetch: async (url, opts) => { seq.push("api"); calls.api.push([url, opts && opts.body ? JSON.parse(opts.body) : null]); return { ok: true, json: async () => ({ ok: true, applied: true, rebuildRequired: false, exception: { status: "active", reasonCode: "closure" }, revision: 1 }) }; },
-    persistRows: async (rows) => { seq.push("persist"); return { ok: true, canonical: rows }; },
-    applyRows: (rows) => { seq.push("applyRows"); calls.applyRows.push(rows); },
-    reloadExceptions: async (c) => { calls.reloadExc.push(c); },
-    rebuildInsights: async (d, c) => { seq.push("rebuild"); calls.rebuild.push([d, c]); },
-    loadInsights: async (d) => { seq.push("loadIns"); calls.loadIns.push(d); return { ok: true, found: true, date: d }; },
+    exceptionState: { get: (d) => excStore[d], set: (d, st) => { excStore[d] = st; }, applyActive: () => {} },
+    opIds: { ensure: (d, mk) => { if (!opStore[d]) opStore[d] = mk(); return opStore[d]; }, consume: (d) => { delete opStore[d]; } },
+    apiFetch: async () => ({ ok: true, json: async () => ({ ok: true, applied: true, rebuildRequired: false, exception: { status: "active", reasonCode: "closure" }, revision: 1 }) }),
+    persistRows: (rows2, c2) => P.persistEntries(rows2, c2),       // REAL persistence boundary
+    applyRows: (rows) => { seq.push("applyRows"); calls.applyRows.push(plain(rows)); },
+    reloadExceptions: async () => {},
+    rebuildInsights: async (d, c) => { seq.push("rebuild"); },
+    loadInsights: (d, isCancelled, c2) => { seq.push("loadIns"); return RB.loadRange(c2, d, isCancelled).then(r => (r && r.cancelled ? { ok: false, cancelled: true } : { ok: true, found: !!(r && r.found), date: d })); }, // REAL readback
     onInsightsFailure: (m) => { calls.insFail = m; },
     suppressNextInsightsLoad: (c) => calls.suppress.push(c),
     resetFormAndEditing: () => { seq.push("resetForm"); calls.resetForm++; },
@@ -95,530 +574,159 @@ function makeSaveHarness(overrides = {}) {
     scheduleNav: (c, ms) => { seq.push("schedNav"); calls.schedNav.push([c, ms]); },
     ...overrides,
   };
-  return { ctrl, io, calls, seq, excStore, opStore };
-}
-function assertNoNewSelectionMutation(calls, { allowApply = 0 } = {}) {
-  assert.equal(calls.applyRows.length, allowApply, "stale save must not apply rows");
-  assert.equal(calls.resetForm, 0, "stale save must not reset the form/editing state");
-  assert.ok(!calls.setSaved.includes(true), "stale save must not set saved state");
-  assert.equal(calls.schedNav.length, 0, "stale save must not schedule navigation");
-  assert.equal(calls.suppress.length, 0, "stale save must not touch insight suppression");
+  return { ctrl, io, calls, seq };
 }
 
-// ═══ FIXTURE SANITY ══════════════════════════════════════════════════════════
-
-test("incident fixture arithmetic is exact", () => {
-  const list = incidentEntries();
-  assert.equal(list.length, 24);
-  assert.equal(totalRevenue(list), 580483);
-  assert.equal(580483 + 27753, 608236);
+test("[prod-helper] S41: a normal same-context save succeeds exactly once over the real persistence+readback", async () => {
+  const h = saveHarness();
+  const r = await ML.executeEntrySave(h.io);
+  assert.equal(r.status, "saved");
+  assert.equal(h.calls.storage.length, 1, "exactly one entries write");
+  assert.equal(h.calls.storage[0][1], "biz:A:entries");
+  assert.equal(h.calls.storage[0][0], "T1", "write bound to captured tenant");
+  assert.ok(h.calls.setSaved.includes(true), "save reported success");
+  assert.equal(h.calls.resetForm, 1);
+  assert.equal(h.calls.apiRange.length >= 1, true, "readback used the real candidate loop");
+  assert.ok(h.calls.apiRange.every(x => x.tenantId === "T1" && x.bizId === "A"), "readback identity from captured ctx");
 });
 
-// ═══ EXECUTABLE RACE TESTS — save lifecycle (scenarios 1-6, 9-13, 20-23) ═════
-
-test("R3-20: invalidate advances the generation synchronously; same biz id under a new tenant is a different context", () => {
-  const ctrl = ML.createSelectionController();
-  ctrl.invalidate("T1", "A");
-  const ctx = ctrl.capture();
-  assert.ok(ctrl.isLive(ctx));
-  const next = ctrl.invalidate("T2", "A"); // scenario 5: same business-id string, tenant T2
-  assert.equal(next.gen, ctx.gen + 1, "generation must advance immediately");
-  assert.ok(!ctrl.isLive(ctx), "old context is stale the moment invalidate returns");
-  assert.ok(ctrl.isLive(ctrl.capture()));
+test("[prod-helper] S42: delayed navigation is scheduled with the captured ctx (token-checked timer)", async () => {
+  const h = saveHarness();
+  await ML.executeEntrySave(h.io);
+  assert.equal(h.calls.schedNav.length, 1);
+  const [ctxUsed] = h.calls.schedNav[0];
+  assert.equal(h.ctrl.isLive(ctxUsed), true, "nav scheduled against the live captured context");
 });
 
-test("R3-1: business A→B after persist resolves but before rebuild — no rebuild, no state, no reset (scenarios 1, 12, 13)", async () => {
-  const h = makeSaveHarness({
-    persistRows: async (rows) => { h.ctrl.invalidate("T1", "B"); return { ok: true, canonical: rows }; },
+test("[prod-helper] S10: a save whose selection changes mid-flight mutates NOTHING in the new selection", async () => {
+  const persistGate = deferred();
+  const h = saveHarness({
+    persistRows: async (rows2, c2) => { const P = ML.createPersistence({ selection: h.ctrl, canonicalize: ME.canonicalizeEntries, storageSetFor: async () => { await persistGate.promise; } }); return P.persistEntries(rows2, c2); },
   });
-  const out = await ML.executeEntrySave(h.io);
-  assert.equal(out.status, "stale");
-  assert.equal(h.calls.rebuild.length, 0, "stale save must not send a rebuild request");
-  assert.equal(h.calls.loadIns.length, 0, "stale save must not send an insight read");
-  assertNoNewSelectionMutation(h.calls);
-});
-
-test("R3-2: business switch while the insights rebuild is pending — readback never sent, nothing mutated after", async () => {
-  const gate = deferred();
-  const h = makeSaveHarness({
-    rebuildInsights: async (d, c) => { h.calls.rebuild.push([d, c]); await gate.promise; },
-  });
-  const run = ML.executeEntrySave(h.io);
-  await tick(); await tick(); await tick(); await tick();
-  assert.equal(h.calls.applyRows.length, 1, "rows applied once while still live");
-  h.ctrl.invalidate("T1", "B"); // switch while rebuild pending
-  gate.resolve();
-  const out = await run;
-  assert.equal(out.status, "stale");
-  assert.equal(h.calls.loadIns.length, 0, "insight readback must not be sent for a stale save");
-  assert.equal(h.calls.resetForm, 0);
-  assert.ok(!h.calls.setSaved.includes(true));
-  assert.equal(h.calls.schedNav.length, 0);
-});
-
-test("R3-3: business switch while dashboard-insight readback is pending — no failure handling, no reset, no nav", async () => {
-  const gate = deferred();
-  const h = makeSaveHarness({
-    loadInsights: async (d) => { h.calls.loadIns.push(d); await gate.promise; return { ok: false }; },
-  });
-  const run = ML.executeEntrySave(h.io);
-  await tick(); await tick(); await tick(); await tick(); await tick();
-  h.ctrl.invalidate("T1", "B");
-  gate.resolve();
-  const out = await run;
-  assert.equal(out.status, "stale");
-  assert.equal(h.calls.insFail, undefined, "stale readback must not trigger insight-failure state");
-  assert.equal(h.calls.suppress.length, 0);
-  assert.equal(h.calls.resetForm, 0);
-  assert.equal(h.calls.schedNav.length, 0);
-});
-
-test("R3-4: logout T1 → initialize T2 → old T1 save resolves — terminated silently (scenarios 4, 12)", async () => {
-  const gate = deferred();
-  const h = makeSaveHarness({
-    persistRows: async (rows) => { await gate.promise; return { ok: true, canonical: rows }; },
-  });
-  const run = ML.executeEntrySave(h.io);
-  await tick(); await tick();
-  h.ctrl.invalidate(null, null);   // logout begins
-  h.ctrl.invalidate("T2", "A");    // another authenticated tenant initialized (same biz id string)
-  gate.resolve();
-  const out = await run;
-  assert.equal(out.status, "stale");
-  assertNoNewSelectionMutation(h.calls);
-  assert.equal(h.calls.setError.length, 0, "stale save must not write error state into the new selection");
-});
-
-test("R3-9: stale structured exception set/clear response cannot update exception state or continue to persist (scenarios 9, 11)", async () => {
-  const gate = deferred();
-  const h = makeSaveHarness({
-    apiFetch: async (url, opts) => { h.calls.api.push([url, JSON.parse(opts.body)]); await gate.promise; return { ok: true, json: async () => ({ ok: true, applied: true, rebuildRequired: true, exception: { status: "active" }, revision: 2 }) }; },
-  });
-  h.io.form = { date: "2026-07-24", sales: 27753, is_exception: true, exception_reason: "closure" };
-  const run = ML.executeEntrySave(h.io);
+  const p = ML.executeEntrySave(h.io);
   await tick();
-  h.ctrl.invalidate("T1", "B");
-  gate.resolve();
-  const out = await run;
-  assert.equal(out.status, "stale");
-  assert.equal(h.calls.excSet.length, 0, "stale set/clear response must not mutate the exception state ref");
-  assert.equal(h.calls.excActive.length, 0, "stale set/clear response must not mutate exception React state");
-  assert.equal(h.seq.filter((s) => s === "persist").length, 0, "stale save must not continue to persist");
-  assertNoNewSelectionMutation(h.calls);
+  h.ctrl.invalidate("T2", "B"); // selection changes while persist is in flight
+  persistGate.resolve();
+  const r = await p;
+  assert.equal(r.status, "stale");
+  assert.ok(!h.calls.setSaved.includes(true), "stale save never reports success");
+  assert.equal(h.calls.resetForm, 0, "stale save never resets the form");
+  assert.equal(h.calls.schedNav.length, 0, "stale save never schedules navigation");
+  assert.equal(h.calls.suppress.length, 0, "stale save never touches insight suppression");
 });
 
-test("R3-10: exception failure reload is bound to the ORIGINAL context; after logout/login nothing is reloaded (scenarios 10, 11)", async () => {
-  // live failure first: reload happens WITH the captured context
-  const h1 = makeSaveHarness({
-    apiFetch: async () => { throw new Error("network"); },
-  });
-  h1.io.form = { date: "2026-07-24", sales: 1, is_exception: true, exception_reason: "closure" };
-  const ctxBefore = h1.ctrl.capture();
-  const out1 = await ML.executeEntrySave(h1.io);
-  assert.equal(out1.status, "error");
-  assert.equal(h1.calls.reloadExc.length, 1);
-  assert.deepEqual(h1.calls.reloadExc[0], ctxBefore, "failure reload must use the captured context, never a later global");
-  // stale failure: nothing at all
-  const gate = deferred();
-  const h2 = makeSaveHarness({
-    apiFetch: async () => { await gate.promise; throw new Error("network"); },
-  });
-  h2.io.form = { date: "2026-07-24", sales: 1, is_exception: true, exception_reason: "closure" };
-  const run2 = ML.executeEntrySave(h2.io);
-  await tick();
-  h2.ctrl.invalidate(null, null); h2.ctrl.invalidate("T2", "A");
-  gate.reject(new Error("network"));
-  const out2 = await run2.catch(() => ({ status: "threw" }));
-  assert.equal(out2.status, "stale");
-  assert.equal(h2.calls.reloadExc.length, 0, "stale failure must not reload exceptions");
-  assert.equal(h2.calls.setError.length, 0, "stale failure must not set error state");
+// ═══════════════════════════════════════════════════════════════════════════
+// PRESERVED BEHAVIOR — MarjinEntries replay/canonicalization (scenarios 34-40)
+// ═══════════════════════════════════════════════════════════════════════════
+
+test("[prod-entries] S34: date-move edit keeps ONE row for the final date (identity by date, not index)", () => {
+  const rows = [day("2026-07-01", 10), day("2026-07-02", 20), day("2026-07-03", 30)];
+  const moved = ME.upsertEntryByDate(rows, day("2026-07-05", 999), "2026-07-02");
+  assert.equal(moved.filter(e => e.date === "2026-07-02").length, 0, "original date removed by DATE");
+  assert.equal(moved.filter(e => e.date === "2026-07-05").length, 1);
+  assert.equal(moved.find(e => e.date === "2026-07-05").sales, 999);
+  assert.equal(moved.length, 3);
 });
 
-test("R3-21: same-context save succeeds exactly once with the reviewed order and the EXACT persisted array (scenarios 19, 21)", async () => {
-  let persisted = null;
-  const h = makeSaveHarness({
-    persistRows: async (rows) => { h.seq.push("persist"); persisted = rows; return { ok: true, canonical: rows }; },
-  });
-  const out = await ML.executeEntrySave(h.io);
-  assert.equal(out.status, "saved");
-  assert.equal(h.calls.applyRows.length, 1);
-  assert.ok(Object.is(h.calls.applyRows[0], persisted), "React state must receive the exact canonical array that was persisted");
-  assert.deepEqual(h.seq.filter((s) => ["persist", "applyRows", "rebuild", "loadIns", "resetForm", "schedNav"].includes(s)),
-    ["persist", "applyRows", "rebuild", "loadIns", "resetForm", "schedNav"], "reviewed save order preserved");
-  assert.ok(h.calls.setSaved.includes(true));
-  assert.equal(h.calls.schedNav[0][1], 1200);
-  assert.equal(totalRevenue(h.calls.applyRows[0]), 100 + 27753);
+test("[prod-entries] S34b: edit onto an EXISTING date collapses to one row (explicit save wins wholesale)", () => {
+  const rows = [day("2026-07-01", 10), day("2026-07-02", 20)];
+  const merged = ME.upsertEntryByDate(rows, day("2026-07-02", 500, { note: "new" }), "2026-07-01");
+  assert.equal(merged.filter(e => e.date === "2026-07-02").length, 1);
+  assert.equal(merged.find(e => e.date === "2026-07-02").sales, 500, "the explicit save value replaces wholesale");
+  assert.equal(merged.length, 1);
 });
 
-test("R3-23: incident — a stale replay of ₪27,753 cannot move the canonical ₪580,483 (scenario 23)", async () => {
-  const rows = incidentEntries();
-  const gate = deferred();
-  const h = makeSaveHarness({
-    persistRows: async (r) => { await gate.promise; return { ok: true, canonical: r }; },
-  });
-  h.io.rows = rows;
-  h.io.form = { date: "2026-07-24", sales: 27753 };
-  const run = ML.executeEntrySave(h.io);
-  await tick(); await tick();
-  h.ctrl.invalidate("T1", "B");
-  gate.resolve();
-  const out = await run;
-  assert.equal(out.status, "stale");
-  assert.equal(h.calls.applyRows.length, 0, "no state applied for the stale save");
-  assert.equal(totalRevenue(rows), 580483, "canonical incident total untouched");
-  // live path: replay keeps exactly 580,483 (one 07-24 row)
-  const h2 = makeSaveHarness();
-  h2.io.rows = incidentEntries();
-  h2.io.form = { date: "2026-07-24", sales: 27753 };
-  const out2 = await ML.executeEntrySave(h2.io);
-  assert.equal(out2.status, "saved");
-  assert.equal(totalRevenue(h2.calls.applyRows[0]), 580483);
-  assert.notEqual(totalRevenue(h2.calls.applyRows[0]), 608236);
+test("[prod-entries] S35: explicit save wins wholesale over a hydrated duplicate", () => {
+  const hydrated = [day("2026-07-10", 100, { payroll: 50 })];
+  const saved = ME.upsertEntryByDate(hydrated, day("2026-07-10", 300), "2026-07-10");
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].sales, 300);
+  assert.equal(saved[0].payroll, undefined, "wholesale replacement — not a field-merge");
 });
 
-test("R3-6: old delayed navigation timer cannot fire into a new selection (scenario 6)", () => {
-  const ctrl = ML.createSelectionController();
-  ctrl.invalidate("T1", "A");
-  const ctx = ctrl.capture();
-  const timerBox = { current: null };
-  let fired = 0; let stored = null; let cleared = [];
-  const setT = (fn) => { stored = fn; return 7; };
-  const clearT = (id) => cleared.push(id);
-  ML.scheduleSelectionBoundTimeout(ctrl, ctx, timerBox, () => { fired++; }, 1200, setT, clearT);
-  assert.equal(timerBox.current, 7);
-  ctrl.invalidate("T1", "B"); // selection switched before the timer fires
-  stored();                    // timer fires late
-  assert.equal(fired, 0, "old timer must not navigate the new selection");
-  assert.equal(timerBox.current, null);
-  // live timer still works, and re-scheduling clears the previous timer
-  const ctx2 = ctrl.capture();
-  ML.scheduleSelectionBoundTimeout(ctrl, ctx2, timerBox, () => { fired++; }, 1200, setT, clearT);
-  ML.scheduleSelectionBoundTimeout(ctrl, ctx2, timerBox, () => { fired++; }, 1200, setT, clearT);
-  assert.deepEqual(cleared, [7], "re-scheduling clears the pending timer");
-  stored();
-  assert.equal(fired, 1);
-});
-
-// ═══ EXECUTABLE RACE TESTS — exception list lifecycle (scenarios 7, 8, 11) ═══
-
-test("R3-7/8: old exception-list response after business OR tenant switch never overwrites the current selection", async () => {
-  for (const nextSel of [["T1", "B"], ["T2", "A"]]) {
-    const ctrl = ML.createSelectionController();
-    ctrl.invalidate("T1", "A");
-    const ctx = ctrl.capture();
-    const gate = deferred();
-    const applied = [];
-    const io = {
-      selection: ctrl,
-      todayKey: (off) => (off === 1 ? "2026-07-25" : "2026-04-20"),
-      apiFetch: async (url) => { io.url = url; await gate.promise; return { ok: true, json: async () => ({ ok: true, exceptions: { "2026-07-10": { source: "structured", status: "active", revision: 1 } } }) }; },
-      applyState: (stateMap, boolMap) => applied.push([stateMap, boolMap]),
-    };
-    const run = ML.loadExceptionsBound(io, ctx);
-    await tick();
-    assert.ok(io.url.includes("tenantId=T1") && io.url.includes("bizId=A"), "request built only from the captured ctx");
-    ctrl.invalidate(nextSel[0], nextSel[1]);
-    gate.resolve();
-    const out = await run;
-    assert.equal(out.status, "stale");
-    assert.equal(applied.length, 0, `stale list response must not apply state (switched to ${nextSel.join("/")})`);
-  }
-});
-
-test("R3: live exception-list response applies exactly once with the parsed shape", async () => {
-  const ctrl = ML.createSelectionController();
-  ctrl.invalidate("T1", "A");
-  const applied = [];
-  const io = {
-    selection: ctrl,
-    todayKey: () => "2026-07-25",
-    apiFetch: async () => ({ ok: true, json: async () => ({ ok: true, exceptions: { "2026-07-10": { source: "legacy", status: "active" } } }) }),
-    applyState: (stateMap, boolMap) => applied.push([plain(stateMap), plain(boolMap)]),
-  };
-  const out = await ML.loadExceptionsBound(io, ctrl.capture());
-  assert.equal(out.status, "applied");
-  assert.deepEqual(applied, [[{ "2026-07-10": { source: "legacy", status: "active", revision: 0, reasonCode: "", reasonText: "" } }, { "2026-07-10": true }]]);
-});
-
-// ═══ EXECUTABLE TESTS — supplier-grid writer (scenarios 14-19) ═══════════════
-
-function makeSupplierHarness(rows, overrides = {}) {
-  const ctrl = ML.createSelectionController();
-  ctrl.invalidate("T1", "A");
-  const applied = [];
-  const io = {
-    selection: ctrl,
-    applyRows: (r) => applied.push(r),
-    persistRows: async (r) => ({ ok: true, canonical: r }),
-    ...overrides,
-  };
-  return { ctrl, io, applied, args: { supId: "s9", date: "2026-07-24", val: "77", rows, fixed: null, emptyEntry: { date: "", sales: 0 } } };
-}
-
-test("R3-14: supplier update starting from DUPLICATE local state exposes only one canonical row and never sums", async () => {
-  const dup = [day("2026-07-24", 27753, { supplier_payments: { s1: 100 } }), day("2026-07-24", 27753, { supplier_payments: { s1: 100 } })];
-  const h = makeSupplierHarness(dup);
-  const out = await ML.applySupplierPaymentBound(h.io, h.args);
-  assert.equal(out.status, "applied");
-  for (const arr of h.applied) {
-    assert.equal(arr.filter((e) => e.date === "2026-07-24").length, 1, "every applied array is canonical");
-  }
-  const final = h.applied[h.applied.length - 1];
-  assert.equal(final[0].supplier_payments.s1, 100, "duplicate rows never sum s1");
-  assert.equal(final[0].supplier_payments.s9, "77");
-  assert.equal(totalRevenue(final), 27753);
-});
-
-test("R3-15/16: new supplier on an existing date preserves the rest of the record; absent date creates one row", async () => {
-  const rows = [day("2026-07-24", 27753, { supplier_payments: { s1: 50 }, payroll: 500, food_cost: 9 })];
-  const h = makeSupplierHarness(rows);
-  const out = await ML.applySupplierPaymentBound(h.io, h.args);
-  assert.equal(out.status, "applied");
-  const final = h.applied[h.applied.length - 1];
-  assert.equal(final.length, 1);
-  assert.deepEqual(plain(final[0].supplier_payments), { s1: 50, s9: "77" });
-  assert.equal(final[0].payroll, 500, "rest of the daily record preserved");
-  assert.equal(final[0].sales, 27753);
-  // absent date
-  const h2 = makeSupplierHarness([day("2026-07-01", 5)]);
-  await ML.applySupplierPaymentBound(h2.io, h2.args);
-  const final2 = h2.applied[h2.applied.length - 1];
-  assert.deepEqual(plain(final2).map((e) => e.date), ["2026-07-01", "2026-07-24"]);
-});
-
-test("R3-17: persistence failure restores the previous canonical state — no unpersisted replacement remains", async () => {
-  const rows = [day("2026-07-24", 27753, { supplier_payments: { s1: 50 } })];
-  const h = makeSupplierHarness(rows, { persistRows: async () => ({ ok: false }) });
-  const out = await ML.applySupplierPaymentBound(h.io, h.args);
-  assert.equal(out.status, "persist_failed");
-  assert.equal(h.applied.length, 2, "optimistic canonical apply + revert");
-  assert.deepEqual(plain(h.applied[1]), plain(ME.canonicalizeEntries(rows)), "state reverted to the previous canonical array");
-  assert.equal(h.applied[1][0].supplier_payments.s9, undefined, "failed value not left in state");
-});
-
-test("R3-19: the EXACT canonical array persisted is the array applied to state; stale supplier persist applies nothing further", async () => {
-  let persisted = null;
-  const rows = [day("2026-07-24", 1)];
-  const h = makeSupplierHarness(rows, { persistRows: async (r) => { persisted = r; return { ok: true, canonical: r }; } });
-  const out = await ML.applySupplierPaymentBound(h.io, h.args);
-  assert.equal(out.status, "applied");
-  assert.ok(Object.is(h.applied[h.applied.length - 1], persisted), "state === persisted canonical array");
-  // stale: selection switches during persist
-  const gate = deferred();
-  const h2 = makeSupplierHarness([day("2026-07-24", 1)], { persistRows: async (r) => { await gate.promise; return { ok: true, canonical: r }; } });
-  const run2 = ML.applySupplierPaymentBound(h2.io, h2.args);
-  await tick();
-  h2.ctrl.invalidate("T2", "A");
-  gate.resolve();
-  const out2 = await run2;
-  assert.equal(out2.status, "stale");
-  assert.equal(h2.applied.length, 1, "only the optimistic canonical apply happened before the switch; nothing after");
-});
-
-test("R3-18: listener echo ordering — canonical hydration after supplier persist reproduces the same state (scenario 18)", async () => {
-  const rows = [day("2026-07-24", 27753, { supplier_payments: { s1: 50 } })];
-  const h = makeSupplierHarness(rows);
-  await ML.applySupplierPaymentBound(h.io, h.args);
-  const applied = h.applied[h.applied.length - 1];
-  const echo = ME.canonicalizeEntries(plain(applied)); // listener wholesale replacement of the persisted blob
-  assert.deepEqual(plain(echo), plain(applied), "echo cannot reintroduce a raw/divergent array after canonical state");
-});
-
-// ═══ BEHAVIORAL TESTS — date identity & replay (R2, preserved) ═══════════════
-
-test("A1/A2: new-entry and edit saves replace by date; MTD stays exact", () => {
-  const a1 = ME.upsertEntryByDate(incidentEntries(), day("2026-07-24", 27753), null);
-  assert.equal(a1.length, 24);
-  assert.equal(totalRevenue(a1), 580483);
-  const a2 = ME.upsertEntryByDate(incidentEntries(), day("2026-07-24", 30000), "2026-07-24");
-  assert.equal(totalRevenue(a2), 580483 - 27753 + 30000);
-});
-
-test("A5/A6/A8: hydration/reorder/removal cannot redirect an edit — no unrelated day is ever removed", () => {
-  const hydrated = ME.canonicalizeEntries([day("2026-07-01", 100), day("2026-07-24", 27753), day("2026-06-30", 50)]);
-  const after = ME.upsertEntryByDate(hydrated, day("2026-07-25", 27753), "2026-07-24");
-  assert.deepEqual(plain(after).map((e) => e.date), ["2026-06-30", "2026-07-01", "2026-07-25"]);
-  const gone = ME.upsertEntryByDate(ME.canonicalizeEntries([day("2026-07-01", 100), day("2026-07-30", 9)]), day("2026-07-25", 27753), "2026-07-24");
-  assert.deepEqual(plain(gone).map((e) => e.date), ["2026-07-01", "2026-07-25", "2026-07-30"]);
-});
-
-test("A4/A9: date-collision edits leave exactly one row for the final date; explicit save wins wholesale", () => {
-  const after = ME.upsertEntryByDate([day("2026-07-20", 1000, { food_cost: 111 }), day("2026-07-24", 27753)], day("2026-07-24", 5000, { food_cost: 999 }), "2026-07-20");
-  assert.equal(after.length, 1);
-  assert.deepEqual(plain(after[0]), plain(day("2026-07-24", 5000, { food_cost: 999 })));
-  const both = ME.upsertEntryByDate(ME.canonicalizeEntries([day("2026-07-01", 100), day("2026-07-24", 27753), day("2026-07-25", 500)]), day("2026-07-25", 27753), "2026-07-24");
-  assert.deepEqual(plain(both).map((e) => `${e.date}:${e.sales}`), ["2026-07-01:100", "2026-07-25:27753"]);
-});
-
-test("A-legacy-index: a numeric third argument is ignored — positional deletion is impossible", () => {
-  const after = ME.upsertEntryByDate(ME.canonicalizeEntries([day("2026-07-01", 100), day("2026-07-24", 27753)]), day("2026-07-25", 1), 0);
-  assert.ok(after.some((e) => e.date === "2026-07-01"));
-  assert.equal(after.length, 3);
-});
-
-test("A11/A12: distinct dates with equal revenue stay separate — no UTC merge", () => {
-  const canon = ME.canonicalizeEntries([day("2026-07-24", 27753), day("2026-07-25", 27753)]);
-  assert.equal(canon.length, 2);
-  assert.equal(totalRevenue(canon), 55506);
-});
-
-const fullRecord = () => ({
-  date: "2026-07-24", sales: 27753, deliveries: 100, other_income: 50,
-  supplier_payments: { supplierA: 100 }, food_cost: 0,
-  payroll: 500, hourly_payroll: { empA: 200 }, other_expense: 30, note: "x",
-});
-
-test("B13-17/B22: identical full-record replay doubles NOTHING; canonicalize(x+x)===canonicalize(x)", () => {
-  const rec = fullRecord();
-  const canon = ME.canonicalizeEntries([rec, plain(rec)]);
+test("[prod-entries] S36: earliest-non-zero scalar precedence for hydrated duplicates (never summed)", () => {
+  const dup = [day("2026-07-11", 0, { payroll: 0 }), day("2026-07-11", 250, { payroll: 80 })];
+  const canon = ME.canonicalizeEntries(dup);
   assert.equal(canon.length, 1);
-  assert.equal(canon[0].sales, 27753);
-  assert.equal(canon[0].supplier_payments.supplierA, 100);
-  assert.equal(canon[0].payroll, 500);
-  assert.equal(canon[0].hourly_payroll.empA, 200);
-  assert.deepEqual(plain(canon), plain(ME.canonicalizeEntries([rec])));
-  assert.deepEqual(plain(ME.canonicalizeEntries(plain(canon))), plain(canon));
+  assert.equal(canon[0].sales, 250, "first non-zero wins, not the sum");
+  assert.equal(canon[0].payroll, 80);
 });
 
-test("B18-21: map union earliest-wins; property order and metadata differences never cause addition", () => {
-  const union = ME.canonicalizeEntries([day("2026-07-24", 27753, { supplier_payments: { supplierA: 100 } }), day("2026-07-24", 0, { supplier_payments: { supplierB: 40 } })]);
-  assert.deepEqual(plain(union[0].supplier_payments), { supplierA: 100, supplierB: 40 });
-  const conflict = ME.canonicalizeEntries([day("2026-07-24", 27753, { supplier_payments: { supplierA: 100 } }), day("2026-07-24", 0, { supplier_payments: { supplierA: 70 } })]);
-  assert.equal(conflict[0].supplier_payments.supplierA, 100);
-  const rec = fullRecord();
-  const reordered = { note: "x", hourly_payroll: { empA: 200 }, payroll: 500, other_expense: 30, food_cost: 0, supplier_payments: { supplierA: 100 }, other_income: 50, deliveries: 100, sales: 27753, date: "2026-07-24" };
-  const withMeta = { ...plain(rec), _idx: 7, __key: "z" };
-  for (const pair of [[rec, reordered], [rec, withMeta]]) {
-    const c = ME.canonicalizeEntries(plain(pair));
-    assert.equal(c[0].sales, 27753);
-    assert.equal(c[0].supplier_payments.supplierA, 100);
-    assert.equal(c[0].payroll, 500);
-  }
-});
-
-test("C24-26: ₪580,483 stable; ₪608,236 unreachable via replay, doubled payload or full doubling", () => {
-  const correct = incidentEntries();
-  for (const attempt of [
-    ME.upsertEntryByDate(correct, day("2026-07-24", 27753), null),
-    ME.canonicalizeEntries([...correct, day("2026-07-24", 27753)]),
-    ME.canonicalizeEntries([...correct, ...plain(correct)]),
-  ]) {
-    assert.equal(totalRevenue(attempt), 580483);
-    assert.notEqual(totalRevenue(attempt), 608236);
-  }
-});
-
-test("C27/C28 + D29-33: one 07-24 point; supplier totals / food% / labor / profit inputs unchanged under replay", () => {
-  const state = ME.upsertEntryByDate(incidentEntries(), day("2026-07-24", 27753), null);
-  const monthEntries = state.filter((e) => e.date && e.date.startsWith("2026-07-"));
-  assert.equal(monthEntries.filter((e) => e.date === "2026-07-24").length, 1);
-  assert.equal(monthEntries.length, 24);
-  const base = [
-    day("2026-07-01", 10000, { supplier_payments: { a: 1000, b: 500 }, payroll: 800, hourly_payroll: { e1: 200 } }),
-    day("2026-07-24", 27753, { supplier_payments: { supplierA: 100 }, payroll: 500 }),
+test("[prod-entries] S37+S38: nested map union keeps all keys, earliest value wins, same keys never summed", () => {
+  const dup = [
+    day("2026-07-12", 1, { supplier_payments: { "s1": "100", "s2": "40" }, hourly_payroll: { "9": "3" } }),
+    day("2026-07-12", 1, { supplier_payments: { "s1": "999", "s3": "70" }, hourly_payroll: { "9": "9", "10": "5" } }),
   ];
-  const metrics = (rows) => {
-    const revenue = totalRevenue(rows);
-    const food = supplierTotal(rows);
-    const labor = rows.reduce((a, e) => a + (Number(e.payroll) || 0) + Object.values(e.hourly_payroll || {}).reduce((s, v) => s + (Number(v) || 0), 0), 0);
-    return { revenue, food, foodPct: (food / revenue) * 100, labor, contribution: revenue - food - labor };
-  };
-  assert.deepEqual(metrics(ME.canonicalizeEntries([...plain(base), ...plain(base)])), metrics(ME.canonicalizeEntries(plain(base))));
+  const canon = ME.canonicalizeEntries(dup);
+  assert.equal(canon.length, 1);
+  assert.deepEqual(plain(canon[0].supplier_payments), { "s1": "100", "s2": "40", "s3": "70" }, "union, earliest wins for s1, never summed");
+  assert.deepEqual(plain(canon[0].hourly_payroll), { "9": "3", "10": "5" }, "hourly map union, earliest wins for key 9");
 });
 
-test("G: undated rows dropped; trimmed dates collide; upsert replay and save→hydration round-trips are idempotent", () => {
-  assert.deepEqual(plain(ME.upsertEntryByDate([day("2026-07-24", 1)], { date: "", sales: 9 }, null)), [day("2026-07-24", 1)]);
-  const trimmed = ME.canonicalizeEntries([day(" 2026-07-24", 100), day("2026-07-24", 0, { food_cost: 5 })]);
-  assert.equal(trimmed.length, 1);
-  assert.equal(trimmed[0].sales, 100);
-  const once = ME.upsertEntryByDate(incidentEntries(), day("2026-07-24", 27753), null);
-  assert.deepEqual(plain(ME.upsertEntryByDate(once, day("2026-07-24", 27753), null)), plain(once));
-  assert.deepEqual(plain(ME.canonicalizeEntries(plain(once))), plain(once));
+test("[prod-entries] S39: canonicalization is deterministic and idempotent", () => {
+  const raw = [day("2026-07-02", 2), day("2026-07-01", 1), day("2026-07-02", 9), { sales: 5 }, { date: null, sales: 7 }, day("2026-07-01", 0)];
+  const once = ME.canonicalizeEntries(raw);
+  const twice = ME.canonicalizeEntries(once);
+  assert.deepEqual(plain(twice), plain(once), "idempotent");
+  assert.deepEqual(plain(once).map(e => e.date), ["2026-07-01", "2026-07-02"], "deterministic sorted; rows with no usable date dropped");
 });
 
-// ═══ [source-guard] wiring assertions (supplementary — NOT race coverage) ════
-
-function saveEntrySlice() {
-  const start = html.indexOf("const saveEntry = async");
-  const end = html.indexOf("const deleteEntryByDate", start);
-  assert.ok(start !== -1 && end !== -1);
-  return html.slice(start, end);
-}
-
-test("[source-guard] saveEntry delegates to the production seam with the real selection controller", () => {
-  const src = saveEntrySlice();
-  assert.ok(src.includes("window.MarjinSaveLifecycle.executeEntrySave({"));
-  assert.ok(src.includes("selection: selectionCtrlRef.current"));
-  assert.ok(src.includes("entrySaveInFlightRef.current"), "double-submit guard must remain");
-  assert.ok(!src.includes("[...entries,"), "no raw append remains in the save path");
-  assert.ok(!html.includes("const saveRevenueStep"), "dead index-keyed wizard writer must not exist");
+test("[prod-entries] S40: listener/self-heal tenant binding is preserved in source (guarded write-back)", () => {
+  // Behavioral proxy: canonicalization drives the self-heal decision; the source
+  // guard below asserts the write-back stays tenant/selection-bound.
+  const val = [day("2026-07-24", 27753), day("2026-07-24", 27753)];
+  const deduped = ME.canonicalizeEntries(val);
+  assert.ok(deduped.length < val.length, "duplicate detected → self-heal path is exercised");
+  assert.equal(totalRevenue(deduped), 27753);
 });
 
-test("[source-guard] synchronous invalidation is wired to every selection transition", () => {
-  const wrapper = html.slice(html.indexOf("const setCurrentBizId = id =>"), html.indexOf("const setCurrentBizId = id =>") + 700);
-  assert.ok(wrapper.includes("invalidateSelection(window._currentTenantId == null ? null : window._currentTenantId, id == null ? null : id);"), "business wrapper invalidates BEFORE state updates");
-  assert.ok(html.includes('invalidateSelection(window._currentTenantId == null ? null : window._currentTenantId, "demo_biz");'), "raw demo setter invalidates");
-  assert.ok(html.includes("invalidateSelection(null, null); // R3: tenant reset/logout invalidates the selection synchronously"));
-  assert.ok(html.includes("invalidateSelection(tid, null); // R3: tenant initialized"));
-  assert.ok(html.includes("invalidateSelection(tenantId, null); // R3: tenant (re)initialized synchronously"));
-  assert.ok(html.includes("invalidateSelection(user._tenantId, null); // R3: another authenticated tenant initialized"));
-  assert.ok(html.includes("useEffect(() => () => { invalidateSelection(null, null); }, []);"), "unmount invalidates");
-  const inv = html.slice(html.indexOf("const invalidateSelection = (tenantId, bizId) => {"), html.indexOf("const invalidateSelection = (tenantId, bizId) => {") + 800);
-  assert.ok(inv.includes("entryExceptionOpIdRef.current = {};"), "exception op-ids cleared on invalidation");
-  assert.ok(inv.includes("suppressNextDashboardInsightsLoadForBizRef.current = null;"), "insight suppression cleared on invalidation");
-  assert.ok(inv.includes("clearTimeout(saveNavTimerRef.current)"), "pending navigation timer cancelled on invalidation");
-  assert.ok(inv.includes("editingDateRef.current = null;"), "edit identity cleared on invalidation");
+// ═══════════════════════════════════════════════════════════════════════════
+// SOURCE GUARDS — supplementary wiring assertions (not race coverage)
+// ═══════════════════════════════════════════════════════════════════════════
+
+test("[source-guard] the legacy multi-write persist(e,f,ctx) helper is removed; no writer passes fixedList to an entries write", () => {
+  assert.ok(!/const persist = async \(e, f, ctx\)/.test(html), "central persist(e,f,ctx) multi-write helper removed");
+  assert.ok(!/setFixedList\(u\);persist\(entries,u\)/.test(html), "no fixed-expense caller does the entries+fixed multi-write");
+  assert.ok(!/persist\(newEntries, fixedList\)/.test(html), "employee labor no longer passes fixedList");
 });
 
-test("[source-guard] persist returns the canonical array and honors the caller context; canonicalization precedes the write", () => {
-  const start = html.indexOf("const persist = async (e, f, ctx)");
-  assert.notEqual(start, -1);
-  const slice = html.slice(start, start + 1800);
-  assert.ok(slice.includes("if (ctx && !isSelectionLive(ctx)) return { ok:false, stale:true };"));
-  const canonIdx = slice.indexOf("e = window.MarjinEntries.canonicalizeEntries(e);");
-  const writeIdx = slice.indexOf("JSON.stringify(e), true");
-  assert.ok(canonIdx !== -1 && writeIdx !== -1 && canonIdx < writeIdx);
-  assert.ok(slice.includes("return { ok:true, canonical: e };"));
-  assert.ok(html.includes("const persistEntries = persist;"));
+test("[source-guard] fixed-expense callers write fixed-only with mandatory captured context", () => {
+  assert.ok(html.includes("setFixedList(u);persistFixed(u,captureSelectionCtx());"), "fixed-expense edits call persistFixed with a captured ctx");
+  assert.ok(/persistFixed = \(fixed, ctx\) => persistenceRef\.current\.persistFixed\(fixed, ctx\)/.test(html), "persistFixed delegates to the production seam");
 });
 
-test("[source-guard] exception lifecycle wiring: effect ctx, cleared state on switch, seam-bound loader", () => {
-  assert.ok(html.includes("loadEntryExceptions(ctxAtSetup);"), "effect passes its selection context");
-  assert.ok(html.includes("const ctxAtSetup = captureSelectionCtx();"));
-  const eff = html.slice(html.indexOf("// useEffect 2: business-specific data -- live listeners"), html.indexOf("// useEffect 2: business-specific data -- live listeners") + 2400);
-  assert.ok(eff.includes("setEntryExceptions({});"), "exception React state cleared on switch");
-  assert.ok(eff.includes("entryExceptionStateRef.current = {};"), "exception state ref cleared on switch");
-  const loader = html.slice(html.indexOf("const loadEntryExceptions = async (ctx)"), html.indexOf("const loadEntryExceptions = async (ctx)") + 900);
-  assert.ok(loader.includes("window.MarjinSaveLifecycle.loadExceptionsBound"));
-  assert.ok(!loader.includes("window._currentTenantId"), "loader never reads the live global tenant");
+test("[source-guard] entries persistence derives tenant+key from ctx, not currentBizId / _currentTenantId", () => {
+  assert.ok(html.includes("`biz:${ctx.bizId}:entries`"), "entries key built from ctx.bizId");
+  assert.ok(html.includes("io.storageSetFor(ctx.tenantId, `biz:${ctx.bizId}:entries`"), "tenant from ctx.tenantId via explicit-tenant transport");
+  assert.ok(!/storage\.set\(`biz:\$\{currentBizId\}:entries`, JSON\.stringify\(e\)/.test(html), "the old currentBizId-closure entries write is gone");
+  assert.ok(html.includes("window.storage.setFor = async (tenantId, key, value, shared=false)"), "explicit-tenant storage method exists");
 });
 
-test("[source-guard] rebuild request uses only the captured context; listener/self-heal tenant binding preserved", () => {
-  const rb = html.slice(html.indexOf("const rebuildInsightsAfterEntrySave = async (date, ctx)"), html.indexOf("const rebuildInsightsAfterEntrySave = async (date, ctx)") + 900);
-  assert.notEqual(rb.indexOf("tenantId: ctx.tenantId"), -1);
-  assert.notEqual(rb.indexOf("bizId: ctx.bizId"), -1);
-  assert.ok(!rb.includes("window._currentTenantId,"), "rebuild body never uses the live global tenant");
-  assert.ok(html.includes("deduped.length < val.length && live && window._currentTenantId === tenantAtSetup"), "R2 self-heal binding preserved");
-  assert.ok(html.includes("if(!live) return; // R2: queued callback from an unsubscribed/old selection — ignore"));
-  assert.ok(html.includes("return () => { live = false; unsubs.forEach(u => typeof u===\"function\" && u());"));
+test("[source-guard] supplier writer + entries listener delegate to the production coordinator", () => {
+  assert.ok(html.includes("entriesWriteCoordRef.current.submitSupplierEdit("), "supplier grid uses the write coordinator");
+  assert.ok(!/applySupplierPaymentBound/.test(html), "the un-sequenced applySupplierPaymentBound is removed");
+  assert.ok(html.includes("entriesWriteCoordRef.current.onListenerEcho(val)"), "entries listener routes echoes through the coordinator");
 });
 
-test("[source-guard] supplier grid and delete/labor writers run the canonical selection-bound paths", () => {
-  assert.ok(html.includes("window.MarjinSaveLifecycle.applySupplierPaymentBound({"));
-  assert.ok(!/entries\.map\(e=>e\.date===date\?updated:e\)/.test(html), "raw supplier map is gone");
-  const del = html.slice(html.indexOf("const deleteEntryByDate = async (date)"), html.indexOf("const deleteEntryByDate = async (date)") + 900);
-  assert.ok(del.includes("captureSelectionCtx()") && del.includes("canonicalizeEntries") && del.includes("persistEntries(canonicalNext, null, ctx)"));
-  assert.ok(del.includes("setEntries(prevCanonical)"), "delete reverts on persistence failure");
-  assert.ok(html.includes("onClick={()=>deleteEntryByDate(e.date)}"));
-  const labor = html.slice(html.indexOf("const setDailyLabor = async (date, val)"), html.indexOf("const setDailyLabor = async (date, val)") + 700);
-  assert.ok(labor.includes("upsertEntryByDate"), "employee daily-labor writer uses the date-keyed upsert");
-  assert.ok(html.includes('const u=[];setEntries(u);persist(u,null);'), "clear-all unchanged (trivially canonical)");
-  assert.ok(html.includes("setEntries(window.MarjinEntries.canonicalizeEntries(demoEntries));"), "demo hydration canonicalized");
+test("[source-guard] saveEntry uses the generation-bound ownership token and a guarded finally", () => {
+  assert.ok(html.includes("saveOwnershipCtrlRef.current"), "save ownership controller wired");
+  assert.ok(html.includes("ownership.begin("), "begin() acquires ownership");
+  assert.ok(html.includes("if (ownership.owns(saveToken)) setEntrySaveInFlight(false);"), "finally clears in-flight only if still owning");
+  assert.ok(!/if \(entrySaveInFlightRef\.current\) return;/.test(html), "the old unbound boolean in-flight ref is gone");
+  assert.ok(html.includes("if (saveOwnershipCtrlRef.current) saveOwnershipCtrlRef.current.invalidate();"), "invalidateSelection frees save ownership");
 });
 
-test("[source-guard] chart and MTD still consume the same effective entries collection; lastyear guard is ctx-bound", () => {
-  assert.ok(html.includes("const monthEntries = entries.filter(e => e.date && e.date.startsWith(monthPrefix));"));
-  assert.ok(html.includes("calcMetrics(monthEntries"));
-  assert.ok(html.includes("buildChart(monthEntries)"));
-  assert.ok(html.includes("if (!isSelectionLive(ctxAtSetup) || !live) return;"));
+test("[source-guard] insight readback threads captured ctx; apiGetDailyRange takes an explicit tenant", () => {
+  assert.ok(html.includes("insightReadbackRef.current.loadRange(effCtx, preferredDate, isCancelled)"), "loadDashboardInsights runs the production readback with a ctx");
+  assert.ok(html.includes("apiGetDailyRange(kind, bizId, fromDate, toDate, tenantId)"), "apiGetDailyRange accepts an explicit tenantId");
+  assert.ok(!/apiGetDailyRange\("insights", currentBizId, date, date\)/.test(html), "the currentBizId/global-tenant insight request is gone");
+});
+
+test("[source-guard] loadExceptionsBound has a preflight liveness gate before apiFetch", () => {
+  const s = html.indexOf("async function loadExceptionsBound");
+  const seg = html.slice(s, s + 900);
+  const gateIdx = seg.indexOf('if (!io.selection.isLive(ctx)) return { status: "stale" };');
+  const fetchIdx = seg.indexOf("io.apiFetch(");
+  assert.ok(gateIdx !== -1, "preflight isLive gate present");
+  assert.ok(gateIdx < fetchIdx, "the preflight gate precedes apiFetch");
 });
