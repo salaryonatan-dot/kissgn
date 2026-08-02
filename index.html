@@ -1286,7 +1286,7 @@ function createEntriesWriteCoordinator(io) {
                               attemptedRev: 0, retired: false, waiters: [] });
   let lane = newLane(0);
   let writing = false;
-  const ownPending = [];                            // [{fp, rev}] own-write fingerprints (bounded)
+  const ownPending = [];                            // [{tenantId,bizId,gen,fp,rev}] destination+generation-scoped own-write markers (bounded)
   const fp = (rows) => io.fingerprint(rows);
   const resolveWaiters = (ln, uptoRev, base) => {
     const done = ln.waiters.filter(w => w.rev <= uptoRev);
@@ -1302,7 +1302,11 @@ function createEntriesWriteCoordinator(io) {
     const rev = ln.desiredRev;
     const snapshot = ln.desiredRows;
     ln.attemptedRev = rev;
-    ownPending.push({ fp: fp(snapshot), rev });    // register BEFORE ack (local-before-ack safe)
+    // R7 (R6-FIND-001): own-echo marker is destination- AND generation-scoped from
+    // the write's captured ctx (tenantId, bizId, gen) — never reconstructed later
+    // from mutable globals. A fingerprint alone can never establish ownership.
+    const marker = { tenantId: ctx.tenantId, bizId: ctx.bizId, gen: ctx.gen, fp: fp(snapshot), rev };
+    ownPending.push(marker);                        // register BEFORE ack (local-before-ack safe)
     while (ownPending.length > 16) ownPending.shift(); // bounded — never permanently blacklists
     const writeLane = ln;                           // finalize THIS lane's accounting on settle
     let res;
@@ -1312,6 +1316,10 @@ function createEntriesWriteCoordinator(io) {
       writeLane.committedRev = rev;
       resolveWaiters(writeLane, rev, { status: "applied", canonical: snapshot });
     } else {
+      // R7: a write that never persisted has no legitimate echo — retire ONLY this
+      // write's own scoped marker (never another destination's or generation's).
+      const mi = ownPending.indexOf(marker);
+      if (mi !== -1) ownPending.splice(mi, 1);
       resolveWaiters(writeLane, rev, { status: (res && res.stale) ? "stale" : "persist_failed", canonical: snapshot });
     }
     pump();                                         // drive the CURRENT lane's newest queued revision
@@ -1358,11 +1366,19 @@ function createEntriesWriteCoordinator(io) {
     // Firebase local-before-ack safe: own-payload identity is by content fingerprint.
     onListenerEcho: (rows, ctx) => {
       const sel = io.selection;
+      // R7 invariant 3: a stale callback (different tenant/business/generation) is
+      // rejected BEFORE it can consume, clear, retire or mutate any marker/state.
       if (ctx && !sel.isLive(ctx)) return { status: "stale" };  // stale tenant/business/generation
       const ln = lane;
       const canonical = io.canonicalize(rows);
       const echoFp = fp(canonical);
-      const oi = ownPending.findIndex(r => r.fp === echoFp);
+      // R7 invariant 2: own-echo consumption requires the listener's captured
+      // destination/generation to match the marker on ALL dimensions
+      // (tenantId, bizId, gen, fp). A fingerprint match ALONE is never sufficient,
+      // so the same canonical payload in a different tenant/business/generation is
+      // treated as legitimate remote hydration — never ignored_own_echo.
+      const oi = ctx ? ownPending.findIndex(r => r.fp === echoFp
+        && r.tenantId === ctx.tenantId && r.bizId === ctx.bizId && r.gen === ctx.gen) : -1;
       if (oi !== -1) { ownPending.splice(oi, 1); return { status: "ignored_own_echo" }; } // our own write's echo
       // Non-matching external payload:
       if (writing || ln.desiredRev > ln.attemptedRev) return { status: "deferred_pending_local" }; // never consumed as own
@@ -1389,6 +1405,15 @@ function createEntriesWriteCoordinator(io) {
       old.waiters = old.waiters.filter(w => w.rev <= old.attemptedRev);
       queued.forEach(w => w.resolve({ status: "cancelled_selection_changed", rev: w.rev, latest: false }));
       lane = newLane(old.gen + 1);                  // fresh accounting; old lane retired
+      // R7 invariant 5: deterministic, scoped marker retirement on selection change.
+      // Retire markers that no longer belong to the now-current destination/generation
+      // (they can never again match a live listener); markers owned by the active
+      // destination are preserved. Bounds obsolete-marker accumulation.
+      const cur = (io.selection.current ? io.selection.current() : io.selection.capture()) || {};
+      for (let i = ownPending.length - 1; i >= 0; i--) {
+        const r = ownPending[i];
+        if (!(r.tenantId === cur.tenantId && r.bizId === cur.bizId && r.gen === cur.gen)) ownPending.splice(i, 1);
+      }
     },
     _state: () => ({ gen: lane.gen, desiredRev: lane.desiredRev, committedRev: lane.committedRev,
                      attemptedRev: lane.attemptedRev, writing,

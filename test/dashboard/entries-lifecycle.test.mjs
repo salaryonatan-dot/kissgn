@@ -208,10 +208,10 @@ test("[prod-helper] R6-6: local own echo BEFORE ack is not poisoned; external 99
   const p = h.lane.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "200", rows: [], emptyEntry: {} });
   await tick();
   const desired = plain(h.last());   // the exact canonical we dispatched (fingerprint source)
-  const localEcho = h.lane.onListenerEcho(desired); // own echo arrives BEFORE ack
+  const localEcho = h.lane.onListenerEcho(desired, h.ctrl.current()); // own echo arrives BEFORE ack
   assert.equal(localEcho.status, "ignored_own_echo", "own local-before-ack echo identified by fingerprint");
   h.ok(0); await settleAll(); await p; // ack — registers nothing new (fp was registered at dispatch)
-  const ext = h.lane.onListenerEcho([day("2026-07-24", 0, { supplier_payments: { "sup-1": "999" } })]);
+  const ext = h.lane.onListenerEcho([day("2026-07-24", 0, { supplier_payments: { "sup-1": "999" } })], h.ctrl.current());
   assert.equal(ext.status, "applied", "legitimate external payload after ack is NOT swallowed by a counter");
   assert.equal(h.sv(h.last(), "2026-07-24", "sup-1"), "999");
 });
@@ -221,16 +221,16 @@ test("[prod-helper] R6-6b: two serialized writes with local-before-ack echoes; t
   const p1 = h.lane.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "100", rows: [], emptyEntry: {} });
   await tick();
   const d1 = plain(h.last());
-  h.lane.onListenerEcho(d1); // local echo of 100 before ack
+  h.lane.onListenerEcho(d1, h.ctrl.current()); // local echo of 100 before ack
   h.ok(0); await settleAll(); await p1;
   const p2 = h.lane.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "200", rows: [], emptyEntry: {} });
   await tick();
   const d2 = plain(h.last());
-  h.lane.onListenerEcho(d2); // local echo of 200 before ack
+  h.lane.onListenerEcho(d2, h.ctrl.current()); // local echo of 200 before ack
   h.ok(1); await settleAll(); await p2;
-  const e1 = h.lane.onListenerEcho([day("2026-07-24", 0, { supplier_payments: { "sup-1": "999" } })]);
+  const e1 = h.lane.onListenerEcho([day("2026-07-24", 0, { supplier_payments: { "sup-1": "999" } })], h.ctrl.current());
   assert.equal(e1.status, "applied");
-  const e2 = h.lane.onListenerEcho([day("2026-07-25", 0, { supplier_payments: { "sup-2": "888" } })]);
+  const e2 = h.lane.onListenerEcho([day("2026-07-25", 0, { supplier_payments: { "sup-2": "888" } })], h.ctrl.current());
   assert.equal(e2.status, "applied", "second external payload also applies (no poisoned counter)");
 });
 
@@ -245,8 +245,8 @@ test("[prod-helper] R6-7: 100 → 200 → own-echo(200) → delayed own-echo(100
   h.ok(1); await settleAll();          // 200 committed
   const echo200 = JSON.parse(h.store["biz:A:entries"]); // own echo of 200
   await Promise.all([p1, p2]);
-  assert.equal(h.lane.onListenerEcho(echo200).status, "ignored_own_echo");
-  assert.equal(h.lane.onListenerEcho(echo100).status, "ignored_own_echo", "delayed OLDER own echo identified and ignored");
+  assert.equal(h.lane.onListenerEcho(echo200, h.ctrl.current()).status, "ignored_own_echo");
+  assert.equal(h.lane.onListenerEcho(echo100, h.ctrl.current()).status, "ignored_own_echo", "delayed OLDER own echo identified and ignored");
   assert.equal(h.sv(h.last(), "2026-07-24", "sup-1"), "200");
   assert.equal(h.persistedSup("2026-07-24", "sup-1"), "200");
 });
@@ -257,9 +257,9 @@ test("[prod-helper] R6-8: external payload after quiescence applies; an identica
   const p = h.lane.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "200", rows: [], emptyEntry: {} });
   await tick(); h.ok(0); await settleAll(); await p;
   const own = JSON.parse(h.store["biz:A:entries"]);
-  assert.equal(h.lane.onListenerEcho(own).status, "ignored_own_echo"); // consumes the own fingerprint
+  assert.equal(h.lane.onListenerEcho(own, h.ctrl.current()).status, "ignored_own_echo"); // consumes the own fingerprint
   // A future EXTERNAL payload identical to what we once wrote now applies (fingerprint retired after consume).
-  const again = h.lane.onListenerEcho(own);
+  const again = h.lane.onListenerEcho(own, h.ctrl.current());
   assert.equal(again.status, "applied", "identical future remote payload is not permanently blacklisted");
 });
 
@@ -267,7 +267,7 @@ test("[prod-helper] R6-8b: an external non-matching payload while a local write 
   const h = laneHarness();
   const p = h.lane.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "200", rows: [], emptyEntry: {} });
   await tick();
-  const ext = h.lane.onListenerEcho([day("2026-07-24", 0, { supplier_payments: { "sup-1": "100" } })]);
+  const ext = h.lane.onListenerEcho([day("2026-07-24", 0, { supplier_payments: { "sup-1": "100" } })], h.ctrl.current());
   assert.equal(ext.status, "deferred_pending_local", "external payload deferred, not applied, not mis-owned, while pending");
   h.ok(0); await settleAll(); await p;
   assert.equal(h.sv(h.last(), "2026-07-24", "sup-1"), "200", "pending value not regressed by the deferred external payload");
@@ -704,9 +704,13 @@ test("[source-guard] every entries writer routes through the ONE lane; no direct
   assert.ok(html.includes("submitLaborEntry"), "employee labor routes through the lane");
   assert.ok(html.includes("const persistEntriesRaw ="), "raw transport is private to the lane");
 });
-test("[source-guard] coordinator is destination-wide with fingerprint echo ownership (no scalar expectedEchoes)", () => {
-  assert.ok(html.includes("const ownPending = [];"), "fingerprint own-pending list present");
-  assert.ok(html.includes("ownPending.push({ fp: fp(snapshot), rev });"), "fingerprint registered at DISPATCH (local-before-ack safe)");
+test("[source-guard] coordinator own-echo ownership is destination+generation scoped (R7; no scalar expectedEchoes)", () => {
+  assert.ok(html.includes("const ownPending = [];"), "own-pending marker list present");
+  assert.ok(html.includes("const marker = { tenantId: ctx.tenantId, bizId: ctx.bizId, gen: ctx.gen, fp: fp(snapshot), rev };"),
+    "own-echo marker captures tenantId+bizId+gen+fp+rev from the write ctx at DISPATCH (local-before-ack safe)");
+  assert.ok(html.includes("ownPending.push(marker);"), "scoped marker registered at DISPATCH");
+  assert.ok(html.includes("r.tenantId === ctx.tenantId && r.bizId === ctx.bizId && r.gen === ctx.gen"),
+    "own-echo consumption requires tenant+business+generation match (fingerprint alone never sufficient)");
   assert.ok(!/expectedEchoes/.test(html), "the R5 scalar expectedEchoes counter is gone");
   assert.ok(html.includes('status: "cancelled_selection_changed"'), "invalidate settles queued waiters explicitly");
 });
@@ -717,4 +721,137 @@ test("[source-guard] supplier caller delegates to result ownership; save-UI + su
   assert.ok(html.includes("saveUiRunnerRef.current.unmount()"), "unmount marks the save-UI port dead");
   assert.ok(html.includes("insightRoleRef.current = loggedInUser?.role"), "insight role port updated every render");
   assert.ok(html.includes("[\"super_owner\",\"owner\",\"manager\"].includes(insightRoleRef.current)"), "insight eligibility reads current role at call time");
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// R7 (R6-FIND-001): destination- and generation-scoped own-echo ownership.
+// Identical canonical payloads across tenant/business/generation must hydrate
+// as legitimate remote data — never be swallowed as ignored_own_echo. A stale
+// listener cannot consume/clear/mutate the active destination. Same-generation
+// local-before-ack own-echo suppression is preserved.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Write `rows` under the current selection, ack it, return the persisted canonical.
+async function writeAndAck(h, rows) {
+  const p = h.lane.submit({ rows });
+  await tick(); h.ok(h.transports.length - 1); await settleAll(); await p;
+  return plain(h.persisted());
+}
+function switchTo(h, t, b) { h.ctrl.invalidate(t, b); h.lane.invalidate(); }
+
+test("[prod-helper] R7-1: identical payload T1/A → T2/B hydrates the NEW destination (not ignored_own_echo)", async () => {
+  const h = laneHarness();
+  const rows = [day("2026-07-24", 500)];
+  const own = await writeAndAck(h, rows);                 // marker {T1,A,gen1,fpX}
+  switchTo(h, "T2", "B");                                 // new tenant AND business, new generation
+  const before = h.applied.length;
+  const r = h.lane.onListenerEcho(own, h.ctrl.current()); // identical canonical payload, T2/B ctx
+  assert.equal(r.status, "applied", "T2/B identical payload is legitimate remote hydration");
+  assert.equal(h.applied.length, before + 1, "T2/B destination actually hydrated (applyRows called)");
+  assert.equal(totalRevenue(h.last()), 500, "hydrated rows rendered for the new destination");
+});
+
+test("[prod-helper] R7-2: identical payload T1/A → T2/A hydrates the NEW tenant", async () => {
+  const h = laneHarness();
+  const rows = [day("2026-07-24", 510)];
+  const own = await writeAndAck(h, rows);
+  switchTo(h, "T2", "A");                                 // same biz id, DIFFERENT tenant, new gen
+  const r = h.lane.onListenerEcho(own, h.ctrl.current());
+  assert.equal(r.status, "applied", "same biz id under a new tenant is not an own echo");
+  assert.equal(totalRevenue(h.last()), 510);
+});
+
+test("[prod-helper] R7-3: identical payload T1/A → T1/B hydrates the NEW business", async () => {
+  const h = laneHarness();
+  const rows = [day("2026-07-24", 520)];
+  const own = await writeAndAck(h, rows);
+  switchTo(h, "T1", "B");                                 // same tenant, DIFFERENT business, new gen
+  const r = h.lane.onListenerEcho(own, h.ctrl.current());
+  assert.equal(r.status, "applied", "same tenant, different business is not an own echo");
+  assert.equal(totalRevenue(h.last()), 520);
+});
+
+test("[prod-helper] R7-4: switch T1/A → T2/B → back to T1/A — the NEW generation hydrates", async () => {
+  const h = laneHarness();
+  const rows = [day("2026-07-24", 530)];
+  const own = await writeAndAck(h, rows);                 // marker {T1,A,gen1}
+  switchTo(h, "T2", "B");                                 // gen2
+  switchTo(h, "T1", "A");                                 // gen3 — same tenant/biz, distinct generation
+  const r = h.lane.onListenerEcho(own, h.ctrl.current()); // identical payload under T1/A gen3
+  assert.equal(r.status, "applied", "an earlier-generation marker must not suppress new-generation hydration");
+  assert.equal(totalRevenue(h.last()), 530);
+});
+
+test("[prod-helper] R7-5: a DELAYED echo from an old listener context is stale and cannot mutate the active destination", async () => {
+  const h = laneHarness();
+  const oldCtx = h.ctrl.current();                        // T1/A gen1
+  const rows = [day("2026-07-24", 700)];
+  await writeAndAck(h, rows);
+  switchTo(h, "T2", "B");
+  const before = h.applied.length;
+  const r = h.lane.onListenerEcho(rows, oldCtx);          // straggler from the OLD listener
+  assert.equal(r.status, "stale", "old-context callback rejected before it can consume/clear/apply");
+  assert.equal(h.applied.length, before, "no hydration or mutation of the active T2/B destination");
+});
+
+test("[prod-helper] R7-6: same tenant/business/generation local-before-ack own echo is STILL ignored_own_echo", async () => {
+  const h = laneHarness();
+  const p = h.lane.submit({ rows: [day("2026-07-24", 250)] });
+  await tick();
+  const desired = plain(h.last());
+  const r = h.lane.onListenerEcho(desired, h.ctrl.current());  // same destination+generation, before ack
+  assert.equal(r.status, "ignored_own_echo", "legitimate same-destination own echo suppression preserved");
+  h.ok(0); await settleAll(); await p;
+});
+
+test("[prod-helper] R7-7: a foreign-destination listener cannot consume or clear the T1/A marker; the true own echo still lands", async () => {
+  const h = laneHarness();
+  const rows = [day("2026-07-24", 300)];
+  const p = h.lane.submit({ rows }); await tick();        // marker {T1,A,gen1} registered before ack
+  const desired = plain(h.last());
+  const cross = h.lane.onListenerEcho(desired, { gen: 999, tenantId: "T2", bizId: "B" });
+  assert.equal(cross.status, "stale", "foreign (non-live) callback cannot touch the active marker");
+  const own = h.lane.onListenerEcho(desired, h.ctrl.current());
+  assert.equal(own.status, "ignored_own_echo", "the T1/A marker survived the foreign listener and is consumed only by its own destination");
+  h.ok(0); await settleAll(); await p;
+});
+
+test("[prod-helper] R7-8: a FAILED write retires ONLY its own scoped marker; a later identical remote payload is not blacklisted", async () => {
+  const h = laneHarness();
+  const rows = [day("2026-07-24", 400)];
+  const p = h.lane.submit({ rows }); await tick();
+  const desired = plain(h.last());
+  assert.equal(h.lane._state().ownPending, 1, "marker registered at dispatch");
+  h.fail(0); await settleAll();
+  const r = await p;
+  assert.equal(r.status, "persist_failed");
+  assert.equal(h.lane._state().ownPending, 0, "failed write's own scoped marker retired");
+  const echo = h.lane.onListenerEcho(desired, h.ctrl.current());
+  assert.equal(echo.status, "applied", "no phantom marker suppresses a real remote payload after a failed write");
+});
+
+test("[prod-helper] R7-9: identical-fingerprint writes across destinations/generations keep isolated ownership", async () => {
+  const h = laneHarness();
+  const rows = [day("2026-07-24", 900)];
+  await writeAndAck(h, rows);                              // T1/A gen1 marker consumed on its own echo path? no — kept until echo
+  const t1aCtx = h.ctrl.current();
+  switchTo(h, "T2", "B");                                  // T1/A marker retired on invalidate
+  const p = h.lane.submit({ rows }); await tick();         // T2/B gen2 marker (same fingerprint)
+  const desired = plain(h.last());
+  assert.equal(h.lane.onListenerEcho(desired, h.ctrl.current()).status, "ignored_own_echo", "T2/B own echo consumed by the T2/B marker");
+  assert.equal(h.lane.onListenerEcho(desired, t1aCtx).status, "stale", "a straggler carrying the OLD T1/A context cannot consume the T2/B marker");
+  assert.equal(h.lane._state().ownPending, 0, "no cross-destination marker accumulation");
+  h.ok(h.transports.length - 1); await settleAll(); await p;
+});
+
+test("[prod-helper] R7-10: two-edit ordering preserved with scoped echoes — newest wins; own ignored, different remote applied", async () => {
+  const h = laneHarness();
+  const p1 = h.lane.submit({ rows: [day("2026-07-24", 100)] });
+  const p2 = h.lane.submit({ rows: [day("2026-07-24", 200)] });
+  await tick(); h.ok(0); await settleAll(); h.ok(1); await settleAll(); await Promise.all([p1, p2]);
+  assert.equal(totalRevenue(h.persisted()), 200, "newest edit wins the single destination");
+  const own = plain(h.persisted());
+  assert.equal(h.lane.onListenerEcho(own, h.ctrl.current()).status, "ignored_own_echo", "final own echo scoped-consumed");
+  const ext = h.lane.onListenerEcho([day("2026-07-24", 777)], h.ctrl.current());
+  assert.equal(ext.status, "applied", "a genuinely different remote payload still hydrates");
 });

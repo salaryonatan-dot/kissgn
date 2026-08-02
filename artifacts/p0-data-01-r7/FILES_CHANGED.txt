@@ -1,0 +1,42 @@
+P0-DATA-01 R7 — Files Changed
+Branch: claude/p0-data-01-r7-fingerprint-ownership
+Base (R6): 13e70a815af391516166c2af6753657493bb20e4
+Commit subject: fix: scope entries echo ownership
+
+MODIFIED (runtime, allowed):
+  index.html
+    createEntriesWriteCoordinator — own-echo ownership made destination- AND
+    generation-scoped:
+      • ownPending markers now { tenantId, bizId, gen, fp, rev }, captured from
+        the write's ctx at DISPATCH (was [{ fp, rev }]).
+      • onListenerEcho consumes an own echo only when the (live) listener ctx
+        matches the marker on tenantId+bizId+gen+fp (fingerprint alone is never
+        sufficient); stale callbacks rejected before any mutation.
+      • failed write retires ONLY its own scoped marker.
+      • invalidate() retires markers not belonging to the now-current
+        destination/generation (scoped cleanup; bounded-16 backstop retained).
+
+MODIFIED (test, allowed):
+  test/dashboard/entries-lifecycle.test.mjs
+    • existing own-echo calls now pass the live listener ctx (h.ctrl.current()) —
+      faithful to the single production call site; assertions unchanged/strengthened.
+    • [source-guard] coordinator test updated to assert the scoped-marker shape.
+    • NEW R7-1..R7-10: cross-tenant / cross-business / cross-generation hydration;
+      switch-away-back hydration; stale-listener rejection; cross-destination
+      non-consumption; failed-write scoped cleanup; identical-fingerprint isolation;
+      same-generation own-echo preservation; two-edit ordering.
+
+ADDED (artifacts, allowed):
+  artifacts/p0-data-01-r7/CHANGE_SUMMARY.md
+  artifacts/p0-data-01-r7/ROOT_CAUSE_AND_INVARIANTS.md
+  artifacts/p0-data-01-r7/R6_FINDING_CLOSURE_MATRIX.md
+  artifacts/p0-data-01-r7/ADVERSARIAL_PROBES.md
+  artifacts/p0-data-01-r7/TEST_RESULTS.md
+  artifacts/p0-data-01-r7/REVIEW_GUIDE.md
+  artifacts/p0-data-01-r7/KNOWN_LIMITATIONS.md
+  artifacts/p0-data-01-r7/SCOPE_COMPLIANCE.md
+  artifacts/p0-data-01-r7/FILES_CHANGED.txt
+
+UNCHANGED (byte-identical to R6): package.json, package-lock.json
+NOT TOUCHED: database.rules.json, vercel.json, api/, lib/, src/, all other
+  runtime/config files; R5/R6/cron worktrees; canonical repository.
