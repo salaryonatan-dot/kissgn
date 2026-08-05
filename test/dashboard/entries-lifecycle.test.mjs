@@ -855,3 +855,191 @@ test("[prod-helper] R7-10: two-edit ordering preserved with scoped echoes — ne
   const ext = h.lane.onListenerEcho([day("2026-07-24", 777)], h.ctrl.current());
   assert.equal(ext.status, "applied", "a genuinely different remote payload still hydrates");
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// R8 (P0-DATA-01-R7-FIND-001): destination-scoped pending-write isolation.
+// An OLD destination's physically in-flight write must NOT suppress the newly
+// selected destination's first legitimate listener hydration. Deferral is scoped
+// to the CURRENT live lane's OWN pending intent (its own in-flight write or a
+// queued-not-dispatched revision), not the coordinator-wide transport flag.
+// Helpers: laneHarness()/switchTo()/writeAndAck() defined above. A write left
+// un-acked (no h.ok/h.fail) stays physically in flight (transport unresolved),
+// so `writing` is true while its lane is retired.
+// ═══════════════════════════════════════════════════════════════════════════
+
+test("[prod-helper] R8-1: old T1/A write in flight → T2/B initial payload hydrates; old success cannot mutate T2/B", async () => {
+  const h = laneHarness();
+  const oldRows = [day("2026-07-24", 4321)];
+  const p = h.lane.submit({ rows: oldRows });        // dispatch T1/A, DO NOT ack (in flight)
+  await tick();
+  assert.equal(h.lane._state().writing, true, "old physical write is in flight");
+  switchTo(h, "T2", "B");                             // switch before ack (gen2)
+  const before = h.applied.length;
+  const cur = h.lane.onListenerEcho(oldRows, h.ctrl.current());  // live T2/B initial payload
+  assert.equal(cur.status, "applied", "current destination hydrates despite old write in flight");
+  assert.equal(h.applied.length, before + 1, "T2/B rendered (applyRows)");
+  const hydrated = plain(h.lane._state().desired);
+  assert.equal(totalRevenue(hydrated), 4321, "active lane desired is the hydrated value");
+  const old = h.lane.onListenerEcho(oldRows, { gen: 1, tenantId: "T1", bizId: "A" });
+  assert.equal(old.status, "stale", "old-context callback stale");
+  h.ok(0); await settleAll(); await p;               // old T1/A write succeeds afterwards
+  assert.deepEqual(plain(h.lane._state().desired), hydrated, "old success did not mutate the current destination");
+  assert.equal(h.store["biz:B:entries"], undefined, "no persistence written for T2/B by the old write");
+});
+
+test("[prod-helper] R8-2: old write in flight → T2/B hydrates; old FAILURE cleanup affects only old ownership", async () => {
+  const h = laneHarness();
+  const oldRows = [day("2026-07-24", 111)];
+  const p = h.lane.submit({ rows: oldRows }); await tick();
+  switchTo(h, "T2", "B");
+  const cur = h.lane.onListenerEcho(oldRows, h.ctrl.current());
+  assert.equal(cur.status, "applied", "current hydrates");
+  const hydrated = plain(h.lane._state().desired);
+  assert.equal(h.lane._state().ownPending, 0, "old marker retired on switch; T2/B hydration adds none");
+  h.fail(0); await settleAll();
+  const r = await p;
+  assert.equal(r.status, "persist_failed", "old write failed");
+  assert.deepEqual(plain(h.lane._state().desired), hydrated, "old failure did not mutate the current destination");
+  assert.equal(h.lane._state().ownPending, 0, "old failure cleanup touched only old ownership");
+});
+
+test("[prod-helper] R8-3: cross-tenant same business — T1/A→T2/A while old write in flight hydrates", async () => {
+  const h = laneHarness();
+  const rows = [day("2026-07-24", 222)];
+  const p = h.lane.submit({ rows }); await tick();
+  switchTo(h, "T2", "A");
+  const cur = h.lane.onListenerEcho(rows, h.ctrl.current());
+  assert.equal(cur.status, "applied", "same biz id under new tenant hydrates while old write pending");
+  assert.equal(totalRevenue(plain(h.lane._state().desired)), 222);
+  h.ok(0); await settleAll(); await p;
+});
+
+test("[prod-helper] R8-4: same tenant different business — T1/A→T1/B while old write in flight hydrates", async () => {
+  const h = laneHarness();
+  const rows = [day("2026-07-24", 333)];
+  const p = h.lane.submit({ rows }); await tick();
+  switchTo(h, "T1", "B");
+  const cur = h.lane.onListenerEcho(rows, h.ctrl.current());
+  assert.equal(cur.status, "applied", "same tenant new business hydrates while old write pending");
+  assert.equal(totalRevenue(plain(h.lane._state().desired)), 333);
+  h.ok(0); await settleAll(); await p;
+});
+
+test("[prod-helper] R8-5: switch away and back — T1/A→T2/B→T1/A (new gen) hydrates before original settles", async () => {
+  const h = laneHarness();
+  const rows = [day("2026-07-24", 444)];
+  const p = h.lane.submit({ rows }); await tick();   // original T1/A write in flight
+  switchTo(h, "T2", "B");                             // gen2
+  switchTo(h, "T1", "A");                             // gen3 — new generation of the same destination
+  const cur = h.lane.onListenerEcho(rows, h.ctrl.current());
+  assert.equal(cur.status, "applied", "returned T1/A new generation hydrates despite the original write still in flight");
+  assert.equal(totalRevenue(plain(h.lane._state().desired)), 444);
+  h.ok(0); await settleAll(); await p;
+});
+
+test("[prod-helper] R8-6: behavior is NOT fingerprint-dependent — T2/B payload different from the old write still hydrates", async () => {
+  const h = laneHarness();
+  const p = h.lane.submit({ rows: [day("2026-07-24", 555)] }); await tick(); // old in flight
+  switchTo(h, "T2", "B");
+  const cur = h.lane.onListenerEcho([day("2026-07-25", 999)], h.ctrl.current()); // DIFFERENT payload
+  assert.equal(cur.status, "applied", "different payload hydrates (not accidentally fingerprint-gated)");
+  assert.equal(totalRevenue(plain(h.lane._state().desired)), 999);
+  h.ok(0); await settleAll(); await p;
+});
+
+test("[prod-helper] R8-7: old completion AFTER new hydration leaves rendered/active/persistence current", async () => {
+  const h = laneHarness();
+  const p = h.lane.submit({ rows: [day("2026-07-24", 666)] }); await tick();
+  switchTo(h, "T2", "B");
+  h.lane.onListenerEcho([day("2026-07-24", 666)], h.ctrl.current());
+  const hydrated = plain(h.lane._state().desired);
+  const appliedLen = h.applied.length;
+  const transportsLen = h.transports.length;
+  h.ok(0); await settleAll(); await p;               // complete the old write now
+  assert.deepEqual(plain(h.lane._state().desired), hydrated, "active lane desired unchanged by old completion");
+  assert.deepEqual(plain(h.last()), hydrated, "rendered entries unchanged by old completion");
+  assert.equal(h.transports.length, transportsLen, "old completion triggered no new physical write for T2/B");
+  assert.equal(h.store["biz:B:entries"], undefined, "no persistence for T2/B from old completion");
+  assert.equal(h.applied.length, appliedLen, "no extra apply from old completion");
+});
+
+test("[prod-helper] R8-8: new lane WITH pending local intent is protected while old write is in flight; converges to local value", async () => {
+  const h = laneHarness();
+  const p = h.lane.submit({ rows: [day("2026-07-24", 10)] }); await tick(); // old T1/A in flight
+  switchTo(h, "T2", "B");
+  const pB = h.lane.submit({ rows: [day("2026-07-24", 777)] });             // local edit in T2/B (queued behind global write)
+  await tick();
+  assert.equal(h.lane._state().pendingLocal, true, "T2/B lane has its own pending local intent");
+  const ext = h.lane.onListenerEcho([day("2026-07-24", 888)], h.ctrl.current()); // external for T2/B
+  assert.equal(ext.status, "deferred_pending_local", "current lane's own local intent is protected (not clobbered)");
+  h.ok(0); await settleAll();                          // old write settles → pump dispatches T2/B write
+  assert.equal(h.transports.length, 2, "T2/B write dispatched after the old write cleared the pump");
+  h.ok(1); await settleAll(); await pB;
+  assert.equal(totalRevenue(JSON.parse(h.store["biz:B:entries"])), 777, "T2/B converged to its own local value, not the external payload");
+});
+
+test("[prod-helper] R8-9: same tenant/business/generation local-before-ack own echo is STILL ignored_own_echo", async () => {
+  const h = laneHarness();
+  const p = h.lane.submit({ rows: [day("2026-07-24", 250)] });
+  await tick();
+  const desired = plain(h.last());
+  assert.equal(h.lane.onListenerEcho(desired, h.ctrl.current()).status, "ignored_own_echo", "current-lane own echo preserved");
+  h.ok(0); await settleAll(); await p;
+});
+
+test("[prod-helper] R8-10: a deferred payload for one lane is not flushed/applied by another lane's completion", async () => {
+  const h = laneHarness();
+  const pA = h.lane.submit({ rows: [day("2026-07-24", 5)] }); await tick(); // T1/A in flight, has own pending intent
+  const deferredExt = h.lane.onListenerEcho([day("2026-07-24", 42)], h.ctrl.current()); // external for T1/A while pending
+  assert.equal(deferredExt.status, "deferred_pending_local", "T1/A external deferred while its own write is in flight");
+  switchTo(h, "T2", "B");                              // move to a different lane
+  const before = h.applied.length;
+  h.ok(0); await settleAll(); await pA;                // complete T1/A write
+  assert.equal(h.applied.length, before, "old-lane completion did not replay/flush the dropped T1/A deferred payload into T2/B");
+  assert.equal(h.lane._state().desired, null, "T2/B lane not mutated by the old lane's dropped deferred payload");
+});
+
+test("[prod-helper] R8-11: old-generation completion cannot delete a marker/pending state created by the current generation", async () => {
+  const h = laneHarness();
+  const pA = h.lane.submit({ rows: [day("2026-07-24", 1)] }); await tick(); // T1/A in flight
+  switchTo(h, "T2", "B");
+  const pB = h.lane.submit({ rows: [day("2026-07-24", 2)] }); await tick(); // T2/B queued behind global write
+  assert.equal(h.lane._state().pendingLocal, true, "current gen has pending intent before old completes");
+  h.ok(0); await settleAll();                          // old T1/A completes → pump dispatches T2/B
+  assert.equal(h.lane._state().ownPending >= 1, true, "current-generation marker exists (created by T2/B dispatch), not cleared by old completion");
+  h.ok(1); await settleAll(); await Promise.all([pA, pB]);
+  assert.equal(totalRevenue(JSON.parse(h.store["biz:B:entries"])), 2, "current-generation write persisted");
+});
+
+test("[prod-helper] R8-12: superseded same-lane revisions retain correct ack/marker/rendered ordering (incl identical fingerprints)", async () => {
+  const h = laneHarness();
+  switchTo(h, "T1", "A");                              // fresh gen, no foreign write
+  const p1 = h.lane.submit({ rows: [day("2026-07-24", 100)] });
+  const p2 = h.lane.submit({ rows: [day("2026-07-24", 200)] });
+  await tick(); h.ok(0); await settleAll(); h.ok(1); await settleAll(); await Promise.all([p1, p2]);
+  assert.equal(totalRevenue(h.persisted()), 200, "newest revision wins");
+  const own = plain(h.persisted());
+  assert.equal(h.lane.onListenerEcho(own, h.ctrl.current()).status, "ignored_own_echo", "final own echo scoped-consumed");
+  const dup = h.lane.onListenerEcho(own, h.ctrl.current());
+  assert.equal(dup.status, "applied", "an identical future remote payload is not permanently blacklisted");
+});
+
+test("[prod-helper] R8-13: invalidation during pending local work retires stale lane state; a later old callback is stale", async () => {
+  const h = laneHarness();
+  const p = h.lane.submit({ rows: [day("2026-07-24", 9)] }); await tick(); // T1/A pending, in flight
+  const oldCtx = h.ctrl.current();
+  switchTo(h, "T2", "B");                              // invalidate during pending work
+  assert.equal(h.lane._state().pendingLocal, false, "new T2/B lane starts with no pending local intent");
+  assert.equal(h.lane._state().desired, null, "new lane desired is fresh (old pending intent not carried over)");
+  const old = h.lane.onListenerEcho([day("2026-07-24", 9)], oldCtx);
+  assert.equal(old.status, "stale", "a later old-context callback remains stale");
+  h.ok(0); await settleAll(); await p;
+});
+
+test("[prod-helper] R8-14: no pending local intent → normal live hydration remains applied", async () => {
+  const h = laneHarness();
+  switchTo(h, "T1", "A");                              // fresh lane, no in-flight/queued local write
+  const r = h.lane.onListenerEcho([day("2026-07-24", 321)], h.ctrl.current());
+  assert.equal(r.status, "applied", "quiescent live lane hydrates external payloads");
+  assert.equal(totalRevenue(plain(h.lane._state().desired)), 321);
+});

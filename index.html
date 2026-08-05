@@ -1282,10 +1282,19 @@ function createPersistence(io) {
 //    permanently blacklisted.
 //  • Terminal identity is always the captured ctx (never mutable _currentTenantId).
 function createEntriesWriteCoordinator(io) {
-  const newLane = (gen) => ({ gen, desiredRows: null, desiredRev: 0, committedRev: 0,
+  // R8 (R7-FIND-001): each lane carries the IMMUTABLE destination it belongs to
+  // (tenantId, bizId, selection generation), captured at lane creation. The
+  // hydration deferral consults ONLY the current live lane's own pending intent,
+  // never the coordinator-wide transport flag.
+  const curOwner = () => {
+    const c = io.selection.current ? io.selection.current() : (io.selection.capture ? io.selection.capture() : null);
+    return c ? { tenantId: c.tenantId, bizId: c.bizId, gen: c.gen } : null;
+  };
+  const newLane = (gen, owner) => ({ gen, owner: owner || null, desiredRows: null, desiredRev: 0, committedRev: 0,
                               attemptedRev: 0, retired: false, waiters: [] });
-  let lane = newLane(0);
-  let writing = false;
+  let lane = newLane(0, curOwner());
+  let writing = false;                              // GLOBAL transport serialization only (one physical write at a time); NOT a hydration gate
+  let writingLane = null;                           // the EXACT lane whose physical write is currently in flight (object identity → destination/generation scoped)
   const ownPending = [];                            // [{tenantId,bizId,gen,fp,rev}] destination+generation-scoped own-write markers (bounded)
   const fp = (rows) => io.fingerprint(rows);
   const resolveWaiters = (ln, uptoRev, base) => {
@@ -1298,6 +1307,7 @@ function createEntriesWriteCoordinator(io) {
     const ln = lane;                              // always drive the CURRENT lane
     if (ln.desiredRev <= ln.attemptedRev) return; // nothing new since the last attempt
     writing = true;
+    writingLane = ln;                              // this physical write belongs to THIS lane's destination/generation
     const ctx = io.selection.capture();            // terminal identity from the live captured ctx
     const rev = ln.desiredRev;
     const snapshot = ln.desiredRows;
@@ -1311,7 +1321,7 @@ function createEntriesWriteCoordinator(io) {
     const writeLane = ln;                           // finalize THIS lane's accounting on settle
     let res;
     try { res = await io.commit(snapshot, ctx); }   // raw entries transport (private to this lane)
-    finally { writing = false; }
+    finally { writing = false; writingLane = null; }
     if (res && res.ok) {
       writeLane.committedRev = rev;
       resolveWaiters(writeLane, rev, { status: "applied", canonical: snapshot });
@@ -1380,8 +1390,16 @@ function createEntriesWriteCoordinator(io) {
       const oi = ctx ? ownPending.findIndex(r => r.fp === echoFp
         && r.tenantId === ctx.tenantId && r.bizId === ctx.bizId && r.gen === ctx.gen) : -1;
       if (oi !== -1) { ownPending.splice(oi, 1); return { status: "ignored_own_echo" }; } // our own write's echo
-      // Non-matching external payload:
-      if (writing || ln.desiredRev > ln.attemptedRev) return { status: "deferred_pending_local" }; // never consumed as own
+      // Non-matching external payload. R8 (R7-FIND-001): defer ONLY when the
+      // current live lane (THIS callback's own tenant+business+generation) holds an
+      // UNCOMMITTED local revision that a remote apply would clobber. The
+      // coordinator-wide `writing` flag serializes physical transport across
+      // generations and MUST NOT gate hydration of a freshly selected destination
+      // while an old/foreign generation's write is still physically in flight.
+      const laneOwned = !!(ln.owner && ctx && ln.owner.tenantId === ctx.tenantId
+        && ln.owner.bizId === ctx.bizId && ln.owner.gen === ctx.gen);
+      const ownWriteInFlight = writing && writingLane === ln;   // THIS destination's own physical write (not a foreign one)
+      if (laneOwned && (ownWriteInFlight || ln.desiredRev > ln.attemptedRev)) return { status: "deferred_pending_local" }; // current-lane pending local intent only
       io.applyRows(canonical);
       ln.desiredRows = canonical;
       const rawLen = Array.isArray(rows) ? rows.length : 0;
@@ -1404,7 +1422,7 @@ function createEntriesWriteCoordinator(io) {
       const queued = old.waiters.filter(w => w.rev > old.attemptedRev);
       old.waiters = old.waiters.filter(w => w.rev <= old.attemptedRev);
       queued.forEach(w => w.resolve({ status: "cancelled_selection_changed", rev: w.rev, latest: false }));
-      lane = newLane(old.gen + 1);                  // fresh accounting; old lane retired
+      lane = newLane(old.gen + 1, curOwner());      // fresh accounting; new lane owned by the now-current destination
       // R7 invariant 5: deterministic, scoped marker retirement on selection change.
       // Retire markers that no longer belong to the now-current destination/generation
       // (they can never again match a live listener); markers owned by the active
@@ -1415,10 +1433,11 @@ function createEntriesWriteCoordinator(io) {
         if (!(r.tenantId === cur.tenantId && r.bizId === cur.bizId && r.gen === cur.gen)) ownPending.splice(i, 1);
       }
     },
-    _state: () => ({ gen: lane.gen, desiredRev: lane.desiredRev, committedRev: lane.committedRev,
-                     attemptedRev: lane.attemptedRev, writing,
-                     pending: lane.desiredRev - lane.committedRev, ownPending: ownPending.length,
-                     desired: lane.desiredRows }),
+    _state: () => ({ gen: lane.gen, owner: lane.owner, desiredRev: lane.desiredRev, committedRev: lane.committedRev,
+                     attemptedRev: lane.attemptedRev, writing, writingOwnLane: writing && writingLane === lane,
+                     pending: lane.desiredRev - lane.committedRev,
+                     pendingLocal: (writing && writingLane === lane) || lane.desiredRev > lane.attemptedRev,
+                     ownPending: ownPending.length, desired: lane.desiredRows }),
   };
 }
 // R4 (P0-DATA-01-R3-005): generation-bound SAVE OWNERSHIP token. begin() blocks a

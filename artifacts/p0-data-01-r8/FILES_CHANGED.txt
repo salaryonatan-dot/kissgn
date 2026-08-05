@@ -1,0 +1,43 @@
+P0-DATA-01 R8 — Files Changed
+Branch: claude/p0-data-01-r8-pending-write-isolation
+Base/parent (R7): dc321d8cc47d5d023c17cb5d70bffbdce8fa42fe
+Commit subject: fix: isolate pending entry hydration
+
+MODIFIED (runtime, allowed):
+  index.html
+    createEntriesWriteCoordinator — pending-write hydration gate isolated from
+    the global transport flag:
+      • each lane carries an immutable owner {tenantId,bizId,gen} (newLane owner
+        param; curOwner() helper; stamped at init and in invalidate()).
+      • new writingLane reference tracks the EXACT lane whose physical write is
+        in flight (set at dispatch, cleared with writing in the finally).
+      • onListenerEcho defers ONLY when the current live lane is owned by the
+        callback (tenant+business+generation) AND has its own pending intent
+        (own write in flight OR queued-not-dispatched) — no longer on the global
+        writing flag. R7 marker/stale/own-echo/failed-cleanup logic unchanged.
+      • _state() additionally exposes owner, writingOwnLane, pendingLocal.
+
+MODIFIED (test, allowed):
+  test/dashboard/entries-lifecycle.test.mjs
+    • NEW R8-1..R8-14: old-success/failure isolation, cross-tenant, cross-business,
+      switch-away-back, different-payload (non-fingerprint-dependent), old
+      completion after new hydration, new-lane pending-intent protection, current
+      same-generation own echo, scoped-deferred non-replay, old-vs-newer marker,
+      superseded revisions, invalidation-during-pending, no-pending hydration.
+    • all 65 R7 cases retained unchanged.
+
+ADDED (artifacts, allowed):
+  artifacts/p0-data-01-r8/CHANGE_SUMMARY.md
+  artifacts/p0-data-01-r8/ROOT_CAUSE_AND_INVARIANTS.md
+  artifacts/p0-data-01-r8/R7_FINDING_CLOSURE_MATRIX.md
+  artifacts/p0-data-01-r8/ADVERSARIAL_PROBES.md
+  artifacts/p0-data-01-r8/TEST_RESULTS.md
+  artifacts/p0-data-01-r8/REVIEW_GUIDE.md
+  artifacts/p0-data-01-r8/KNOWN_LIMITATIONS.md
+  artifacts/p0-data-01-r8/SCOPE_COMPLIANCE.md
+  artifacts/p0-data-01-r8/FILES_CHANGED.txt
+
+UNCHANGED (byte-identical to R7): package.json, package-lock.json,
+  database.rules.json, vercel.json
+NOT TOUCHED: api/, lib/, src/, all other runtime/config files; R5/R6/R7/cron
+  worktrees; canonical repository. Cron commit 4ce7c84 not merged (not an ancestor).
