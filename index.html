@@ -773,17 +773,19 @@
     };
 
     // Live listener -- calls callback whenever any key changes
-    window.storage.subscribe = (key, callback, shared=false) => {
+    window.storage.subscribe = (key, callback, shared=false, onError) => {
       const path = shared ? fkeyShared(key) : fkey(key);
       if (!path) return () => {}; // no-op unsubscribe if tenant not set
       const r = ref(db, path);
+      // R9: surface listener errors to the caller so a financial lane can stay
+      // FAIL-CLOSED instead of assuming an un-hydrated empty state is authoritative.
       return onValue(r, (snap) => {
         if (snap.exists()) {
           const raw = snap.val();
           const value = (raw && typeof raw === "object" && "_v" in raw) ? raw._v : JSON.stringify(raw);
           callback({ key, value });
         }
-      });
+      }, (err) => { if (typeof onError === "function") { try { onError(err); } catch(_){} } });
     };
     // Expose uid for app use
     window.storage.getUid = () => _uid;
@@ -1290,13 +1292,48 @@ function createEntriesWriteCoordinator(io) {
     const c = io.selection.current ? io.selection.current() : (io.selection.capture ? io.selection.capture() : null);
     return c ? { tenantId: c.tenantId, bizId: c.bizId, gen: c.gen } : null;
   };
+  // R9: every lane additionally carries its own HYDRATION state (invariant B) and the
+  // latest DEFERRED remote payload (R8-FIND-001). Both are per-lane, so they are
+  // inherently tenant/business/generation scoped and can never cross owners.
   const newLane = (gen, owner) => ({ gen, owner: owner || null, desiredRows: null, desiredRev: 0, committedRev: 0,
-                              attemptedRev: 0, retired: false, waiters: [] });
+                              attemptedRev: 0, retired: false, waiters: [],
+                              hydrated: false,          // authoritative full history loaded for THIS owner
+                              hydrationFailed: false,   // listener/bootstrap error → stay fail-closed
+                              deferred: null,           // { rows, owner } latest deferred remote payload
+                              duplicatesObserved: false });
   let lane = newLane(0, curOwner());
   let writing = false;                              // GLOBAL transport serialization only (one physical write at a time); NOT a hydration gate
   let writingLane = null;                           // the EXACT lane whose physical write is currently in flight (object identity → destination/generation scoped)
   const ownPending = [];                            // [{tenantId,bizId,gen,fp,rev}] destination+generation-scoped own-write markers (bounded)
   const fp = (rows) => io.fingerprint(rows);
+  // R9 invariant A: an owner is USABLE only when it is fully identified. A null or
+  // partially-formed tenant/business context can never authorize a financial write.
+  const ownerUsable = (o) => !!(o && o.tenantId != null && o.bizId != null && o.gen != null);
+  const sameOwner = (a, b) => !!(a && b && a.tenantId === b.tenantId && a.bizId === b.bizId && a.gen === b.gen);
+  const dateKeysOf = (rows) => {
+    const out = new Set();
+    (rows || []).forEach(r => { const k = io.entryDateKey(r && r.date); if (k) out.add(k); });
+    return out;
+  };
+  // R9 (R8-FIND-001) TERMINAL CONVERGENCE: a stored deferred remote payload is applied
+  // when its owning write settles WITHOUT success and no newer local intent exists —
+  // deterministically, with NO dependency on a further listener emission.
+  const convergeDeferred = (ln) => {
+    const d = ln.deferred;
+    if (!d) return null;
+    if (ln !== lane || ln.retired) return null;              // owner/generation moved on → never cross-apply
+    const cur = curOwner();
+    if (!ownerUsable(cur) || !sameOwner(d.owner, cur)) return null;
+    if (ln.desiredRev > ln.attemptedRev) return null;        // newer local intent queued → it settles first
+    ln.deferred = null;
+    io.applyRows(d.rows);
+    ln.desiredRows = d.rows;
+    ln.committedRev = ln.desiredRev;
+    ln.attemptedRev = ln.desiredRev;
+    ln.hydrated = true;                                      // remote authoritative state is a valid hydration
+    ln.hydrationFailed = false;
+    return d.rows;
+  };
   const resolveWaiters = (ln, uptoRev, base) => {
     const done = ln.waiters.filter(w => w.rev <= uptoRev);
     ln.waiters = ln.waiters.filter(w => w.rev > uptoRev);
@@ -1324,13 +1361,19 @@ function createEntriesWriteCoordinator(io) {
     finally { writing = false; writingLane = null; }
     if (res && res.ok) {
       writeLane.committedRev = rev;
+      // R9: our committed value is newer than any payload deferred during this write.
+      writeLane.deferred = null;
       resolveWaiters(writeLane, rev, { status: "applied", canonical: snapshot });
     } else {
       // R7: a write that never persisted has no legitimate echo — retire ONLY this
       // write's own scoped marker (never another destination's or generation's).
       const mi = ownPending.indexOf(marker);
       if (mi !== -1) ownPending.splice(mi, 1);
-      resolveWaiters(writeLane, rev, { status: (res && res.stale) ? "stale" : "persist_failed", canonical: snapshot });
+      // R9 (R8-FIND-001): the failed write's optimistic rows are NOT authoritative.
+      // Converge onto the deferred remote payload now — no later emit required.
+      const converged = convergeDeferred(writeLane);
+      resolveWaiters(writeLane, rev, { status: (res && res.stale) ? "stale" : "persist_failed",
+                                       canonical: snapshot, converged: !!converged });
     }
     pump();                                         // drive the CURRENT lane's newest queued revision
   };
@@ -1339,14 +1382,38 @@ function createEntriesWriteCoordinator(io) {
   const submit = (op) => {
     const sel = io.selection;
     const ln = lane;
+    // ── R9 GATES (invariants A/B/C). Every rejection below happens BEFORE any
+    // desiredRows/desiredRev mutation, applyRows call, waiter or pump — so a blocked
+    // save produces NO persistence intent of any kind.
+    if (!ownerUsable(ln.owner)) return Promise.resolve({ status: "blocked_no_owner" });
+    if (!ln.hydrated) return Promise.resolve({ status: "blocked_unhydrated", hydrationFailed: !!ln.hydrationFailed });
     let next;
     if (op.transform) {
+      // R9 invariant C: once hydrated, the AUTHORITATIVE full-history rows are the only
+      // legal base. A caller-supplied `baseRows` (a React/UI collection that may be
+      // month-filtered, sorted or stale) can never become the persistence base.
       const base = (ln.desiredRows && !ln.retired) ? ln.desiredRows : io.canonicalize(op.baseRows || []);
       const mapped = op.transform(base);
       if (mapped == null) return Promise.resolve({ status: "noop" });
       next = io.canonicalize(mapped);
     } else {
       next = io.canonicalize(op.rows || []);       // wholesale replace
+      // R9 invariant C/F (P0-REV-WRITE-004): a wholesale replace may not silently DROP
+      // business dates that the authoritative hydrated history contains. A current-month
+      // (or otherwise filtered) subset is therefore structurally incapable of becoming a
+      // full-parent payload. Genuine removals declare `allowDrop`.
+      if (!op.allowDrop) {
+        const have = dateKeysOf(ln.desiredRows);
+        if (have.size) {
+          const keep = dateKeysOf(next);
+          const dropped = [];
+          have.forEach(k => { if (!keep.has(k)) dropped.push(k); });
+          if (dropped.length) {
+            dropped.sort();
+            return Promise.resolve({ status: "blocked_history_drop", droppedDates: dropped, droppedCount: dropped.length });
+          }
+        }
+      }
     }
     ln.desiredRows = next;
     const myRev = ++ln.desiredRev;
@@ -1399,20 +1466,30 @@ function createEntriesWriteCoordinator(io) {
       const laneOwned = !!(ln.owner && ctx && ln.owner.tenantId === ctx.tenantId
         && ln.owner.bizId === ctx.bizId && ln.owner.gen === ctx.gen);
       const ownWriteInFlight = writing && writingLane === ln;   // THIS destination's own physical write (not a foreign one)
-      if (laneOwned && (ownWriteInFlight || ln.desiredRev > ln.attemptedRev)) return { status: "deferred_pending_local" }; // current-lane pending local intent only
+      if (laneOwned && (ownWriteInFlight || ln.desiredRev > ln.attemptedRev)) {
+        // R9 (R8-FIND-001): deferral is now STATEFUL. The payload is retained with its
+        // owning tenant/business/generation and replayed by convergeDeferred() when the
+        // owning write settles unsuccessfully — so a legitimate remote payload can no
+        // longer be silently discarded, and terminal convergence needs no further emit.
+        ln.deferred = { rows: canonical, owner: { tenantId: ctx.tenantId, bizId: ctx.bizId, gen: ctx.gen } };
+        return { status: "deferred_pending_local", deferredStored: true };
+      }
       io.applyRows(canonical);
       ln.desiredRows = canonical;
+      ln.deferred = null;                           // superseded by this authoritative payload
+      ln.hydrated = true;                           // R9 invariant B: authoritative history is loaded
+      ln.hydrationFailed = false;
       const rawLen = Array.isArray(rows) ? rows.length : 0;
-      if (canonical.length < rawLen) {
-        // Duplicates hydrated → conditional self-heal through the SAME lane (captured
-        // tenant persistence); its own echo is recognised by fingerprint (no loop).
-        ln.desiredRev++;
-        pump();
-      } else {
-        ln.committedRev = ln.desiredRev;            // in sync with server; no write-back
-        ln.attemptedRev = ln.desiredRev;
-      }
-      return { status: "applied", canonical };
+      const dupes = canonical.length < rawLen;
+      // R9 invariant G / P0-REV-SAFETY-005: duplicates are canonicalized for DISPLAY only.
+      // The former automatic self-heal write-back is REMOVED — merely opening or
+      // navigating the screen must never emit an entries write intent, and a financial
+      // node is never silently replaced from client-derived state. The condition is
+      // surfaced instead, for an explicit operator-initiated repair.
+      if (dupes) ln.duplicatesObserved = true;
+      ln.committedRev = ln.desiredRev;              // in sync with server; no write-back
+      ln.attemptedRev = ln.desiredRev;
+      return { status: "applied", canonical, duplicatesObserved: dupes, selfHealSuppressed: dupes };
     },
     invalidate: () => {
       const old = lane;
@@ -1432,12 +1509,47 @@ function createEntriesWriteCoordinator(io) {
         const r = ownPending[i];
         if (!(r.tenantId === cur.tenantId && r.bizId === cur.bizId && r.gen === cur.gen)) ownPending.splice(i, 1);
       }
+      // R9: a deferred payload belongs to the retired lane's destination. Never carry it
+      // across an owner change; the retired lane keeps it only to settle its own write.
+      if (old.deferred && !sameOwner(old.deferred.owner, cur)) old.deferred = null;
     },
+    // R9 invariant B: the ONLY way a lane becomes writable. Production calls this after
+    // it establishes the authoritative history for THIS owner — including the legitimate
+    // "node does not exist yet → authoritative empty" bootstrap, which the RTDB listener
+    // never reports (onValue does not fire for a missing node).
+    markHydrated: (ctx, rows) => {
+      if (ctx && !io.selection.isLive(ctx)) return { status: "stale" };
+      const ln = lane;
+      if (!ownerUsable(ln.owner)) return { status: "blocked_no_owner" };
+      if (ctx && !sameOwner(ln.owner, ctx)) return { status: "stale" };
+      if (ln.hydrated) return { status: "already_hydrated" };
+      const canonical = io.canonicalize(rows || []);
+      ln.desiredRows = canonical;
+      ln.hydrated = true;
+      ln.hydrationFailed = false;
+      ln.committedRev = ln.desiredRev;
+      ln.attemptedRev = ln.desiredRev;
+      io.applyRows(canonical);
+      return { status: "hydrated", canonical };
+    },
+    // R9 invariant G: a listener/bootstrap failure keeps the lane FAIL-CLOSED — writes
+    // stay blocked rather than persisting from an unverified client state.
+    onListenerError: (ctx) => {
+      if (ctx && !io.selection.isLive(ctx)) return { status: "stale" };
+      const ln = lane;
+      if (ctx && !sameOwner(ln.owner, ctx)) return { status: "stale" };
+      if (ln.hydrated) return { status: "already_hydrated" }; // already authoritative; keep it
+      ln.hydrationFailed = true;
+      return { status: "hydration_failed" };
+    },
+    isHydrated: () => !!lane.hydrated,
     _state: () => ({ gen: lane.gen, owner: lane.owner, desiredRev: lane.desiredRev, committedRev: lane.committedRev,
                      attemptedRev: lane.attemptedRev, writing, writingOwnLane: writing && writingLane === lane,
                      pending: lane.desiredRev - lane.committedRev,
                      pendingLocal: (writing && writingLane === lane) || lane.desiredRev > lane.attemptedRev,
-                     ownPending: ownPending.length, desired: lane.desiredRows }),
+                     ownPending: ownPending.length, desired: lane.desiredRows,
+                     hydrated: lane.hydrated, hydrationFailed: lane.hydrationFailed,
+                     deferredPending: !!lane.deferred, duplicatesObserved: lane.duplicatesObserved }),
   };
 }
 // R4 (P0-DATA-01-R3-005): generation-bound SAVE OWNERSHIP token. begin() blocks a
@@ -3685,12 +3797,12 @@ function PilotDashboard() {
     setCompensations({});
 
     const unsubs = [];
-    const sub = (key, setter, shared=false) => {
+    const sub = (key, setter, shared=false, onError) => {
       if(!window.storage.subscribe) return;
       unsubs.push(window.storage.subscribe(key, r => {
         if(!live) return; // R2: queued callback from an unsubscribed/old selection — ignore
         try { setter(JSON.parse(r.value)); } catch(_){}
-      }, shared));
+      }, shared, onError ? (err) => { if (live) onError(err); } : undefined));
     };
     // Initial load -- only for data without live listeners
     (async()=>{
@@ -3716,7 +3828,32 @@ function PilotDashboard() {
       //    captured-tenant persistence (persistEntries → the explicit-tenant transport),
       //    never the mutable-tenant global write, so it cannot race a supplier write.
       entriesWriteCoordRef.current.onListenerEcho(val, ctxAtSetup);
+    }, false, () => {
+      // R9 invariant G: entries listener failure keeps the lane fail-closed (no writes)
+      // rather than letting an unverified empty client state become persistable.
+      entriesWriteCoordRef.current.onListenerError(ctxAtSetup);
     });
+    // R9 invariant B (hydration bootstrap): Firebase `onValue` NEVER fires for a node
+    // that does not exist, so a business with no entries yet would otherwise stay
+    // permanently un-hydrated and unable to save its first entry. This READ-ONLY probe
+    // resolves that one case: if the node is genuinely absent, an empty history is the
+    // authoritative state. If the node exists, the listener is the only hydration
+    // source (markHydrated is a no-op once hydrated). Never writes.
+    (async () => {
+      // NOTE: `sg()` is deliberately NOT used here — it collapses every failure to null,
+      // which would make a transient/permission read error indistinguishable from a
+      // genuinely absent node and could hydrate an EMPTY history over real data.
+      let absent = false, failed = false;
+      try { await window.storage.get(`biz:${currentBizId}:entries`, true); }   // exists → listener hydrates
+      catch (err) {
+        const msg = (err && err.message) || "";
+        if (msg === "not found") absent = true;            // ONLY this means "no entries node yet"
+        else failed = true;                                // anything else stays fail-closed
+      }
+      if (!isSelectionLive(ctxAtSetup) || !live) return;   // selection moved on → discard
+      if (absent) entriesWriteCoordRef.current.markHydrated(ctxAtSetup, []);
+      else if (failed) entriesWriteCoordRef.current.onListenerError(ctxAtSetup);
+    })();
     loadEntryExceptions(ctxAtSetup); // R3: bound to this effect run's selection context
     sub(`biz:${currentBizId}:fixed`,     setFixedList);
     sub(`biz:${currentBizId}:suppliers`, setSuppliers);
@@ -5723,7 +5860,7 @@ function PilotDashboard() {
 	              <div style={{fontSize:12,color:"#94A3B8",marginTop:3}}>{monthEntries.length} ימים מוזנים · {MONTH_NAMES[MONTH]}</div>
             </div>
             {entries.length>0&&(
-              <button onClick={()=>{if(window.confirm("למחוק את כל הרשומות?")){ entriesWriteCoordRef.current.submit({ rows: [] }); }}}
+              <button onClick={()=>{if(window.confirm("למחוק את כל הרשומות?")){ entriesWriteCoordRef.current.submit({ rows: [], allowDrop: true }); }}}
                 style={{background:"none",border:"none",color:"#CBD5E1",padding:"4px 8px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
                 מחק הכל
               </button>

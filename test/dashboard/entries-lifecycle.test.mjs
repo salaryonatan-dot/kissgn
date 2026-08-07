@@ -71,7 +71,7 @@ function incidentEntries() {
 // ONE DESTINATION LANE — real coordinator + real persistence + COMMITTING store
 // ═══════════════════════════════════════════════════════════════════════════
 
-function laneHarness() {
+function laneHarness(opts = {}) {
   const ctrl = liveCtrl("T1", "A");
   const store = {};              // simulated persisted RTDB: key -> serialized value
   const transports = [];         // one per dispatched terminal write, in order
@@ -89,9 +89,18 @@ function laneHarness() {
     entryDateKey: ME.entryDateKey, fingerprint: (rows) => JSON.stringify(rows),
     applyRows: (r) => applied.push(plain(r)), commit: (rows, ctx) => P.persistEntries(rows, ctx),
   });
+  // R9 invariant B: a lane is not writable until the authoritative history for its
+  // owner has hydrated. Production hydrates from the entries listener, or from the
+  // absent-node bootstrap (markHydrated(ctx, [])). Tests default to the hydrated
+  // steady state they were always modelling; pass {hydrated:false} to exercise the gate,
+  // or {hydrateRows:[...]} to hydrate a real history.
+  if (opts.hydrated !== false) lane.markHydrated(ctrl.capture(), opts.hydrateRows || []);
+  const appliedFromHydration = applied.length;
   const sv = (arr, date, supId) => { const row = (arr || []).find(e => e.date === date); return row && row.supplier_payments ? row.supplier_payments[supId] : undefined; };
   return {
-    ctrl, store, transports, applied, lane, sv,
+    ctrl, store, transports, applied, lane, sv, appliedFromHydration,
+    // re-hydrate after a selection change (production re-subscribes per business)
+    hydrate: (rows) => lane.markHydrated(ctrl.capture(), rows || []),
     last: () => applied[applied.length - 1],
     persisted: () => (store["biz:A:entries"] ? JSON.parse(store["biz:A:entries"]) : null),
     persistedSup: (d, s) => { const p = store["biz:A:entries"]; return p ? sv(JSON.parse(p), d, s) : undefined; },
@@ -136,7 +145,7 @@ test("[prod-helper] R6-2: supplier/main-save/delete/clear/labor/self-heal all ro
   // clear all (replace [])
   const c1 = h.lane.submit({ rows: [day("2026-07-25", 10)] });
   await tick(); h.ok(4); await settleAll(); await c1;
-  const c2 = h.lane.submit({ rows: [] });
+  const c2 = h.lane.submit({ rows: [], allowDrop: true }); // R9: intentional removal declares allowDrop
   await tick(); h.ok(5); await settleAll(); await c2;
   assert.deepEqual(h.persisted(), [], "clear-all persisted []");
   assert.equal(h.transports.length, 6, "each intent produced exactly one terminal write, all serialized");
@@ -190,6 +199,7 @@ test("[prod-helper] R6-5: switch-away-and-back to T1/A — new write waits behin
   await tick();
   h.lane.invalidate();               // leave A
   h.lane.invalidate();               // ... return to A (fresh lane)
+  h.hydrate([day("2026-07-24", 5)]); // R9: the re-selected destination hydrates before it can write
   const pNew = h.lane.submitSupplierEdit({ supId: "sup-1", date: "2026-07-24", val: "NEW", rows: [day("2026-07-24", 5)], emptyEntry: {} });
   await tick();
   assert.equal(h.transports.length, 1, "new write NOT dispatched while the old physical write is active");
@@ -700,7 +710,7 @@ test("[source-guard] every entries writer routes through the ONE lane; no direct
   assert.ok(!/setEntries\(u\);persistEntries\(u,captureSelectionCtx/.test(html), "clear-all no longer calls persistEntries directly");
   assert.ok(!/const res = await persistEntries\(canonicalNext, ctx\)/.test(html), "delete no longer calls persistEntries directly");
   assert.ok(html.includes("persistRows: (rows2, c2) => entriesWriteCoordRef.current.submit({ rows: rows2, apply: false })"), "main save routes through the lane");
-  assert.ok(html.includes('entriesWriteCoordRef.current.submit({ rows: [] })'), "clear-all routes through the lane");
+  assert.ok(html.includes('entriesWriteCoordRef.current.submit({ rows: [], allowDrop: true })'), "clear-all routes through the lane and declares an intentional drop (R9)");
   assert.ok(html.includes("submitLaborEntry"), "employee labor routes through the lane");
   assert.ok(html.includes("const persistEntriesRaw ="), "raw transport is private to the lane");
 });
@@ -737,7 +747,13 @@ async function writeAndAck(h, rows) {
   await tick(); h.ok(h.transports.length - 1); await settleAll(); await p;
   return plain(h.persisted());
 }
-function switchTo(h, t, b) { h.ctrl.invalidate(t, b); h.lane.invalidate(); }
+function switchTo(h, t, b, hydrateRows) {
+  h.ctrl.invalidate(t, b); h.lane.invalidate();
+  // R9: the freshly selected destination starts UN-hydrated (invariant B). Production
+  // re-subscribes and hydrates before any save is possible; tests that go on to write
+  // model that same step. Pass hydrateRows === false to keep the lane un-hydrated.
+  if (hydrateRows !== false) h.lane.markHydrated(h.ctrl.capture(), hydrateRows || []);
+}
 
 test("[prod-helper] R7-1: identical payload T1/A → T2/B hydrates the NEW destination (not ignored_own_echo)", async () => {
   const h = laneHarness();
@@ -992,7 +1008,8 @@ test("[prod-helper] R8-10: a deferred payload for one lane is not flushed/applie
   const pA = h.lane.submit({ rows: [day("2026-07-24", 5)] }); await tick(); // T1/A in flight, has own pending intent
   const deferredExt = h.lane.onListenerEcho([day("2026-07-24", 42)], h.ctrl.current()); // external for T1/A while pending
   assert.equal(deferredExt.status, "deferred_pending_local", "T1/A external deferred while its own write is in flight");
-  switchTo(h, "T2", "B");                              // move to a different lane
+  assert.equal(deferredExt.deferredStored, true, "R9: the deferred payload is RETAINED, not dropped");
+  switchTo(h, "T2", "B", false);                       // move to a different lane (not yet hydrated)
   const before = h.applied.length;
   h.ok(0); await settleAll(); await pA;                // complete T1/A write
   assert.equal(h.applied.length, before, "old-lane completion did not replay/flush the dropped T1/A deferred payload into T2/B");
@@ -1028,7 +1045,7 @@ test("[prod-helper] R8-13: invalidation during pending local work retires stale 
   const h = laneHarness();
   const p = h.lane.submit({ rows: [day("2026-07-24", 9)] }); await tick(); // T1/A pending, in flight
   const oldCtx = h.ctrl.current();
-  switchTo(h, "T2", "B");                              // invalidate during pending work
+  switchTo(h, "T2", "B", false);                       // invalidate during pending work (new lane un-hydrated)
   assert.equal(h.lane._state().pendingLocal, false, "new T2/B lane starts with no pending local intent");
   assert.equal(h.lane._state().desired, null, "new lane desired is fresh (old pending intent not carried over)");
   const old = h.lane.onListenerEcho([day("2026-07-24", 9)], oldCtx);
@@ -1042,4 +1059,335 @@ test("[prod-helper] R8-14: no pending local intent → normal live hydration rem
   const r = h.lane.onListenerEcho([day("2026-07-24", 321)], h.ctrl.current());
   assert.equal(r.status, "applied", "quiescent live lane hydrates external payloads");
   assert.equal(totalRevenue(plain(h.lane._state().desired)), 321);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// R9 — SAVE-LIFECYCLE HARDENING (P0-DATA-01-R8-FIND-001/002, P0-REV-WRITE-004,
+// P0-REV-SAFETY-005, P0-REV-FOOD-008). Every test drives the REAL production
+// createEntriesWriteCoordinator; only terminal transports/state are injected.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// KGS-like production-shaped fixture: 2026-03-01 .. 2026-08-07 (160 business dates).
+function kgsHistory() {
+  const out = [];
+  const mk = (y, m, dmax) => { for (let d = 1; d <= dmax; d++) out.push(day(`${y}-${m}-${String(d).padStart(2, "0")}`, 10000 + d)); };
+  mk("2026", "03", 31); mk("2026", "04", 30); mk("2026", "05", 31);
+  mk("2026", "06", 30); mk("2026", "07", 31); mk("2026", "08", 7);
+  return out;
+}
+const datesOf = (rows) => (rows || []).map(r => r.date);
+
+// ── 1 / 20: full-history hydration then a revenue save preserves every date ──
+test("[prod-helper] R9-1: revenue save on a fully hydrated 160-date history preserves ALL dates", async () => {
+  const h = laneHarness({ hydrateRows: kgsHistory() });
+  assert.equal(h.lane.isHydrated(), true, "listener/bootstrap hydration makes the lane writable");
+  assert.equal(h.lane._state().desired.length, 160, "authoritative full history hydrated");
+  const edited = h.lane._state().desired.map(e => e.date === "2026-08-05" ? { ...e, sales: 99999 } : e);
+  const p = h.lane.submit({ rows: edited, apply: false });
+  await tick(); h.ok(0); await settleAll(); await p;
+  const persisted = h.persisted();
+  assert.equal(persisted.length, 160, "revenue save persisted the FULL history, not a subset");
+  assert.equal(persisted.find(e => e.date === "2026-03-01").sales, 10001, "March history intact after an August edit");
+  assert.equal(persisted.find(e => e.date === "2026-08-05").sales, 99999, "the edit landed");
+});
+
+// ── 3: revenue save BEFORE hydration is blocked with no persistence intent ──
+test("[prod-helper] R9-2: revenue save before hydration is BLOCKED and emits no persistence intent", async () => {
+  const h = laneHarness({ hydrated: false });
+  const r = await h.lane.submit({ rows: [day("2026-08-06", 500)], apply: false });
+  await settleAll();
+  assert.equal(r.status, "blocked_unhydrated", "un-hydrated revenue save is refused");
+  assert.equal(h.transports.length, 0, "NO physical write was dispatched");
+  assert.equal(h.applied.length, 0, "no optimistic UI mutation either");
+  assert.equal(h.persisted(), null, "nothing persisted");
+  assert.equal(h.lane._state().desiredRev, 0, "no revision was created");
+});
+
+// ── 2: food-cost save BEFORE hydration is blocked with no persistence intent ──
+test("[prod-helper] R9-3: food-cost save before hydration is BLOCKED and emits no persistence intent", async () => {
+  const h = laneHarness({ hydrated: false });
+  const r = await h.lane.submitSupplierEdit({ supId: "sup-1", date: "2026-08-06", val: "250", rows: [], emptyEntry: {} });
+  await settleAll();
+  assert.equal(r.status, "blocked_unhydrated", "un-hydrated food-cost save is refused (invariant F parity)");
+  assert.equal(h.transports.length, 0, "NO physical write dispatched from a pre-hydration food-cost edit");
+  assert.equal(h.applied.length, 0, "no optimistic apply");
+  assert.equal(h.lane._state().desiredRev, 0, "no revision created");
+});
+
+// ── 4: a current-month display subset can never become the persisted collection ──
+test("[prod-helper] R9-4: current-month filtered subset is REFUSED as a full-replacement payload", async () => {
+  const h = laneHarness({ hydrateRows: kgsHistory() });
+  const monthPrefix = "2026-08-";
+  const monthEntries = h.lane._state().desired.filter(e => e.date.startsWith(monthPrefix)); // the deployed display collection
+  assert.equal(monthEntries.length, 7, "display collection is the current month only");
+  const r = await h.lane.submit({ rows: monthEntries, apply: false });
+  await settleAll();
+  assert.equal(r.status, "blocked_history_drop", "a month-filtered subset cannot replace the full node");
+  assert.equal(r.droppedCount, 153, "all 153 pre-August dates were detected as dropped");
+  assert.equal(h.transports.length, 0, "NO destructive write dispatched");
+  assert.equal(h.lane._state().desired.length, 160, "authoritative history untouched");
+});
+
+// ── 19: food-cost edit preserves all hydrated historical dates ──
+test("[prod-helper] R9-5: food-cost edit on 160-date history preserves every historical date", async () => {
+  const h = laneHarness({ hydrateRows: kgsHistory() });
+  const p = h.lane.submitSupplierEdit({ supId: "sup-9", date: "2026-08-06", val: "870.34", rows: [day("2026-08-06", 0)], emptyEntry: {} });
+  await tick(); h.ok(0); await settleAll(); await p;
+  const persisted = h.persisted();
+  assert.equal(persisted.length, 160, "food-cost write persisted the FULL history");
+  assert.equal(h.persistedSup("2026-08-06", "sup-9"), "870.34", "supplier value landed");
+  assert.equal(persisted.find(e => e.date === "2026-07-31").sales, 10031, "July history intact");
+  assert.equal(datesOf(persisted)[0], "2026-03-01", "earliest date preserved");
+});
+
+// ── 21: opening / navigating the screen emits NO entries write intent ──
+test("[prod-helper] R9-6: hydration (incl. duplicates) emits NO write intent — self-heal is fail-closed", async () => {
+  const h = laneHarness({ hydrated: false });
+  const withDupes = [day("2026-08-01", 100), day("2026-08-01", 100), day("2026-08-02", 200)];
+  const r = h.lane.onListenerEcho(withDupes, h.ctrl.current());
+  await settleAll();
+  assert.equal(r.status, "applied", "listener hydration applies for display");
+  assert.equal(r.duplicatesObserved, true, "duplicate dates are detected");
+  assert.equal(r.selfHealSuppressed, true, "the automatic self-heal write-back is suppressed (invariant G)");
+  assert.equal(h.transports.length, 0, "merely opening/navigating produced NO entries write");
+  assert.equal(h.persisted(), null, "the financial node was not silently rewritten");
+  assert.equal(h.lane.isHydrated(), true, "the screen is still usable/writable afterwards");
+  assert.equal(h.lane._state().duplicatesObserved, true, "condition surfaced for an explicit operator repair");
+});
+
+// ── 18 / G: listener failure before hydration keeps the lane fail-closed ──
+test("[prod-helper] R9-7: listener failure before hydration keeps writes BLOCKED (fail-closed)", async () => {
+  const h = laneHarness({ hydrated: false });
+  const e = h.lane.onListenerError(h.ctrl.current());
+  assert.equal(e.status, "hydration_failed");
+  const r = await h.lane.submit({ rows: [day("2026-08-06", 1)], apply: false });
+  await settleAll();
+  assert.equal(r.status, "blocked_unhydrated", "no write from an unverified state");
+  assert.equal(r.hydrationFailed, true, "the failure is surfaced to the caller");
+  assert.equal(h.transports.length, 0, "no persistence intent after listener failure");
+  // recovery: a real payload still hydrates and unblocks
+  h.lane.onListenerEcho([day("2026-08-01", 10)], h.ctrl.current());
+  assert.equal(h.lane.isHydrated(), true, "a later successful listener payload recovers the lane");
+});
+
+// ── 17: malformed / ambiguous owner context fails closed ──
+test("[prod-helper] R9-8: malformed owner context (no tenant/business) is refused", async () => {
+  const ctrl = ML.createSelectionController();            // never invalidated → tenantId/bizId null
+  const transports = [];
+  const lane = ML.createEntriesWriteCoordinator({
+    selection: ctrl, canonicalize: ME.canonicalizeEntries, upsert: ME.upsertEntryByDate,
+    entryDateKey: ME.entryDateKey, fingerprint: (rows) => JSON.stringify(rows),
+    applyRows: () => {}, commit: async (rows) => { transports.push(rows); return { ok: true }; },
+  });
+  assert.equal(lane.markHydrated(null, []).status, "blocked_no_owner", "cannot hydrate an unidentified destination");
+  const r = await lane.submit({ rows: [day("2026-08-06", 5)] });
+  assert.equal(r.status, "blocked_no_owner", "cannot write to an unidentified destination");
+  assert.equal(transports.length, 0, "no physical write from a malformed context");
+});
+
+// ── 16: logout / unmount with work in flight ──
+test("[prod-helper] R9-9: logout during an in-flight write blocks new writes and never mutates the new context", async () => {
+  const h = laneHarness({ hydrateRows: [day("2026-08-01", 10)] });
+  const p = h.lane.submit({ rows: [day("2026-08-01", 20)], apply: false }); await tick();
+  h.ctrl.invalidate(null, null); h.lane.invalidate();     // logout
+  const after = h.applied.length;
+  const r = await h.lane.submit({ rows: [day("2026-08-01", 30)] });
+  assert.equal(r.status, "blocked_no_owner", "post-logout writes are refused");
+  h.ok(0); await settleAll(); await p;                     // the in-flight write settles against its captured destination
+  assert.equal(h.applied.length, after, "the settling old write did not mutate post-logout UI state");
+  assert.equal(h.transports.length, 1, "no second physical write");
+});
+
+// ═══ R8-FIND-001 TERMINAL CONVERGENCE (the blocking finding) ═══
+// Codex probe: same-lane deferred payload → write fails → NO further listener emit.
+// R8 left rendered/active state on the failed optimistic rows; R9 must converge.
+
+test("[prod-helper] R9-10: same-lane deferred payload + write FAILURE + NO further emit → deterministic convergence", async () => {
+  const h = laneHarness({ hydrateRows: [day("2026-07-24", 0)] });
+  const p = h.lane.submit({ rows: [day("2026-07-24", 200)], apply: true }); await tick();
+  const d = h.lane.onListenerEcho([day("2026-07-24", 999)], h.ctrl.current()); // legitimate same-lane remote
+  assert.equal(d.status, "deferred_pending_local");
+  assert.equal(d.deferredStored, true, "R9 RETAINS the deferred payload");
+  assert.equal(h.lane._state().deferredPending, true);
+  h.fail(0); await settleAll();                        // write fails; NO further listener emit is delivered
+  const r = await p;
+  assert.equal(r.status, "persist_failed");
+  assert.equal(r.converged, true, "settlement converged onto the deferred remote payload");
+  assert.equal(totalRevenue(h.last()), 999, "RENDERED state converged to the remote payload, not the failed local 200");
+  assert.equal(totalRevenue(plain(h.lane._state().desired)), 999, "active lane converged");
+  assert.equal(h.lane._state().pendingLocal, false, "lane is quiescent — no additional emit required");
+  assert.equal(h.lane._state().deferredPending, false, "deferred payload consumed exactly once");
+  assert.equal(h.transports.length, 1, "convergence did NOT trigger a new write");
+});
+
+test("[prod-helper] R9-11: deferred payload + write SUCCESS → our newer committed value wins, deferral discarded", async () => {
+  const h = laneHarness({ hydrateRows: [day("2026-07-24", 0)] });
+  const p = h.lane.submit({ rows: [day("2026-07-24", 200)], apply: true }); await tick();
+  h.lane.onListenerEcho([day("2026-07-24", 999)], h.ctrl.current());
+  h.ok(0); await settleAll(); const r = await p;
+  assert.equal(r.status, "applied");
+  assert.equal(totalRevenue(h.persisted()), 200, "our committed value persisted");
+  assert.equal(totalRevenue(plain(h.lane._state().desired)), 200, "committed local value is authoritative, not the stale deferral");
+  assert.equal(h.lane._state().deferredPending, false, "superseded deferral discarded");
+});
+
+test("[prod-helper] R9-12: an OWN echo while pending is never stored as a deferred payload", async () => {
+  const h = laneHarness({ hydrateRows: [day("2026-07-24", 0)] });
+  const rows = [day("2026-07-24", 200)];
+  const p = h.lane.submit({ rows, apply: true }); await tick();
+  const own = h.lane.onListenerEcho(ME.canonicalizeEntries(rows), h.ctrl.current()); // local-before-ack own echo
+  assert.equal(own.status, "ignored_own_echo");
+  assert.equal(h.lane._state().deferredPending, false, "own echoes are consumed, never deferred");
+  h.fail(0); await settleAll(); const r = await p;
+  assert.equal(r.converged, false, "nothing to converge onto");
+  assert.equal(totalRevenue(plain(h.lane._state().desired)), 200, "local intent retained when no remote payload exists");
+});
+
+test("[prod-helper] R9-13: a NEWER local edit supersedes convergence until it settles", async () => {
+  const h = laneHarness({ hydrateRows: [day("2026-07-24", 0)] });
+  const p1 = h.lane.submit({ rows: [day("2026-07-24", 200)], apply: true }); await tick();
+  h.lane.onListenerEcho([day("2026-07-24", 999)], h.ctrl.current());   // deferred
+  const p2 = h.lane.submit({ rows: [day("2026-07-24", 300)], apply: true }); // newer local intent queued
+  h.fail(0); await settleAll();
+  assert.equal(totalRevenue(plain(h.lane._state().desired)), 300, "newer local intent is NOT clobbered by the deferred payload");
+  h.ok(1); await settleAll(); await Promise.allSettled([p1, p2]);
+  assert.equal(totalRevenue(h.persisted()), 300, "newest local edit persisted");
+  assert.equal(h.lane._state().deferredPending, false, "deferral resolved/discarded once the newer write committed");
+});
+
+test("[prod-helper] R9-14: a deferred payload is NEVER applied after the owner changed", async () => {
+  const h = laneHarness({ hydrateRows: [day("2026-07-24", 0)] });
+  const p = h.lane.submit({ rows: [day("2026-07-24", 200)], apply: true }); await tick();
+  h.lane.onListenerEcho([day("2026-07-24", 999)], h.ctrl.current());   // deferred for T1/A
+  switchTo(h, "T2", "B", false);                                       // owner changes, new lane un-hydrated
+  const before = h.applied.length;
+  h.fail(0); await settleAll(); await p;
+  assert.equal(h.applied.length, before, "the old lane's deferred payload was not applied into T2/B");
+  assert.equal(h.lane._state().desired, null, "new destination untouched");
+  assert.equal(h.lane.isHydrated(), false, "new destination still requires its own hydration");
+});
+
+// ── 5 / 6: tenant and business switch WHILE hydration is pending ──
+test("[prod-helper] R9-15: business switch while hydration pending — no write, old payload cannot hydrate the new business", async () => {
+  const h = laneHarness({ hydrated: false });
+  const oldCtx = h.ctrl.current();
+  switchTo(h, "T1", "B", false);                                       // switch before hydration completed
+  const late = h.lane.onListenerEcho(kgsHistory(), oldCtx);            // previous business's payload lands late
+  assert.equal(late.status, "stale", "a previous business's hydration payload is rejected");
+  assert.equal(h.lane.isHydrated(), false, "new business remains un-hydrated");
+  const r = await h.lane.submit({ rows: [day("2026-08-06", 1)] });
+  assert.equal(r.status, "blocked_unhydrated", "writes stay blocked for the new business");
+  assert.equal(h.transports.length, 0, "no persistence intent at any point");
+});
+
+test("[prod-helper] R9-16: tenant switch while hydration pending behaves identically", async () => {
+  const h = laneHarness({ hydrated: false });
+  const oldCtx = h.ctrl.current();
+  switchTo(h, "T2", "A", false);
+  assert.equal(h.lane.onListenerEcho(kgsHistory(), oldCtx).status, "stale", "previous tenant payload rejected");
+  assert.equal(h.lane.markHydrated(oldCtx, kgsHistory()).status, "stale", "stale ctx cannot force-hydrate the new tenant");
+  assert.equal((await h.lane.submit({ rows: [day("2026-08-06", 1)] })).status, "blocked_unhydrated");
+  assert.equal(h.transports.length, 0);
+});
+
+// ── 7 / 8 / 9: late callbacks from a previous business / generation ──
+test("[prod-helper] R9-17: late listener callback from the previous business never mutates the current one", async () => {
+  const h = laneHarness({ hydrateRows: [day("2026-07-24", 5)] });
+  const oldCtx = h.ctrl.current();
+  switchTo(h, "T1", "B", [day("2026-07-24", 7)]);
+  const before = h.applied.length;
+  assert.equal(h.lane.onListenerEcho([day("2026-07-24", 999)], oldCtx).status, "stale");
+  assert.equal(h.applied.length, before, "no UI mutation from the old business's callback");
+  assert.equal(totalRevenue(plain(h.lane._state().desired)), 7, "current business state unchanged");
+});
+
+test("[prod-helper] R9-18: late write SUCCESS and FAILURE from a previous generation settle only their own lane", async () => {
+  // late success
+  const a = laneHarness({ hydrateRows: [day("2026-07-24", 1)] });
+  const pa = a.lane.submit({ rows: [day("2026-07-24", 11)], apply: false }); await tick();
+  switchTo(a, "T2", "B", [day("2026-07-24", 2)]);
+  const aBefore = a.applied.length;
+  a.ok(0); await settleAll(); assert.equal((await pa).status, "applied");
+  assert.equal(a.applied.length, aBefore, "old-generation SUCCESS did not touch the new destination UI");
+  assert.equal(totalRevenue(plain(a.lane._state().desired)), 2, "new destination state intact");
+  assert.equal(a.store["biz:B:entries"], undefined, "old success wrote only to its own captured destination");
+  // late failure
+  const b = laneHarness({ hydrateRows: [day("2026-07-24", 1)] });
+  const pb = b.lane.submit({ rows: [day("2026-07-24", 11)], apply: false }); await tick();
+  switchTo(b, "T2", "B", [day("2026-07-24", 2)]);
+  const bBefore = b.applied.length;
+  b.fail(0); await settleAll(); assert.equal((await pb).status, "persist_failed");
+  assert.equal(b.applied.length, bBefore, "old-generation FAILURE did not touch the new destination UI");
+  assert.equal(totalRevenue(plain(b.lane._state().desired)), 2, "new destination state intact");
+});
+
+// ── 10 / 11 / 12 / 13 / 14 / 15: ordering, concurrency, retries ──
+test("[prod-helper] R9-19: two rapid edits to the SAME date converge on the newest", async () => {
+  const h = laneHarness({ hydrateRows: kgsHistory() });
+  const p1 = h.lane.submitSupplierEdit({ supId: "s1", date: "2026-08-03", val: "10", rows: [], emptyEntry: {} });
+  const p2 = h.lane.submitSupplierEdit({ supId: "s1", date: "2026-08-03", val: "20", rows: [], emptyEntry: {} });
+  await tick(); assert.equal(h.transports.length, 1, "single-flight");
+  h.ok(0); await settleAll(); h.ok(1); await settleAll(); await Promise.all([p1, p2]);
+  assert.equal(h.persistedSup("2026-08-03", "s1"), "20", "newest value wins");
+  assert.equal(h.persisted().length, 160, "history preserved throughout");
+});
+
+test("[prod-helper] R9-20: two rapid edits to DIFFERENT dates both survive", async () => {
+  const h = laneHarness({ hydrateRows: kgsHistory() });
+  const p1 = h.lane.submitSupplierEdit({ supId: "s1", date: "2026-08-02", val: "11", rows: [], emptyEntry: {} });
+  const p2 = h.lane.submitSupplierEdit({ supId: "s1", date: "2026-08-03", val: "22", rows: [], emptyEntry: {} });
+  await tick(); h.ok(0); await settleAll(); h.ok(1); await settleAll(); await Promise.all([p1, p2]);
+  assert.equal(h.persistedSup("2026-08-02", "s1"), "11");
+  assert.equal(h.persistedSup("2026-08-03", "s1"), "22", "transform built on the LATEST desired, not a stale snapshot");
+  assert.equal(h.persisted().length, 160);
+});
+
+test("[prod-helper] R9-21: listener echo arriving BETWEEN queued edits cannot regress the newest edit", async () => {
+  const h = laneHarness({ hydrateRows: [day("2026-07-24", 0)] });
+  const p1 = h.lane.submit({ rows: [day("2026-07-24", 100)], apply: true }); await tick();
+  const p2 = h.lane.submit({ rows: [day("2026-07-24", 300)], apply: true });   // queued
+  assert.equal(h.lane.onListenerEcho([day("2026-07-24", 999)], h.ctrl.current()).status, "deferred_pending_local");
+  h.ok(0); await settleAll(); h.ok(1); await settleAll(); await Promise.all([p1, p2]);
+  assert.equal(totalRevenue(h.persisted()), 300, "newest local edit is the terminal persisted value");
+  assert.equal(totalRevenue(plain(h.lane._state().desired)), 300, "no regression to the interleaved echo");
+});
+
+test("[prod-helper] R9-22: failed first write followed by a newer queued edit — the newer edit still persists", async () => {
+  const h = laneHarness({ hydrateRows: [day("2026-07-24", 0)] });
+  const p1 = h.lane.submit({ rows: [day("2026-07-24", 100)], apply: true }); await tick();
+  const p2 = h.lane.submit({ rows: [day("2026-07-24", 300)], apply: true });
+  h.fail(0); await settleAll();
+  assert.equal(h.transports.length, 2, "the queued newer edit was still dispatched after the failure");
+  h.ok(1); await settleAll(); await Promise.allSettled([p1, p2]);
+  assert.equal(totalRevenue(h.persisted()), 300, "later queued change was NOT silently discarded by the failure");
+});
+
+test("[prod-helper] R9-23: retry after failure carries the CURRENT owner's payload and ordering", async () => {
+  const h = laneHarness({ hydrateRows: kgsHistory() });
+  const p1 = h.lane.submitSupplierEdit({ supId: "s1", date: "2026-08-01", val: "5", rows: [], emptyEntry: {} });
+  await tick(); h.fail(0); await settleAll(); await p1;
+  const st = h.lane._state();
+  assert.equal(st.hydrated, true, "a failed write does not de-hydrate the lane");
+  const p2 = h.lane.submitSupplierEdit({ supId: "s1", date: "2026-08-01", val: "5", rows: [], emptyEntry: {} }); // user retries
+  await tick(); h.ok(1); await settleAll(); await p2;
+  assert.equal(h.transports[1].tenantId, "T1", "retry targeted the CURRENT owner's tenant");
+  assert.equal(h.transports[1].key, "biz:A:entries", "retry targeted the CURRENT owner's destination");
+  assert.equal(h.persistedSup("2026-08-01", "s1"), "5", "retry persisted");
+  assert.equal(h.persisted().length, 160, "retry payload is the full authoritative history");
+});
+
+// ── source guards for the R9 invariants ──
+test("[source-guard] R9 wiring: hydration gate, fail-closed self-heal, bootstrap and listener-error are production-wired", () => {
+  assert.ok(html.includes('if (!ln.hydrated) return Promise.resolve({ status: "blocked_unhydrated"'), "submit is hydration-gated");
+  assert.ok(html.includes('if (!ownerUsable(ln.owner)) return Promise.resolve({ status: "blocked_no_owner" });'), "submit requires a fully identified owner");
+  assert.ok(html.includes('status: "blocked_history_drop"'), "wholesale replace refuses undeclared history drops");
+  assert.ok(html.includes("ln.deferred = { rows: canonical, owner:"), "deferral is stateful (R8-FIND-001)");
+  assert.ok(html.includes("const converged = convergeDeferred(writeLane);"), "failed writes converge onto the deferred payload");
+  assert.ok(!/ln\.desiredRev\+\+;\s*\n\s*pump\(\);/.test(html), "the automatic duplicate self-heal write-back is removed");
+  assert.ok(html.includes("entriesWriteCoordRef.current.onListenerError(ctxAtSetup)"), "entries listener failure is wired to fail-closed");
+  assert.ok(html.includes("entriesWriteCoordRef.current.markHydrated(ctxAtSetup, [])"), "absent-node hydration bootstrap is wired");
+  assert.ok(html.includes('if (msg === "not found") absent = true;'), "bootstrap treats ONLY a genuine missing node as empty-authoritative");
+  assert.ok(html.includes("else failed = true;"), "any other bootstrap read failure stays fail-closed");
+  assert.ok(!/existed = await sg\(`biz:\$\{currentBizId\}:entries`\)/.test(html), "the error-swallowing sg() bootstrap is not used");
+  assert.ok(html.includes("markHydrated: (ctx, rows) =>"), "markHydrated is part of the production coordinator");
 });

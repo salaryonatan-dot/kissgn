@@ -1,0 +1,29 @@
+index.html
+  - window.storage.subscribe: optional error callback (additive, backwards compatible)
+  - createEntriesWriteCoordinator:
+      * lane gains hydrated / hydrationFailed / deferred / duplicatesObserved
+      * ownerUsable(), sameOwner(), dateKeysOf(), convergeDeferred() helpers
+      * pump settle: success clears deferral; failure converges (reports `converged`)
+      * submit(): blocked_no_owner / blocked_unhydrated / blocked_history_drop gates
+      * onListenerEcho(): stateful deferral; automatic duplicate self-heal WRITE removed
+      * invalidate(): owner-scoped deferral cleanup
+      * new API: markHydrated(ctx, rows), onListenerError(ctx), isHydrated()
+      * _state(): exposes hydrated / hydrationFailed / deferredPending / duplicatesObserved
+  - PilotDashboard listener effect:
+      * sub() forwards an error callback; entries listener error -> onListenerError
+      * read-only absent-node hydration bootstrap (distinguishes "not found" from failure)
+  - clear-all button: submit({ rows: [], allowDrop: true })
+
+test/dashboard/entries-lifecycle.test.mjs
+  - laneHarness(opts): models the hydrated lifecycle; {hydrated:false} / {hydrateRows:[...]}
+  - switchTo(h,t,b,hydrateRows): successor lane re-hydrates (or stays un-hydrated)
+  - R6-2 clear-all declares allowDrop; R6-5 re-hydrates on return; R8-10/R8-13 use un-hydrated successor
+  - source guard updated for the new clear-all call
+  - NEW: R9-1 .. R9-23 + an R9 wiring source guard (24 tests)
+
+artifacts/p0-data-01-r9/
+  CHANGE_SUMMARY.md, R8_FINDINGS_CLOSURE.md, DESIGN_AND_INVARIANTS.md, TEST_RESULTS.md,
+  REVIEW_GUIDE.md, KNOWN_LIMITATIONS.md, FILES_CHANGED.txt, COMMANDS_SANITIZED.log
+
+NOT changed: package.json, package-lock.json, node_modules, database.rules.json, firebase/IAM/auth
+config, api/**, lib/**, src/**, financial definitions, and all display/month-selector behavior.

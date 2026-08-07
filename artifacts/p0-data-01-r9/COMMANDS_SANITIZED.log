@@ -1,0 +1,41 @@
+# R9 implementation — sanitized command log (local only; no network, no Firebase, no Production)
+
+## Phase 1 — inspection (read-only)
+git -C <canonical> rev-parse HEAD                      # 1690f0a... (unchanged, .DS_Store dirt preserved)
+git --git-dir=<shared>/worktrees/kissgn-p0-data-01-r8 rev-parse HEAD   # 3685c926... verified
+cat codex-p0-data-01-r8-review-2026-08-05/{EXECUTIVE_VERDICT.md,CODEX_P0_DATA_01_R8_FINAL_REVIEW.md,FINDINGS.json}
+cat codex-p0-revenue-display-review-2026-08-07/{05,07,08,09}_*.md ; python3 - < FINDINGS.json
+grep -n '<coordinator/listener/save symbols>' kissgn-p0-data-01-r8/index.html
+
+## Phase 1 — worktree creation
+git -C <shared> worktree add -b claude/p0-data-01-r9 <r9-path> 3685c9266c7cb14df53da890341808de25224245
+ln -s ../kissgn-m1-s0-vat-invariant/node_modules <r9-path>/node_modules   # shared deps; nothing installed
+# device-VM quirk: stale *.lock files cannot be unlinked; moved aside to /tmp (known, benign)
+
+## Phase 2/3 — implementation (python3 in-place edits on index.html)
+python3 /tmp/r9_patch1.py      # lane fields, owner helpers, convergeDeferred, pump settle, submit gates
+python3 /tmp/r9_patch2.py      # stateful deferral, fail-closed self-heal, invalidate, markHydrated/onListenerError
+python3 /tmp/r9_patch3.py      # subscribe onError, sub(), listener error + bootstrap, clear-all allowDrop
+python3 /tmp/r9_fix_bootstrap.py  # bootstrap distinguishes "not found" from any other read failure
+
+## Phase 4 — tests
+node --test test/dashboard/entries-lifecycle.test.mjs                       # 79 -> (harness) -> 103 pass / 0 fail
+node --test test/finance/vat-invariant.test.mjs                             # 5 pass
+node --test test/forecast/revenue-forecast-ui.test.mjs test/forecast/revenue-forecast-p0.test.mjs
+node --test --test-concurrency=8 test/**/*.test.mjs docs/production-readiness/test/*.test.mjs   # 444 pass / 0 fail
+./node_modules/.bin/tsc --noEmit                       # exit 2, 22 TS2742 in src/firebase/refs.ts (baseline)
+./node_modules/.bin/tsc --noEmit --preserveSymlinks    # exit 0
+git diff --check ; git diff --check 3685c926..         # exit 0
+
+## Negative control (offline, /tmp, NOT committed)
+node /tmp/r9-negative-control/nc.mjs <r8>/index.html <r9>/index.html
+#   R8: desired=200 (defect reproduced)   R9: desired=999 (converged)  -> PASSED
+
+## Phase 6 — single local commit
+git add index.html test/dashboard/entries-lifecycle.test.mjs artifacts/p0-data-01-r9
+git commit -m "fix: harden entries lifecycle coordination (R9)"     # author/trailer per project convention
+
+## NOT performed
+Firebase/RTDB access, Production app open, network calls, dependency install/upgrade,
+schema/Rules/IAM/auth/secret changes, recovery/backfill/restore/analytics rebuild,
+merge/rebase/push/deploy, canonical-worktree or R8-worktree modification, display/month-selector work.
