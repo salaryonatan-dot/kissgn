@@ -6,7 +6,13 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+// R10-GATE-016: reach the repository through the resolved git context. A linked
+// worktree records ABSOLUTE back-pointers when it is created, so a checkout reached
+// through a different absolute path (a container mount, a relocated volume) makes
+// plain `git` fail from inside it with "not a git repository" — which failed this
+// guard for reasons that had nothing to do with the VAT invariant. The invariant
+// assertions below are unchanged; only how git is invoked is.
+import { gitIn } from "../support/git-context.mjs";
 import vm from "node:vm";
 import { dailyReportMessage } from "../../lib/whatsappMessages.js";
 
@@ -159,7 +165,7 @@ test("runtime source has one VAT-rate literal and one sanctioned VAT division si
 });
 
 test("S0 diff contains no historical data transform, migration, RTDB rules, or forbidden runtime area", () => {
-  const names = spawnSync("git", ["diff", "--name-only", BASE, "--"], { cwd: ROOT, encoding: "utf8" });
+  const names = gitIn(ROOT, ["diff", "--name-only", BASE, "--"]);
   assert.equal(names.status, 0, names.stderr);
   const changed = names.stdout.trim().split(/\n/).filter(Boolean);
   const forbiddenPaths = [
@@ -179,7 +185,7 @@ test("S0 diff contains no historical data transform, migration, RTDB rules, or f
     "S0 must not touch historical transforms, RTDB rules, forecast/KPI areas, packages, or stored-data scripts",
   );
 
-  const runtimeDiff = spawnSync("git", ["diff", "--unified=0", BASE, "--", "index.html", "api", "lib", "src"], { cwd: ROOT, encoding: "utf8" });
+  const runtimeDiff = gitIn(ROOT, ["diff", "--unified=0", BASE, "--", "index.html", "api", "lib", "src"]);
   assert.equal(runtimeDiff.status, 0, runtimeDiff.stderr);
   const addedLines = runtimeDiff.stdout
     .split(/\r?\n/)

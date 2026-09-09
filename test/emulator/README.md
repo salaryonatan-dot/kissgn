@@ -95,3 +95,54 @@ matrix totals makes the script exit non‑zero. It prints a `=== FAILURES ===`
 section with, per case: id, policy area, identity, operation, path, expected,
 actual, and a severity hint (unexpected allow = P0/P1; unexpected deny = P2).
 Do not modify `database.rules.json` to make a case pass — investigate first.
+
+## Run the R10 concurrency validation
+
+`entries-remote-atomic-emulator.mjs` drives the ACTUAL production write path
+(`createRemoteEntriesMutator`, `createEntriesWriteCoordinator`, `applyEntryIntent`,
+vm-extracted from `index.html`) against this same emulator. It is deliberately not
+named `*.test.mjs`, so the repository glob `node --test test/**/*.test.mjs` — which
+runs with no emulator — can never pick it up.
+
+Run it from the repository root, exactly like the matrix above but with this script:
+
+```
+env -u GOOGLE_APPLICATION_CREDENTIALS \
+    -u FIREBASE_CONFIG \
+    -u FIREBASE_DATABASE_URL \
+    GCLOUD_PROJECT=demo-marjin-rules \
+    GOOGLE_CLOUD_PROJECT=demo-marjin-rules \
+    FIREBASE_DATABASE_EMULATOR_HOST=127.0.0.1:9000 \
+    JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home \
+    PATH="/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin:$PATH" \
+    ./node_modules/.bin/firebase emulators:exec \
+      --only database \
+      --project demo-marjin-rules \
+      --config test/emulator/firebase.json \
+      "node test/emulator/entries-remote-atomic-emulator.mjs"
+```
+
+Expected: a per-case table, then
+
+```
+=== TOTALS ===
+total=16 passed=16 failed=0
+
+ALL CASES PASSED
+```
+
+Exit code `0`. Any unexpected result, safety abort or incomplete matrix exits nonzero.
+
+What it covers: two genuinely independent clients (separate apps, connections, caches,
+selection controllers, coordinators and mutators) over one real node — both completion
+orders and true simultaneity; the R9 full-node read-modify-write **negative control**,
+which must still reproduce the historical lost update, proving the suite can see the
+bug; eight-way contention with real CAS retries; conflict with exact `conflictPaths`;
+idempotent re-submission; `id_collision`; Rules-enforced cross-business, cross-tenant
+and viewer denial; stale/no-owner refusal with zero I/O; and the cold-cache abort
+behaviour of a real RTDB transaction, which no in-process fake store can model.
+
+If the emulator JAR cannot be downloaded on the machine you are running on, copy an
+existing `firebase-database-emulator-v*.jar` into `~/.cache/firebase/emulators/`
+before running; the CLI uses the cached copy and needs no network for the emulator
+itself. Java 21+ is required by firebase-tools 15.23.0 regardless.

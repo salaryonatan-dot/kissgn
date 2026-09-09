@@ -575,7 +575,7 @@
   </script>
     <script type="module">
     import { initializeApp, initializeApp as initializeApp2 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-    import { getDatabase, ref, get, set, remove, onValue, forceWebSockets } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+    import { getDatabase, ref, get, set, remove, onValue, forceWebSockets, runTransaction } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
     import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
              sendPasswordResetEmail, onAuthStateChanged, signOut, updateProfile,
              updateEmail, updatePassword, browserLocalPersistence, setPersistence }
@@ -770,6 +770,16 @@
       const tenantRef = ref(db, path);
       await set(tenantRef, { _v: str });
       return { key, value: str, shared };
+    };
+
+    // R10: REMOTE-ATOMIC mutation transport (compare-and-swap). `txnFn(rawCurrent)`
+    // must be PURE — RTDB may re-run it several times against a fresher remote value.
+    // `applyLocally:false` suppresses optimistic local events, so listeners never see
+    // an intermediate financial value that was never committed.
+    window.storage.mutateFor = async (tenantId, key, txnFn) => {
+      if (!tenantId) throw new Error("explicit tenant required");
+      const path = fkeySharedForTenant(tenantId, key);
+      return await runTransaction(ref(db, path), txnFn, { applyLocally: false });
     };
 
     // Live listener -- calls callback whenever any key changes
@@ -1236,19 +1246,11 @@ async function loadExceptionsBound(io, ctx) {
 function createPersistence(io) {
   const validCtx = (ctx) => !!(ctx && ctx.tenantId && ctx.bizId);
   return {
-    persistEntries: async (rows, ctx) => {
-      if (!validCtx(ctx)) return { ok: false, error: "missing_context" };
-      if (!io.selection.isLive(ctx)) return { ok: false, stale: true }; // pre-canonicalize gate
-      const rawCount = Array.isArray(rows) ? rows.length : 0;
-      const canonical = io.canonicalize(rows); // canonicalize EXACTLY once at the production boundary
-      if (rawCount !== canonical.length && io.warn) io.warn(rawCount - canonical.length);
-      if (!io.selection.isLive(ctx)) return { ok: false, stale: true }; // immediately-before-dispatch gate
-      try { await io.storageSetFor(ctx.tenantId, `biz:${ctx.bizId}:entries`, JSON.stringify(canonical)); }
-      catch (err) { return { ok: false, error: (err && err.message) || "write_failed" }; }
-      // Write confirmed. If the selection changed DURING the await, the write still
-      // landed in the originating namespace; callers re-check liveness before applying.
-      return io.selection.isLive(ctx) ? { ok: true, canonical } : { ok: true, canonical, staleAfterWrite: true };
-    },
+    // R10: `persistEntries` (blind full-node snapshot write of the entries blob) is
+    // REMOVED. It was the mechanism behind R9-FIND-001/003 — an independent writer's
+    // whole-history `set` silently erasing another client's edit. Entries are now
+    // mutated ONLY through createRemoteEntriesMutator's RTDB transaction. `fixed` is a
+    // different destination with single-owner semantics and keeps its direct write.
     persistFixed: async (fixed, ctx) => {
       if (!validCtx(ctx)) return { ok: false, error: "missing_context" };
       if (!io.selection.isLive(ctx)) return { ok: false, stale: true };
@@ -1284,239 +1286,225 @@ function createPersistence(io) {
 //    permanently blacklisted.
 //  • Terminal identity is always the captured ctx (never mutable _currentTenantId).
 function createEntriesWriteCoordinator(io) {
-  // R8 (R7-FIND-001): each lane carries the IMMUTABLE destination it belongs to
-  // (tenantId, bizId, selection generation), captured at lane creation. The
-  // hydration deferral consults ONLY the current live lane's own pending intent,
-  // never the coordinator-wide transport flag.
+  // ── R10 ──────────────────────────────────────────────────────────────────────
+  // The lane keeps its PROVEN R6–R9 responsibilities: per-destination single-flight
+  // ordering, owner {tenantId,bizId,gen} isolation, stale-callback rejection, scoped
+  // own-echo markers, deterministic waiter settlement and terminal convergence of a
+  // deferred remote payload after a failed write.
+  //
+  // What changed in R10: the lane no longer dispatches a CLIENT SNAPSHOT. It queues
+  // SEMANTIC MUTATION INTENTS and dispatches each through io.mutate(), which applies
+  // it inside an RTDB transaction against the LATEST REMOTE value. The client's
+  // hydrated collection is never the replacement source, so two independent browsers
+  // can no longer silently overwrite each other (R9-FIND-001/003).
+  //
+  // Local revisions/markers/generations remain LOCAL ordering + ownership devices
+  // only. They are explicitly NOT cross-client locks; the remote transaction is the
+  // sole cross-client concurrency authority.
   const curOwner = () => {
     const c = io.selection.current ? io.selection.current() : (io.selection.capture ? io.selection.capture() : null);
     return c ? { tenantId: c.tenantId, bizId: c.bizId, gen: c.gen } : null;
   };
-  // R9: every lane additionally carries its own HYDRATION state (invariant B) and the
-  // latest DEFERRED remote payload (R8-FIND-001). Both are per-lane, so they are
-  // inherently tenant/business/generation scoped and can never cross owners.
   const newLane = (gen, owner) => ({ gen, owner: owner || null, desiredRows: null, desiredRev: 0, committedRev: 0,
-                              attemptedRev: 0, retired: false, waiters: [],
-                              hydrated: false,          // authoritative full history loaded for THIS owner
-                              hydrationFailed: false,   // listener/bootstrap error → stay fail-closed
-                              deferred: null,           // { rows, owner } latest deferred remote payload
+                              attemptedRev: 0, retired: false, queue: [],
+                              rawRows: null,            // EXACT authoritative full-node value (never canonicalized/sorted)
+                              hydrated: false,          // a full-node remote value was seen for THIS owner
+                              absentConfirmed: false,   // the node is genuinely absent (create-only readiness)
+                              degraded: false,          // authoritative listener failed AFTER hydration
+                              hydrationFailed: false,   // listener/bootstrap failed BEFORE hydration
+                              deferred: null,
                               duplicatesObserved: false });
   let lane = newLane(0, curOwner());
-  let writing = false;                              // GLOBAL transport serialization only (one physical write at a time); NOT a hydration gate
-  let writingLane = null;                           // the EXACT lane whose physical write is currently in flight (object identity → destination/generation scoped)
-  const ownPending = [];                            // [{tenantId,bizId,gen,fp,rev}] destination+generation-scoped own-write markers (bounded)
+  let writing = false;
+  let writingLane = null;
+  const ownPending = [];
   const fp = (rows) => io.fingerprint(rows);
-  // R9 invariant A: an owner is USABLE only when it is fully identified. A null or
-  // partially-formed tenant/business context can never authorize a financial write.
   const ownerUsable = (o) => !!(o && o.tenantId != null && o.bizId != null && o.gen != null);
   const sameOwner = (a, b) => !!(a && b && a.tenantId === b.tenantId && a.bizId === b.bizId && a.gen === b.gen);
-  const dateKeysOf = (rows) => {
-    const out = new Set();
-    (rows || []).forEach(r => { const k = io.entryDateKey(r && r.date); if (k) out.add(k); });
-    return out;
-  };
-  // R9 (R8-FIND-001) TERMINAL CONVERGENCE: a stored deferred remote payload is applied
-  // when its owning write settles WITHOUT success and no newer local intent exists —
-  // deterministically, with NO dependency on a further listener emission.
+  // Ready to submit an ordinary mutation. A genuinely absent node is enough to CREATE
+  // (the transaction still rebases on the latest remote value), but only a real
+  // full-node hydration authorizes the destructive clear-all.
+  const laneReady = (ln) => !!((ln.hydrated || ln.absentConfirmed) && !ln.degraded && !ln.hydrationFailed);
   const convergeDeferred = (ln) => {
     const d = ln.deferred;
     if (!d) return null;
-    if (ln !== lane || ln.retired) return null;              // owner/generation moved on → never cross-apply
+    if (ln !== lane || ln.retired) return null;
     const cur = curOwner();
     if (!ownerUsable(cur) || !sameOwner(d.owner, cur)) return null;
-    if (ln.desiredRev > ln.attemptedRev) return null;        // newer local intent queued → it settles first
+    if (ln.desiredRev > ln.attemptedRev) return null;
     ln.deferred = null;
     io.applyRows(d.rows);
     ln.desiredRows = d.rows;
     ln.committedRev = ln.desiredRev;
     ln.attemptedRev = ln.desiredRev;
-    ln.hydrated = true;                                      // remote authoritative state is a valid hydration
-    ln.hydrationFailed = false;
+    ln.hydrated = true; ln.hydrationFailed = false;
     return d.rows;
   };
-  const resolveWaiters = (ln, uptoRev, base) => {
-    const done = ln.waiters.filter(w => w.rev <= uptoRev);
-    ln.waiters = ln.waiters.filter(w => w.rev > uptoRev);
-    done.forEach(w => w.resolve({ ...base, rev: w.rev, latest: w.rev === ln.desiredRev }));
+  const settleQueued = (ln, rev, base) => {
+    const done = ln.queue.filter(j => j.rev <= rev);
+    ln.queue = ln.queue.filter(j => j.rev > rev);
+    done.forEach(j => j.resolve({ ...base, rev: j.rev, latest: j.rev === ln.desiredRev }));
   };
   const pump = async () => {
-    if (writing) return;                          // one terminal write at a time, globally
-    const ln = lane;                              // always drive the CURRENT lane
-    if (ln.desiredRev <= ln.attemptedRev) return; // nothing new since the last attempt
+    if (writing) return;
+    const ln = lane;
+    const job = ln.queue.find(j => j.rev > ln.attemptedRev);
+    if (!job) return;
     writing = true;
-    writingLane = ln;                              // this physical write belongs to THIS lane's destination/generation
-    const ctx = io.selection.capture();            // terminal identity from the live captured ctx
-    const rev = ln.desiredRev;
-    const snapshot = ln.desiredRows;
+    writingLane = ln;
+    const ctx = io.selection.capture();
+    const rev = job.rev;
     ln.attemptedRev = rev;
-    // R7 (R6-FIND-001): own-echo marker is destination- AND generation-scoped from
-    // the write's captured ctx (tenantId, bizId, gen) — never reconstructed later
-    // from mutable globals. A fingerprint alone can never establish ownership.
-    const marker = { tenantId: ctx.tenantId, bizId: ctx.bizId, gen: ctx.gen, fp: fp(snapshot), rev };
-    ownPending.push(marker);                        // register BEFORE ack (local-before-ack safe)
-    while (ownPending.length > 16) ownPending.shift(); // bounded — never permanently blacklists
-    const writeLane = ln;                           // finalize THIS lane's accounting on settle
+    // Own-echo marker stays destination+generation scoped (R7) so our own listener
+    // echo is not mistaken for a foreign payload.
+    const marker = { tenantId: ctx.tenantId, bizId: ctx.bizId, gen: ctx.gen, fp: null, rev, pending: true };
+    ownPending.push(marker);
+    while (ownPending.length > 16) ownPending.shift();
+    const writeLane = ln;
     let res;
-    try { res = await io.commit(snapshot, ctx); }   // raw entries transport (private to this lane)
+    try { res = await io.mutate(job.intent, ctx); }
+    catch (err) { res = { status: "failed", error: (err && err.message) || "mutate_threw" }; }
     finally { writing = false; writingLane = null; }
-    if (res && res.ok) {
+    const committed = res && (res.status === "committed" || res.status === "committed_idempotent");
+    if (committed) {
       writeLane.committedRev = rev;
-      // R9: our committed value is newer than any payload deferred during this write.
       writeLane.deferred = null;
-      resolveWaiters(writeLane, rev, { status: "applied", canonical: snapshot });
+      if (res.rows) {
+        // The TRANSACTION RESULT is authoritative — not the client's prior view.
+        marker.fp = fp(res.rows);
+        writeLane.rawRows = res.rows;
+        writeLane.desiredRows = res.rows;
+        if (writeLane === lane && io.selection.isLive(ctx)) io.applyRows(res.rows);
+      } else {
+        const mi = ownPending.indexOf(marker); if (mi !== -1) ownPending.splice(mi, 1);
+      }
+      // R10-GATE-011: an IDEMPOTENT success also carries a precise classification from
+      // the transformation (`already_created` = this exact create is already present,
+      // `already_applied` = another writer already set the exact desired value,
+      // `empty_patch` = the submission changed nothing). Forwarding it makes the two
+      // materially different meanings of "nothing to write" distinguishable at the
+      // caller, so a client-side empty diff can never be mistaken for a confirmed
+      // remote state. Additive and symmetric with the non-commit branch below; an
+      // ordinary commit carries no reason.
+      settleQueued(writeLane, rev, { status: res.status, reason: res.reason, rows: res.rows, runs: res.runs,
+                                     created: !!res.created, destructive: !!res.destructive });
     } else {
-      // R7: a write that never persisted has no legitimate echo — retire ONLY this
-      // write's own scoped marker (never another destination's or generation's).
       const mi = ownPending.indexOf(marker);
       if (mi !== -1) ownPending.splice(mi, 1);
-      // R9 (R8-FIND-001): the failed write's optimistic rows are NOT authoritative.
-      // Converge onto the deferred remote payload now — no later emit required.
       const converged = convergeDeferred(writeLane);
-      resolveWaiters(writeLane, rev, { status: (res && res.stale) ? "stale" : "persist_failed",
-                                       canonical: snapshot, converged: !!converged });
+      settleQueued(writeLane, rev, { status: (res && res.status) || "failed", reason: res && res.reason,
+                                     detail: res && res.detail,   // R10-GATE-010: precise identity classification
+                                     conflictPaths: res && res.conflictPaths, count: res && res.count,
+                                     error: res && res.error, runs: res && res.runs, converged: !!converged });
     }
-    pump();                                         // drive the CURRENT lane's newest queued revision
+    pump();
   };
-  // Generic destination submit. op = { rows?, transform?, baseRows?, apply(bool, default true) }.
-  // `rows` → wholesale REPLACE; `transform(desired)` → map the latest desired canonical rows.
-  const submit = (op) => {
-    const sel = io.selection;
+  // ── the ONE write API: a typed semantic intent ───────────────────────────────
+  const submitIntent = (intent) => {
     const ln = lane;
-    // ── R9 GATES (invariants A/B/C). Every rejection below happens BEFORE any
-    // desiredRows/desiredRev mutation, applyRows call, waiter or pump — so a blocked
-    // save produces NO persistence intent of any kind.
     if (!ownerUsable(ln.owner)) return Promise.resolve({ status: "blocked_no_owner" });
-    if (!ln.hydrated) return Promise.resolve({ status: "blocked_unhydrated", hydrationFailed: !!ln.hydrationFailed });
-    let next;
-    if (op.transform) {
-      // R9 invariant C: once hydrated, the AUTHORITATIVE full-history rows are the only
-      // legal base. A caller-supplied `baseRows` (a React/UI collection that may be
-      // month-filtered, sorted or stale) can never become the persistence base.
-      const base = (ln.desiredRows && !ln.retired) ? ln.desiredRows : io.canonicalize(op.baseRows || []);
-      const mapped = op.transform(base);
-      if (mapped == null) return Promise.resolve({ status: "noop" });
-      next = io.canonicalize(mapped);
-    } else {
-      next = io.canonicalize(op.rows || []);       // wholesale replace
-      // R9 invariant C/F (P0-REV-WRITE-004): a wholesale replace may not silently DROP
-      // business dates that the authoritative hydrated history contains. A current-month
-      // (or otherwise filtered) subset is therefore structurally incapable of becoming a
-      // full-parent payload. Genuine removals declare `allowDrop`.
-      if (!op.allowDrop) {
-        const have = dateKeysOf(ln.desiredRows);
-        if (have.size) {
-          const keep = dateKeysOf(next);
-          const dropped = [];
-          have.forEach(k => { if (!keep.has(k)) dropped.push(k); });
-          if (dropped.length) {
-            dropped.sort();
-            return Promise.resolve({ status: "blocked_history_drop", droppedDates: dropped, droppedCount: dropped.length });
-          }
-        }
-      }
+    if (!intent || typeof intent !== "object" || !intent.type) return Promise.resolve({ status: "blocked_invalid_intent" });
+    if (ln.degraded) return Promise.resolve({ status: "blocked_listener_degraded" });
+    if (!laneReady(ln)) return Promise.resolve({ status: "blocked_unhydrated", hydrationFailed: !!ln.hydrationFailed });
+    // No ordinary save or delete may run against a node that still has id-less rows.
+    if (ln.identityRequired) return Promise.resolve({ status: "blocked_entry_identity_required" });
+    if (intent.type === "clear_all") {
+      // Destructive operations require a REAL full-node hydration plus the confirmed
+      // complete-content fingerprint; an absent-node readiness can never authorize one.
+      if (!ln.hydrated) return Promise.resolve({ status: "blocked_unhydrated", reason: "clear_all_requires_full_hydration" });
+      if (typeof intent.expectedNodeFingerprint !== "string" || !intent.expectedNodeFingerprint) return Promise.resolve({ status: "blocked_precondition_missing" });
+      if (!intent.confirmToken) return Promise.resolve({ status: "blocked_unconfirmed" });
     }
-    ln.desiredRows = next;
     const myRev = ++ln.desiredRev;
-    if (op.apply !== false) io.applyRows(next);     // optimistic UI is always the newest intent
-    const settled = new Promise(resolve => ln.waiters.push({ rev: myRev, resolve }));
+    const settled = new Promise(resolve => ln.queue.push({ rev: myRev, intent, resolve }));
     pump();
     return settled;
   };
   return {
-    submit,
-    // Supplier edit: transform the LATEST desired canonical rows (entries only).
+    submitIntent,
+    // Food-cost / supplier edit — the SAME lane and the SAME remote-atomic path as
+    // revenue (invariant F parity), expressed as a per-supplier-key absolute patch so
+    // two different suppliers, or a revenue field and a supplier field on the same
+    // row, never clobber one another.
     submitSupplierEdit: (args) => {
-      const key = io.entryDateKey(args.date);
+      const key = io.entryDateKey(args && args.date);
       if (!key) return Promise.resolve({ status: "invalid_date" });
-      return submit({
-        baseRows: args.rows,
-        transform: (base) => {
-          const existing = base.find(r => io.entryDateKey(r && r.date) === key);
-          const nextEntry = existing
-            ? { ...existing, supplier_payments: { ...(existing.supplier_payments || {}), [args.supId]: args.val } }
-            : { ...(args.emptyEntry || {}), date: key, supplier_payments: { [args.supId]: args.val } };
-          return io.upsert(base, nextEntry, existing ? key : null);
-        },
+      if (!args.supId) return Promise.resolve({ status: "invalid_supplier" });
+      // Identity is the immutable row id. Editing an existing row requires its id;
+      // creating a new row requires a pre-generated id. No date targeting exists.
+      const creating = args.targetId == null;
+      if (creating && !isValidEntryId(args.newId)) return Promise.resolve({ status: "invalid_identity" });
+      if (!creating && !isValidEntryId(args.targetId)) return Promise.resolve({ status: "blocked_entry_identity_required" });
+      const base = args.baseValue;
+      return submitIntent({
+        type: "patch_supplier", opId: args.opId,
+        target: { id: creating ? args.newId : args.targetId },
+        patch: { maps: { supplier_payments: { [args.supId]: args.val } } },
+        base:  { maps: { supplier_payments: { [args.supId]: base === undefined ? null : base } } },
+        createIfMissing: creating,
+        newRow: creating ? { ...(args.emptyEntry || {}), id: args.newId, date: key, supplier_payments: { [args.supId]: args.val } } : undefined,
       });
     },
-    // Production listener echo handler. `ctx` = the listener's captured selection.
-    // Firebase local-before-ack safe: own-payload identity is by content fingerprint.
+    // Destructive clear-all: a DEDICATED typed operation. It cannot be reached by an
+    // options boolean or object spread, requires the confirmed complete-content
+    // fingerprint, and aborts remotely if anything changed after confirmation.
+    submitClearAll: (args) => submitIntent({
+      type: "clear_all",
+      expectedNodeFingerprint: args && args.expectedNodeFingerprint,
+      confirmToken: args && args.confirmToken,
+      opId: args && args.opId,
+    }),
     onListenerEcho: (rows, ctx) => {
       const sel = io.selection;
-      // R7 invariant 3: a stale callback (different tenant/business/generation) is
-      // rejected BEFORE it can consume, clear, retire or mutate any marker/state.
-      if (ctx && !sel.isLive(ctx)) return { status: "stale" };  // stale tenant/business/generation
+      if (ctx && !sel.isLive(ctx)) return { status: "stale" };
       const ln = lane;
-      const canonical = io.canonicalize(rows);
+      // R10-GATE-005: the authoritative value is stored EXACTLY as received — no
+      // deduplication, no date-keyed rebuild, no reordering. Duplicate-date rows with
+      // distinct ids survive hydration and stay independently addressable.
+      const canonical = Array.isArray(rows) ? rows.slice() : [];
       const echoFp = fp(canonical);
-      // R7 invariant 2: own-echo consumption requires the listener's captured
-      // destination/generation to match the marker on ALL dimensions
-      // (tenantId, bizId, gen, fp). A fingerprint match ALONE is never sufficient,
-      // so the same canonical payload in a different tenant/business/generation is
-      // treated as legitimate remote hydration — never ignored_own_echo.
-      const oi = ctx ? ownPending.findIndex(r => r.fp === echoFp
+      const oi = ctx ? ownPending.findIndex(r => r.fp !== null && r.fp === echoFp
         && r.tenantId === ctx.tenantId && r.bizId === ctx.bizId && r.gen === ctx.gen) : -1;
-      if (oi !== -1) { ownPending.splice(oi, 1); return { status: "ignored_own_echo" }; } // our own write's echo
-      // Non-matching external payload. R8 (R7-FIND-001): defer ONLY when the
-      // current live lane (THIS callback's own tenant+business+generation) holds an
-      // UNCOMMITTED local revision that a remote apply would clobber. The
-      // coordinator-wide `writing` flag serializes physical transport across
-      // generations and MUST NOT gate hydration of a freshly selected destination
-      // while an old/foreign generation's write is still physically in flight.
+      if (oi !== -1) { ownPending.splice(oi, 1); return { status: "ignored_own_echo" }; }
       const laneOwned = !!(ln.owner && ctx && ln.owner.tenantId === ctx.tenantId
         && ln.owner.bizId === ctx.bizId && ln.owner.gen === ctx.gen);
-      const ownWriteInFlight = writing && writingLane === ln;   // THIS destination's own physical write (not a foreign one)
+      const ownWriteInFlight = writing && writingLane === ln;
       if (laneOwned && (ownWriteInFlight || ln.desiredRev > ln.attemptedRev)) {
-        // R9 (R8-FIND-001): deferral is now STATEFUL. The payload is retained with its
-        // owning tenant/business/generation and replayed by convergeDeferred() when the
-        // owning write settles unsuccessfully — so a legitimate remote payload can no
-        // longer be silently discarded, and terminal convergence needs no further emit.
         ln.deferred = { rows: canonical, owner: { tenantId: ctx.tenantId, bizId: ctx.bizId, gen: ctx.gen } };
         return { status: "deferred_pending_local", deferredStored: true };
       }
       io.applyRows(canonical);
+      ln.rawRows = canonical;
       ln.desiredRows = canonical;
-      ln.deferred = null;                           // superseded by this authoritative payload
-      ln.hydrated = true;                           // R9 invariant B: authoritative history is loaded
-      ln.hydrationFailed = false;
-      const rawLen = Array.isArray(rows) ? rows.length : 0;
-      const dupes = canonical.length < rawLen;
-      // R9 invariant G / P0-REV-SAFETY-005: duplicates are canonicalized for DISPLAY only.
-      // The former automatic self-heal write-back is REMOVED — merely opening or
-      // navigating the screen must never emit an entries write intent, and a financial
-      // node is never silently replaced from client-derived state. The condition is
-      // surfaced instead, for an explicit operator-initiated repair.
-      if (dupes) ln.duplicatesObserved = true;
-      ln.committedRev = ln.desiredRev;              // in sync with server; no write-back
+      ln.deferred = null;
+      // A full-node listener value is the ONLY thing that establishes real hydration
+      // and the only thing that clears a degraded lane.
+      ln.hydrated = true; ln.hydrationFailed = false; ln.degraded = false; ln.absentConfirmed = false;
+      const nodeState = validateEntriesNode(canonical);
+      ln.identityRequired = nodeState.status === "missing_entry_id";
+      const dupes = false;                        // duplicates are preserved, never collapsed
+      ln.committedRev = ln.desiredRev;
       ln.attemptedRev = ln.desiredRev;
       return { status: "applied", canonical, duplicatesObserved: dupes, selfHealSuppressed: dupes };
     },
     invalidate: () => {
       const old = lane;
       old.retired = true;
-      // Settle every NOT-YET-DISPATCHED waiter exactly once; the in-flight write (rev ==
-      // attemptedRev) stays to settle naturally against its captured destination.
-      const queued = old.waiters.filter(w => w.rev > old.attemptedRev);
-      old.waiters = old.waiters.filter(w => w.rev <= old.attemptedRev);
-      queued.forEach(w => w.resolve({ status: "cancelled_selection_changed", rev: w.rev, latest: false }));
-      lane = newLane(old.gen + 1, curOwner());      // fresh accounting; new lane owned by the now-current destination
-      // R7 invariant 5: deterministic, scoped marker retirement on selection change.
-      // Retire markers that no longer belong to the now-current destination/generation
-      // (they can never again match a live listener); markers owned by the active
-      // destination are preserved. Bounds obsolete-marker accumulation.
+      const queued = old.queue.filter(j => j.rev > old.attemptedRev);
+      old.queue = old.queue.filter(j => j.rev <= old.attemptedRev);
+      queued.forEach(j => j.resolve({ status: "cancelled_selection_changed", rev: j.rev, latest: false }));
+      lane = newLane(old.gen + 1, curOwner());
       const cur = (io.selection.current ? io.selection.current() : io.selection.capture()) || {};
       for (let i = ownPending.length - 1; i >= 0; i--) {
         const r = ownPending[i];
         if (!(r.tenantId === cur.tenantId && r.bizId === cur.bizId && r.gen === cur.gen)) ownPending.splice(i, 1);
       }
-      // R9: a deferred payload belongs to the retired lane's destination. Never carry it
-      // across an owner change; the retired lane keeps it only to settle its own write.
       if (old.deferred && !sameOwner(old.deferred.owner, cur)) old.deferred = null;
     },
-    // R9 invariant B: the ONLY way a lane becomes writable. Production calls this after
-    // it establishes the authoritative history for THIS owner — including the legitimate
-    // "node does not exist yet → authoritative empty" bootstrap, which the RTDB listener
-    // never reports (onValue does not fire for a missing node).
+    // Absent-node readiness. This is a UI/readiness signal ONLY: it permits creates
+    // (which the transaction rebases on the latest remote value anyway) and can never
+    // authorize a destructive clear-all or a full replacement — no full-replacement
+    // path exists in R10.
     markHydrated: (ctx, rows) => {
       if (ctx && !io.selection.isLive(ctx)) return { status: "stale" };
       const ln = lane;
@@ -1524,31 +1512,41 @@ function createEntriesWriteCoordinator(io) {
       if (ctx && !sameOwner(ln.owner, ctx)) return { status: "stale" };
       if (ln.hydrated) return { status: "already_hydrated" };
       const canonical = io.canonicalize(rows || []);
+      if (canonical.length) return { status: "rejected_non_empty_bootstrap" }; // only a listener may deliver real history
       ln.desiredRows = canonical;
-      ln.hydrated = true;
+      ln.absentConfirmed = true;
       ln.hydrationFailed = false;
       ln.committedRev = ln.desiredRev;
       ln.attemptedRev = ln.desiredRev;
       io.applyRows(canonical);
-      return { status: "hydrated", canonical };
+      return { status: "ready_absent" };
     },
-    // R9 invariant G: a listener/bootstrap failure keeps the lane FAIL-CLOSED — writes
-    // stay blocked rather than persisting from an unverified client state.
+    // Listener failure. BEFORE hydration it blocks writes; AFTER hydration it puts the
+    // lane in an explicit DEGRADED state — the client is no longer receiving
+    // authoritative updates, so ordinary saving stops until a fresh listener value.
     onListenerError: (ctx) => {
       if (ctx && !io.selection.isLive(ctx)) return { status: "stale" };
       const ln = lane;
       if (ctx && !sameOwner(ln.owner, ctx)) return { status: "stale" };
-      if (ln.hydrated) return { status: "already_hydrated" }; // already authoritative; keep it
+      if (ln.hydrated || ln.absentConfirmed) { ln.degraded = true; return { status: "degraded" }; }
       ln.hydrationFailed = true;
       return { status: "hydration_failed" };
     },
     isHydrated: () => !!lane.hydrated,
+    isReady: () => laneReady(lane),
+    // R10-GATE-004: the clear-all precondition is the fingerprint of the EXACT
+    // authoritative full-node snapshot — never `desiredRows` after any sort/dedup and
+    // never a displayed subset. Unavailable until a real full-node hydration exists.
+    currentFingerprint: () => (lane.hydrated && lane.rawRows) ? io.contentFingerprint(lane.rawRows) : null,
+    rawSnapshot: () => lane.rawRows,
     _state: () => ({ gen: lane.gen, owner: lane.owner, desiredRev: lane.desiredRev, committedRev: lane.committedRev,
                      attemptedRev: lane.attemptedRev, writing, writingOwnLane: writing && writingLane === lane,
                      pending: lane.desiredRev - lane.committedRev,
                      pendingLocal: (writing && writingLane === lane) || lane.desiredRev > lane.attemptedRev,
                      ownPending: ownPending.length, desired: lane.desiredRows,
-                     hydrated: lane.hydrated, hydrationFailed: lane.hydrationFailed,
+                     rawRows: lane.rawRows, identityRequired: !!lane.identityRequired,
+                     hydrated: lane.hydrated, absentConfirmed: lane.absentConfirmed, degraded: lane.degraded,
+                     ready: laneReady(lane), hydrationFailed: lane.hydrationFailed,
                      deferredPending: !!lane.deferred, duplicatesObserved: lane.duplicatesObserved }),
   };
 }
@@ -1655,6 +1653,88 @@ function createSaveUiRunner(io) {
 // component is mounted, its captured selection is still live, and its token still owns
 // the current supplier UI result. So an old-selection or superseded result can never
 // set or clear the current selection's error.
+// R10 (R9-FIND-005): ONE mapping from every typed persistence outcome to an
+// actionable user-facing message. A financial save may never fail silently, and a
+// conflict must never be presented as a generic error or as success.
+// Injectable/overridable so tests can supply deterministic ids.
+// Canonical UUID v4 only. Never Date.now(), a date, counter, index, fingerprint or
+// Math.random(). `cryptoImpl` is injectable so tests can drive both paths.
+function generateEntryId(cryptoImpl) {
+  const c = cryptoImpl || ((typeof window !== "undefined" && window.crypto) ? window.crypto : null);
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  if (c && typeof c.getRandomValues === "function") {
+    const b = new Uint8Array(16);
+    c.getRandomValues(b);
+    b[6] = (b[6] & 0x0f) | 0x40;                 // version 4
+    b[8] = (b[8] & 0x3f) | 0x80;                 // variant 10xx
+    const h = [];
+    for (let i = 0; i < 16; i++) h.push((b[i] + 0x100).toString(16).slice(1));
+    return h.slice(0, 4).join("") + "-" + h.slice(4, 6).join("") + "-" + h.slice(6, 8).join("")
+         + "-" + h.slice(8, 10).join("") + "-" + h.slice(10, 16).join("");
+  }
+  throw new Error("no_secure_id_source");
+}
+// R10-GATE-010: accepts EITHER the legacy status string OR the whole typed outcome
+// ({status, reason, detail}). Purely additive — given only a status the returned text
+// is byte-identical to before. Given the full outcome, the most specific typed
+// classification wins, so a create-ID collision is presented as its own distinct,
+// actionable condition instead of the generic blocked text. Nothing here inspects or
+// alters stored data; it is a presentation mapping only.
+function describeSaveOutcome(outcome, partialException) {
+  const typed = (outcome && typeof outcome === "object") ? outcome : null;
+  const status = typed ? typed.status : outcome;
+  const reason = typed ? typed.reason : undefined;
+  const detail = typed ? typed.detail : undefined;
+  if (detail === "id_collision" || reason === "id_collision") {
+    return "מזהה הרשומה כבר קיים עם תוכן שונה. רענן את המסך ונסה שוב — לא בוצע שינוי ומידע קיים לא נדרס.";
+  }
+  // R10-GATE-014: duplicate business date. The call site refuses rather than guessing
+  // which of the rows the operator meant; say so precisely instead of falling through
+  // to the catch-all `blocked` text. Same wording as the delete call site already uses.
+  if (reason === "ambiguous_date_requires_id") {
+    return "קיימות מספר רשומות לתאריך זה — בחר את הרשומה לעריכה.";
+  }
+  // A fail-closed identity/structure condition carries its precise classification in
+  // `reason`; surface that rather than the catch-all `blocked` text.
+  if (status === "blocked" && (reason === "duplicate_id" || reason === "invalid_identity" || reason === "malformed_remote")) {
+    return describeSaveOutcome(reason, partialException);
+  }
+  switch (status) {
+    case "conflict":
+      return "הנתונים שונו בינתיים ממכשיר אחר. רענן כדי לראות את הערכים העדכניים ונסה שוב — השינוי שלך לא נשמר.";
+    case "blocked_unhydrated":
+      return "הנתונים עדיין נטענים. המתן לסיום הטעינה ונסה שוב — השינוי שלך לא נשמר.";
+    case "blocked_listener_degraded":
+      return "החיבור לנתונים נותק. רענן את הדף כדי להתחבר מחדש ונסה שוב — השינוי שלך לא נשמר.";
+    case "blocked_no_owner":
+      return "לא נבחר עסק. בחר עסק ונסה שוב — השינוי שלך לא נשמר.";
+    case "blocked_entry_identity_required":
+    // R10-GATE-012: the builder-level name for the same condition, so a typed refusal
+    // maps to the identical operator-facing text as the coordinator-level block.
+    case "entry_identity_required":
+      return "רשומות קיימות עדיין ללא מזהה קבוע. נדרשת פעולת נתונים מאושרת לפני עריכה — השינוי שלך לא נשמר.";
+    case "duplicate_id":
+    case "invalid_identity":
+      return "זוהתה בעיית זיהוי רשומה (מזהה כפול או מתנגש). פנה לתמיכה — השינוי שלך לא נשמר.";
+    case "malformed_remote":
+      return "מבנה הנתונים המאוחסן אינו תקין. פנה לתמיכה — לא בוצע שינוי.";
+    case "blocked":
+      return "השמירה נחסמה בגלל מצב נתונים לא חד-משמעי (רשומה כפולה או פגומה). פנה לתמיכה — השינוי שלך לא נשמר.";
+    case "stale":
+    case "cancelled_selection_changed":
+      return "הבחירה השתנתה במהלך השמירה. השינוי שלך לא נשמר.";
+    // R10-GATE-014: an unparseable business date is refused before any write.
+    case "invalid_date":
+      return "התאריך אינו תקין — לא בוצע שינוי.";
+    case "blocked_precondition_missing":
+    case "blocked_unconfirmed":
+      return "הפעולה לא אושרה כראוי. נסה שוב — לא בוצע שינוי.";
+    default:
+      return partialException
+        ? "יום החריג נשמר אך שמירת ההכנסות נכשלה — נסה שוב."
+        : "שמירת הנתונים נכשלה. נסה שוב — השינוי שלך לא נשמר.";
+  }
+}
 function createSupplierResultOwnership() {
   let currentToken = null;
   let mounted = true;
@@ -1665,8 +1745,12 @@ function createSupplierResultOwnership() {
       if (!mounted) return { action: "unmounted" };
       if (!token || !selection.isLive(token.ctx)) return { action: "stale" };
       if (currentToken !== token) return { action: "superseded" };
-      if (res && res.status === "persist_failed") { ports.setError(); return { action: "set" }; }
-      if (res && res.status === "applied") { ports.clearError(); return { action: "clear" }; }
+      // R10 (R9-FIND-005): a blocked/conflicting/failed food-cost edit must NEVER be
+      // silently discarded. Only a confirmed remote commit clears the error surface.
+      const st = res && res.status;
+      if (st === "committed" || st === "committed_idempotent") { ports.clearError(); return { action: "clear" }; }
+      if (st === "stale" || st === "cancelled_selection_changed") return { action: "none" }; // superseded selection
+      if (res) { ports.setError(describeSaveOutcome(res, false)); return { action: "set", status: st }; }
       return { action: "none" };
     },
     invalidate: () => { currentToken = null; }, // selection change: old results are superseded
@@ -1698,9 +1782,11 @@ function createExceptionOwnership() {
 // function the production setSupPayDate caller invokes.
 function applySupplierWriteResult(res, ports) {
   if (!res || !res.latest) return { action: "none" };
-  if (res.status === "persist_failed") { ports.setError(); return { action: "set" }; }
-  if (res.status === "applied") { ports.clearError(); return { action: "clear" }; }
-  return { action: "none" };
+  const st = res.status;
+  if (st === "committed" || st === "committed_idempotent") { ports.clearError(); return { action: "clear" }; }
+  if (st === "stale" || st === "cancelled_selection_changed") return { action: "none" };
+  ports.setError(describeSaveOutcome(res, false));   // R10-GATE-010: precise classification
+  return { action: "set", status: st };
 }
 // The FULL selection-bound daily-entry save orchestration (structured-exception
 // step → date-keyed upsert → persist → insights rebuild/readback → form reset →
@@ -1780,19 +1866,40 @@ async function executeEntrySave(io) {
   // structured mutation just succeeded; otherwise legacy fields are preserved.
   const __structuredGoverns = !!(__loaded && __loaded.source === "structured");
   const __stripException = __structuredGoverns || (__exResponse != null);
-  const updatedRows = window.MarjinEntries.upsertEntryByDate(io.rows, __applyExc(netForm, __stripException, __prevEntry), io.editingDate);
+  // R10: the save is a NARROW semantic intent over the target row — never a client
+  // snapshot of the whole history. Only fields the user actually changed are patched,
+  // so a concurrent food-cost edit on the same row survives.
+  const __nextRow = __applyExc(netForm, __stripException, __prevEntry);
+  const __intent = window.MarjinSaveLifecycle.buildEntryUpsertIntent(__prevEntry, __nextRow, { newId: io.newRowId ? io.newRowId() : undefined });
+  // R10-GATE-012: the builder returns a TYPED REFUSAL rather than an intent when the
+  // save cannot be addressed at all — an invalid date, or a row that still has no
+  // immutable id. A refusal is not a mutation intent and must never be handed to the
+  // lane, where it would be reported to the operator as a generic invalid-intent
+  // failure. Surface the precise condition and submit nothing.
+  if (__intent && __intent.status) {
+    io.setSaved(false);
+    io.setError(__intent.status === "invalid_date"
+      ? "תאריך לא תקין."
+      : window.MarjinSaveLifecycle.describeSaveOutcome(__intent.status, false));
+    return { status: "error", outcome: __intent.status };
+  }
   if (!sel.isLive(ctx)) return { status: "stale" }; // pre-persist: never write another selection's path
-  const persistResult = await io.persistRows(updatedRows, ctx); // R4: entries-only, mandatory captured ctx
+  const persistResult = await io.persistMutation(__intent, ctx); // R10: remote-atomic
   if (!sel.isLive(ctx)) return { status: "stale" }; // post-persist: never mutate the new selection
   if (!persistResult || !persistResult.ok) {
     // PARTIAL: structured exception succeeded (if any) but revenue failed. Keep
     // the operationId so a retry REPLAYS the same structured op.
+    // R10: every non-commit outcome is surfaced with an actionable reason; the form
+    // is NOT cleared and no success indicator is shown.
     io.setSaved(false);
-    io.setError(__exResponse ? "יום החריג נשמר אך שמירת ההכנסות נכשלה — נסה שוב." : "שמירת הנתונים נכשלה. נסה שוב.");
-    return { status: "error" };
+    if (io.setStatusDetail) io.setStatusDetail(persistResult ? persistResult.status : "failed");
+    // R10-GATE-010: hand over the WHOLE typed outcome so the precise classification
+    // (e.g. a create-ID collision) reaches the operator, not just the coarse status.
+    io.setError(window.MarjinSaveLifecycle.describeSaveOutcome(persistResult || "failed", !!__exResponse));
+    return { status: "error", outcome: persistResult && persistResult.status };
   }
   io.opIds.consume(exDate); // full success → operationId consumed (same live selection)
-  io.applyRows(persistResult.canonical || updatedRows); // EXACT canonical persisted array
+  io.applyRows(persistResult.canonical || io.rows); // EXACT rows the transaction committed
   // ── ONE rebuild decision after all required saves succeed:
   //    shouldRebuild = revenueChanged OR (exceptionApplied && rebuildRequired). ──
   const __revenueChanged = __revenueMaterialChanged(__prevEntry, netForm);
@@ -1823,7 +1930,315 @@ async function executeEntrySave(io) {
   io.scheduleNav(ctx, insightsRefreshed ? 1200 : 2000);
   return { status: "saved", insightsRefreshed };
 }
-window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, createPersistence, createEntriesWriteCoordinator, createSaveOwnership, createInsightReadback, createInsightUiLoader, createSaveUiRunner, createExceptionOwnership, createSupplierResultOwnership, applySupplierWriteResult, executeEntrySave });
+// ── P0-DATA-01 R10: REMOTE-ATOMIC SEMANTIC ENTRY MUTATIONS ────────────────────
+// Closes R9-FIND-001/002/003/004 (independent-writer overwrite, hydration race,
+// incomplete history-drop invariant, broad allowDrop).
+//
+// R1–R9 persisted the CLIENT'S whole entries array. Two independent browsers could
+// each hydrate revision N, each save a different date, and the later writer's
+// full-snapshot `set` silently erased the earlier writer's edit — both reporting
+// success. No client-side lane, counter, fingerprint or generation can fix that:
+// they are per-instance and are not cross-client locks.
+//
+// R10 replaces snapshot persistence with SEMANTIC MUTATION INTENTS applied inside an
+// RTDB transaction (compare-and-swap). The transaction transformation receives the
+// LATEST REMOTE value, applies only the requested narrow change, preserves every
+// unrelated record and unrelated field, and aborts on conflict/ambiguity/malformed
+// state. The client's hydrated collection is never the replacement source.
+//
+// PURITY CONTRACT: applyEntryIntent is a pure function of (currentRows, intent).
+// RTDB may execute a transaction callback MANY times; it must never touch React
+// state, log, alert, or emit another write. Every patch is an ABSOLUTE set (never an
+// increment), so repeated execution is idempotent.
+//
+// IDENTITY: a row is targeted by an explicit stable `id` when present, otherwise by
+// its business date PROVEN UNIQUE in the current remote value. Date alone is never
+// trusted: if the date (or id) matches more than one row, the mutation ABORTS with
+// zero remote change rather than guessing, deduplicating or picking the first row.
+// Rows created by R10 carry a stable `id`; existing rows are untouched (additive
+// optional field — no rewrite of existing rows, no schema/Rules change).
+function stableStringify(v) {
+  if (v === null || typeof v !== "object") return JSON.stringify(v === undefined ? null : v);
+  if (Array.isArray(v)) return "[" + v.map(stableStringify).join(",") + "]";
+  return "{" + Object.keys(v).sort().map(k => JSON.stringify(k) + ":" + stableStringify(v[k])).join(",") + "}";
+}
+// Deterministic content fingerprint (FNV-1a 32-bit + length) over the COMPLETE node
+// content — used as the clear-all precondition, so it covers values, fields, row
+// order and duplicates, not merely the set of dates.
+function contentFingerprint(rows) {
+  const s = stableStringify(rows == null ? [] : rows);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0; }
+  return "f" + h.toString(16) + "l" + s.length;
+}
+const MAP_FIELDS = ["supplier_payments", "hourly_payroll"];
+// ── APPROVED ENTRY-ID DATA CONTRACT (R10-GATE-001/002) ───────────────────────
+// Every persisted entry MUST carry an immutable, collision-resistant string `id`.
+// Runtime identity is the id and ONLY the id: date, array index, row position and
+// display order are never identity. A node containing any id-less row is NOT
+// writable — it reports `missing_entry_id` and every ordinary mutation fails
+// closed until a separately approved offline data action assigns ids.
+// POSITIVE contract: a stored entry id is a canonical lowercase RFC 4122 UUID v4 —
+// version nibble 4 and variant nibble in [8,9,a,b]. This is an allowlist, not a
+// denylist: dates, counters, indexes, fingerprints, timestamps and arbitrary strings
+// simply do not match, so no exclusion list has to anticipate them.
+const ENTRY_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+function isValidEntryId(v) { return typeof v === "string" && ENTRY_ID_RE.test(v); }
+// Whole-node precondition evaluated INSIDE the transaction before any mutation.
+// Never repairs, never deduplicates, never reorders.
+function validateEntriesNode(rows) {
+  if (rows === null || rows === undefined) return { ok: true, rows: [], empty: true };
+  if (!Array.isArray(rows)) return { status: "malformed_remote" };
+  const seen = Object.create(null);
+  let missing = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (!isPlainRow(r)) return { status: "malformed_remote", index: i };
+    if (r.id === undefined || r.id === null || r.id === "") { missing++; continue; }
+    if (!isValidEntryId(r.id)) return { status: "malformed_remote", index: i, reason: "invalid_id" };
+    if (seen[r.id]) return { status: "duplicate_id", id: r.id };
+    seen[r.id] = true;
+  }
+  // Duplicate BUSINESS DATES are explicitly valid when their ids differ.
+  if (missing) return { status: "missing_entry_id", missingIdCount: missing, total: rows.length };
+  return { ok: true, rows };
+}
+function normVal(v) { return v === undefined ? null : v; }
+function sameVal(a, b) { return stableStringify(normVal(a)) === stableStringify(normVal(b)); }
+function isPlainRow(r) { return !!r && typeof r === "object" && !Array.isArray(r); }
+// Resolve the target row BY IMMUTABLE ID ONLY. There is no date fallback and no
+// positional fallback; a first-match choice is structurally impossible.
+function resolveEntryTarget(rows, target) {
+  if (!target || !isValidEntryId(target.id)) return { status: "invalid_identity" };
+  const hits = [];
+  rows.forEach((r, i) => { if (isPlainRow(r) && r.id != null && String(r.id) === String(target.id)) hits.push(i); });
+  if (hits.length === 1) return { index: hits[0] };
+  if (hits.length === 0) return { status: "target_not_found" };
+  return { status: "duplicate_id", count: hits.length };
+}
+// Read the value at a patch path on a row. path = {field} | {map, key}
+function readPath(row, p) {
+  if (!isPlainRow(row)) return undefined;
+  if (p.map) { const m = row[p.map]; return isPlainRow(m) ? m[p.key] : undefined; }
+  return row[p.field];
+}
+// Expand an intent's patch into explicit absolute paths.
+function patchPaths(patch) {
+  const out = [];
+  if (patch && patch.fields) Object.keys(patch.fields).forEach(f => out.push({ field: f, value: patch.fields[f] }));
+  // `unset` removes a field entirely (exception-governance strip) instead of writing
+  // null, so the stored row shape is preserved exactly.
+  if (patch && patch.unset) Object.keys(patch.unset).forEach(f => out.push({ field: f, value: undefined, unset: true }));
+  if (patch && patch.maps) MAP_FIELDS.forEach(m => {
+    const mm = patch.maps[m];
+    if (isPlainRow(mm)) Object.keys(mm).forEach(k => out.push({ map: m, key: k, value: mm[k] }));
+  });
+  return out;
+}
+function applyPaths(row, paths) {
+  const next = { ...row };
+  paths.forEach(p => {
+    if (p.map) { next[p.map] = { ...(isPlainRow(next[p.map]) ? next[p.map] : {}), [p.key]: p.value }; }
+    else if (p.unset) { delete next[p.field]; }
+    else { next[p.field] = p.value; }
+  });
+  return next;
+}
+// Build the narrow semantic intent for a revenue save. Only the fields the user
+// actually changed are patched, so a concurrent food-cost edit to a DIFFERENT field
+// of the SAME row survives (and vice versa). `base` records exactly the pre-state the
+// user edited from, which is what the transaction uses for conflict detection.
+function buildEntryUpsertIntent(prev, next, opts) {
+  const o = opts || {};
+  const dateKey = entryDateKey(next && next.date);
+  if (!dateKey) return { status: "invalid_date" };
+  if (!prev) {
+    // A create must carry a pre-generated, collision-resistant id BEFORE submission,
+    // so a transaction retry reuses the identical id (idempotent create).
+    if (!isValidEntryId(o.newId)) return { status: "invalid_identity" };
+    const newRow = { ...next, date: dateKey, id: o.newId };
+    return { type: "upsert_entry", opId: o.opId, target: { id: o.newId },
+             createIfMissing: true, newRow, patch: {}, base: {} };
+  }
+  // An edit targets the base row's IMMUTABLE id. A row without one cannot be
+  // addressed at all — the node needs the approved offline data action first.
+  if (!isValidEntryId(prev.id)) return { status: "entry_identity_required" };
+  const fields = {}, baseFields = {}, unset = {}, maps = {}, baseMaps = {};
+  // R10-GATE-003: `date` is an ORDINARY PATCHED FIELD. Previously it was skipped in
+  // both diff loops while the target was derived from the NEW date, so a date change
+  // silently returned `empty_patch` → the UI reported success and nothing moved.
+  if (!sameVal(prev.date, dateKey)) { fields.date = dateKey; baseFields.date = prev.date; }
+  Object.keys(next).forEach(k => {
+    if (k === "date" || k === "id") return;
+    if (MAP_FIELDS.indexOf(k) !== -1) {
+      const nm = isPlainRow(next[k]) ? next[k] : {};
+      const pm = isPlainRow(prev[k]) ? prev[k] : {};
+      Object.keys(nm).forEach(mk => { if (!sameVal(pm[mk], nm[mk])) { maps[k] = maps[k] || {}; baseMaps[k] = baseMaps[k] || {}; maps[k][mk] = nm[mk]; baseMaps[k][mk] = pm[mk]; } });
+      return;
+    }
+    if (!sameVal(prev[k], next[k])) { fields[k] = next[k]; baseFields[k] = prev[k]; }
+  });
+  // Fields the save intentionally removes (exception strip). `id` is immutable and
+  // can never be unset or rewritten by an ordinary edit.
+  Object.keys(prev).forEach(k => {
+    if (k === "date" || k === "id") return;
+    if (MAP_FIELDS.indexOf(k) !== -1) return;
+    if (!(k in next) && prev[k] !== undefined) { unset[k] = true; baseFields[k] = prev[k]; }
+  });
+  return { type: "upsert_entry", opId: o.opId, target: { id: prev.id },
+           patch: { fields, maps, unset }, base: { fields: baseFields, maps: baseMaps },
+           createIfMissing: false };
+}
+// ── THE TRANSACTION TRANSFORMATION (pure) ────────────────────────────────────
+// currentRows: the parsed remote array, or null when the node is absent.
+// Returns a typed outcome; `rows` is present ONLY for a real commit.
+function applyEntryIntent(currentRows, intent) {
+  if (!intent || typeof intent !== "object") return { ok: false, status: "invalid_intent" };
+  // WHOLE-NODE precondition first: malformed / duplicate-id / any missing id blocks
+  // every ordinary mutation. An empty or absent node is valid and may accept a create.
+  const v = validateEntriesNode(currentRows);
+  if (v.status) return { ok: false, status: v.status, missingIdCount: v.missingIdCount, total: v.total, id: v.id, index: v.index };
+  const rows = v.rows;
+  const absent = !!v.empty && (currentRows === null || currentRows === undefined);
+
+  if (intent.type === "clear_all") {
+    // Destructive: requires the fingerprint of the COMPLETE node content the user
+    // confirmed. Any concurrent change (value, field, row order, duplicate) aborts.
+    if (typeof intent.expectedNodeFingerprint !== "string") return { ok: false, status: "precondition_missing" };
+    const actual = contentFingerprint(rows);
+    if (actual !== intent.expectedNodeFingerprint) return { ok: false, status: "precondition_failed", actual };
+    if (rows.length === 0) return { ok: true, noop: true, status: "already_empty" };
+    return { ok: true, rows: [], destructive: true };
+  }
+
+  if (intent.type === "delete_entry") {
+    if (absent) return { ok: false, status: "target_not_found" };
+    const t = resolveEntryTarget(rows, intent.target);
+    if (t.status) return { ok: false, status: t.status, count: t.count };
+    const row = rows[t.index];
+    // A stale delete must not remove a record edited after the user's base version.
+    if (intent.base) {
+      const bad = patchPaths({ fields: intent.base.fields, maps: intent.base.maps })
+        .filter(p => !sameVal(readPath(row, p), p.value));
+      if (bad.length) return { ok: false, status: "conflict", conflictPaths: bad.map(p => p.map ? p.map + "." + p.key : p.field) };
+    }
+    return { ok: true, rows: rows.filter((_, i) => i !== t.index) };
+  }
+
+  if (intent.type === "upsert_entry" || intent.type === "patch_supplier") {
+    const t = absent ? { status: "target_not_found" } : resolveEntryTarget(rows, intent.target);
+    if (t.status && t.status !== "target_not_found") return { ok: false, status: t.status, count: t.count };
+    // A CREATE whose pre-generated id already exists must settle as create-idempotency
+    // (identical → no-op) or fail closed (different content → conflict). It must never
+    // fall through to the patch branch and report a false `empty_patch` success.
+    if (intent.createIfMissing && isPlainRow(intent.newRow) && !t.status) {
+      const existingRow = rows[t.index];
+      // Identical create → genuinely idempotent. Any difference → a DISTINCT
+      // fail-closed identity collision. Never reinterpreted as an edit, never patched,
+      // never `empty_patch`, never a success.
+      return stableStringify(existingRow) === stableStringify(intent.newRow)
+        ? { ok: true, noop: true, status: "already_created" }
+        : { ok: false, status: "invalid_identity", reason: "id_collision", id: intent.newRow.id };
+    }
+    if (t.status === "target_not_found") {
+      if (!intent.createIfMissing) return { ok: false, status: "target_not_found" };
+      const nr = intent.newRow;
+      if (!isPlainRow(nr) || !entryDateKey(nr.date)) return { ok: false, status: "invalid_new_row" };
+      if (!isValidEntryId(nr.id)) return { ok: false, status: "invalid_identity" };
+      // Idempotent create: the SAME pre-generated id reused on a transaction retry is
+      // a no-op when identical, and fails closed when the content differs.
+      const existing = rows.filter(r => isPlainRow(r) && r.id != null && String(r.id) === String(nr.id));
+      if (existing.length > 1) return { ok: false, status: "duplicate_id", count: existing.length };
+      if (existing.length === 1) {
+        return stableStringify(existing[0]) === stableStringify(nr)
+          ? { ok: true, noop: true, status: "already_created" }
+          : { ok: false, status: "invalid_identity", reason: "id_collision", id: nr.id };
+      }
+      // A duplicate business DATE is legal — rows are distinguished by id, and the
+      // existing row is preserved untouched.
+      return { ok: true, rows: rows.concat([nr]), created: true };
+    }
+    const row = rows[t.index];
+    if (!isPlainRow(row)) return { ok: false, status: "malformed_target" };
+    const paths = patchPaths(intent.patch);
+    if (paths.some(p => !p.map && p.field === "id")) return { ok: false, status: "invalid_identity", reason: "id_is_immutable" };
+    if (!paths.length) return { ok: true, noop: true, status: "empty_patch" };
+    const basePaths = patchPaths({ fields: intent.base && intent.base.fields, maps: intent.base && intent.base.maps });
+    const baseAt = (p) => { const m = basePaths.find(b => (b.map ? (b.map === p.map && b.key === p.key) : (b.field === p.field))); return m ? m.value : undefined; };
+    const conflicts = [], effective = [];
+    paths.forEach(p => {
+      const remote = readPath(row, p);
+      const desired = p.unset ? undefined : p.value;
+      if (sameVal(remote, desired)) return;             // already at the desired value → idempotent
+      if (!sameVal(remote, baseAt(p))) conflicts.push(p); // remote moved away from the user's base → conflict
+      else effective.push(p);
+    });
+    if (conflicts.length) return { ok: false, status: "conflict", conflictPaths: conflicts.map(p => p.map ? p.map + "." + p.key : p.field) };
+    if (!effective.length) return { ok: true, noop: true, status: "already_applied" };
+    const nextRow = applyPaths(row, effective);
+    const nextRows = rows.slice();
+    nextRows[t.index] = nextRow;                        // in place: order, duplicates and every other row preserved verbatim
+    return { ok: true, rows: nextRows };
+  }
+  return { ok: false, status: "unsupported_intent" };
+}
+// Parse the stored {_v:"<json>"} envelope WITHOUT repairing it.
+// Returns {absent} | {rows} | {malformed}
+function parseEntriesNode(raw) {
+  if (raw === null || raw === undefined) return { absent: true };
+  let json = null;
+  if (typeof raw === "object" && !Array.isArray(raw) && typeof raw._v === "string") json = raw._v;
+  else if (typeof raw === "string") json = raw;
+  else if (Array.isArray(raw)) return { rows: raw };
+  else return { malformed: true };
+  let parsed;
+  try { parsed = JSON.parse(json); } catch (_) { return { malformed: true }; }
+  if (!Array.isArray(parsed)) return { malformed: true };
+  return { rows: parsed };
+}
+// ── REMOTE ATOMIC ADAPTER ────────────────────────────────────────────────────
+// Wraps the RTDB transaction primitive. io.transact(tenantId, key, txnFn) must run
+// txnFn(rawCurrent) -> newRawValue | undefined(abort) atomically with CAS retry.
+function createRemoteEntriesMutator(io) {
+  return {
+    mutate: async (intent, ctx) => {
+      if (!ctx || !ctx.tenantId || !ctx.bizId) return { status: "blocked_no_owner" };
+      if (!io.selection.isLive(ctx)) return { status: "stale" };
+      const key = `biz:${ctx.bizId}:entries`;
+      let outcome = null;
+      let runs = 0;
+      try {
+        const res = await io.transact(ctx.tenantId, key, (raw) => {
+          runs++;
+          const parsed = parseEntriesNode(raw);
+          if (parsed.malformed) { outcome = { ok: false, status: "malformed_remote" }; return undefined; }
+          const r = applyEntryIntent(parsed.absent ? null : parsed.rows, intent);
+          outcome = r;
+          if (r.ok && r.rows) return { _v: JSON.stringify(r.rows) };
+          return undefined;                        // abort: conflict, ambiguity, malformed or no-op
+        });
+        // A transaction that aborts is NOT a failure of the transport.
+        if (!outcome) return { status: "failed", error: "transaction_never_ran", runs };
+        if (outcome.ok && outcome.rows) {
+          if (res && res.committed === false) return { status: "failed", error: "not_committed", runs };
+          return { status: "committed", rows: outcome.rows, runs, created: !!outcome.created, destructive: !!outcome.destructive };
+        }
+        if (outcome.ok && outcome.noop) return { status: "committed_idempotent", reason: outcome.status, runs };
+        // R10-GATE-010: the transformation classifies identity failures precisely
+        // (e.g. `id_collision` vs a generic invalid identity). Propagate that detail so
+        // the caller/UI can present a distinct create-ID-collision outcome. Additive
+        // only: the top-level fail-closed status and reason are unchanged, and `detail`
+        // is set solely from the transformation's own typed classification.
+        return { status: outcome.status === "conflict" ? "conflict" : "blocked", reason: outcome.status,
+                 detail: outcome.reason, conflictPaths: outcome.conflictPaths, count: outcome.count, runs };
+      } catch (err) {
+        return { status: "failed", error: (err && err.message) || "transaction_failed", runs };
+      }
+    },
+  };
+}
+
+window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, createPersistence, createEntriesWriteCoordinator, createSaveOwnership, createInsightReadback, createInsightUiLoader, createSaveUiRunner, createExceptionOwnership, createSupplierResultOwnership, applySupplierWriteResult, executeEntrySave, createRemoteEntriesMutator, applyEntryIntent, resolveEntryTarget, parseEntriesNode, contentFingerprint, stableStringify, buildEntryUpsertIntent, describeSaveOutcome, validateEntriesNode, isValidEntryId, generateEntryId });
 const TARGETS = {
   salesGrowthPct: 5,
   foodCostPct:   33,
@@ -3509,35 +3924,51 @@ function PilotDashboard() {
   // callers must not call it directly — every full-blob entries write goes through
   // entriesWriteCoordRef.current.submit(...). (persistFixed stays direct: fixed is a
   // different destination.)
-  const persistEntriesRaw = (rows, ctx) => persistenceRef.current.persistEntries(rows, ctx);
   const persistFixed = (fixed, ctx) => persistenceRef.current.persistFixed(fixed, ctx);
   // R6: ONE destination-wide entries lane. supplier / main-save / delete / clear-all /
   // employee-labor / self-heal all route through this single instance, so no two
   // full-blob writes to biz:{bizId}:entries can overlap. It is the exact code the
   // tests execute (via window.MarjinSaveLifecycle.createEntriesWriteCoordinator).
+  // R10: the remote-atomic adapter. EVERY ordinary entries mutation goes through an
+  // RTDB transaction against the latest remote value — never a client snapshot write.
+  const entriesMutatorRef = useRef(null);
+  if (!entriesMutatorRef.current) entriesMutatorRef.current = window.MarjinSaveLifecycle.createRemoteEntriesMutator({
+    selection: selectionCtrlRef.current,
+    transact: (tenantId, key, txnFn) => window.storage.mutateFor(tenantId, key, txnFn),
+  });
   const entriesWriteCoordRef = useRef(null);
   if (!entriesWriteCoordRef.current) entriesWriteCoordRef.current = window.MarjinSaveLifecycle.createEntriesWriteCoordinator({
     selection: selectionCtrlRef.current,
     canonicalize: window.MarjinEntries.canonicalizeEntries,
-    upsert: window.MarjinEntries.upsertEntryByDate,
     entryDateKey: window.MarjinEntries.entryDateKey,
-    fingerprint: (rows) => JSON.stringify(rows), // deterministic: rows are already canonical
+    fingerprint: (rows) => JSON.stringify(rows),
+    contentFingerprint: window.MarjinSaveLifecycle.contentFingerprint,
     applyRows: setEntries,
-    commit: (rows, ctx) => persistEntriesRaw(rows, ctx),
+    mutate: (intent, ctx) => entriesMutatorRef.current.mutate(intent, ctx),
   });
+  // Collision-resistant id generated BEFORE submission so a transaction retry reuses
+  // it. Never derived from a date, counter, index or fingerprint.
+  const newRowId = () => window.MarjinSaveLifecycle.generateEntryId();
   // R6: employee daily-labor is an ENTRIES transform routed through the SAME lane —
   // it upserts payroll onto the LATEST desired canonical rows (never a stale snapshot)
   // and can never overlap a concurrent supplier / main-save / delete write.
   const submitLaborEntry = (date, val) => {
     const key = window.MarjinEntries.entryDateKey(date);
     if (!key) return Promise.resolve({ status: "invalid_date" });
-    return entriesWriteCoordRef.current.submit({
-      baseRows: entries,
-      transform: (desired) => {
-        const existing = desired.find(e => window.MarjinEntries.entryDateKey(e && e.date) === key);
-        const nextEntry = existing ? { ...existing, payroll: val } : { ...EMPTY_ENTRY, date: key, payroll: val };
-        return window.MarjinEntries.upsertEntryByDate(desired, nextEntry, existing ? key : null);
-      },
+    // Identity: the row's immutable id. Ambiguous or id-less rows are refused here,
+    // never resolved by date.
+    const hits = entries.filter(e => window.MarjinEntries.entryDateKey(e && e.date) === key);
+    if (hits.length > 1) return Promise.resolve({ status: "blocked", reason: "ambiguous_date_requires_id" });
+    const existing = hits[0] || null;
+    if (existing && !window.MarjinSaveLifecycle.isValidEntryId(existing.id)) return Promise.resolve({ status: "blocked_entry_identity_required" });
+    const freshId = newRowId();
+    return entriesWriteCoordRef.current.submitIntent({
+      type: "upsert_entry",
+      target: { id: existing ? existing.id : freshId },
+      patch: { fields: { payroll: val } },
+      base: { fields: { payroll: existing ? existing.payroll : undefined } },
+      createIfMissing: !existing,
+      newRow: existing ? undefined : { ...EMPTY_ENTRY, id: freshId, date: key, payroll: val },
     });
   };
   const saveOwnershipCtrlRef = useRef(null);
@@ -4383,8 +4814,21 @@ function PilotDashboard() {
         // R6: main save is a WHOLESALE REPLACE routed through the ONE destination lane
         // (apply:false — executeEntrySave applies canonical itself). It is serialized
         // behind any pending supplier/other entries write and, being newest, wins.
-        persistRows: (rows2, c2) => entriesWriteCoordRef.current.submit({ rows: rows2, apply: false })
-          .then(r => ({ ok: r.status === "applied", canonical: r.canonical || rows2, stale: r.status === "stale" || r.status === "cancelled_selection_changed" })),
+        newRowId,
+        persistMutation: (intent2, c2) => entriesWriteCoordRef.current.submitIntent(intent2)
+          .then(r => ({
+            ok: r.status === "committed" || r.status === "committed_idempotent",
+            canonical: r.rows,
+            status: r.status,
+            conflict: r.status === "conflict",
+            blocked: typeof r.status === "string" && r.status.indexOf("blocked_") === 0,
+            stale: r.status === "stale" || r.status === "cancelled_selection_changed",
+            // R10-GATE-010: keep the transformation's own precise classification
+            // (`r.detail`, e.g. id_collision) ahead of the coarser `r.reason`, so the
+            // save UI can present a distinct create-ID-collision outcome.
+            reason: r.reason,
+            detail: r.detail || r.reason || r.error || (r.conflictPaths && r.conflictPaths.join(",")),
+          })),
         applyRows: setEntries,
         reloadExceptions: (c2) => loadEntryExceptions(c2),
         rebuildInsights: (date2, c2) => rebuildInsightsAfterEntrySave(date2, c2), // exactly one rebuild call
@@ -4416,17 +4860,47 @@ function PilotDashboard() {
     const key = window.MarjinEntries.entryDateKey(date);
     if(!key) return;
     if (!entries.some(e => window.MarjinEntries.entryDateKey(e && e.date) === key)) return; // not present in current view
-    const res = await entriesWriteCoordRef.current.submit({
-      baseRows: entries,
-      transform: (desired) => desired.filter(e => window.MarjinEntries.entryDateKey(e && e.date) !== key),
+    const hits = entries.filter(e => window.MarjinEntries.entryDateKey(e && e.date) === key);
+    if (hits.length > 1) { setEntrySaveError("קיימות מספר רשומות לתאריך זה — בחר את הרשומה למחיקה."); return; }
+    const target = hits[0] || null;
+    if (!target || !window.MarjinSaveLifecycle.isValidEntryId(target.id)) {
+      setEntrySaveError(window.MarjinSaveLifecycle.describeSaveOutcome("blocked_entry_identity_required", false)); return;
+    }
+    const res = await entriesWriteCoordRef.current.submitIntent({
+      type: "delete_entry",
+      target: { id: target.id },
+      // A stale delete must not remove a record that changed after the user's view.
+      base: target ? { fields: { sales: target.sales, deliveries: target.deliveries, other_income: target.other_income } } : undefined,
     });
-    if (res && res.status === "persist_failed" && res.latest) {
+    if (res && res.status !== "committed" && res.status !== "committed_idempotent" && res.latest) {
       // Never revert to an older value; a failed delete converges on the next listener
-      // echo. Surface, do not silently ignore.
+      // echo. R10-GATE-013: SURFACE it through the production mapper — a console
+      // warning is not an operator surface, and this is the delete the UI invokes.
+      // Stale and superseded results stay silent, per the accepted outcome policy.
+      if (res.status !== "stale" && res.status !== "cancelled_selection_changed") {
+        setEntrySaveError(window.MarjinSaveLifecycle.describeSaveOutcome(res, false));
+      }
       try { console.warn("[delete] entries write failed; will reconcile on next sync"); } catch(_){}
     }
   };
 
+  // R10-GATE-006: duplicate-date rows are distinct records. This targets ONE of them
+  // by its immutable id so duplicates are individually deletable.
+  const deleteEntryById = async (rowId) => {
+    if (!window.MarjinSaveLifecycle.isValidEntryId(rowId)) {
+      setEntrySaveError(window.MarjinSaveLifecycle.describeSaveOutcome("blocked_entry_identity_required", false)); return;
+    }
+    const target = entries.find(e => e && e.id === rowId) || null;
+    if (!target) return;
+    const res = await entriesWriteCoordRef.current.submitIntent({
+      type: "delete_entry", target: { id: rowId },
+      base: { fields: { sales: target.sales, deliveries: target.deliveries, other_income: target.other_income } },
+    });
+    const st = res && res.status;
+    // R10-GATE-010: pass the whole typed outcome so a precise identity classification
+    // is presented rather than the catch-all blocked text.
+    if (st !== "committed" && st !== "committed_idempotent") setEntrySaveError(window.MarjinSaveLifecycle.describeSaveOutcome(res || "failed", false));
+  };
   // Filter entries to current month only -- dashboard always shows current month
   // Derive which businesses this user can see
   const isSuperOwner = loggedInUser?.role === "super_owner" || loggedInUser?.role === "owner";
@@ -5367,9 +5841,17 @@ function PilotDashboard() {
               // submission's token still current — so an OLD-selection or superseded
               // result can never set/clear the CURRENT selection's error surface.
               const token = supplierResultOwnershipRef.current.begin(captureSelectionCtx());
-              const res = await entriesWriteCoordRef.current.submitSupplierEdit({ supId, date, val, rows: entries, emptyEntry: EMPTY_ENTRY });
+              // R10: carry the row's stable id (when present) and the exact BASE value
+              // the user edited from, so the remote transaction can detect a conflict.
+              const __row = entries.find(e => window.MarjinEntries.entryDateKey(e && e.date) === window.MarjinEntries.entryDateKey(date)) || null;
+              const __base = __row && __row.supplier_payments ? __row.supplier_payments[supId] : undefined;
+              const res = await entriesWriteCoordRef.current.submitSupplierEdit({
+                supId, date, val, emptyEntry: EMPTY_ENTRY,
+                targetId: __row && __row.id != null ? __row.id : undefined,
+                baseValue: __base, newId: newRowId(),
+              });
               supplierResultOwnershipRef.current.settle(token, res, selectionCtrlRef.current, {
-                setError: () => setSupplierWriteError("שמירת התשלום לספק נכשלה. הערך מוצג אך לא נשמר — נסה שוב."),
+                setError: (msg) => setSupplierWriteError(msg || "שמירת התשלום לספק נכשלה. הערך מוצג אך לא נשמר — נסה שוב."),
                 clearError: () => setSupplierWriteError(""),
               });
             };
@@ -5860,7 +6342,23 @@ function PilotDashboard() {
 	              <div style={{fontSize:12,color:"#94A3B8",marginTop:3}}>{monthEntries.length} ימים מוזנים · {MONTH_NAMES[MONTH]}</div>
             </div>
             {entries.length>0&&(
-              <button onClick={()=>{if(window.confirm("למחוק את כל הרשומות?")){ entriesWriteCoordRef.current.submit({ rows: [], allowDrop: true }); }}}
+              <button onClick={async ()=>{
+                  if(!window.confirm("למחוק את כל הרשומות?")) return;
+                  // R10 (R9-FIND-004): destructive clear-all is a DEDICATED typed
+                  // operation carrying the fingerprint of the COMPLETE content the user
+                  // just confirmed. If anything changed remotely after confirmation the
+                  // transaction aborts, and the outcome is always surfaced.
+                  const __res = await entriesWriteCoordRef.current.submitClearAll({
+                    expectedNodeFingerprint: entriesWriteCoordRef.current.currentFingerprint(),
+                    confirmToken: newRowId(),
+                  });
+                  const __st = __res && __res.status;
+                  if (__st !== "committed" && __st !== "committed_idempotent") {
+                    setEntrySaveError(__st === "blocked" && __res.reason === "precondition_failed"
+                      ? "הנתונים השתנו מאז האישור — המחיקה בוטלה ולא בוצע שינוי."
+                      : window.MarjinSaveLifecycle.describeSaveOutcome(__res || "failed", false));
+                  }
+                }}
                 style={{background:"none",border:"none",color:"#CBD5E1",padding:"4px 8px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
                 מחק הכל
               </button>
@@ -5873,6 +6371,20 @@ function PilotDashboard() {
 	                  if(e?.date && e.date.startsWith(monthPrefix) && !entriesByDate.has(e.date)) {
 	                    entriesByDate.set(e.date, {...e,_idx:i,__missing:false});
 	                  }
+	                });
+	                // R10-GATE-015 (D-GAP-1): rows beyond the first for a business date are
+	                // PRESERVED by R10 (never collapsed on write) but this list keeps only the
+	                // first row per date, so a preserved duplicate was neither visible nor
+	                // removable. Collect the extras per date; the day card lists them and offers
+	                // an id-addressed, explicitly confirmed, single-row delete.
+	                const dupExtras = new Map();
+	                entries.forEach((e,i)=>{
+	                  if(!(e?.date && e.date.startsWith(monthPrefix))) return;
+	                  const head = entriesByDate.get(e.date);
+	                  if(!head || head._idx === i) return;
+	                  const list = dupExtras.get(e.date) || [];
+	                  list.push({...e,_idx:i});
+	                  dupExtras.set(e.date, list);
 	                });
 	                const sorted = Array.from({length:DAY_OF_MONTH},(_,i)=>{
 	                  const date = `${YEAR}-${MONTH_STR}-${String(i+1).padStart(2,"0")}`;
@@ -6018,6 +6530,30 @@ function PilotDashboard() {
 	                          </button>
 	                        )}
                       </div>
+
+                      {/* R10-GATE-015 (D-GAP-1): preserved duplicate rows for this business
+                          date. Individually addressable by immutable id — never by position —
+                          and removable only by an explicit, confirmed, single-row action. */}
+                      {!isMissing&&(dupExtras.get(e.date)||[]).length>0&&(
+                        <div style={{marginTop:10,background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:8,padding:"8px 12px"}}>
+                          <div style={{fontSize:11,fontWeight:700,color:"#B45309",marginBottom:6}}>
+                            {(dupExtras.get(e.date)||[]).length+1} רשומות קיימות לתאריך זה — הכרטיס מציג את הראשונה
+                          </div>
+                          {(dupExtras.get(e.date)||[]).map(dup=>(
+                            <div key={dup.id||dup._idx} style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:"#92400E",padding:"3px 0"}}>
+                              <span style={{flex:1,minWidth:0}}>
+                                הכנסות {fmt((Number(dup.sales)||0)+(Number(dup.deliveries)||0)+(Number(dup.other_income)||0))} · עלות כ״א {fmt(Number(dup.payroll)||0)}
+                              </span>
+                              <button
+                                onClick={()=>{ if(!window.confirm(`למחוק רשומה כפולה זו לתאריך ${e.date}? נמחקת רשומה אחת בלבד, והפעולה אינה ניתנת לביטול.`)) return; deleteEntryById(dup.id); }}
+                                data-testid="dup-delete"
+                                style={{background:"none",border:"1px solid #FDE68A",borderRadius:6,color:"#B91C1C",cursor:"pointer",padding:"2px 8px",fontFamily:"inherit",fontSize:11}}>
+                                מחק רשומה זו
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   );
                 };
@@ -6560,8 +7096,22 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLa
   // R6: employee daily-labor is an ENTRIES transform routed through the ONE shared
   // destination lane (submitLaborEntry). It upserts payroll onto the latest desired
   // canonical rows, never writes fixed, and cannot overlap another entries writer.
+  // R10-GATE-014 (L-GAP-1): the typed outcome is CONSUMED, not discarded. Every
+  // non-commit result reaches the operator through the same production mapper the
+  // dashboard uses; a commit clears the banner. Silence is never success: the input
+  // renders from stored `entries`, so a refused write leaves the stored value on
+  // screen and the banner explains why.
+  const [laborSaveError, setLaborSaveError] = useState("");
   const setDailyLabor = async (date, val) => {
-    if (typeof submitLaborEntry === "function") await submitLaborEntry(date, val);
+    if (typeof submitLaborEntry !== "function") return undefined;
+    const res = await submitLaborEntry(date, val);
+    const st = res && res.status;
+    // A selection change is neither an error nor a success — it stays silent and
+    // leaves any existing banner alone, exactly as the delete call site does.
+    if (st === "stale" || st === "cancelled_selection_changed") return res;
+    if (st === "committed" || st === "committed_idempotent") { setLaborSaveError(""); return res; }
+    setLaborSaveError(window.MarjinSaveLifecycle.describeSaveOutcome(res || "failed", false));
+    return res;
   };
 
   const globalDailyTotal = globalEmps.reduce((a,e)=>a+Math.round(Number(e.monthlySalary)/emDays),0);
@@ -6618,6 +7168,9 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLa
           ))}
         </div>
       )}
+
+      {/* R10-GATE-014 (L-GAP-1): operator-facing surface for a refused labor write. */}
+      {laborSaveError && <div data-testid="labor-save-error" style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:6,padding:"10px 14px",textAlign:"center",fontWeight:600,color:"#B91C1C",fontSize:13,marginBottom:8}}>{laborSaveError}</div>}
 
       {/* לוח הזנה יומית */}
       <div style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:8,overflow:"hidden",marginBottom:12}}>
