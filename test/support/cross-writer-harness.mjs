@@ -371,16 +371,23 @@ export function makeClient(remote, name, opts = {}) {
         newId: o2.newId || nextTestId(),
       }), `supplier(${date}/${supId})`);
     },
-    // Delete addressed by id. `baseFields` declares exactly which paths the user's
-    // view is based on; the stale-delete guard is evaluated over those paths only.
+    // Delete addressed by id, built by the PRODUCTION builder, so the whole canonical
+    // target row is the precondition (R10.1-GATE-017). `legacyBaseFields` exists only
+    // so a negative control can still submit the superseded partial-base shape and
+    // demonstrate what it failed to protect; nothing else uses it.
     del(date, opts2) {
       const o2 = opts2 || {};
       const rows = lane._state().desired || [];
       const prev = o2.byId ? (rows.find(r => r && r.id === o2.byId) || null)
                            : (rows.filter(r => r && r.date === date)[0] || null);
       if (!prev) return Promise.resolve({ status: "blocked", reason: "target_not_found" });
-      const base = o2.baseFields ? { fields: o2.baseFields(prev) } : { fields: { sales: prev.sales } };
-      return guard(lane.submitIntent({ type: "delete_entry", target: { id: prev.id }, base }), `del(${prev.id})`);
+      if (o2.legacyBaseFields) {
+        return guard(lane.submitIntent({ type: "delete_entry", target: { id: prev.id },
+          base: { fields: o2.legacyBaseFields(prev) } }), `del-legacy(${prev.id})`);
+      }
+      const intent = ML.buildEntryDeleteIntent(prev, {});
+      if (intent.status) return Promise.resolve({ status: intent.status });
+      return guard(lane.submitIntent(intent), `del(${prev.id})`);
     },
     clearAll(opts2) {
       const o2 = opts2 || {};

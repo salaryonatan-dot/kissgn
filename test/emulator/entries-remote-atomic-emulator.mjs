@@ -567,6 +567,67 @@ async function main() {
       return `cold=${r.status}/${r.reason || ""} (fail-closed), warm=${r2.status}`;
     });
 
+  // ── F. R10.1: the stale-delete precondition, on the real transport ─────────
+  await run("EMU-F-stale-delete-supplier", "stale-delete",
+    "Codex's schedule: a delete from a stale view must not erase a concurrent supplier payment",
+    async () => {
+      await reseed();
+      const A = await makeClient("manager#1", { name: "A" }).attach();
+      const B = await makeClient("owner#1", { name: "B" }).attach();
+      // A opens the row; this is the row its delete will be based on.
+      const prevAtView = (A.lane._state().desired || []).find((r) => r.date === DATE_A);
+      // B commits a supplier payment to that same row.
+      const rB = await B.direct({ type: "upsert_entry", target: { id: prevAtView.id },
+        patch: { maps: { supplier_payments: { sup9: 500 } } }, base: { maps: { supplier_payments: {} } } });
+      expect(COMMITTED(rB.status), `the supplier write must commit first, got ${rB.status}`);
+      const before = await readRaw("tenantA", "bizA");
+      // A now deletes, from the view it had BEFORE B's write.
+      const rA = await A.direct(ML.buildEntryDeleteIntent(prevAtView, {}));
+      expectEq(rA.status, "conflict", `the stale delete must be refused, got ${rA.status}`);
+      expect(Array.isArray(rA.conflictPaths) && rA.conflictPaths.includes("supplier_payments.sup9"),
+        `the conflict must name the concurrent path, got ${JSON.stringify(rA.conflictPaths)}`);
+      const rows = await readRows("tenantA", "bizA");
+      const row = rows.find((r) => r.id === prevAtView.id);
+      expect(!!row, "the row must still exist");
+      expectEq(row.supplier_payments.sup9, 500, "the concurrent supplier payment survives");
+      expectEq(rows.length, 160, "the history is intact");
+      expectEq(JSON.stringify(await readRaw("tenantA", "bizA")), JSON.stringify(before), "the node is byte-intact");
+      return `refused with conflictPaths=${JSON.stringify(rA.conflictPaths)}`;
+    });
+
+  await run("EMU-F-delete-unchanged", "stale-delete",
+    "an unchanged row is still deleted normally over the real transport",
+    async () => {
+      await reseed();
+      const A = await makeClient("manager#1", { name: "A" }).attach();
+      const prev = (A.lane._state().desired || []).find((r) => r.date === DATE_A);
+      const r = await A.direct(ML.buildEntryDeleteIntent(prev, {}));
+      expect(COMMITTED(r.status), `a legitimate delete must commit, got ${r.status} ${r.reason || ""}`);
+      const rows = await readRows("tenantA", "bizA");
+      expectEq(rows.length, 159, "exactly one row removed");
+      expect(!rows.some((x) => x.id === prev.id), "and it is the addressed one");
+      return "committed";
+    });
+
+  await run("EMU-F-unrelated-row", "stale-delete",
+    "a concurrent change to a DIFFERENT row does not make a valid delete stale",
+    async () => {
+      await reseed();
+      const A = await makeClient("manager#1", { name: "A" }).attach();
+      const B = await makeClient("owner#1", { name: "B" }).attach();
+      const prev = (A.lane._state().desired || []).find((r) => r.date === DATE_A);
+      const otherRow = (B.lane._state().desired || []).find((r) => r.date === DATE_B);
+      const rB = await B.direct({ type: "upsert_entry", target: { id: otherRow.id },
+        patch: { fields: { sales: 4242 } }, base: { fields: { sales: otherRow.sales } } });
+      expect(COMMITTED(rB.status), `the unrelated edit must commit, got ${rB.status}`);
+      const rA = await A.direct(ML.buildEntryDeleteIntent(prev, {}));
+      expect(COMMITTED(rA.status), `the delete must NOT be falsely stale, got ${rA.status} ${JSON.stringify(rA.conflictPaths || null)}`);
+      const rows = await readRows("tenantA", "bizA");
+      expect(!rows.some((x) => x.id === prev.id), "the target is gone");
+      expectEq(salesAt(rows, DATE_B), 4242, "and the unrelated edit is intact");
+      return "committed, no false stale";
+    });
+
   // ─── Report ───────────────────────────────────────────────────────────────
   const w = (s, n) => String(s).padEnd(n).slice(0, n);
   console.log("");
@@ -574,7 +635,7 @@ async function main() {
   console.log("-".repeat(120));
   for (const r of results) console.log(`${w(r.id, 26)} ${w(r.area, 22)} ${w(r.status, 6)} ${w(r.ms, 6)} ${r.notes}`);
   console.log("");
-  const EXPECTED_CASES = 16;
+  const EXPECTED_CASES = 19;
   console.log("=== TOTALS ===");
   console.log(`total=${results.length} passed=${results.filter((r) => r.status === "PASS").length} failed=${failures}`);
   if (results.length !== EXPECTED_CASES) {

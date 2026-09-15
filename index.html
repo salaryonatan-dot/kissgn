@@ -2089,6 +2089,35 @@ function buildEntryUpsertIntent(prev, next, opts) {
            patch: { fields, maps, unset }, base: { fields: baseFields, maps: baseMaps },
            createIfMissing: false };
 }
+// R10.1-GATE-017: every semantic difference between two canonical rows, as absolute
+// paths in the same shape `conflictPaths` already uses. Map fields are compared
+// key-by-key so a concurrent supplier payment is named precisely.
+function rowDiffPaths(a, b) {
+  const A = isPlainRow(a) ? a : {}, B = isPlainRow(b) ? b : {};
+  const out = [];
+  Object.keys({ ...A, ...B }).sort().forEach(k => {
+    const av = A[k], bv = B[k];
+    if (MAP_FIELDS.indexOf(k) !== -1 && (isPlainRow(av) || isPlainRow(bv))) {
+      const am = isPlainRow(av) ? av : {}, bm = isPlainRow(bv) ? bv : {};
+      Object.keys({ ...am, ...bm }).sort().forEach(key => { if (!sameVal(am[key], bm[key])) out.push(k + "." + key); });
+      return;
+    }
+    if (!sameVal(av, bv)) out.push(k);
+  });
+  return out;
+}
+// Build the intent for a DELETE. A delete is destructive and irreversible, so its
+// precondition is the COMPLETE canonical row the operator was looking at — not a
+// hand-maintained list of a few fields, which silently stops protecting every field
+// added after it was written. `prev` must be the row as hydrated from the node.
+function buildEntryDeleteIntent(prev, opts) {
+  const o = opts || {};
+  if (!isPlainRow(prev)) return { status: "invalid_intent" };
+  // Identity is the immutable id and only the id — never the business date.
+  if (!isValidEntryId(prev.id)) return { status: "entry_identity_required" };
+  return { type: "delete_entry", opId: o.opId, target: { id: prev.id },
+           base: { row: JSON.parse(stableStringify(prev)) } };
+}
 // ── THE TRANSACTION TRANSFORMATION (pure) ────────────────────────────────────
 // currentRows: the parsed remote array, or null when the node is absent.
 // Returns a typed outcome; `rows` is present ONLY for a real commit.
@@ -2116,11 +2145,19 @@ function applyEntryIntent(currentRows, intent) {
     const t = resolveEntryTarget(rows, intent.target);
     if (t.status) return { ok: false, status: t.status, count: t.count };
     const row = rows[t.index];
-    // A stale delete must not remove a record edited after the user's base version.
-    if (intent.base) {
-      const bad = patchPaths({ fields: intent.base.fields, maps: intent.base.maps })
-        .filter(p => !sameVal(readPath(row, p), p.value));
-      if (bad.length) return { ok: false, status: "conflict", conflictPaths: bad.map(p => p.map ? p.map + "." + p.key : p.field) };
+    // R10.1-GATE-017: a stale delete must not remove a record edited after the user's
+    // base version — for ANY field, not only the ones the call site happened to
+    // declare. A declared-path base protected exactly the paths someone remembered to
+    // list, so a concurrent `supplier_payments` (or any later-added field) change was
+    // erased along with the row while the delete still reported success. The whole
+    // canonical target row is therefore the precondition, and a delete that does not
+    // carry one is refused rather than run with a partial guard. There are no
+    // exclusions: every persisted field of an entry row is client-authored and
+    // semantic; the node holds no server-generated or derived values.
+    const baseRow = intent.base && intent.base.row;
+    if (!isPlainRow(baseRow)) return { ok: false, status: "precondition_missing", reason: "delete_base_row_required" };
+    if (stableStringify(baseRow) !== stableStringify(row)) {
+      return { ok: false, status: "conflict", conflictPaths: rowDiffPaths(baseRow, row) };
     }
     return { ok: true, rows: rows.filter((_, i) => i !== t.index) };
   }
@@ -2238,7 +2275,7 @@ function createRemoteEntriesMutator(io) {
   };
 }
 
-window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, createPersistence, createEntriesWriteCoordinator, createSaveOwnership, createInsightReadback, createInsightUiLoader, createSaveUiRunner, createExceptionOwnership, createSupplierResultOwnership, applySupplierWriteResult, executeEntrySave, createRemoteEntriesMutator, applyEntryIntent, resolveEntryTarget, parseEntriesNode, contentFingerprint, stableStringify, buildEntryUpsertIntent, describeSaveOutcome, validateEntriesNode, isValidEntryId, generateEntryId });
+window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, createPersistence, createEntriesWriteCoordinator, createSaveOwnership, createInsightReadback, createInsightUiLoader, createSaveUiRunner, createExceptionOwnership, createSupplierResultOwnership, applySupplierWriteResult, executeEntrySave, createRemoteEntriesMutator, applyEntryIntent, resolveEntryTarget, parseEntriesNode, contentFingerprint, stableStringify, buildEntryUpsertIntent, buildEntryDeleteIntent, rowDiffPaths, describeSaveOutcome, validateEntriesNode, isValidEntryId, generateEntryId });
 const TARGETS = {
   salesGrowthPct: 5,
   foodCostPct:   33,
@@ -4866,12 +4903,14 @@ function PilotDashboard() {
     if (!target || !window.MarjinSaveLifecycle.isValidEntryId(target.id)) {
       setEntrySaveError(window.MarjinSaveLifecycle.describeSaveOutcome("blocked_entry_identity_required", false)); return;
     }
-    const res = await entriesWriteCoordRef.current.submitIntent({
-      type: "delete_entry",
-      target: { id: target.id },
-      // A stale delete must not remove a record that changed after the user's view.
-      base: target ? { fields: { sales: target.sales, deliveries: target.deliveries, other_income: target.other_income } } : undefined,
-    });
+    // R10.1-GATE-017: the production builder captures the COMPLETE canonical row the
+    // operator is looking at as the delete precondition. A typed builder refusal is
+    // surfaced and nothing is submitted (the R10-GATE-012 rule for builder refusals).
+    const __intent = window.MarjinSaveLifecycle.buildEntryDeleteIntent(target, {});
+    if (__intent.status) {
+      setEntrySaveError(window.MarjinSaveLifecycle.describeSaveOutcome(__intent.status, false)); return;
+    }
+    const res = await entriesWriteCoordRef.current.submitIntent(__intent);
     if (res && res.status !== "committed" && res.status !== "committed_idempotent" && res.latest) {
       // Never revert to an older value; a failed delete converges on the next listener
       // echo. R10-GATE-013: SURFACE it through the production mapper — a console
@@ -4892,10 +4931,13 @@ function PilotDashboard() {
     }
     const target = entries.find(e => e && e.id === rowId) || null;
     if (!target) return;
-    const res = await entriesWriteCoordRef.current.submitIntent({
-      type: "delete_entry", target: { id: rowId },
-      base: { fields: { sales: target.sales, deliveries: target.deliveries, other_income: target.other_income } },
-    });
+    // R10.1-GATE-017: complete canonical base row, same builder as the date-addressed
+    // delete, so both call sites carry the identical concurrency contract.
+    const __intent = window.MarjinSaveLifecycle.buildEntryDeleteIntent(target, {});
+    if (__intent.status) {
+      setEntrySaveError(window.MarjinSaveLifecycle.describeSaveOutcome(__intent.status, false)); return;
+    }
+    const res = await entriesWriteCoordRef.current.submitIntent(__intent);
     const st = res && res.status;
     // R10-GATE-010: pass the whole typed outcome so a precise identity classification
     // is presented rather than the catch-all blocked text.

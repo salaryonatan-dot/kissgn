@@ -21,7 +21,7 @@ import vm from "node:vm";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const html = readFileSync(join(ROOT, "index.html"), "utf8");
 
-const FREEZE = "window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, createPersistence, createEntriesWriteCoordinator, createSaveOwnership, createInsightReadback, createInsightUiLoader, createSaveUiRunner, createExceptionOwnership, createSupplierResultOwnership, applySupplierWriteResult, executeEntrySave, createRemoteEntriesMutator, applyEntryIntent, resolveEntryTarget, parseEntriesNode, contentFingerprint, stableStringify, buildEntryUpsertIntent, describeSaveOutcome, validateEntriesNode, isValidEntryId, generateEntryId });";
+const FREEZE = "window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, createPersistence, createEntriesWriteCoordinator, createSaveOwnership, createInsightReadback, createInsightUiLoader, createSaveUiRunner, createExceptionOwnership, createSupplierResultOwnership, applySupplierWriteResult, executeEntrySave, createRemoteEntriesMutator, applyEntryIntent, resolveEntryTarget, parseEntriesNode, contentFingerprint, stableStringify, buildEntryUpsertIntent, buildEntryDeleteIntent, rowDiffPaths, describeSaveOutcome, validateEntriesNode, isValidEntryId, generateEntryId });";
 
 function loadProductionBlocks() {
   const start = html.indexOf("// ── P0-DATA-01: canonical daily-entries identity & upsert helpers");
@@ -201,7 +201,9 @@ function laneHarness(opts = {}) {
     const id = (opts && opts.id) || idFor(date);
     const prev = rowById(id);
     if (!prev) return Promise.resolve({ status: "blocked", reason: "target_not_found", latest: true });
-    return lane.submitIntent({ type: "delete_entry", target: { id }, base: { fields: { sales: prev.sales } } });
+    const intent = ML.buildEntryDeleteIntent(prev, {});   // R10.1-GATE-017: complete canonical base row
+    if (intent.status) return Promise.resolve({ status: intent.status });
+    return lane.submitIntent(intent);
   };
   const sv = (arr, date, supId) => { const row = (arr || []).find(e => e.date === date); return row && row.supplier_payments ? row.supplier_payments[supId] : undefined; };
   const __h = {

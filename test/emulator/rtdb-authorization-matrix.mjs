@@ -212,41 +212,46 @@ const P = (id, area, identity, patchRoot, value, expect)  => ({ id, area, identi
 
 const TA = "tenants/tenantA";
 const V = { _v: "[9]" };
+// R10.1: `biz:{bizId}:entries` is now validated server-side, so an AUTHORIZATION
+// case on that path must carry a well-formed entries value — otherwise it would be
+// measuring the new validation rule instead of the authorization rule it is for.
+// Every expected allow/deny value below is unchanged; only the payload is.
+const V_ENTRIES = { _v: '[{"id":"00000001-aaaa-4bbb-8ccc-dddddddddddd","date":"2026-07-14","sales":9}]' };
 
 const CASES = [
   // 1) Authentication and tenant isolation
   R("A1-01","auth/tenant","unauth",       `${TA}/biz:bizA:entries`,"deny"),
-  W("A1-02","auth/tenant","unauth",       `${TA}/biz:bizA:entries`,V,"deny"),
+  W("A1-02","auth/tenant","unauth",       `${TA}/biz:bizA:entries`,V_ENTRIES,"deny"),
   R("A1-03","auth/tenant","nomember",     `${TA}/biz:bizA:entries`,"deny"),
-  W("A1-04","auth/tenant","nomember",     `${TA}/biz:bizA:entries`,V,"deny"),
+  W("A1-04","auth/tenant","nomember",     `${TA}/biz:bizA:entries`,V_ENTRIES,"deny"),
   R("A1-05","auth/tenant","viewer",       `tenants/tenantB/biz:bizA:entries`,"deny"),
-  W("A1-06","auth/tenant","owner",        `tenants/tenantB/biz:bizA:entries`,V,"deny"),
+  W("A1-06","auth/tenant","owner",        `tenants/tenantB/biz:bizA:entries`,V_ENTRIES,"deny"),
   R("A1-07","auth/tenant","tenantB",      `${TA}/biz:bizA:entries`,"deny"),
-  W("A1-08","auth/tenant","tenantB",      `${TA}/biz:bizA:entries`,V,"deny"),
+  W("A1-08","auth/tenant","tenantB",      `${TA}/biz:bizA:entries`,V_ENTRIES,"deny"),
   R("A1-09","auth/tenant","owner",        `${TA}`,"deny"),
 
   // 2) biz_access isolation
   R("A2-10","biz_access","viewer",        `${TA}/biz:bizA:entries`,"allow"),
   R("A2-11","biz_access","viewer",        `${TA}/biz:bizB:entries`,"deny"),
   R("A2-12","biz_access","viewer_nobiz",  `${TA}/biz:bizA:entries`,"deny"),
-  W("A2-13","biz_access","manager_nobiz", `${TA}/biz:bizA:entries`,V,"deny"),
-  W("A2-14","biz_access","manager",       `${TA}/biz:bizB:entries`,V,"deny"),
+  W("A2-13","biz_access","manager_nobiz", `${TA}/biz:bizA:entries`,V_ENTRIES,"deny"),
+  W("A2-14","biz_access","manager",       `${TA}/biz:bizB:entries`,V_ENTRIES,"deny"),
   R("A2-15","biz_access","bizAB",         `${TA}/biz:bizA:entries`,"allow"),
   R("A2-16","biz_access","bizAB",         `${TA}/biz:bizB:entries`,"allow"),
-  W("A2-17","biz_access","bizAB",         `${TA}/biz:bizB:entries`,V,"allow"),
+  W("A2-17","biz_access","bizAB",         `${TA}/biz:bizB:entries`,V_ENTRIES,"allow"),
   W("A2-18","biz_access","owner",         `${TA}/biz_access/bizA/u_viewer`,true,"deny"),
   W("A2-19","biz_access","manager",       `${TA}/biz_access/bizA/u_manager`,true,"deny"),
   R("A2-20","biz_access","owner",         `${TA}/biz_access`,"deny"),
 
   // 3) Role tiers
   R("A3-21","roles","shift",              `${TA}/biz:bizA:entries`,"allow"),
-  W("A3-22","roles","shift",              `${TA}/biz:bizA:entries`,V,"deny"),
+  W("A3-22","roles","shift",              `${TA}/biz:bizA:entries`,V_ENTRIES,"deny"),
   W("A3-23","roles","shift",              `${TA}/biz:bizA:tasks`,V,"allow"),
   W("A3-24","roles","viewer",             `${TA}/biz:bizA:tasks`,V,"deny"),
   W("A3-25","roles","manager",            `${TA}/biz:bizA:config`,V,"allow"),
   W("A3-26","roles","viewer",             `${TA}/biz:bizA:config`,V,"deny"),
-  W("A3-27","roles","owner",              `${TA}/biz:bizA:entries`,V,"allow"),
-  W("A3-28","roles","super",              `${TA}/biz:bizA:entries`,V,"allow"),
+  W("A3-27","roles","owner",              `${TA}/biz:bizA:entries`,V_ENTRIES,"allow"),
+  W("A3-28","roles","super",              `${TA}/biz:bizA:entries`,V_ENTRIES,"allow"),
   W("A3-29","roles","viewer",             `${TA}/roles/u_viewer`,"owner","deny"),
   W("A3-30","roles","owner",              `${TA}/roles/u_owner`,"super_owner","deny"),
   W("A3-31","roles","viewer",             `${TA}/biz_access/bizA/u_viewer`,true,"deny"),
@@ -335,8 +340,8 @@ const CASES = [
   W("A12-96","validation","manager",      `${TA}/entries`,{foo:"x"},"deny"),                   // missing _v
   W("A12-97","validation","manager",      `${TA}/entries`,{_v:{nested:1}},"deny"),             // _v not string
   W("A12-98","validation","manager",      `${TA}/entries`,{_v:BIG},"deny"),                    // oversize _v
-  P("A12-99","validation","manager",      TA,{"biz:bizA:entries":{_v:"[2]"}},"allow"),         // single allowed location
-  P("A12-100","validation","manager",     TA,{"biz:bizA:entries":{_v:"[3]"},"roles/u_viewer":"owner"},"deny"), // forbidden roles location
+  P("A12-99","validation","manager",      TA,{"biz:bizA:entries":V_ENTRIES},"allow"),         // single allowed location
+  P("A12-100","validation","manager",     TA,{"biz:bizA:entries":V_ENTRIES,"roles/u_viewer":"owner"},"deny"), // forbidden roles location
 
   // Top-level self-scoped + denied nodes + member-readable
   R("A1-101","auth/tenant","viewer",      `user_tenants/u_viewer`,"allow"),

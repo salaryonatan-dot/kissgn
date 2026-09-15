@@ -468,8 +468,10 @@ test("[delete] G5-D01 committed: the target is the immutable ID, exactly one cal
   const c = e.coordinatorCalls[0];
   assert.equal(c.intent.type, "delete_entry");
   assert.deepEqual(c.intent.target, { id: ID1 }, "the immutable id — never a date, index or fingerprint");
-  assert.deepEqual(c.intent.base.fields, { sales: 101, deliveries: 7, other_income: 3 },
-    "the user's base is declared so a stale delete cannot remove an edited record");
+  // R10.1-GATE-017: the delete precondition is the COMPLETE canonical row, so a
+  // concurrent change to ANY field — including one no call site ever listed — aborts.
+  assert.deepEqual(c.intent.base.row, HIST()[1],
+    "the whole canonical target row is the base, not a hand-maintained field list");
   assert.deepEqual(rows(e), [HIST()[0]], "exactly the surviving row");
   assert.equal(e.state.entrySaveError, "", "no error on success");
 });

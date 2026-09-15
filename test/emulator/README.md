@@ -146,3 +146,55 @@ If the emulator JAR cannot be downloaded on the machine you are running on, copy
 existing `firebase-database-emulator-v*.jar` into `~/.cache/firebase/emulators/`
 before running; the CLI uses the cached copy and needs no network for the emulator
 itself. Java 21+ is required by firebase-tools 15.23.0 regardless.
+
+## Run the entries Rules validation matrix
+
+`entries-rules-validation-matrix.mjs` exercises the server-side `.validate` added for
+`biz:{bizId}:entries` in R10.1 against the REAL Rules engine — 13 allow cases covering
+everything the R10 runtime legitimately writes, and 17 deny cases covering the malformed
+writes an authorized manager could previously make, including the direct `_v` child write
+that would otherwise bypass the parent rule. Like the other two scripts it is not named
+`*.test.mjs`.
+
+```
+env -u GOOGLE_APPLICATION_CREDENTIALS -u FIREBASE_CONFIG -u FIREBASE_DATABASE_URL \
+    GCLOUD_PROJECT=demo-marjin-rules \
+    GOOGLE_CLOUD_PROJECT=demo-marjin-rules \
+    FIREBASE_DATABASE_EMULATOR_HOST=127.0.0.1:9000 \
+    JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home \
+    PATH="/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin:$PATH" \
+    ./node_modules/.bin/firebase emulators:exec \
+      --only database \
+      --project demo-marjin-rules \
+      --config test/emulator/firebase.json \
+      "node test/emulator/entries-rules-validation-matrix.mjs"
+```
+
+Expected:
+
+```
+=== TOTALS ===
+total=30 expected_allow=13 expected_deny=17 passed=30 failed=0
+unexpected_allow=0 unexpected_deny=0 errored=0
+
+ALL CASES PASSED
+```
+
+## Running all three emulator scripts together
+
+Each script reseeds the database root, so they must run ONE AT A TIME against a single
+emulator — never concurrently. A convenient single session:
+
+```
+... emulators:exec --only database --project demo-marjin-rules \
+      --config test/emulator/firebase.json \
+      "node test/emulator/rtdb-authorization-matrix.mjs && \
+       node test/emulator/entries-remote-atomic-emulator.mjs && \
+       node test/emulator/entries-rules-validation-matrix.mjs"
+```
+
+This is also why `node --test test/**/*.mjs` is not a valid regression command for this
+repository: it sweeps the three emulator scripts in with the unit suites, runs them in
+parallel, and — with no emulator — trips their safety gate. Use
+`node --test --test-concurrency=8 test/**/*.test.mjs docs/production-readiness/test/*.test.mjs`
+for regressions and the commands above for the emulator work.

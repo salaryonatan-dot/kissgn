@@ -258,21 +258,25 @@ test("[concurrency] C-10b: DATE edit lands first, then a DELETE whose declared b
     "the record survives the stale delete verbatim");
 });
 
-test("[concurrency] C-10c: DATE edit lands first, then a DELETE whose declared base still holds — the delete legitimately commits", async () => {
-  // CONTRACT NOTE: the stale-delete guard is evaluated over the paths the caller
-  // DECLARES as its base. A delete declaring only `sales` is not invalidated by a
-  // concurrent `date` change, so it commits. That is an explicit, authorised removal,
-  // not silent loss — asserted here so the boundary of the guard is documented and
-  // pinned rather than assumed.
+test("[concurrency] C-10c: DATE edit lands first, then a DELETE built from the pre-edit row — the delete is refused", async () => {
+  // R10.1-GATE-017. This cell previously documented the OPPOSITE: the guard was
+  // evaluated only over the paths a call site happened to declare, so a delete
+  // declaring `sales` alone was not invalidated by a concurrent `date` change and
+  // committed. Codex reproduced the general form of that hole (a concurrent
+  // `supplier_payments` change erased with the row). The precondition is now the
+  // complete canonical row, so the same schedule aborts and the edited record lives.
   const remote = makeRemote(history());
   const A = makeClient(remote, "A").attach().pull();
   const B = makeClient(remote, "B").attach().pull();
   const pEdit = A.upsert("2026-08-01", {}, { byId: ID1, newDate: "2026-08-09" });
-  const pDel = B.del("2026-08-01", { byId: ID1 });               // declares base { sales } only
+  const pDel = B.del("2026-08-01", { byId: ID1 });
   const [rEdit, rDel] = await Promise.all([pEdit, pDel]);
   await settleAll();
-  assert.ok(COMMITTED(rEdit.status) && COMMITTED(rDel.status));
-  exact(remote, [day("2026-08-02", 200), day("2026-08-03", 300)], "exactly the two surviving rows");
+  assert.ok(COMMITTED(rEdit.status), "the date edit committed");
+  assert.equal(rDel.status, "conflict", "the delete is refused — its base row no longer matches what is stored");
+  assert.deepEqual(plain(rDel.conflictPaths), ["date"], "and it names exactly what moved");
+  exact(remote, [{ ...day("2026-08-01", 100), date: "2026-08-09" }, day("2026-08-02", 200), day("2026-08-03", 300)],
+    "every row survives");
 });
 
 test("[concurrency] C-11: transaction-callback RE-EXECUTION for a date edit — rebased on the fresher value, no duplicate effect", async () => {

@@ -165,8 +165,9 @@ function makeClient(remote, name, opts = {}) {
       const rows = lane._state().desired || [];
       const prev = byId ? (rows.find(r => r && r.id === byId) || null) : (rows.filter(r => r && r.date === date)[0] || null);
       if (!prev) return Promise.resolve({ status: "blocked", reason: "target_not_found" });
-      return lane.submitIntent({ type: "delete_entry", target: { id: prev.id },
-        base: { fields: { sales: prev.sales } } });
+      const intent = ML.buildEntryDeleteIntent(prev, {});  // R10.1-GATE-017
+      if (intent.status) return Promise.resolve({ status: intent.status });
+      return lane.submitIntent(intent);
     },
     clearAll() {
       return lane.submitClearAll({ expectedNodeFingerprint: lane.currentFingerprint(), confirmToken: "tok-" + name });

@@ -179,8 +179,38 @@ test("S0 diff contains no historical data transform, migration, RTDB rules, or f
     /^package(?:-lock)?\.json$/,
     /(?:^|\/)(?:migration|migrations|scripts)\//i,
   ];
+  // R10.1-GATE-018. `database.rules.json` REMAINS forbidden. The single exception is
+  // the explicitly authorized R10.1 remediation of Codex blocking finding 2 — adding
+  // server-side validation for `biz:{bizId}:entries` — and the exception is granted by
+  // CONTENT, never by exempting the path: the rules tree with exactly those two
+  // additions removed must still be deep-equal to the base version. Any other rules
+  // drift, including anything touching authorization or a VAT-relevant node, fails
+  // here exactly as it did before, and so does any change to the added expressions'
+  // location. Nothing about the VAT invariant itself is relaxed.
+  const rulesChangeIsOnlyAuthorizedEntriesValidation = () => {
+    const show = gitIn(ROOT, ["show", `${BASE}:database.rules.json`]);
+    if (show.status !== 0) return false;
+    let before, after;
+    try { before = JSON.parse(show.stdout); after = JSON.parse(read("database.rules.json")); }
+    catch { return false; }
+    const dk = after?.rules?.tenants?.["$tenantId"]?.["$dataKey"];
+    if (!dk || typeof dk[".validate"] !== "string") return false;
+    if (!dk["_v"] || typeof dk["_v"][".validate"] !== "string") return false;
+    if (Object.keys(dk["_v"]).length !== 1) return false;          // `_v` carries ONLY a validator
+    // Both additions must actually constrain the entries node, not be inert.
+    for (const expr of [dk[".validate"], dk["_v"][".validate"]]) {
+      if (!expr.includes("biz:[^:]+:entries")) return false;
+      if (!expr.includes("matches(")) return false;
+    }
+    delete dk[".validate"];
+    delete dk["_v"];
+    try { assert.deepEqual(after, before); } catch { return false; }
+    return true;
+  };
+  const rulesExempt = changed.includes("database.rules.json") && rulesChangeIsOnlyAuthorizedEntriesValidation();
   assert.deepEqual(
-    changed.filter((rel) => forbiddenPaths.some((re) => re.test(rel))),
+    changed.filter((rel) => forbiddenPaths.some((re) => re.test(rel)))
+           .filter((rel) => !(rulesExempt && rel === "database.rules.json")),
     [],
     "S0 must not touch historical transforms, RTDB rules, forecast/KPI areas, packages, or stored-data scripts",
   );

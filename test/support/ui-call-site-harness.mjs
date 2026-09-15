@@ -195,14 +195,14 @@ export const CALL_SITES = {
   deleteByDate: {
     name: "deleteEntryByDate",
     anchor: "const deleteEntryByDate = async (date) => {",
-    markers: ["type: \"delete_entry\"", "target: { id: target.id }",
-              "isValidEntryId(target.id)", "קיימות מספר רשומות לתאריך זה"],
+    markers: ["buildEntryDeleteIntent(target, {})", "isValidEntryId(target.id)",
+              "קיימות מספר רשומות לתאריך זה", "submitIntent(__intent)"],
   },
   deleteById: {
     name: "deleteEntryById",
     anchor: "const deleteEntryById = async (rowId) => {",
-    markers: ["isValidEntryId(rowId)", "type: \"delete_entry\", target: { id: rowId }",
-              "describeSaveOutcome(res || \"failed\", false)"],
+    markers: ["isValidEntryId(rowId)", "buildEntryDeleteIntent(target, {})",
+              "submitIntent(__intent)", "describeSaveOutcome(res || \"failed\", false)"],
   },
   clearAll: {
     name: "clearAllOnClick",
