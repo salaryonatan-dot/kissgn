@@ -782,6 +782,24 @@
       return await runTransaction(ref(db, path), txnFn, { applyLocally: false });
     };
 
+    // R-V2: RAW-node subscribe. `subscribe` above unwraps `_v` for the legacy blob,
+    // which after a V2 cutover would hand the caller the FROZEN snapshot. This one
+    // delivers the node exactly as stored so the reader can decide the storage mode.
+    window.storage.subscribeNode = (key, callback, onError) => {
+      const path = fkeyShared(key);
+      if (!path) return () => {};
+      return onValue(ref(db, path), (snap) => { if (snap.exists()) callback(snap.val()); },
+        (err) => { if (typeof onError === "function") { try { onError(err); } catch(_){} } });
+    };
+    // R-V2: row-scoped compare-and-swap. Same contract as mutateFor, addressed at a
+    // child path, so two operators editing different rows never contend.
+    window.storage.mutateForPath = async (tenantId, key, subPath, txnFn) => {
+      if (!tenantId) throw new Error("explicit tenant required");
+      const base = fkeySharedForTenant(tenantId, key);
+      const path = subPath ? (base + "/" + String(subPath).replace(/[.#$[\]]/g, "_")) : base;
+      return await runTransaction(ref(db, path), txnFn, { applyLocally: false });
+    };
+
     // Live listener -- calls callback whenever any key changes
     window.storage.subscribe = (key, callback, shared=false, onError) => {
       const path = shared ? fkeyShared(key) : fkey(key);
@@ -2276,6 +2294,236 @@ function createRemoteEntriesMutator(io) {
 }
 
 window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, createPersistence, createEntriesWriteCoordinator, createSaveOwnership, createInsightReadback, createInsightUiLoader, createSaveUiRunner, createExceptionOwnership, createSupplierResultOwnership, applySupplierWriteResult, executeEntrySave, createRemoteEntriesMutator, applyEntryIntent, resolveEntryTarget, parseEntriesNode, contentFingerprint, stableStringify, buildEntryUpsertIntent, buildEntryDeleteIntent, rowDiffPaths, describeSaveOutcome, validateEntriesNode, isValidEntryId, generateEntryId });
+// ══ STORAGE V2 — ROW-KEYED ENTRIES ═══════════════════════════════════════════
+// LEGACY storage keeps every row inside one opaque JSON string at
+// `biz:{bizId}:entries/_v`, so RTDB Rules cannot see a row at all: the node has a
+// single string child and row identity lives in its characters. That is why the
+// server could accept an id-less row, a nested decoy id, or two rows sharing an id.
+//
+// V2 gives every row its own node, keyed by its own immutable id:
+//
+//   biz:{bizId}:entries/
+//     schemaVersion : 2
+//     generation    : "<uuid v4>"      the collection epoch; clear-all rotates it
+//     rows/
+//       {rowId}/                       rowId IS the row's immutable id
+//         id   : "{rowId}"             Rules enforce id === the child key
+//         gen  : "<generation>"        Rules enforce it equals the live generation
+//         date : "YYYY-MM-DD"          the canonical entryDateKey
+//         …every other supported field, as ordinary children
+//     _v : "<frozen pre-cutover snapshot>"   read-only; never authoritative again
+//
+// Consequences: duplicate ids become unrepresentable (a Firebase key is unique in its
+// parent), a top-level id is structurally required, free text is just a string value —
+// no serialization pattern anywhere — and a row from a retired generation cannot be
+// resurrected. Duplicate business DATES remain legal, exactly as in R10.
+const STORAGE_V2 = 2;
+const isGenerationToken = (v) => isValidEntryId(v);        // same canonical uuid v4 allowlist
+function isV2Node(raw) {
+  return !!raw && typeof raw === "object" && !Array.isArray(raw) && raw.schemaVersion === STORAGE_V2;
+}
+// A node carrying V2 structure but no schemaVersion is NOT legacy — treating it as
+// legacy would hydrate the frozen snapshot over live rows. It is malformed.
+function looksLikeStrippedV2(raw) {
+  return !!raw && typeof raw === "object" && !Array.isArray(raw) && raw.schemaVersion === undefined
+      && (raw.rows !== undefined || raw.generation !== undefined);
+}
+// Explicit storage-mode detection. There is no "probably".
+function detectStorageMode(raw) {
+  if (raw === null || raw === undefined) return { mode: "absent" };
+  if (isV2Node(raw)) return { mode: "v2" };
+  if (looksLikeStrippedV2(raw)) return { mode: "malformed", reason: "v2_structure_without_schema_version" };
+  if (!Array.isArray(raw) && typeof raw === "object" && raw.schemaVersion !== undefined)
+    return { mode: "malformed", reason: "unsupported_schema_version", schemaVersion: raw.schemaVersion };
+  const p = parseEntriesNode(raw);
+  if (p.malformed) return { mode: "malformed", reason: "legacy_unparseable" };
+  return { mode: "legacy" };
+}
+// Read the V2 row map into the array shape every layer above already speaks.
+// FAIL-CLOSED: a malformed V2 node returns a typed status and NEVER falls back to the
+// frozen `_v` snapshot. `gen` is an infrastructure field and is stripped here, so the
+// semantic row the app and the R10.1 complete-row delete base see is unchanged.
+function readV2Rows(raw) {
+  if (!isV2Node(raw)) return { status: "not_v2" };
+  const generation = raw.generation;
+  if (!isGenerationToken(generation)) return { status: "malformed_v2", reason: "invalid_generation" };
+  const node = raw.rows;
+  if (node === null || node === undefined) return { ok: true, rows: [], generation };
+  if (typeof node !== "object" || Array.isArray(node)) return { status: "malformed_v2", reason: "rows_not_a_map" };
+  const rows = [];
+  const keys = Object.keys(node);
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i], r = node[k];
+    if (!isValidEntryId(k)) return { status: "malformed_v2", reason: "row_key_not_canonical_id", key: k };
+    if (!isPlainRow(r)) return { status: "malformed_v2", reason: "row_not_an_object", key: k };
+    if (r.id !== k) return { status: "malformed_v2", reason: "row_id_key_mismatch", key: k };
+    if (r.gen !== generation) return { status: "malformed_v2", reason: "row_generation_mismatch", key: k };
+    const sem = { ...r };
+    delete sem.gen;
+    rows.push(sem);
+  }
+  // Object key order is not identity. Order deterministically by business date then id
+  // so two clients reading the same node always present the same array.
+  rows.sort((a, b) => (String(a.date) < String(b.date) ? -1 : String(a.date) > String(b.date) ? 1 : (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)));
+  return { ok: true, rows, generation };
+}
+// The ONE dual-mode read seam. Every caller gets a typed mode and never a blend.
+function readEntriesNode(raw) {
+  const d = detectStorageMode(raw);
+  if (d.mode === "absent") return { ok: true, mode: "absent", rows: [] };
+  if (d.mode === "malformed") return { status: "malformed_storage", reason: d.reason, mode: "malformed" };
+  if (d.mode === "v2") {
+    const r = readV2Rows(raw);
+    if (r.status) return { status: r.status, reason: r.reason, key: r.key, mode: "v2" };
+    return { ok: true, mode: "v2", rows: r.rows, generation: r.generation };
+  }
+  const p = parseEntriesNode(raw);
+  if (p.malformed) return { status: "malformed_storage", reason: "legacy_unparseable", mode: "malformed" };
+  return { ok: true, mode: "legacy", rows: p.absent ? [] : p.rows };
+}
+// ── THE ROW-SCOPED TRANSFORMATION (pure) ─────────────────────────────────────
+// The V2 counterpart of applyEntryIntent. It sees ONE row, because in V2 a row is one
+// node, so an ordinary mutation contends only with writers of that same row. Every
+// accepted R10 / R10.1 semantic is preserved verbatim: identity is the immutable id
+// only, a delete's precondition is the COMPLETE canonical row, a create with an
+// existing id is idempotent-or-collision, and `id` is immutable.
+function applyRowIntent(currentRow, intent) {
+  if (!intent || typeof intent !== "object") return { ok: false, status: "invalid_intent" };
+  if (!intent.target || !isValidEntryId(intent.target.id)) return { ok: false, status: "invalid_identity" };
+  const cur = (currentRow === null || currentRow === undefined) ? null : currentRow;
+  if (cur !== null && !isPlainRow(cur)) return { ok: false, status: "malformed_remote" };
+  if (cur !== null && cur.id !== intent.target.id) return { ok: false, status: "malformed_remote", reason: "row_id_key_mismatch" };
+
+  if (intent.type === "delete_entry") {
+    if (!cur) return { ok: false, status: "target_not_found" };
+    const baseRow = intent.base && intent.base.row;
+    if (!isPlainRow(baseRow)) return { ok: false, status: "precondition_missing", reason: "delete_base_row_required" };
+    if (stableStringify(baseRow) !== stableStringify(cur))
+      return { ok: false, status: "conflict", conflictPaths: rowDiffPaths(baseRow, cur) };
+    return { ok: true, remove: true, destructive: true };
+  }
+  if (intent.type === "upsert_entry" || intent.type === "patch_supplier") {
+    if (intent.createIfMissing && isPlainRow(intent.newRow)) {
+      const nr = intent.newRow;
+      if (!isValidEntryId(nr.id) || nr.id !== intent.target.id) return { ok: false, status: "invalid_identity" };
+      if (!entryDateKey(nr.date)) return { ok: false, status: "invalid_new_row" };
+      if (cur) return stableStringify(cur) === stableStringify(nr)
+        ? { ok: true, noop: true, status: "already_created" }
+        : { ok: false, status: "invalid_identity", reason: "id_collision", id: nr.id };
+      return { ok: true, row: nr, created: true };
+    }
+    if (!cur) return { ok: false, status: "target_not_found" };
+    const paths = patchPaths(intent.patch);
+    if (paths.some(p => !p.map && p.field === "id")) return { ok: false, status: "invalid_identity", reason: "id_is_immutable" };
+    if (!paths.length) return { ok: true, noop: true, status: "empty_patch" };
+    const basePaths = patchPaths({ fields: intent.base && intent.base.fields, maps: intent.base && intent.base.maps });
+    const baseAt = (p) => { const m = basePaths.find(b => (b.map ? (b.map === p.map && b.key === p.key) : (b.field === p.field))); return m ? m.value : undefined; };
+    const conflicts = [], effective = [];
+    paths.forEach(p => {
+      const remote = readPath(cur, p);
+      const desired = p.unset ? undefined : p.value;
+      if (sameVal(remote, desired)) return;
+      if (!sameVal(remote, baseAt(p))) conflicts.push(p); else effective.push(p);
+    });
+    if (conflicts.length) return { ok: false, status: "conflict", conflictPaths: conflicts.map(p => p.map ? p.map + "." + p.key : p.field) };
+    if (!effective.length) return { ok: true, noop: true, status: "already_applied" };
+    return { ok: true, row: applyPaths(cur, effective) };
+  }
+  return { ok: false, status: "unsupported_intent" };
+}
+// ── V2 REMOTE ADAPTER ────────────────────────────────────────────────────────
+// io.transactRow(tenantId, key, rowId, fn)  — CAS on ONE row node
+// io.transactNode(tenantId, key, fn)        — CAS on the whole collection node
+// io.generation()                           — the generation this client hydrated
+// Ordinary mutations take the row lane; clear-all is the ONLY collection-scoped
+// operation, and it keeps R10's whole-node compare-and-swap so it can never lose a
+// concurrent write.
+function createV2EntriesMutator(io) {
+  return {
+    mutate: async (intent, ctx) => {
+      if (!ctx || !ctx.tenantId || !ctx.bizId) return { status: "blocked_no_owner" };
+      if (!io.selection.isLive(ctx)) return { status: "stale" };
+      const key = `biz:${ctx.bizId}:entries`;
+      const generation = io.generation();
+      if (!isGenerationToken(generation)) return { status: "blocked_unhydrated", reason: "no_active_generation" };
+      let outcome = null, runs = 0;
+
+      if (intent && intent.type === "clear_all") {
+        try {
+          const res = await io.transactNode(ctx.tenantId, key, (cur) => {
+            runs++;
+            if (!isV2Node(cur)) { outcome = { ok: false, status: "malformed_remote" }; return undefined; }
+            const read = readV2Rows(cur);
+            if (read.status) { outcome = { ok: false, status: read.status }; return undefined; }
+            if (read.generation !== generation) { outcome = { ok: false, status: "precondition_failed", reason: "generation_changed" }; return undefined; }
+            if (typeof intent.expectedNodeFingerprint !== "string") { outcome = { ok: false, status: "precondition_missing" }; return undefined; }
+            const actual = contentFingerprint(read.rows);
+            if (actual !== intent.expectedNodeFingerprint) { outcome = { ok: false, status: "precondition_failed", actual }; return undefined; }
+            if (!isGenerationToken(intent.nextGeneration)) { outcome = { ok: false, status: "precondition_missing", reason: "next_generation_required" }; return undefined; }
+            if (read.rows.length === 0) { outcome = { ok: true, noop: true, status: "already_empty" }; return undefined; }
+            outcome = { ok: true, destructive: true, rows: [] };
+            // Rotating the generation is what retires every row of the old epoch: a
+            // client still holding it can no longer write a row at all (Rules compare
+            // the row's `gen` with the live one), so nothing can be resurrected.
+            const next = { schemaVersion: STORAGE_V2, generation: intent.nextGeneration };
+            if (typeof cur._v === "string") next._v = cur._v;   // frozen snapshot, byte-identical
+            return next;
+          });
+          if (!outcome) return { status: "failed", error: "transaction_never_ran", runs };
+          if (outcome.ok && outcome.destructive) {
+            if (res && res.committed === false) return { status: "failed", error: "not_committed", runs };
+            return { status: "committed", rows: [], runs, destructive: true, generation: intent.nextGeneration };
+          }
+          if (outcome.ok && outcome.noop) return { status: "committed_idempotent", reason: outcome.status, runs };
+          return { status: outcome.status === "conflict" ? "conflict" : "blocked", reason: outcome.reason || outcome.status,
+                   detail: outcome.reason, actual: outcome.actual, runs };
+        } catch (err) { return { status: "failed", error: (err && err.message) || "transaction_failed", runs }; }
+      }
+
+      if (!intent || !intent.target || !isValidEntryId(intent.target.id)) return { status: "invalid_identity" };
+      try {
+        const res = await io.transactRow(ctx.tenantId, key, intent.target.id, (raw) => {
+          runs++;
+          let sem = null;
+          if (raw !== null && raw !== undefined) {
+            if (!isPlainRow(raw)) { outcome = { ok: false, status: "malformed_remote" }; return undefined; }
+            if (raw.gen !== generation) { outcome = { ok: false, status: "conflict", conflictPaths: ["gen"], reason: "generation_changed" }; return undefined; }
+            sem = { ...raw };
+            delete sem.gen;
+          }
+          const r = applyRowIntent(sem, intent);
+          outcome = r;
+          if (r.ok && r.remove) return null;                       // delete this row node
+          if (r.ok && r.row) return { ...r.row, gen: generation };  // create / edit
+          return undefined;                                        // abort
+        });
+        if (!outcome) return { status: "failed", error: "transaction_never_ran", runs };
+        if (outcome.ok && (outcome.row || outcome.remove)) {
+          if (res && res.committed === false) return { status: "failed", error: "not_committed", runs };
+          return { status: "committed", runs, created: !!outcome.created, destructive: !!outcome.destructive, row: outcome.row || null };
+        }
+        if (outcome.ok && outcome.noop) return { status: "committed_idempotent", reason: outcome.status, runs };
+        return { status: outcome.status === "conflict" ? "conflict" : "blocked", reason: outcome.status,
+                 detail: outcome.reason, conflictPaths: outcome.conflictPaths, runs };
+      } catch (err) { return { status: "failed", error: (err && err.message) || "transaction_failed", runs }; }
+    },
+  };
+}
+// ── STORAGE ROUTER ───────────────────────────────────────────────────────────
+// One mutate() surface for the write coordinator; the storage mode decides which
+// engine runs. A malformed or un-hydrated node writes NOTHING.
+function createEntriesStorageRouter(io) {
+  return {
+    mutate: (intent, ctx) => {
+      const m = io.mode();
+      if (!m || m.mode === "malformed") return Promise.resolve({ status: "blocked_unhydrated", reason: (m && m.reason) || "storage_mode_unknown" });
+      if (m.mode === "v2") return io.v2.mutate(intent, ctx);
+      return io.legacy.mutate(intent, ctx);
+    },
+  };
+}
+window.MarjinStorageV2 = Object.freeze({ STORAGE_V2, isV2Node, detectStorageMode, readV2Rows, readEntriesNode, applyRowIntent, createV2EntriesMutator, createEntriesStorageRouter, isGenerationToken });
+
 const TARGETS = {
   salesGrowthPct: 5,
   foodCostPct:   33,
@@ -3973,6 +4221,25 @@ function PilotDashboard() {
     selection: selectionCtrlRef.current,
     transact: (tenantId, key, txnFn) => window.storage.mutateFor(tenantId, key, txnFn),
   });
+  // R-V2: the storage mode this client actually hydrated, plus the live collection
+  // generation. Set ONLY by the entries listener, from the raw node. Until it is known
+  // the router writes nothing — an unknown storage mode is not a writable state.
+  const entriesStorageModeRef = useRef(null);
+  const entriesV2MutatorRef = useRef(null);
+  if (!entriesV2MutatorRef.current) entriesV2MutatorRef.current = window.MarjinStorageV2.createV2EntriesMutator({
+    selection: selectionCtrlRef.current,
+    generation: () => (entriesStorageModeRef.current && entriesStorageModeRef.current.generation) || null,
+    transactRow: (tenantId, key, rowId, txnFn) => window.storage.mutateForPath(tenantId, key, "rows/" + rowId, txnFn),
+    transactNode: (tenantId, key, txnFn) => window.storage.mutateFor(tenantId, key, txnFn),
+  });
+  // R-V2: ONE mutate() surface for the coordinator. The hydrated mode picks the engine;
+  // legacy and V2 are never blended, and a malformed node is refused rather than guessed.
+  const entriesStorageRouterRef = useRef(null);
+  if (!entriesStorageRouterRef.current) entriesStorageRouterRef.current = window.MarjinStorageV2.createEntriesStorageRouter({
+    mode: () => entriesStorageModeRef.current,
+    legacy: entriesMutatorRef.current,
+    v2: entriesV2MutatorRef.current,
+  });
   const entriesWriteCoordRef = useRef(null);
   if (!entriesWriteCoordRef.current) entriesWriteCoordRef.current = window.MarjinSaveLifecycle.createEntriesWriteCoordinator({
     selection: selectionCtrlRef.current,
@@ -3981,7 +4248,7 @@ function PilotDashboard() {
     fingerprint: (rows) => JSON.stringify(rows),
     contentFingerprint: window.MarjinSaveLifecycle.contentFingerprint,
     applyRows: setEntries,
-    mutate: (intent, ctx) => entriesMutatorRef.current.mutate(intent, ctx),
+    mutate: (intent, ctx) => entriesStorageRouterRef.current.mutate(intent, ctx),
   });
   // Collision-resistant id generated BEFORE submission so a transaction retry reuses
   // it. Never derived from a date, counter, index or fingerprint.
@@ -4283,7 +4550,27 @@ function PilotDashboard() {
       setSetupDone(true);
     })();
     // Live listeners -- fire immediately with current value AND on every change
-    sub(`biz:${currentBizId}:entries`, (val) => {
+    // R-V2: hydrate from the RAW node through the single dual-mode read seam. A V2
+    // node that is malformed keeps the lane fail-closed; it NEVER falls back to the
+    // frozen `_v` snapshot, which is exactly how a cutover could otherwise lose data.
+    const subNodeEntries = (key, onNode, onErr) => {
+      if (!window.storage.subscribeNode) return;
+      unsubs.push(window.storage.subscribeNode(key, (raw) => { if (live) onNode(raw); },
+        (err) => { if (live) onErr(err); }));
+    };
+    subNodeEntries(`biz:${currentBizId}:entries`, (raw) => {
+      const read = window.MarjinStorageV2.readEntriesNode(raw);
+      if (read.status) {
+        entriesStorageModeRef.current = { mode: "malformed", reason: read.reason || read.status };
+        entriesWriteCoordRef.current.onListenerError(ctxAtSetup);
+        return;
+      }
+      entriesStorageModeRef.current = { mode: read.mode, generation: read.generation || null };
+      __entriesHydrate(read.rows);
+    }, () => {
+      entriesWriteCoordRef.current.onListenerError(ctxAtSetup);
+    });
+    const __entriesHydrate = (val) => {
       if(!Array.isArray(val)) return;
       // R5: hydration/echo AND duplicate self-heal go through the production entries-
       // write coordinator, bound to THIS effect run's captured selection context.
@@ -4296,11 +4583,7 @@ function PilotDashboard() {
       //    captured-tenant persistence (persistEntries → the explicit-tenant transport),
       //    never the mutable-tenant global write, so it cannot race a supplier write.
       entriesWriteCoordRef.current.onListenerEcho(val, ctxAtSetup);
-    }, false, () => {
-      // R9 invariant G: entries listener failure keeps the lane fail-closed (no writes)
-      // rather than letting an unverified empty client state become persistable.
-      entriesWriteCoordRef.current.onListenerError(ctxAtSetup);
-    });
+    };
     // R9 invariant B (hydration bootstrap): Firebase `onValue` NEVER fires for a node
     // that does not exist, so a business with no entries yet would otherwise stay
     // permanently un-hydrated and unable to save its first entry. This READ-ONLY probe

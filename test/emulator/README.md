@@ -198,3 +198,40 @@ repository: it sweeps the three emulator scripts in with the unit suites, runs t
 parallel, and — with no emulator — trips their safety gate. Use
 `node --test --test-concurrency=8 test/**/*.test.mjs docs/production-readiness/test/*.test.mjs`
 for regressions and the commands above for the emulator work.
+
+## Run the Storage V2 matrix
+
+`storage-v2-matrix.mjs` proves the row-keyed entries contract against the real Rules
+engine and the real transaction protocol: legacy mode still works, the preflight refuses
+unconvertible data, the per-business cutover is atomic and cannot lose a concurrent legacy
+write (with a negative control that does), row key == top-level id is structurally
+enforced, duplicate ids are unrepresentable, duplicate dates survive, free text containing
+`},{` is accepted, ordinary row writes stop contending, the R10.1 stale-delete contract
+still holds, clear-all rotates a generation so nothing can be resurrected, and a legacy
+client cannot corrupt a business after cutover.
+
+```
+env -u GOOGLE_APPLICATION_CREDENTIALS -u FIREBASE_CONFIG -u FIREBASE_DATABASE_URL \
+    GCLOUD_PROJECT=demo-marjin-rules \
+    GOOGLE_CLOUD_PROJECT=demo-marjin-rules \
+    FIREBASE_DATABASE_EMULATOR_HOST=127.0.0.1:9000 \
+    JAVA_HOME=/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home \
+    PATH="/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin:$PATH" \
+    ./node_modules/.bin/firebase emulators:exec \
+      --only database \
+      --project demo-marjin-rules \
+      --config test/emulator/firebase.json \
+      "node test/emulator/storage-v2-matrix.mjs"
+```
+
+Expected:
+
+```
+=== TOTALS ===
+total=32 passed=32 failed=0
+
+ALL CASES PASSED
+```
+
+There are now FOUR emulator scripts, and they all reseed the database root, so they still
+must run one at a time against a single emulator.

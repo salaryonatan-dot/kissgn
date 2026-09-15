@@ -197,13 +197,37 @@ test("S0 diff contains no historical data transform, migration, RTDB rules, or f
     if (!dk || typeof dk[".validate"] !== "string") return false;
     if (!dk["_v"] || typeof dk["_v"][".validate"] !== "string") return false;
     if (Object.keys(dk["_v"]).length !== 1) return false;          // `_v` carries ONLY a validator
-    // Both additions must actually constrain the entries node, not be inert.
-    for (const expr of [dk[".validate"], dk["_v"][".validate"]]) {
+    // Storage V2 (row-keyed entries) adds three more validators at this ONE location,
+    // under the same content-verified exception: the schema marker, the collection
+    // generation, and the per-row structural contract. Each must be shaped exactly as
+    // authorized — a validator only, nothing else smuggled alongside it.
+    const v2 = { schemaVersion: dk["schemaVersion"], generation: dk["generation"], rows: dk["rows"] };
+    if (!v2.schemaVersion || typeof v2.schemaVersion[".validate"] !== "string" || Object.keys(v2.schemaVersion).length !== 1) return false;
+    if (!v2.generation || typeof v2.generation[".validate"] !== "string" || Object.keys(v2.generation).length !== 1) return false;
+    const rowRule = v2.rows && v2.rows["$rowId"];
+    if (!rowRule || typeof rowRule[".validate"] !== "string") return false;
+    if (Object.keys(v2.rows).length !== 1) return false;            // `rows` carries ONLY the row wildcard
+    for (const k of Object.keys(rowRule)) {
+      if (k === ".validate") continue;
+      if (["id", "gen", "date"].indexOf(k) === -1) return false;    // no unexpected child rule
+      if (typeof rowRule[k][".validate"] !== "string" || Object.keys(rowRule[k]).length !== 1) return false;
+    }
+    // The row contract must be the identity contract it claims to be.
+    if (!rowRule[".validate"].includes("newData.child('id').val() === $rowId")) return false;
+    if (!rowRule[".validate"].includes("newData.child('gen').val() === newData.parent().parent().child('generation').val()")) return false;
+    // Every added expression must actually constrain the entries node, not be inert.
+    for (const expr of [dk[".validate"], dk["_v"][".validate"], v2.schemaVersion[".validate"],
+                        v2.generation[".validate"], rowRule[".validate"]]) {
       if (!expr.includes("biz:[^:]+:entries")) return false;
+    }
+    for (const expr of [dk[".validate"], dk["_v"][".validate"], v2.generation[".validate"], rowRule[".validate"]]) {
       if (!expr.includes("matches(")) return false;
     }
     delete dk[".validate"];
     delete dk["_v"];
+    delete dk["schemaVersion"];
+    delete dk["generation"];
+    delete dk["rows"];
     try { assert.deepEqual(after, before); } catch { return false; }
     return true;
   };
