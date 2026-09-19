@@ -1,0 +1,40 @@
+⚠  Unable to fetch the CLI MOTD and remote config. This is not a fatal error, but may indicate an issue with your network connection.
+i  emulators: Starting emulators: database
+i  emulators: Detected demo project ID "demo-marjin-rules", emulated services will use a demo configuration and attempts to access non-emulated services for this project will fail.
+i  database: Database Emulator logging to database-debug.log
+i  Running script: node /Users/yonatan/Documents/marjin/kissgn-p0-data-01-storage-v2/test/emulator/entries-remote-atomic-emulator.mjs
+[2026-09-19T08:10:37.681Z]  @firebase/database: FIREBASE WARNING: transaction at /tenants/tenantA/biz:bizB:entries failed: permission_denied 
+[2026-09-19T08:10:37.727Z]  @firebase/database: FIREBASE WARNING: transaction at /tenants/tenantB/biz:bizA:entries failed: permission_denied 
+[2026-09-19T08:10:37.823Z]  @firebase/database: FIREBASE WARNING: transaction at /tenants/tenantA/biz:bizA:entries failed: permission_denied 
+
+case                       area                   status ms     notes
+------------------------------------------------------------------------------------------------------------------------
+EMU-A-A_then_B             independent-writers    PASS   1688   both edits present, 160 dates retained
+EMU-A-B_then_A             independent-writers    PASS   214    both edits present, 160 dates retained
+EMU-A-parallel             independent-writers    PASS   240    both edits present under true simultaneity
+EMU-B-negctl-A_then_B      r9-negative-control    PASS   117    edit at 2026-02-10 lost, as in the R9 incident
+EMU-B-negctl-B_then_A      r9-negative-control    PASS   102    edit at 2026-02-11 lost, as in the R9 incident
+EMU-B-r10-same-schedule    r9-negative-control    PASS   109    same schedule, zero loss
+EMU-C-retry                transaction-semantics  PASS   864    8/8 committed, 35 txnFn runs for 8 transactions (retries exercised)
+EMU-C-conflict             transaction-semantics  PASS   147    conflictPaths=["sales"], node untouched, commits after re-base
+EMU-C-idempotent           transaction-semantics  PASS   78     reason=already_applied
+EMU-C-id-collision         transaction-semantics  PASS   57     status=blocked reason=invalid_identity detail=id_collision
+EMU-D-cross-business       ownership              PASS   62     hydration denied=true, mutate=failed/permission_denied
+EMU-D-cross-tenant         ownership              PASS   44     mutate=failed/permission_denied
+EMU-D-viewer               ownership              PASS   99     mutate=failed/permission_denied
+EMU-D-stale-selection      ownership              PASS   50     refused with zero I/O
+EMU-D-no-owner             ownership              PASS   28     refused with zero I/O
+EMU-E-cold-cache           rtdb-semantics         PASS   86     cold=blocked/target_not_found (fail-closed), warm=committed
+EMU-F-stale-delete-supplie stale-delete           PASS   98     refused with conflictPaths=["supplier_payments.sup9"]
+EMU-F-delete-unchanged     stale-delete           PASS   59     committed
+EMU-F-unrelated-row        stale-delete           PASS   100    committed, no false stale
+
+=== TOTALS ===
+total=19 passed=19 failed=0
+
+ALL CASES PASSED
+✔  Script exited successfully (code 0)
+i  emulators: Shutting down emulators.
+i  database: Stopping Database Emulator
+i  hub: Stopping emulator hub
+i  logging: Stopping Logging Emulator

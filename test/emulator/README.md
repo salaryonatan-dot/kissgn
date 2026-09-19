@@ -210,6 +210,19 @@ enforced, duplicate ids are unrepresentable, duplicate dates survive, free text 
 still holds, clear-all rotates a generation so nothing can be resurrected, and a legacy
 client cannot corrupt a business after cutover.
 
+Hardening R1 (cases `V2-H01`…`V2-H10`, closing Codex SV2-01…SV2-09) adds: the cutover is
+irreversible on the server (no whole-node delete, downgrade or legacy re-creation once a
+business is V2); the generation is a strictly monotonic integer epoch that only clear-all
+advances, by exactly one, with an empty collection rotating too; an intent is bound to the
+epoch it was submitted under and is refused — never restamped — when the epoch moved on;
+the REAL coordinator converges on the authoritative listener value after row commits; an
+absent business initialises straight into V2; the conversion preserves a legacy `gen`
+domain field (the epoch stamp lives under the reserved `_gen` key) and reports its
+approved canonicalization; an exact create retry with the UI template is idempotent; the
+row map cannot be replaced by a scalar; and the legacy engine refuses a V2 node instead of
+reporting success against the frozen `_v`. `V2-M04` now forces the cutover race with a real
+ETag barrier (one HTTP 412 retry, `runs=2`).
+
 ```
 env -u GOOGLE_APPLICATION_CREDENTIALS -u FIREBASE_CONFIG -u FIREBASE_DATABASE_URL \
     GCLOUD_PROJECT=demo-marjin-rules \
@@ -228,10 +241,36 @@ Expected:
 
 ```
 === TOTALS ===
-total=32 passed=32 failed=0
+total=42 passed=42 failed=0
 
 ALL CASES PASSED
 ```
 
-There are now FOUR emulator scripts, and they all reseed the database root, so they still
-must run one at a time against a single emulator.
+## Run the Rules-guard mutation probe
+
+`storage-v2-rules-guard-mutations.mjs` proves that the S0 anti-migration guard's rejections
+of the entries Rules contract are meaningful. The guard (`test/support/rules-authorized-delta.mjs`,
+consumed by `test/finance/vat-invariant.test.mjs`) pins the authorized delta as literal
+expressions and compares a whitespace-normalized expression tree, so an inert wrapper such as
+`true || (…)` is rejected. This probe loads each rejected mutation into the real emulator
+through its local settings endpoint, shows that a write the shipped Rules deny becomes
+allowed, restores the shipped Rules and shows it is denied again.
+
+```
+... emulators:exec --only database --project demo-marjin-rules \
+      --config test/emulator/firebase.json \
+      "node test/emulator/storage-v2-rules-guard-mutations.mjs"
+```
+
+Expected:
+
+```
+=== TOTALS ===
+mutations=12 proven_weakening_and_guard_rejected=12 failed=0
+
+ALL MUTATIONS PROVEN: each guard rejection corresponds to a real loss of server enforcement
+```
+
+There are now FIVE emulator scripts, and they all reseed the database root (the mutation
+probe also swaps the loaded Rules), so they still must run one at a time against a single
+emulator.

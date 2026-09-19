@@ -1,0 +1,66 @@
+⚠  Unable to fetch the CLI MOTD and remote config. This is not a fatal error, but may indicate an issue with your network connection.
+i  emulators: Starting emulators: database
+i  emulators: Detected demo project ID "demo-marjin-rules", emulated services will use a demo configuration and attempts to access non-emulated services for this project will fail.
+i  database: Database Emulator logging to database-debug.log
+i  Running script: node /Users/yonatan/Documents/marjin/kissgn-p0-data-01-storage-v2/test/emulator/entries-rules-validation-matrix.mjs
+[2026-09-19T08:11:09.850Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied 
+[2026-09-19T08:11:09.880Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied 
+[2026-09-19T08:11:09.911Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied 
+[2026-09-19T08:11:09.937Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied 
+[2026-09-19T08:11:09.966Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied 
+[2026-09-19T08:11:09.994Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied 
+[2026-09-19T08:11:10.022Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied 
+[2026-09-19T08:11:10.051Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied 
+[2026-09-19T08:11:10.076Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied 
+[2026-09-19T08:11:10.107Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied 
+[2026-09-19T08:11:10.135Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied 
+[2026-09-19T08:11:10.163Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/_v failed: permission_denied 
+[2026-09-19T08:11:10.194Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/_v failed: permission_denied 
+[2026-09-19T08:11:10.311Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied 
+[2026-09-19T08:11:10.333Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizB:entries failed: permission_denied 
+[2026-09-19T08:11:10.382Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied 
+[2026-09-19T08:11:10.429Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied 
+
+case     area            identity  op        expect  actual  note
+-----------------------------------------------------------------------------------------------------------------------------
+R-A01    valid-write     manager   set       allow   allow   representative valid node
+R-A02    valid-create    manager   set       allow   allow   the real create shape — id is the LAST key
+R-A03    valid-update    manager   set       allow   allow   an ordinary field edit
+R-A04    valid-delete-ro manager   set       allow   allow   a row removed, the rest rewritten
+R-A05    clear-all       manager   set       allow   allow   the empty array clear-all writes
+R-A06    duplicate-dates manager   set       allow   allow   duplicate business dates with distinct ids stay writable
+R-A07    large-history   manager   set       allow   allow   160-date history, mixed key order
+R-A08    minimal-row     manager   set       allow   allow   a row carrying only its id
+R-A09    braces-in-text  manager   set       allow   allow   free text containing braces is NOT rejected
+R-A10    child-write     manager   setChild  allow   allow   writing the _v child directly, with a valid array
+R-A11    owner-role      owner     set       allow   allow   the owner role is unaffected
+R-A12    transaction     manager   txn       allow   allow   a real RTDB transaction still commits
+R-A13    unicode-fields  manager   set       allow   allow   escaped quotes and Hebrew are unaffected
+R-D01    codex-proof     manager   set       deny    deny    non-JSON _v
+R-D02    codex-proof     manager   set       deny    deny    id-less row JSON
+R-D03    codex-proof     manager   set       deny    deny    object without _v
+R-D04    structure       manager   set       deny    deny    an id-less row hidden among valid rows
+R-D05    structure       manager   set       deny    deny    _v that is not a string
+R-D06    structure       manager   set       deny    deny    truncated JSON
+R-D07    structure       manager   set       deny    deny    non-canonical (uppercase) id
+R-D08    structure       manager   set       deny    deny    wrong UUID version nibble
+R-D09    structure       manager   set       deny    deny    wrong UUID variant nibble
+R-D10    structure       manager   set       deny    deny    array of scalars
+R-D11    structure       manager   set       deny    deny    an object where an array is required
+R-D12    bypass          manager   setChild  deny    deny    the direct _v child write Codex would otherwise use to bypass the parent rule
+R-D13    bypass          manager   setChild  deny    deny    id-less rows through the child path
+R-D14    size            manager   set       deny    deny    beyond the documented size ceiling
+R-D15    authorization   manager   set       deny    deny    cross-business write stays denied
+R-D16    authorization   viewer    set       deny    deny    viewer role stays denied
+R-D17    authorization   unauth    set       deny    deny    unauthenticated stays denied
+
+=== TOTALS ===
+total=30 expected_allow=13 expected_deny=17 passed=30 failed=0
+unexpected_allow=0 unexpected_deny=0 errored=0
+
+ALL CASES PASSED
+✔  Script exited successfully (code 0)
+i  emulators: Shutting down emulators.
+i  database: Stopping Database Emulator
+i  hub: Stopping emulator hub
+i  logging: Stopping Logging Emulator

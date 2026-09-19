@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 // guard for reasons that had nothing to do with the VAT invariant. The invariant
 // assertions below are unchanged; only how git is invoked is.
 import { gitIn } from "../support/git-context.mjs";
+import { authorizedEntriesRulesDelta } from "../support/rules-authorized-delta.mjs";
 import vm from "node:vm";
 import { dailyReportMessage } from "../../lib/whatsappMessages.js";
 
@@ -180,56 +181,24 @@ test("S0 diff contains no historical data transform, migration, RTDB rules, or f
     /(?:^|\/)(?:migration|migrations|scripts)\//i,
   ];
   // R10.1-GATE-018. `database.rules.json` REMAINS forbidden. The single exception is
-  // the explicitly authorized R10.1 remediation of Codex blocking finding 2 — adding
-  // server-side validation for `biz:{bizId}:entries` — and the exception is granted by
-  // CONTENT, never by exempting the path: the rules tree with exactly those two
-  // additions removed must still be deep-equal to the base version. Any other rules
-  // drift, including anything touching authorization or a VAT-relevant node, fails
-  // here exactly as it did before, and so does any change to the added expressions'
-  // location. Nothing about the VAT invariant itself is relaxed.
+  // the explicitly authorized entries storage contract — the R10.1 server-side
+  // validation of `biz:{bizId}:entries` and the Storage V2 row-keyed contract — and
+  // the exception is granted by CONTENT, never by exempting the path.
+  // R-V2-H10: the content check is SEMANTIC. The authorized delta is pinned as literal
+  // expressions in test/support/rules-authorized-delta.mjs and compared as a
+  // whitespace-normalized expression tree; the `.write` rule must be exactly the base
+  // rule plus the cutover guard; and the tree with the authorized delta removed must be
+  // deep-equal to the base version. Token presence proves nothing here: an inert
+  // wrapper (`true || (…)`), a loosened comparison, a dropped clause or a smuggled
+  // child rule all differ from the pinned expressions and fail. Nothing about the VAT
+  // invariant itself is relaxed.
   const rulesChangeIsOnlyAuthorizedEntriesValidation = () => {
     const show = gitIn(ROOT, ["show", `${BASE}:database.rules.json`]);
     if (show.status !== 0) return false;
     let before, after;
     try { before = JSON.parse(show.stdout); after = JSON.parse(read("database.rules.json")); }
     catch { return false; }
-    const dk = after?.rules?.tenants?.["$tenantId"]?.["$dataKey"];
-    if (!dk || typeof dk[".validate"] !== "string") return false;
-    if (!dk["_v"] || typeof dk["_v"][".validate"] !== "string") return false;
-    if (Object.keys(dk["_v"]).length !== 1) return false;          // `_v` carries ONLY a validator
-    // Storage V2 (row-keyed entries) adds three more validators at this ONE location,
-    // under the same content-verified exception: the schema marker, the collection
-    // generation, and the per-row structural contract. Each must be shaped exactly as
-    // authorized — a validator only, nothing else smuggled alongside it.
-    const v2 = { schemaVersion: dk["schemaVersion"], generation: dk["generation"], rows: dk["rows"] };
-    if (!v2.schemaVersion || typeof v2.schemaVersion[".validate"] !== "string" || Object.keys(v2.schemaVersion).length !== 1) return false;
-    if (!v2.generation || typeof v2.generation[".validate"] !== "string" || Object.keys(v2.generation).length !== 1) return false;
-    const rowRule = v2.rows && v2.rows["$rowId"];
-    if (!rowRule || typeof rowRule[".validate"] !== "string") return false;
-    if (Object.keys(v2.rows).length !== 1) return false;            // `rows` carries ONLY the row wildcard
-    for (const k of Object.keys(rowRule)) {
-      if (k === ".validate") continue;
-      if (["id", "gen", "date"].indexOf(k) === -1) return false;    // no unexpected child rule
-      if (typeof rowRule[k][".validate"] !== "string" || Object.keys(rowRule[k]).length !== 1) return false;
-    }
-    // The row contract must be the identity contract it claims to be.
-    if (!rowRule[".validate"].includes("newData.child('id').val() === $rowId")) return false;
-    if (!rowRule[".validate"].includes("newData.child('gen').val() === newData.parent().parent().child('generation').val()")) return false;
-    // Every added expression must actually constrain the entries node, not be inert.
-    for (const expr of [dk[".validate"], dk["_v"][".validate"], v2.schemaVersion[".validate"],
-                        v2.generation[".validate"], rowRule[".validate"]]) {
-      if (!expr.includes("biz:[^:]+:entries")) return false;
-    }
-    for (const expr of [dk[".validate"], dk["_v"][".validate"], v2.generation[".validate"], rowRule[".validate"]]) {
-      if (!expr.includes("matches(")) return false;
-    }
-    delete dk[".validate"];
-    delete dk["_v"];
-    delete dk["schemaVersion"];
-    delete dk["generation"];
-    delete dk["rows"];
-    try { assert.deepEqual(after, before); } catch { return false; }
-    return true;
+    return authorizedEntriesRulesDelta(before, after).ok === true;
   };
   const rulesExempt = changed.includes("database.rules.json") && rulesChangeIsOnlyAuthorizedEntriesValidation();
   assert.deepEqual(

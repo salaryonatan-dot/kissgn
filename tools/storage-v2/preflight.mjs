@@ -22,13 +22,52 @@ export const PREFLIGHT_BLOCKERS = Object.freeze({
   DUPLICATE_ENTRY_ID: "duplicate_entry_id",
   UNSUPPORTED_ROW_SHAPE: "unsupported_row_shape",
   INVALID_ENTRY_DATE: "invalid_entry_date",
+  // R-V2-H6 — representation boundary. Every accepted row must be storable as RTDB
+  // children WITHOUT any transformation beyond the one approved canonicalization
+  // (`null` / `{}` / `[]` values are absent in the store). Anything else is a blocker.
+  RESERVED_FIELD_PRESENT: "reserved_field_present",       // the row already carries the reserved epoch stamp key
+  UNREPRESENTABLE_FIELD_KEY: "unrepresentable_field_key", // a key RTDB cannot hold as a child name
+  UNREPRESENTABLE_VALUE: "unrepresentable_value",         // a value RTDB would silently alter (e.g. null inside an array)
 });
 
+// RTDB child keys: non-empty, no `. # $ / [ ]`, no control characters.
+const RTDB_KEY_OK = /^[^.#$/\[\]\x00-\x1f\x7f]+$/;
+// Walk a row and classify every value RTDB would not store as given. Returns
+// { dropped: [paths whose value canonicalizes to absent], bad: [{path, reason}] }.
+function representation(row, rowGenKey) {
+  const dropped = [], bad = [];
+  const walk = (v, path, inArray) => {
+    if (v === null || v === undefined) { if (inArray) bad.push({ path, reason: "null_inside_array" }); else dropped.push(path); return; }
+    if (typeof v === "number" && !Number.isFinite(v)) { bad.push({ path, reason: "non_finite_number" }); return; }
+    if (Array.isArray(v)) {
+      if (!v.length) { dropped.push(path); return; }
+      v.forEach((x, i) => walk(x, path + "[" + i + "]", true));
+      return;
+    }
+    if (typeof v === "object") {
+      const keys = Object.keys(v);
+      if (!keys.length) { dropped.push(path); return; }
+      keys.forEach((k) => {
+        if (!RTDB_KEY_OK.test(k)) { bad.push({ path: path + "." + k, reason: "invalid_key" }); return; }
+        walk(v[k], path ? path + "." + k : k, false);
+      });
+      return;
+    }
+  };
+  Object.keys(row).forEach((k) => {
+    if (k === rowGenKey) return;                                  // reported separately as reserved
+    if (!RTDB_KEY_OK.test(k)) { bad.push({ path: k, reason: "invalid_key" }); return; }
+    walk(row[k], k, false);
+  });
+  return { dropped, bad };
+}
+
 export function createLegacyPreflight(deps) {
-  const { parseEntriesNode, isValidEntryId, isPlainRow, entryDateKey, detectStorageMode } = deps || {};
+  const { parseEntriesNode, isValidEntryId, isPlainRow, entryDateKey, detectStorageMode, rowGenKey } = deps || {};
   for (const k of ["parseEntriesNode", "isValidEntryId", "isPlainRow", "entryDateKey", "detectStorageMode"]) {
     if (typeof (deps || {})[k] !== "function") throw new Error("preflight requires the runtime contract helper: " + k);
   }
+  if (typeof rowGenKey !== "string" || !rowGenKey) throw new Error("preflight requires the runtime contract value: rowGenKey");
 
   // `raw` is the node EXACTLY as stored. Returns a deterministic report; the same input
   // always yields the same blockers in the same order.
@@ -55,6 +94,7 @@ export function createLegacyPreflight(deps) {
       return { ok: false, mode: "legacy", rowCount: null, blockers: [{ code: PREFLIGHT_BLOCKERS.NOT_AN_ARRAY }] };
     }
     const missing = [], malformedRows = [], badDate = [], firstSeen = Object.create(null), dupIds = [];
+    const reserved = [], badKeys = [], badValues = [], normalized = [];
     rows.forEach((r, i) => {
       if (!isPlainRow(r)) { malformedRows.push(i); return; }
       const id = r.id;
@@ -63,6 +103,10 @@ export function createLegacyPreflight(deps) {
       if (firstSeen[id] !== undefined) { if (dupIds.indexOf(id) === -1) dupIds.push(id); }
       else firstSeen[id] = i;
       if (!entryDateKey(r.date)) badDate.push(i);
+      if (Object.prototype.hasOwnProperty.call(r, rowGenKey)) reserved.push(i);
+      const rep = representation(r, rowGenKey);
+      rep.bad.forEach((b) => (b.reason === "invalid_key" ? badKeys : badValues).push({ index: i, path: b.path, reason: b.reason }));
+      if (rep.dropped.length) normalized.push({ index: i, paths: rep.dropped });
     });
     const blockers = [];
     if (malformedRows.length) blockers.push({ code: PREFLIGHT_BLOCKERS.UNSUPPORTED_ROW_SHAPE, indexes: malformedRows, count: malformedRows.length });
@@ -77,10 +121,20 @@ export function createLegacyPreflight(deps) {
       remedy: "operator_resolution_required",   // which of the two rows survives is a business decision
     });
     if (badDate.length) blockers.push({ code: PREFLIGHT_BLOCKERS.INVALID_ENTRY_DATE, indexes: badDate, count: badDate.length });
+    if (reserved.length) blockers.push({
+      code: PREFLIGHT_BLOCKERS.RESERVED_FIELD_PRESENT, key: rowGenKey, indexes: reserved, count: reserved.length,
+      remedy: "operator_resolution_required",   // the row's own value would be indistinguishable from the epoch stamp
+    });
+    if (badKeys.length) blockers.push({ code: PREFLIGHT_BLOCKERS.UNREPRESENTABLE_FIELD_KEY, fields: badKeys, count: badKeys.length });
+    if (badValues.length) blockers.push({ code: PREFLIGHT_BLOCKERS.UNREPRESENTABLE_VALUE, fields: badValues, count: badValues.length });
     const ok = blockers.length === 0;
+    // `normalization` is REPORTED, never applied here: it names exactly which values the
+    // approved canonicalization will drop, so the conversion's transformation is
+    // reviewed up front instead of discovered after the fact.
+    const normalization = { rowsAffected: normalized.length, rows: normalized };
     return ok
-      ? { ok: true, mode: "legacy", rowCount: rows.length, rows, blockers: [] }
-      : { ok: false, mode: "legacy", rowCount: rows.length, blockers };
+      ? { ok: true, mode: "legacy", rowCount: rows.length, rows, blockers: [], normalization }
+      : { ok: false, mode: "legacy", rowCount: rows.length, blockers, normalization };
   }
 
   return { preflightLegacyNode };

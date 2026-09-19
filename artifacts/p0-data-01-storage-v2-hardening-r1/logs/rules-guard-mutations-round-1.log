@@ -1,0 +1,54 @@
+⚠  Unable to fetch the CLI MOTD and remote config. This is not a fatal error, but may indicate an issue with your network connection.
+i  emulators: Starting emulators: database
+i  emulators: Detected demo project ID "demo-marjin-rules", emulated services will use a demo configuration and attempts to access non-emulated services for this project will fail.
+i  database: Database Emulator logging to database-debug.log
+i  Running script: node /Users/yonatan/Documents/marjin/kissgn-p0-data-01-storage-v2/test/emulator/storage-v2-rules-guard-mutations.mjs
+[2026-09-19T08:09:02.071Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:v2:entries/rows/53250f3c-ce27-4f3c-8e27-250f3c2bce27 failed: permission_denied 
+[2026-09-19T08:09:04.141Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:v2:entries/rows/53250f3c-ce27-4f3c-8e27-250f3c2bce27 failed: permission_denied 
+[2026-09-19T08:09:04.613Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:v2:entries/rows/53250f3c-ce27-4f3c-8e27-250f3c2bce27 failed: permission_denied 
+[2026-09-19T08:09:06.638Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:v2:entries/rows/53250f3c-ce27-4f3c-8e27-250f3c2bce27 failed: permission_denied 
+[2026-09-19T08:09:07.012Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:legacy:entries failed: permission_denied 
+[2026-09-19T08:09:08.419Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:legacy:entries failed: permission_denied 
+[2026-09-19T08:09:08.885Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:legacy:entries/generation failed: permission_denied 
+[2026-09-19T08:09:10.213Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:legacy:entries/generation failed: permission_denied 
+[2026-09-19T08:09:10.532Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:v2:entries/_v failed: permission_denied 
+[2026-09-19T08:09:11.601Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:v2:entries/_v failed: permission_denied 
+[2026-09-19T08:09:11.805Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:legacy:entries/schemaVersion failed: permission_denied 
+[2026-09-19T08:09:12.602Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:legacy:entries/schemaVersion failed: permission_denied 
+[2026-09-19T08:09:12.819Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:v2:entries failed: permission_denied 
+[2026-09-19T08:09:13.595Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:v2:entries failed: permission_denied 
+[2026-09-19T08:09:13.800Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:v2:entries failed: permission_denied 
+[2026-09-19T08:09:14.611Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:v2:entries failed: permission_denied 
+[2026-09-19T08:09:14.811Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:v2:entries/rows failed: permission_denied 
+[2026-09-19T08:09:15.471Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:v2:entries/rows failed: permission_denied 
+[2026-09-19T08:09:15.646Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:empty:entries/generation failed: permission_denied 
+[2026-09-19T08:09:16.344Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:empty:entries/generation failed: permission_denied 
+[2026-09-19T08:09:16.557Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:empty:entries/generation failed: permission_denied 
+[2026-09-19T08:09:17.373Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:empty:entries/generation failed: permission_denied 
+[2026-09-19T08:09:17.581Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:v2:entries/rows/4a250111-a3a6-4111-83a6-2501112ba3a6 failed: permission_denied 
+[2026-09-19T08:09:18.306Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:v2:entries/rows/4a250111-a3a6-4111-83a6-2501112ba3a6 failed: permission_denied 
+
+mutation                                         shipped  mutated  restored  guard                                          result
+--------------------------------------------------------------------------------------------------------------------------------------------
+inert row validator wrapper `true || (…)`        deny     allow    deny      rejected:authorized_rule_differs:rows          PASS
+plain inert row validator `true`                 deny     allow    deny      rejected:authorized_rule_differs:rows          PASS
+inert envelope validator wrapper                 deny     allow    deny      rejected:authorized_rule_differs:.validate     PASS
+inert generation validator wrapper               deny     allow    deny      rejected:authorized_rule_differs:generation    PASS
+inert _v validator wrapper                       deny     allow    deny      rejected:authorized_rule_differs:_v            PASS
+inert schemaVersion + envelope wrappers (marker  deny     allow    deny      rejected:authorized_rule_differs:.validate     PASS
+cutover guard dropped from .write                deny     allow    deny      rejected:write_rule_not_base_plus_cutover_guar PASS
+cutover guard weakened to `true`                 deny     allow    deny      rejected:write_rule_not_base_plus_cutover_guar PASS
+rows-must-be-a-map dropped (held twice)          deny     allow    deny      rejected:authorized_rule_differs:.validate     PASS
+epoch step loosened to +2 (held twice)           deny     allow    deny      rejected:authorized_rule_differs:.validate     PASS
+epoch rollback permitted (held twice)            deny     allow    deny      rejected:authorized_rule_differs:.validate     PASS
+row stamp renamed away from the reserved key     deny     allow    deny      rejected:authorized_rule_differs:rows          PASS
+
+=== TOTALS ===
+mutations=12 proven_weakening_and_guard_rejected=12 failed=0
+
+ALL MUTATIONS PROVEN: each guard rejection corresponds to a real loss of server enforcement
+✔  Script exited successfully (code 0)
+i  emulators: Shutting down emulators.
+i  database: Stopping Database Emulator
+i  hub: Stopping emulator hub
+i  logging: Stopping Logging Emulator
