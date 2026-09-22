@@ -1,0 +1,105 @@
+⚠  Unable to fetch the CLI MOTD and remote config. This is not a fatal error, but may indicate an issue with your network connection.
+i  emulators: Starting emulators: database
+i  emulators: Detected demo project ID "demo-marjin-rules", emulated services will use a demo configuration and attempts to access non-emulated services for this project will fail.
+i  database: Database Emulator logging to database-debug.log
+i  Running script: node /Users/yonatan/Documents/marjin/kissgn-p0-data-01-storage-v2/test/emulator/storage-v2-matrix.mjs
+[2026-09-22T11:41:29.474Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/d34af868-3539-4868-8539-4af8684c3539 failed: permission_denied
+[2026-09-22T11:41:29.499Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/d44af9fb-33a6-49fb-83a6-4af9fb4c33a6 failed: permission_denied
+[2026-09-22T11:41:29.523Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/d94b01da-385f-41da-885f-4b01da4c385f failed: permission_denied
+[2026-09-22T11:41:29.559Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/da4b036d-36cc-436d-86cc-4b036d4c36cc failed: permission_denied
+[2026-09-22T11:41:29.591Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/row-1 failed: permission_denied
+[2026-09-22T11:41:29.643Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows failed: permission_denied
+[2026-09-22T11:41:29.877Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/6c6f7991-5bcc-4991-8bcc-6f7991e65bcc/id failed: permission_denied
+[2026-09-22T11:41:30.539Z]  @firebase/database: FIREBASE WARNING: transaction at /tenants/tenantA/biz:bizA:entries/rows/6c6f7991-5bcc-4991-8bcc-6f7991e65bcc failed: permission_denied
+[2026-09-22T11:41:30.559Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/6c6f7991-5bcc-4991-8bcc-6f7991e65bcc failed: permission_denied
+[2026-09-22T11:41:30.935Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:41:30.947Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/_v failed: permission_denied
+[2026-09-22T11:41:30.959Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:41:31.090Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizB:entries/rows/53250f3c-ce27-4f3c-8e27-250f3c2bce27 failed: permission_denied
+[2026-09-22T11:41:31.140Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/542510cf-cc94-40cf-8c94-2510cf2bcc94 failed: permission_denied
+[2026-09-22T11:41:31.177Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/55251262-d14d-4262-814d-2512622bd14d failed: permission_denied
+[2026-09-22T11:41:31.235Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:41:31.244Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:41:31.251Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/schemaVersion failed: permission_denied
+[2026-09-22T11:41:31.259Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/schemaVersion failed: permission_denied
+[2026-09-22T11:41:31.296Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:41:31.308Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:41:31.315Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:41:31.328Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/schemaVersion failed: permission_denied
+[2026-09-22T11:41:31.339Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/schemaVersion failed: permission_denied
+[2026-09-22T11:41:31.361Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:41:31.372Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:41:31.432Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/generation failed: permission_denied
+[2026-09-22T11:41:31.449Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:41:31.462Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:41:31.475Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:41:31.509Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:41:31.520Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/generation failed: permission_denied
+[2026-09-22T11:41:31.558Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/1fa4af71-f676-4f71-8676-a4af7196f676 failed: permission_denied
+[2026-09-22T11:41:31.584Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/generation failed: permission_denied
+[2026-09-22T11:41:31.594Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizC:entries failed: permission_denied
+[2026-09-22T11:41:31.622Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizD:entries failed: permission_denied
+[2026-09-22T11:41:31.674Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows failed: permission_denied
+[2026-09-22T11:41:31.684Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows failed: permission_denied
+[2026-09-22T11:41:31.703Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows failed: permission_denied
+[2026-09-22T11:41:31.721Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:41:31.802Z]  @firebase/database: FIREBASE WARNING: transaction at /tenants/tenantA/biz:bizA:entries/rows/6c6f7991-5bcc-4991-8bcc-6f7991e65bcc failed: permission_denied
+
+case     area           status ms     notes
+------------------------------------------------------------------------------------------------------------------------
+V2-L01   legacy         PASS   1979   legacy read/write intact
+V2-P01   preflight      PASS   63     ok, 3 rows, node untouched
+V2-P02   preflight      PASS   55     blocked: missing_entry_id
+V2-P03   preflight      PASS   37     blocked
+V2-P04   preflight      PASS   33     blocked
+V2-M01   cutover        PASS   118    3 rows, schemaVersion=2, generation set, _v frozen
+V2-M02   cutover        PASS   50     refused
+V2-M03   cutover        PASS   76     refused: missing_entry_id
+V2-M04   cutover        PASS   611    runs=2, one HTTP 412, 4 rows — concurrent legacy write preserved
+V2-M05   cutover        PASS   203    lost update reproduced, as required of a negative control
+V2-I01   identity       PASS   77     allow
+V2-I02   identity       PASS   35     deny
+V2-I03   identity       PASS   46     deny, deny
+V2-I04   identity       PASS   69     deny, deny
+V2-I05   identity       PASS   116    structurally impossible
+V2-I06   identity       PASS   71     allow, allow
+V2-I07   identity       PASS   54     allow — the serialization artifact is gone
+V2-I08   identity       PASS   53     deny
+V2-C01   concurrency    PASS   121    both committed, 2 callback runs for 2 writes — no contention
+V2-C02   concurrency    PASS   91     conflictPaths=["sales"]
+V2-C03   concurrency    PASS   109    refused
+V2-C04   concurrency    PASS   113    committed, no false stale
+V2-C05   concurrency    PASS   92     committed
+V2-G01   generation     PASS   97     advanced 1 -> 2
+V2-G02   generation     PASS   51     client=blocked, rules=deny
+V2-G03   generation     PASS   31     committed
+V2-G04   generation     PASS   141    refused: blocked/precondition_failed
+V2-G05   generation     PASS   146    refused: blocked
+V2-X01   compatibility  PASS   97     deny ×3, node unchanged
+V2-X02   compatibility  PASS   56     fail-closed, twice
+V2-X03   compatibility  PASS   0      blocked_unhydrated ×2
+V2-A01   authorization  PASS   167    deny ×3, allow ×1
+V2-H01   cutover-perman PASS   196    deny ×11, legacy scope unchanged
+V2-H02   generation     PASS   245    deny ×10, allow ×6
+V2-H03   rows-map       PASS   89     deny ×4
+V2-H04   generation     PASS   81     rotated 1 -> 2 on empty; retired work refused client-side and server-side
+V2-H05   generation     PASS   73     old intent refused, new intent accepted
+V2-H06   listener-autho PASS   166    displayed converged after edit, queued edits, foreign write, delete and clear-all
+V2-H07   bootstrap      PASS   161    initialised V2 directly; race: committed,conflict
+V2-H08   cutover        PASS   72     gen preserved; canonicalization reported; 3 representation blockers
+V2-H09   idempotency    PASS   61     committed → already_created → id_collision
+V2-H10   compatibility  PASS   38     blocked/storage_mode_mismatch ×2
+V2-W01   production-wir PASS   143    absent→V2 gen1, create, edit, delete, clear→gen2 — all through index.html's own wiring
+V2-W02   production-wir PASS   125    retired binding refused before transaction; business switch bound to the new node
+V2-W03   listener-order PASS   112    newer snapshot (row 777) displayed after the clear promise resolved
+V2-W04   idempotency    PASS   198    array readback; retry already_created; 3 real changes collide; ordinary unchanged; conversion reported + idempotent
+
+=== TOTALS ===
+total=46 passed=46 failed=0
+
+ALL CASES PASSED
+✔  Script exited successfully (code 0)
+i  emulators: Shutting down emulators.
+i  database: Stopping Database Emulator
+i  hub: Stopping emulator hub
+i  logging: Stopping Logging Emulator

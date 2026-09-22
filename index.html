@@ -1303,6 +1303,9 @@ function createPersistence(io) {
 //    fingerprints are bounded (last 16) so an identical FUTURE remote payload is not
 //    permanently blacklisted.
 //  • Terminal identity is always the captured ctx (never mutable _currentTenantId).
+// R2-B2: the storage epoch is a strictly increasing integer (see MarjinStorageV2); a
+// legacy destination has none (null) and never takes the newer-snapshot branch.
+const isGenerationEpoch = (v) => typeof v === "number" && Number.isInteger(v) && v >= 1;
 function createEntriesWriteCoordinator(io) {
   // ── R10 ──────────────────────────────────────────────────────────────────────
   // The lane keeps its PROVEN R6–R9 responsibilities: per-destination single-flight
@@ -1390,13 +1393,34 @@ function createEntriesWriteCoordinator(io) {
     const committed = res && (res.status === "committed" || res.status === "committed_idempotent");
     if (committed) {
       writeLane.committedRev = rev;
-      if (res.rows) {
+      // R2-B2: a collection result (legacy engine, V2 clear-all) is authoritative for
+      // the state the transaction PRODUCED — but a listener snapshot parked while the
+      // promise was still pending can already be NEWER than that state: after a V2
+      // clear-all committed at epoch N+1, another client may have created a row in
+      // epoch N+1 and this client may already hold that authoritative snapshot. The
+      // parked echo carries the storage epoch it was received under (captured through
+      // the same storageBinding seam every intent uses); an echo at or beyond the
+      // result's epoch supersedes the result and is converged on instead. An echo from
+      // an OLDER epoch (the pre-clear content this clear was confirmed against) is what
+      // the result replaces, exactly as before. Nothing here invents a collection value.
+      const parked = writeLane.deferred;
+      const newerParked = !!(res.rows && parked && isGenerationEpoch(res.generation)
+        && parked.storage && isGenerationEpoch(parked.storage.generation)
+        && parked.storage.generation >= res.generation);
+      if (res.rows && !newerParked) {
         // The TRANSACTION RESULT is authoritative — not the client's prior view.
         writeLane.deferred = null;
         marker.fp = fp(res.rows);
         writeLane.rawRows = res.rows;
         writeLane.desiredRows = res.rows;
         if (writeLane === lane && io.selection.isLive(ctx)) io.applyRows(res.rows);
+      } else if (res.rows && newerParked) {
+        // The authoritative listener already moved past this result: no own-echo is
+        // pending any more (it was the parked snapshot or an earlier one), so drop the
+        // marker and converge on the newer snapshot — unless newer local work is still
+        // queued, in which case the next echo supersedes it.
+        const mi = ownPending.indexOf(marker); if (mi !== -1) ownPending.splice(mi, 1);
+        convergeDeferred(writeLane);
       } else {
         // R-V2-H3: a row-scoped commit returns no collection value, so the LISTENER is
         // the only authority for what the collection now holds. An authoritative echo
@@ -1503,7 +1527,12 @@ function createEntriesWriteCoordinator(io) {
         && ln.owner.bizId === ctx.bizId && ln.owner.gen === ctx.gen);
       const ownWriteInFlight = writing && writingLane === ln;
       if (laneOwned && (ownWriteInFlight || ln.desiredRev > ln.attemptedRev)) {
-        ln.deferred = { rows: canonical, owner: { tenantId: ctx.tenantId, bizId: ctx.bizId, gen: ctx.gen } };
+        // R2-B2: remember the storage epoch this snapshot was received under (the
+        // listener updates the mode ref before delivering the echo), so a completing
+        // collection-scoped write can tell a NEWER snapshot from the one it replaced.
+        const storage = io.storageBinding ? io.storageBinding() : undefined;
+        ln.deferred = { rows: canonical, owner: { tenantId: ctx.tenantId, bizId: ctx.bizId, gen: ctx.gen },
+                        storage: storage ? { mode: storage.mode, generation: storage.generation === undefined ? null : storage.generation } : null };
         return { status: "deferred_pending_local", deferredStored: true };
       }
       io.applyRows(canonical);
@@ -2399,7 +2428,34 @@ function canonicalStorageValue(v) {
   }
   return v;
 }
-const canonicalRowKey = (row) => stableStringify(canonicalStorageValue(row) || {});
+// R2-B3 — RTDB numeric-key readback. The two MAP fields of an entry (`supplier_payments`,
+// `hourly_payroll` — MAP_FIELDS) are maps keyed by supplier / employee id. Ids are
+// frequently numeric strings ("0", "1", …), and RTDB hands a map whose keys are dense
+// integers back as a JavaScript ARRAY. For these two fields — and ONLY these, because
+// their domain shape is a keyed map where element order carries no meaning — an array
+// is therefore the same value as the map {index: element}; a `null` element is an
+// absent key. Every other field keeps array semantics (order is content) and no
+// numeric-key object anywhere else is reinterpreted, so a genuine content difference
+// — a changed amount, an added or removed key — still differs.
+function canonicalMapField(v) {
+  if (v === null || v === undefined) return undefined;
+  if (Array.isArray(v)) {
+    const m = {};
+    v.forEach((x, i) => { if (x !== null && x !== undefined) m[String(i)] = x; });
+    return canonicalStorageValue(m);
+  }
+  return canonicalStorageValue(v);
+}
+function canonicalRowValue(row) {
+  if (!isPlainRow(row)) return canonicalStorageValue(row);
+  const out = {};
+  Object.keys(row).sort().forEach((k) => {
+    const c = MAP_FIELDS.indexOf(k) !== -1 ? canonicalMapField(row[k]) : canonicalStorageValue(row[k]);
+    if (c !== undefined) out[k] = c;
+  });
+  return Object.keys(out).length ? out : undefined;
+}
+const canonicalRowKey = (row) => stableStringify(canonicalRowValue(row) || {});
 // Explicit storage-mode detection. There is no "probably".
 function detectStorageMode(raw) {
   if (raw === null || raw === undefined) return { mode: "absent" };
@@ -2520,7 +2576,7 @@ function applyRowIntent(currentRow, intent) {
 // create, in one node-level CAS, so a new business never touches the legacy shape.
 const isRulesDenial = (err) => /permission[_ ]denied/i.test(String((err && (err.message || "")) + (err && err.code || "")));
 function stampRow(row, generation) {
-  const c = canonicalStorageValue(row) || {};
+  const c = canonicalRowValue(row) || {};
   return { ...c, [ROW_GEN_KEY]: generation };
 }
 function createV2EntriesMutator(io) {
@@ -2636,7 +2692,7 @@ function createEntriesStorageRouter(io) {
     },
   };
 }
-window.MarjinStorageV2 = Object.freeze({ STORAGE_V2, GENERATION_FIRST, ROW_GEN_KEY, isV2Node, detectStorageMode, readV2Rows, readEntriesNode, applyRowIntent, createV2EntriesMutator, createEntriesStorageRouter, isGenerationToken, nextGenerationOf, canonicalStorageValue, canonicalRowKey, stampRow });
+window.MarjinStorageV2 = Object.freeze({ STORAGE_V2, GENERATION_FIRST, ROW_GEN_KEY, MAP_FIELDS, isV2Node, detectStorageMode, readV2Rows, readEntriesNode, applyRowIntent, createV2EntriesMutator, createEntriesStorageRouter, isGenerationToken, nextGenerationOf, canonicalStorageValue, canonicalMapField, canonicalRowValue, canonicalRowKey, stampRow });
 
 const TARGETS = {
   salesGrowthPct: 5,
@@ -4367,7 +4423,11 @@ function PilotDashboard() {
       return m ? { mode: m.mode, generation: m.generation === undefined ? null : m.generation } : undefined;
     },
     applyRows: setEntries,
-    mutate: (intent, ctx) => entriesStorageRouterRef.current.mutate(intent, ctx),
+    // R2-B1: the binding the coordinator captured at SUBMISSION travels with the job
+    // through this adapter to the router and engine. Dropping it here refused every
+    // V2 operation before any transaction (Codex R1-F1); nothing is fabricated at a
+    // lower layer — the engine still requires the captured binding.
+    mutate: (intent, ctx, binding) => entriesStorageRouterRef.current.mutate(intent, ctx, binding),
   });
   // Collision-resistant id generated BEFORE submission so a transaction retry reuses
   // it. Never derived from a date, counter, index or fingerprint.

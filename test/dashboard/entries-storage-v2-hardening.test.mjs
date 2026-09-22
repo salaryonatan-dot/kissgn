@@ -381,14 +381,14 @@ test("[H5] production wiring: the mode ref is reset on every selection change, s
 // ═══ H6 — conversion preserves domain fields; representation policy ═══════════
 const preflightDeps = () => ({ parseEntriesNode: ML.parseEntriesNode, isValidEntryId: ML.isValidEntryId,
   isPlainRow: (r) => !!r && typeof r === "object" && !Array.isArray(r), entryDateKey: ME.entryDateKey,
-  detectStorageMode: V2.detectStorageMode, rowGenKey: GK });
+  detectStorageMode: V2.detectStorageMode, rowGenKey: GK, mapFields: V2.MAP_FIELDS });
 test("[H6] a legacy `gen` domain field survives conversion under its own name; the epoch stamp is structurally separate", async () => {
   const { preflightLegacyNode } = createLegacyPreflight(preflightDeps());
   const { upgradeBusinessToV2 } = createStorageV2Upgrader({ preflightLegacyNode, isV2Node: V2.isV2Node, stampRow: V2.stampRow, generationFirst: V2.GENERATION_FIRST });
   const odd = row(ID1, "2026-08-01", 1, { gen: "legacy-domain-value", nullable: null, supplier_payments: {}, list: [], notes: "" });
   const remote = fakeRemote({ _v: JSON.stringify([odd]) });
   const rep = preflightLegacyNode(remote.getAt(""));
-  assert.equal(rep.ok, true); assert.deepEqual(plain(rep.normalization), { rowsAffected: 1, rows: [{ index: 0, paths: ["nullable", "supplier_payments", "list"] }] });
+  assert.equal(rep.ok, true); assert.deepEqual(plain(rep.normalization), { rowsAffected: 1, rows: [{ index: 0, paths: ["nullable", "supplier_payments", "list"] }], numericKeyMaps: { rowsAffected: 0, rows: [] } });
   const res = await upgradeBusinessToV2({ transactNode: (t, k, fn) => remote.transact("", fn) }, { tenantId: "T", bizId: "B" });
   assert.equal(res.status, "committed"); assert.equal(res.generation, 1); assert.deepEqual(plain(res.normalization), plain(rep.normalization));
   const stored = remote.getAt("rows/" + ID1);

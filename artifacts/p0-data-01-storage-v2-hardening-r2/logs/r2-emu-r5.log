@@ -1,0 +1,256 @@
+⚠  Unable to fetch the CLI MOTD and remote config. This is not a fatal error, but may indicate an issue with your network connection.
+i  emulators: Starting emulators: database
+i  emulators: Detected demo project ID "demo-marjin-rules", emulated services will use a demo configuration and attempts to access non-emulated services for this project will fail.
+i  database: Database Emulator logging to database-debug.log
+i  Running script: node /Users/yonatan/Documents/marjin/kissgn-p0-data-01-storage-v2/test/emulator/rtdb-authorization-matrix.mjs && node /Users/yonatan/Documents/marjin/kissgn-p0-data-01-storage-v2/test/emulator/entries-remote-atomic-emulator.mjs && node /Users/yonatan/Documents/marjin/kissgn-p0-data-01-storage-v2/test/emulator/entries-rules-validation-matrix.mjs
+[2026-09-22T11:46:59.419Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:46:59.557Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:46:59.710Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantB/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:46:59.831Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:00.108Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:00.173Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizB:entries failed: permission_denied
+[2026-09-22T11:47:00.355Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz_access/bizA/u_viewer failed: permission_denied
+[2026-09-22T11:47:00.378Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz_access/bizA/u_manager failed: permission_denied
+[2026-09-22T11:47:00.483Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:00.540Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:tasks failed: permission_denied
+[2026-09-22T11:47:00.629Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:config failed: permission_denied
+[2026-09-22T11:47:00.724Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/roles/u_viewer failed: permission_denied
+[2026-09-22T11:47:00.747Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/roles/u_owner failed: permission_denied
+[2026-09-22T11:47:00.765Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz_access/bizA/u_viewer failed: permission_denied
+[2026-09-22T11:47:00.814Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:suppliers failed: permission_denied
+[2026-09-22T11:47:01.023Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:checklist_templates failed: permission_denied
+[2026-09-22T11:47:01.318Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizB:tasks failed: permission_denied
+[2026-09-22T11:47:01.347Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:logs failed: permission_denied
+[2026-09-22T11:47:01.413Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:checklist_template failed: permission_denied
+[2026-09-22T11:47:01.437Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:checklist_template failed: permission_denied
+[2026-09-22T11:47:01.505Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:checklist_template_items:tpl1 failed: permission_denied
+[2026-09-22T11:47:01.549Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:checklist_runs:2026-07-14 failed: permission_denied
+[2026-09-22T11:47:01.603Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:checklist_simple_runs:2026-07-14:tpl1 failed: permission_denied
+[2026-09-22T11:47:01.675Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/analytics failed: permission_denied
+[2026-09-22T11:47:01.744Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:analytics:daily:2026-07-14 failed: permission_denied
+[2026-09-22T11:47:01.792Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:insights:daily:2026-07-14 failed: permission_denied
+[2026-09-22T11:47:01.860Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:pin failed: permission_denied
+[2026-09-22T11:47:01.908Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:unknownsuffix failed: permission_denied
+[2026-09-22T11:47:01.925Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:analytics:daily:2026-13-99 failed: permission_denied
+[2026-09-22T11:47:01.960Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/entry_exceptions/bizA/2026-07-15 failed: permission_denied
+[2026-09-22T11:47:01.978Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/entry_exceptions/bizA/2026-07-14 failed: permission_denied
+[2026-09-22T11:47:02.003Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/entry_exceptions/bizA/2026-07-14 failed: permission_denied
+[2026-09-22T11:47:02.133Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/members/u_new2 failed: permission_denied
+[2026-09-22T11:47:02.167Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/access_meta/x failed: permission_denied
+[2026-09-22T11:47:02.184Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz_access/bizB/u_viewer failed: permission_denied
+[2026-09-22T11:47:02.244Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:02.282Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:checklist_runs:2026-07-14 failed: permission_denied
+[2026-09-22T11:47:02.299Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/roles/u_viewer failed: permission_denied
+[2026-09-22T11:47:02.311Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/entry_exceptions/bizA/2026-07-14 failed: permission_denied
+[2026-09-22T11:47:02.343Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/entries failed: permission_denied
+[2026-09-22T11:47:02.357Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/entries failed: permission_denied
+[2026-09-22T11:47:02.382Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/entries failed: permission_denied
+[2026-09-22T11:47:02.490Z]  @firebase/database: FIREBASE WARNING: update at /tenants/tenantA failed: permission_denied
+[2026-09-22T11:47:02.578Z]  @firebase/database: FIREBASE WARNING: set at /user_active_biz/u_viewer failed: permission_denied
+ID        | area            | identity      | op     | expect | actual | PASS | path
+------------------------------------------------------------------------------------------------------------------------
+A1-01     | auth/tenant     | unauth        | read   | deny   | deny   | PASS | tenants/tenantA/biz:bizA:entries
+A1-02     | auth/tenant     | unauth        | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:entries
+A1-03     | auth/tenant     | nomember      | read   | deny   | deny   | PASS | tenants/tenantA/biz:bizA:entries
+A1-04     | auth/tenant     | nomember      | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:entries
+A1-05     | auth/tenant     | viewer        | read   | deny   | deny   | PASS | tenants/tenantB/biz:bizA:entries
+A1-06     | auth/tenant     | owner         | update | deny   | deny   | PASS | tenants/tenantB/biz:bizA:entries
+A1-07     | auth/tenant     | tenantB       | read   | deny   | deny   | PASS | tenants/tenantA/biz:bizA:entries
+A1-08     | auth/tenant     | tenantB       | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:entries
+A1-09     | auth/tenant     | owner         | read   | deny   | deny   | PASS | tenants/tenantA
+A2-10     | biz_access      | viewer        | read   | allow  | allow  | PASS | tenants/tenantA/biz:bizA:entries
+A2-11     | biz_access      | viewer        | read   | deny   | deny   | PASS | tenants/tenantA/biz:bizB:entries
+A2-12     | biz_access      | viewer_nobiz  | read   | deny   | deny   | PASS | tenants/tenantA/biz:bizA:entries
+A2-13     | biz_access      | manager_nobiz | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:entries
+A2-14     | biz_access      | manager       | update | deny   | deny   | PASS | tenants/tenantA/biz:bizB:entries
+A2-15     | biz_access      | bizAB         | read   | allow  | allow  | PASS | tenants/tenantA/biz:bizA:entries
+A2-16     | biz_access      | bizAB         | read   | allow  | allow  | PASS | tenants/tenantA/biz:bizB:entries
+A2-17     | biz_access      | bizAB         | update | allow  | allow  | PASS | tenants/tenantA/biz:bizB:entries
+A2-18     | biz_access      | owner         | update | deny   | deny   | PASS | tenants/tenantA/biz_access/bizA/u_viewer
+A2-19     | biz_access      | manager       | update | deny   | deny   | PASS | tenants/tenantA/biz_access/bizA/u_manager
+A2-20     | biz_access      | owner         | read   | deny   | deny   | PASS | tenants/tenantA/biz_access
+A3-21     | roles           | shift         | read   | allow  | allow  | PASS | tenants/tenantA/biz:bizA:entries
+A3-22     | roles           | shift         | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:entries
+A3-23     | roles           | shift         | update | allow  | allow  | PASS | tenants/tenantA/biz:bizA:tasks
+A3-24     | roles           | viewer        | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:tasks
+A3-25     | roles           | manager       | update | allow  | allow  | PASS | tenants/tenantA/biz:bizA:config
+A3-26     | roles           | viewer        | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:config
+A3-27     | roles           | owner         | update | allow  | allow  | PASS | tenants/tenantA/biz:bizA:entries
+A3-28     | roles           | super         | update | allow  | allow  | PASS | tenants/tenantA/biz:bizA:entries
+A3-29     | roles           | viewer        | update | deny   | deny   | PASS | tenants/tenantA/roles/u_viewer
+A3-30     | roles           | owner         | update | deny   | deny   | PASS | tenants/tenantA/roles/u_owner
+A3-31     | roles           | viewer        | update | deny   | deny   | PASS | tenants/tenantA/biz_access/bizA/u_viewer
+A4-32     | mgr-keys        | manager       | update | allow  | allow  | PASS | tenants/tenantA/biz:bizA:suppliers
+A4-33     | mgr-keys        | shift         | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:suppliers
+A4-34     | mgr-keys        | manager       | update | allow  | allow  | PASS | tenants/tenantA/biz:bizA:fixed
+A4-35     | mgr-keys        | owner         | update | allow  | allow  | PASS | tenants/tenantA/biz:bizA:lastyear
+A4-36     | mgr-keys        | manager       | update | allow  | allow  | PASS | tenants/tenantA/biz:bizA:credits
+A4-37     | mgr-keys        | manager       | update | allow  | allow  | PASS | tenants/tenantA/biz:bizA:pettycash
+A4-38     | mgr-keys        | manager       | update | allow  | allow  | PASS | tenants/tenantA/biz:bizA:customer_compensations
+A4-39     | mgr-keys        | manager       | update | allow  | allow  | PASS | tenants/tenantA/biz:bizA:checklist_templates
+A4-40     | mgr-keys        | viewer        | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:checklist_templates
+A4-41     | mgr-keys        | viewer        | read   | allow  | allow  | PASS | tenants/tenantA/biz:bizA:config
+A4-42     | mgr-keys        | viewer_nobiz  | read   | deny   | deny   | PASS | tenants/tenantA/biz:bizA:suppliers
+A4-43     | mgr-keys        | viewer        | read   | allow  | allow  | PASS | tenants/tenantA/entries
+A4-44     | mgr-keys        | nomember      | read   | deny   | deny   | PASS | tenants/tenantA/entries
+A5-45     | shift-keys      | shift         | update | allow  | allow  | PASS | tenants/tenantA/biz:bizA:logs
+A5-46     | shift-keys      | shift         | update | allow  | allow  | PASS | tenants/tenantA/biz:bizA:active-log
+A5-47     | shift-keys      | viewer        | read   | allow  | allow  | PASS | tenants/tenantA/biz:bizA:tasks
+A5-48     | shift-keys      | manager       | update | allow  | allow  | PASS | tenants/tenantA/biz:bizA:tasks
+A5-49     | shift-keys      | owner         | update | allow  | allow  | PASS | tenants/tenantA/biz:bizA:tasks
+A5-50     | shift-keys      | shift         | update | deny   | deny   | PASS | tenants/tenantA/biz:bizB:tasks
+A5-51     | shift-keys      | viewer        | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:logs
+A6-52     | checklist       | manager       | update | allow  | allow  | PASS | tenants/tenantA/biz:bizA:checklist_template
+A6-53     | checklist       | shift         | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:checklist_template
+A6-54     | checklist       | viewer        | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:checklist_template
+A6-55     | checklist       | viewer        | read   | allow  | allow  | PASS | tenants/tenantA/biz:bizA:checklist_template
+A6-56     | checklist       | owner         | read   | deny   | deny   | PASS | tenants/tenantA/biz:bizA:checklist_template_items:tpl1
+A6-57     | checklist       | manager       | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:checklist_template_items:tpl1
+A6-58     | checklist       | owner         | read   | deny   | deny   | PASS | tenants/tenantA/biz:bizA:checklist_runs:2026-07-14
+A6-59     | checklist       | manager       | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:checklist_runs:2026-07-14
+A6-60     | checklist       | owner         | read   | deny   | deny   | PASS | tenants/tenantA/biz:bizA:checklist_simple_runs:2026-07-14:tpl1
+A6-61     | checklist       | shift         | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:checklist_simple_runs:2026-07-14:tpl1
+A6-62     | checklist       | viewer        | read   | allow  | allow  | PASS | tenants/tenantA/biz:bizA:checklist_templates
+A7-63     | analytics       | owner         | read   | deny   | deny   | PASS | tenants/tenantA/analytics
+A7-64     | analytics       | owner         | update | deny   | deny   | PASS | tenants/tenantA/analytics
+A7-65     | analytics       | owner         | read   | deny   | deny   | PASS | tenants/tenantA/analytics/daily/main/2026-07-14
+A7-66     | analytics       | owner         | read   | deny   | deny   | PASS | tenants/tenantA/biz:bizA:analytics:daily:2026-07-14
+A7-67     | analytics       | manager       | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:analytics:daily:2026-07-14
+A7-68     | analytics       | owner         | read   | deny   | deny   | PASS | tenants/tenantA/biz:bizA:insights:daily:2026-07-14
+A7-69     | analytics       | manager       | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:insights:daily:2026-07-14
+A7-70     | analytics       | owner         | read   | deny   | deny   | PASS | tenants/tenantA/biz:bizB:analytics:daily:2026-07-14
+A8-71     | pin/unknown     | owner         | read   | deny   | deny   | PASS | tenants/tenantA/biz:bizA:pin
+A8-72     | pin/unknown     | manager       | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:pin
+A8-73     | pin/unknown     | owner         | read   | deny   | deny   | PASS | tenants/tenantA/biz:bizA:unknownsuffix
+A8-74     | pin/unknown     | owner         | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:unknownsuffix
+A8-75     | pin/unknown     | manager       | update | deny   | deny   | PASS | tenants/tenantA/biz:bizA:analytics:daily:2026-13-99
+A9-76     | entry_exception | owner         | read   | deny   | deny   | PASS | tenants/tenantA/entry_exceptions/bizA/2026-07-14
+A9-77     | entry_exception | manager       | create | deny   | deny   | PASS | tenants/tenantA/entry_exceptions/bizA/2026-07-15
+A9-78     | entry_exception | owner         | update | deny   | deny   | PASS | tenants/tenantA/entry_exceptions/bizA/2026-07-14
+A9-79     | entry_exception | owner         | delete | deny   | deny   | PASS | tenants/tenantA/entry_exceptions/bizA/2026-07-14
+A10-80    | metadata        | owner         | read   | allow  | allow  | PASS | tenants/tenantA/roles
+A10-81    | metadata        | viewer        | read   | deny   | deny   | PASS | tenants/tenantA/roles
+A10-82    | metadata        | owner         | read   | allow  | allow  | PASS | tenants/tenantA/members
+A10-83    | metadata        | viewer        | read   | deny   | deny   | PASS | tenants/tenantA/members
+A10-84    | metadata        | owner         | create | allow  | allow  | PASS | tenants/tenantA/members/u_new
+A10-85    | metadata        | viewer        | create | deny   | deny   | PASS | tenants/tenantA/members/u_new2
+A10-86    | metadata        | owner         | read   | deny   | deny   | PASS | tenants/tenantA/access_meta
+A10-87    | metadata        | owner         | update | deny   | deny   | PASS | tenants/tenantA/access_meta/x
+A10-88    | metadata        | owner         | update | deny   | deny   | PASS | tenants/tenantA/biz_access/bizB/u_viewer
+A11-89    | delete          | manager       | delete | allow  | allow  | PASS | tenants/tenantA/biz:bizA:entries
+A11-90    | delete          | viewer        | delete | deny   | deny   | PASS | tenants/tenantA/biz:bizA:entries
+A11-91    | delete          | shift         | delete | allow  | allow  | PASS | tenants/tenantA/biz:bizA:tasks
+A11-92    | delete          | manager       | delete | deny   | deny   | PASS | tenants/tenantA/biz:bizA:checklist_runs:2026-07-14
+A11-93    | delete          | owner         | delete | deny   | deny   | PASS | tenants/tenantA/roles/u_viewer
+A11-94    | delete          | manager       | delete | deny   | deny   | PASS | tenants/tenantA/entry_exceptions/bizA/2026-07-14
+A12-95    | validation      | manager       | update | allow  | allow  | PASS | tenants/tenantA/entries
+A12-96    | validation      | manager       | update | deny   | deny   | PASS | tenants/tenantA/entries
+A12-97    | validation      | manager       | update | deny   | deny   | PASS | tenants/tenantA/entries
+A12-98    | validation      | manager       | update | deny   | deny   | PASS | tenants/tenantA/entries
+A12-99    | validation      | manager       | patch  | allow  | allow  | PASS | tenants/tenantA
+A12-100   | validation      | manager       | patch  | deny   | deny   | PASS | tenants/tenantA
+A1-101    | auth/tenant     | viewer        | read   | allow  | allow  | PASS | user_tenants/u_viewer
+A1-102    | auth/tenant     | owner         | read   | deny   | deny   | PASS | user_tenants/u_viewer
+A1-103    | auth/tenant     | shift         | update | allow  | allow  | PASS | user_active_biz/u_shift
+A1-104    | auth/tenant     | manager       | update | deny   | deny   | PASS | user_active_biz/u_viewer
+A1-105    | auth/tenant     | viewer        | read   | allow  | allow  | PASS | username_index/alice
+A1-106    | auth/tenant     | unauth        | read   | deny   | deny   | PASS | username_index/alice
+A1-107    | auth/tenant     | owner         | read   | deny   | deny   | PASS | app-users
+A4-108    | mgr-keys        | viewer        | read   | allow  | allow  | PASS | tenants/tenantA/proactive_insights/bizA
+
+=== TOTALS ===
+total=108 expected_allow=37 expected_deny=71 passed=108 failed=0
+unexpected_allow=0 unexpected_deny=0 errored=0
+
+ALL CASES PASSED
+[2026-09-22T11:47:05.087Z]  @firebase/database: FIREBASE WARNING: transaction at /tenants/tenantA/biz:bizB:entries failed: permission_denied
+[2026-09-22T11:47:05.125Z]  @firebase/database: FIREBASE WARNING: transaction at /tenants/tenantB/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:05.190Z]  @firebase/database: FIREBASE WARNING: transaction at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+
+case                       area                   status ms     notes
+------------------------------------------------------------------------------------------------------------------------
+EMU-A-A_then_B             independent-writers    PASS   549    both edits present, 160 dates retained
+EMU-A-B_then_A             independent-writers    PASS   150    both edits present, 160 dates retained
+EMU-A-parallel             independent-writers    PASS   167    both edits present under true simultaneity
+EMU-B-negctl-A_then_B      r9-negative-control    PASS   92     edit at 2026-02-10 lost, as in the R9 incident
+EMU-B-negctl-B_then_A      r9-negative-control    PASS   59     edit at 2026-02-11 lost, as in the R9 incident
+EMU-B-r10-same-schedule    r9-negative-control    PASS   88     same schedule, zero loss
+EMU-C-retry                transaction-semantics  PASS   720    8/8 committed, 35 txnFn runs for 8 transactions (retries exercised)
+EMU-C-conflict             transaction-semantics  PASS   165    conflictPaths=["sales"], node untouched, commits after re-base
+EMU-C-idempotent           transaction-semantics  PASS   62     reason=already_applied
+EMU-C-id-collision         transaction-semantics  PASS   36     status=blocked reason=invalid_identity detail=id_collision
+EMU-D-cross-business       ownership              PASS   47     hydration denied=true, mutate=failed/permission_denied
+EMU-D-cross-tenant         ownership              PASS   36     mutate=failed/permission_denied
+EMU-D-viewer               ownership              PASS   64     mutate=failed/permission_denied
+EMU-D-stale-selection      ownership              PASS   32     refused with zero I/O
+EMU-D-no-owner             ownership              PASS   19     refused with zero I/O
+EMU-E-cold-cache           rtdb-semantics         PASS   66     cold=blocked/target_not_found (fail-closed), warm=committed
+EMU-F-stale-delete-supplie stale-delete           PASS   65     refused with conflictPaths=["supplier_payments.sup9"]
+EMU-F-delete-unchanged     stale-delete           PASS   41     committed
+EMU-F-unrelated-row        stale-delete           PASS   70     committed, no false stale
+
+=== TOTALS ===
+total=19 passed=19 failed=0
+
+ALL CASES PASSED
+[2026-09-22T11:47:06.262Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:06.275Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:06.289Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:06.302Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:06.315Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:06.328Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:06.339Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:06.351Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:06.366Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:06.381Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:06.398Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:06.417Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/_v failed: permission_denied
+[2026-09-22T11:47:06.436Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/_v failed: permission_denied
+[2026-09-22T11:47:06.564Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:06.624Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizB:entries failed: permission_denied
+[2026-09-22T11:47:06.659Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:47:06.686Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+
+case     area            identity  op        expect  actual  note
+-----------------------------------------------------------------------------------------------------------------------------
+R-A01    valid-write     manager   set       allow   allow   representative valid node
+R-A02    valid-create    manager   set       allow   allow   the real create shape — id is the LAST key
+R-A03    valid-update    manager   set       allow   allow   an ordinary field edit
+R-A04    valid-delete-ro manager   set       allow   allow   a row removed, the rest rewritten
+R-A05    clear-all       manager   set       allow   allow   the empty array clear-all writes
+R-A06    duplicate-dates manager   set       allow   allow   duplicate business dates with distinct ids stay writable
+R-A07    large-history   manager   set       allow   allow   160-date history, mixed key order
+R-A08    minimal-row     manager   set       allow   allow   a row carrying only its id
+R-A09    braces-in-text  manager   set       allow   allow   free text containing braces is NOT rejected
+R-A10    child-write     manager   setChild  allow   allow   writing the _v child directly, with a valid array
+R-A11    owner-role      owner     set       allow   allow   the owner role is unaffected
+R-A12    transaction     manager   txn       allow   allow   a real RTDB transaction still commits
+R-A13    unicode-fields  manager   set       allow   allow   escaped quotes and Hebrew are unaffected
+R-D01    codex-proof     manager   set       deny    deny    non-JSON _v
+R-D02    codex-proof     manager   set       deny    deny    id-less row JSON
+R-D03    codex-proof     manager   set       deny    deny    object without _v
+R-D04    structure       manager   set       deny    deny    an id-less row hidden among valid rows
+R-D05    structure       manager   set       deny    deny    _v that is not a string
+R-D06    structure       manager   set       deny    deny    truncated JSON
+R-D07    structure       manager   set       deny    deny    non-canonical (uppercase) id
+R-D08    structure       manager   set       deny    deny    wrong UUID version nibble
+R-D09    structure       manager   set       deny    deny    wrong UUID variant nibble
+R-D10    structure       manager   set       deny    deny    array of scalars
+R-D11    structure       manager   set       deny    deny    an object where an array is required
+R-D12    bypass          manager   setChild  deny    deny    the direct _v child write Codex would otherwise use to bypass the parent rule
+R-D13    bypass          manager   setChild  deny    deny    id-less rows through the child path
+R-D14    size            manager   set       deny    deny    beyond the documented size ceiling
+R-D15    authorization   manager   set       deny    deny    cross-business write stays denied
+R-D16    authorization   viewer    set       deny    deny    viewer role stays denied
+R-D17    authorization   unauth    set       deny    deny    unauthenticated stays denied
+
+=== TOTALS ===
+total=30 expected_allow=13 expected_deny=17 passed=30 failed=0
+unexpected_allow=0 unexpected_deny=0 errored=0
+
+ALL CASES PASSED
+✔  Script exited successfully (code 0)
+i  emulators: Shutting down emulators.
+i  database: Stopping Database Emulator
+i  hub: Stopping emulator hub
+i  logging: Stopping Logging Emulator

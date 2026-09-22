@@ -32,24 +32,38 @@ export const PREFLIGHT_BLOCKERS = Object.freeze({
 
 // RTDB child keys: non-empty, no `. # $ / [ ]`, no control characters.
 const RTDB_KEY_OK = /^[^.#$/\[\]\x00-\x1f\x7f]+$/;
+// R2-B3: a non-empty object whose keys are ALL non-negative integers is handed back by
+// the RTDB SDK as an ARRAY. Inside a MAP field (supplier/employee ids) that readback is
+// the same value under the runtime's canonical equality; anywhere else it is a shape
+// the row cannot round-trip, so it is a blocker rather than a silent transformation.
+const INTEGER_KEY = /^(0|[1-9][0-9]*)$/;
+const isNumericKeyObject = (v) => !!v && typeof v === "object" && !Array.isArray(v)
+  && Object.keys(v).length > 0 && Object.keys(v).every((k) => INTEGER_KEY.test(k));
+
 // Walk a row and classify every value RTDB would not store as given. Returns
-// { dropped: [paths whose value canonicalizes to absent], bad: [{path, reason}] }.
-function representation(row, rowGenKey) {
-  const dropped = [], bad = [];
-  const walk = (v, path, inArray) => {
-    if (v === null || v === undefined) { if (inArray) bad.push({ path, reason: "null_inside_array" }); else dropped.push(path); return; }
+// { dropped: [paths whose value canonicalizes to absent], bad: [{path, reason}],
+//   numericKeyMaps: [top-level MAP fields that RTDB will read back as arrays] }.
+function representation(row, rowGenKey, mapFields) {
+  const dropped = [], bad = [], numericKeyMaps = [];
+  const walk = (v, path, inArray, mapField) => {
+    if (v === null || v === undefined) {
+      // inside a MAP field an array hole is simply an absent key (canonical map form)
+      if (inArray && !mapField) bad.push({ path, reason: "null_inside_array" }); else dropped.push(path);
+      return;
+    }
     if (typeof v === "number" && !Number.isFinite(v)) { bad.push({ path, reason: "non_finite_number" }); return; }
     if (Array.isArray(v)) {
       if (!v.length) { dropped.push(path); return; }
-      v.forEach((x, i) => walk(x, path + "[" + i + "]", true));
+      v.forEach((x, i) => walk(x, path + "[" + i + "]", true, false));
       return;
     }
     if (typeof v === "object") {
       const keys = Object.keys(v);
       if (!keys.length) { dropped.push(path); return; }
+      if (!mapField && isNumericKeyObject(v)) { bad.push({ path, reason: "numeric_key_object_outside_map_field" }); return; }
       keys.forEach((k) => {
         if (!RTDB_KEY_OK.test(k)) { bad.push({ path: path + "." + k, reason: "invalid_key" }); return; }
-        walk(v[k], path ? path + "." + k : k, false);
+        walk(v[k], path ? path + "." + k : k, false, false);
       });
       return;
     }
@@ -57,17 +71,20 @@ function representation(row, rowGenKey) {
   Object.keys(row).forEach((k) => {
     if (k === rowGenKey) return;                                  // reported separately as reserved
     if (!RTDB_KEY_OK.test(k)) { bad.push({ path: k, reason: "invalid_key" }); return; }
-    walk(row[k], k, false);
+    const mapField = mapFields.indexOf(k) !== -1;
+    if (mapField && (Array.isArray(row[k]) || isNumericKeyObject(row[k]))) numericKeyMaps.push(k);
+    walk(row[k], k, false, mapField);
   });
-  return { dropped, bad };
+  return { dropped, bad, numericKeyMaps };
 }
 
 export function createLegacyPreflight(deps) {
-  const { parseEntriesNode, isValidEntryId, isPlainRow, entryDateKey, detectStorageMode, rowGenKey } = deps || {};
+  const { parseEntriesNode, isValidEntryId, isPlainRow, entryDateKey, detectStorageMode, rowGenKey, mapFields } = deps || {};
   for (const k of ["parseEntriesNode", "isValidEntryId", "isPlainRow", "entryDateKey", "detectStorageMode"]) {
     if (typeof (deps || {})[k] !== "function") throw new Error("preflight requires the runtime contract helper: " + k);
   }
   if (typeof rowGenKey !== "string" || !rowGenKey) throw new Error("preflight requires the runtime contract value: rowGenKey");
+  if (!Array.isArray(mapFields) || !mapFields.every((k) => typeof k === "string" && k)) throw new Error("preflight requires the runtime contract value: mapFields");
 
   // `raw` is the node EXACTLY as stored. Returns a deterministic report; the same input
   // always yields the same blockers in the same order.
@@ -94,7 +111,7 @@ export function createLegacyPreflight(deps) {
       return { ok: false, mode: "legacy", rowCount: null, blockers: [{ code: PREFLIGHT_BLOCKERS.NOT_AN_ARRAY }] };
     }
     const missing = [], malformedRows = [], badDate = [], firstSeen = Object.create(null), dupIds = [];
-    const reserved = [], badKeys = [], badValues = [], normalized = [];
+    const reserved = [], badKeys = [], badValues = [], normalized = [], numericMaps = [];
     rows.forEach((r, i) => {
       if (!isPlainRow(r)) { malformedRows.push(i); return; }
       const id = r.id;
@@ -104,9 +121,10 @@ export function createLegacyPreflight(deps) {
       else firstSeen[id] = i;
       if (!entryDateKey(r.date)) badDate.push(i);
       if (Object.prototype.hasOwnProperty.call(r, rowGenKey)) reserved.push(i);
-      const rep = representation(r, rowGenKey);
+      const rep = representation(r, rowGenKey, mapFields);
       rep.bad.forEach((b) => (b.reason === "invalid_key" ? badKeys : badValues).push({ index: i, path: b.path, reason: b.reason }));
       if (rep.dropped.length) normalized.push({ index: i, paths: rep.dropped });
+      if (rep.numericKeyMaps.length) numericMaps.push({ index: i, fields: rep.numericKeyMaps });
     });
     const blockers = [];
     if (malformedRows.length) blockers.push({ code: PREFLIGHT_BLOCKERS.UNSUPPORTED_ROW_SHAPE, indexes: malformedRows, count: malformedRows.length });
@@ -131,7 +149,10 @@ export function createLegacyPreflight(deps) {
     // `normalization` is REPORTED, never applied here: it names exactly which values the
     // approved canonicalization will drop, so the conversion's transformation is
     // reviewed up front instead of discovered after the fact.
-    const normalization = { rowsAffected: normalized.length, rows: normalized };
+    // R2-B3: MAP fields with integer keys are reported too — RTDB reads them back as
+    // arrays; the runtime's canonical equality treats that readback as the same value.
+    const normalization = { rowsAffected: normalized.length, rows: normalized,
+                            numericKeyMaps: { rowsAffected: numericMaps.length, rows: numericMaps } };
     return ok
       ? { ok: true, mode: "legacy", rowCount: rows.length, rows, blockers: [], normalization }
       : { ok: false, mode: "legacy", rowCount: rows.length, blockers, normalization };

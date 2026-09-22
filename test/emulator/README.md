@@ -223,6 +223,14 @@ row map cannot be replaced by a scalar; and the legacy engine refuses a V2 node 
 reporting success against the frozen `_v`. `V2-M04` now forces the cutover race with a real
 ETag barrier (one HTTP 412 retry, `runs=2`).
 
+Hardening R2 (cases `V2-W01`…`V2-W04`, closing Codex R1-F1…R1-F3) runs the ACTUAL dashboard
+initialization block and selection-effect listener block of `index.html`
+(`test/support/dashboard-wiring-harness.mjs`) over the real SDK: absent first save, create,
+edit, delete and clear-all through the production wiring; a retired binding refused before
+any transaction and no cross-business binding reuse; a clear completion that never
+overwrites a newer authoritative listener snapshot; and numeric-key MAP fields whose real
+RTDB array readback is idempotent on an identical retry while real changes still collide.
+
 ```
 env -u GOOGLE_APPLICATION_CREDENTIALS -u FIREBASE_CONFIG -u FIREBASE_DATABASE_URL \
     GCLOUD_PROJECT=demo-marjin-rules \
@@ -241,7 +249,7 @@ Expected:
 
 ```
 === TOTALS ===
-total=42 passed=42 failed=0
+total=46 passed=46 failed=0
 
 ALL CASES PASSED
 ```

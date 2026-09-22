@@ -1,0 +1,191 @@
+⚠  Unable to fetch the CLI MOTD and remote config. This is not a fatal error, but may indicate an issue with your network connection.
+i  emulators: Starting emulators: database
+i  emulators: Detected demo project ID "demo-marjin-rules", emulated services will use a demo configuration and attempts to access non-emulated services for this project will fail.
+i  database: Database Emulator logging to database-debug.log
+i  Running script: node /Users/yonatan/Documents/marjin/kissgn-p0-data-01-storage-v2/test/emulator/entries-remote-atomic-emulator.mjs && node /Users/yonatan/Documents/marjin/kissgn-p0-data-01-storage-v2/test/emulator/entries-rules-validation-matrix.mjs && node /Users/yonatan/Documents/marjin/kissgn-p0-data-01-storage-v2/test/emulator/storage-v2-matrix.mjs
+[2026-09-22T11:43:38.036Z]  @firebase/database: FIREBASE WARNING: transaction at /tenants/tenantA/biz:bizB:entries failed: permission_denied
+[2026-09-22T11:43:38.080Z]  @firebase/database: FIREBASE WARNING: transaction at /tenants/tenantB/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:38.156Z]  @firebase/database: FIREBASE WARNING: transaction at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+
+case                       area                   status ms     notes
+------------------------------------------------------------------------------------------------------------------------
+EMU-A-A_then_B             independent-writers    PASS   1654   both edits present, 160 dates retained
+EMU-A-B_then_A             independent-writers    PASS   187    both edits present, 160 dates retained
+EMU-A-parallel             independent-writers    PASS   233    both edits present under true simultaneity
+EMU-B-negctl-A_then_B      r9-negative-control    PASS   110    edit at 2026-02-10 lost, as in the R9 incident
+EMU-B-negctl-B_then_A      r9-negative-control    PASS   93     edit at 2026-02-11 lost, as in the R9 incident
+EMU-B-r10-same-schedule    r9-negative-control    PASS   114    same schedule, zero loss
+EMU-C-retry                transaction-semantics  PASS   932    8/8 committed, 38 txnFn runs for 8 transactions (retries exercised)
+EMU-C-conflict             transaction-semantics  PASS   130    conflictPaths=["sales"], node untouched, commits after re-base
+EMU-C-idempotent           transaction-semantics  PASS   70     reason=already_applied
+EMU-C-id-collision         transaction-semantics  PASS   39     status=blocked reason=invalid_identity detail=id_collision
+EMU-D-cross-business       ownership              PASS   49     hydration denied=true, mutate=failed/permission_denied
+EMU-D-cross-tenant         ownership              PASS   43     mutate=failed/permission_denied
+EMU-D-viewer               ownership              PASS   76     mutate=failed/permission_denied
+EMU-D-stale-selection      ownership              PASS   47     refused with zero I/O
+EMU-D-no-owner             ownership              PASS   29     refused with zero I/O
+EMU-E-cold-cache           rtdb-semantics         PASS   107    cold=blocked/target_not_found (fail-closed), warm=committed
+EMU-F-stale-delete-supplie stale-delete           PASS   103    refused with conflictPaths=["supplier_payments.sup9"]
+EMU-F-delete-unchanged     stale-delete           PASS   64     committed
+EMU-F-unrelated-row        stale-delete           PASS   95     committed, no false stale
+
+=== TOTALS ===
+total=19 passed=19 failed=0
+
+ALL CASES PASSED
+[2026-09-22T11:43:39.470Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:39.487Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:39.504Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:39.519Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:39.534Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:39.547Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:39.562Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:39.576Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:39.591Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:39.607Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:39.622Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:39.637Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/_v failed: permission_denied
+[2026-09-22T11:43:39.651Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/_v failed: permission_denied
+[2026-09-22T11:43:39.708Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:39.724Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizB:entries failed: permission_denied
+[2026-09-22T11:43:39.756Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:39.789Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+
+case     area            identity  op        expect  actual  note
+-----------------------------------------------------------------------------------------------------------------------------
+R-A01    valid-write     manager   set       allow   allow   representative valid node
+R-A02    valid-create    manager   set       allow   allow   the real create shape — id is the LAST key
+R-A03    valid-update    manager   set       allow   allow   an ordinary field edit
+R-A04    valid-delete-ro manager   set       allow   allow   a row removed, the rest rewritten
+R-A05    clear-all       manager   set       allow   allow   the empty array clear-all writes
+R-A06    duplicate-dates manager   set       allow   allow   duplicate business dates with distinct ids stay writable
+R-A07    large-history   manager   set       allow   allow   160-date history, mixed key order
+R-A08    minimal-row     manager   set       allow   allow   a row carrying only its id
+R-A09    braces-in-text  manager   set       allow   allow   free text containing braces is NOT rejected
+R-A10    child-write     manager   setChild  allow   allow   writing the _v child directly, with a valid array
+R-A11    owner-role      owner     set       allow   allow   the owner role is unaffected
+R-A12    transaction     manager   txn       allow   allow   a real RTDB transaction still commits
+R-A13    unicode-fields  manager   set       allow   allow   escaped quotes and Hebrew are unaffected
+R-D01    codex-proof     manager   set       deny    deny    non-JSON _v
+R-D02    codex-proof     manager   set       deny    deny    id-less row JSON
+R-D03    codex-proof     manager   set       deny    deny    object without _v
+R-D04    structure       manager   set       deny    deny    an id-less row hidden among valid rows
+R-D05    structure       manager   set       deny    deny    _v that is not a string
+R-D06    structure       manager   set       deny    deny    truncated JSON
+R-D07    structure       manager   set       deny    deny    non-canonical (uppercase) id
+R-D08    structure       manager   set       deny    deny    wrong UUID version nibble
+R-D09    structure       manager   set       deny    deny    wrong UUID variant nibble
+R-D10    structure       manager   set       deny    deny    array of scalars
+R-D11    structure       manager   set       deny    deny    an object where an array is required
+R-D12    bypass          manager   setChild  deny    deny    the direct _v child write Codex would otherwise use to bypass the parent rule
+R-D13    bypass          manager   setChild  deny    deny    id-less rows through the child path
+R-D14    size            manager   set       deny    deny    beyond the documented size ceiling
+R-D15    authorization   manager   set       deny    deny    cross-business write stays denied
+R-D16    authorization   viewer    set       deny    deny    viewer role stays denied
+R-D17    authorization   unauth    set       deny    deny    unauthenticated stays denied
+
+=== TOTALS ===
+total=30 expected_allow=13 expected_deny=17 passed=30 failed=0
+unexpected_allow=0 unexpected_deny=0 errored=0
+
+ALL CASES PASSED
+[2026-09-22T11:43:40.905Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/d34af868-3539-4868-8539-4af8684c3539 failed: permission_denied
+[2026-09-22T11:43:40.918Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/d44af9fb-33a6-49fb-83a6-4af9fb4c33a6 failed: permission_denied
+[2026-09-22T11:43:40.927Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/d94b01da-385f-41da-885f-4b01da4c385f failed: permission_denied
+[2026-09-22T11:43:40.939Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/da4b036d-36cc-436d-86cc-4b036d4c36cc failed: permission_denied
+[2026-09-22T11:43:40.951Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/row-1 failed: permission_denied
+[2026-09-22T11:43:40.973Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows failed: permission_denied
+[2026-09-22T11:43:41.086Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/6c6f7991-5bcc-4991-8bcc-6f7991e65bcc/id failed: permission_denied
+[2026-09-22T11:43:41.537Z]  @firebase/database: FIREBASE WARNING: transaction at /tenants/tenantA/biz:bizA:entries/rows/6c6f7991-5bcc-4991-8bcc-6f7991e65bcc failed: permission_denied
+[2026-09-22T11:43:41.555Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/6c6f7991-5bcc-4991-8bcc-6f7991e65bcc failed: permission_denied
+[2026-09-22T11:43:41.750Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:41.757Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/_v failed: permission_denied
+[2026-09-22T11:43:41.769Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:41.874Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizB:entries/rows/53250f3c-ce27-4f3c-8e27-250f3c2bce27 failed: permission_denied
+[2026-09-22T11:43:41.906Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/542510cf-cc94-40cf-8c94-2510cf2bcc94 failed: permission_denied
+[2026-09-22T11:43:41.934Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/55251262-d14d-4262-814d-2512622bd14d failed: permission_denied
+[2026-09-22T11:43:41.977Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:41.985Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:41.991Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/schemaVersion failed: permission_denied
+[2026-09-22T11:43:42.000Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/schemaVersion failed: permission_denied
+[2026-09-22T11:43:42.013Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:42.020Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:42.026Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:42.034Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/schemaVersion failed: permission_denied
+[2026-09-22T11:43:42.040Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/schemaVersion failed: permission_denied
+[2026-09-22T11:43:42.055Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:42.062Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:42.105Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/generation failed: permission_denied
+[2026-09-22T11:43:42.114Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:42.121Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:42.133Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:42.150Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:42.158Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/generation failed: permission_denied
+[2026-09-22T11:43:42.185Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows/1fa4af71-f676-4f71-8676-a4af7196f676 failed: permission_denied
+[2026-09-22T11:43:42.205Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/generation failed: permission_denied
+[2026-09-22T11:43:42.213Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizC:entries failed: permission_denied
+[2026-09-22T11:43:42.241Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizD:entries failed: permission_denied
+[2026-09-22T11:43:42.287Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows failed: permission_denied
+[2026-09-22T11:43:42.295Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows failed: permission_denied
+[2026-09-22T11:43:42.304Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries/rows failed: permission_denied
+[2026-09-22T11:43:42.319Z]  @firebase/database: FIREBASE WARNING: set at /tenants/tenantA/biz:bizA:entries failed: permission_denied
+[2026-09-22T11:43:42.392Z]  @firebase/database: FIREBASE WARNING: transaction at /tenants/tenantA/biz:bizA:entries/rows/6c6f7991-5bcc-4991-8bcc-6f7991e65bcc failed: permission_denied
+
+case     area           status ms     notes
+------------------------------------------------------------------------------------------------------------------------
+V2-L01   legacy         PASS   248    legacy read/write intact
+V2-P01   preflight      PASS   30     ok, 3 rows, node untouched
+V2-P02   preflight      PASS   20     blocked: missing_entry_id
+V2-P03   preflight      PASS   15     blocked
+V2-P04   preflight      PASS   15     blocked
+V2-M01   cutover        PASS   51     3 rows, schemaVersion=2, generation set, _v frozen
+V2-M02   cutover        PASS   21     refused
+V2-M03   cutover        PASS   34     refused: missing_entry_id
+V2-M04   cutover        PASS   278    runs=2, one HTTP 412, 4 rows — concurrent legacy write preserved
+V2-M05   cutover        PASS   87     lost update reproduced, as required of a negative control
+V2-I01   identity       PASS   37     allow
+V2-I02   identity       PASS   14     deny
+V2-I03   identity       PASS   20     deny, deny
+V2-I04   identity       PASS   24     deny, deny
+V2-I05   identity       PASS   49     structurally impossible
+V2-I06   identity       PASS   38     allow, allow
+V2-I07   identity       PASS   27     allow — the serialization artifact is gone
+V2-I08   identity       PASS   27     deny
+V2-C01   concurrency    PASS   81     both committed, 2 callback runs for 2 writes — no contention
+V2-C02   concurrency    PASS   59     conflictPaths=["sales"]
+V2-C03   concurrency    PASS   72     refused
+V2-C04   concurrency    PASS   78     committed, no false stale
+V2-C05   concurrency    PASS   70     committed
+V2-G01   generation     PASS   65     advanced 1 -> 2
+V2-G02   generation     PASS   39     client=blocked, rules=deny
+V2-G03   generation     PASS   23     committed
+V2-G04   generation     PASS   67     refused: blocked/precondition_failed
+V2-G05   generation     PASS   64     refused: blocked
+V2-X01   compatibility  PASS   67     deny ×3, node unchanged
+V2-X02   compatibility  PASS   50     fail-closed, twice
+V2-X03   compatibility  PASS   2      blocked_unhydrated ×2
+V2-A01   authorization  PASS   122    deny ×3, allow ×1
+V2-H01   cutover-perman PASS   127    deny ×11, legacy scope unchanged
+V2-H02   generation     PASS   177    deny ×10, allow ×6
+V2-H03   rows-map       PASS   71     deny ×4
+V2-H04   generation     PASS   74     rotated 1 -> 2 on empty; retired work refused client-side and server-side
+V2-H05   generation     PASS   68     old intent refused, new intent accepted
+V2-H06   listener-autho PASS   146    displayed converged after edit, queued edits, foreign write, delete and clear-all
+V2-H07   bootstrap      PASS   130    initialised V2 directly; race: committed,conflict
+V2-H08   cutover        PASS   53     gen preserved; canonicalization reported; 3 representation blockers
+V2-H09   idempotency    PASS   44     committed → already_created → id_collision
+V2-H10   compatibility  PASS   43     blocked/storage_mode_mismatch ×2
+V2-W01   production-wir PASS   137    absent→V2 gen1, create, edit, delete, clear→gen2 — all through index.html's own wiring
+V2-W02   production-wir PASS   125    retired binding refused before transaction; business switch bound to the new node
+V2-W03   listener-order PASS   76     newer snapshot (row 777) displayed after the clear promise resolved
+V2-W04   idempotency    PASS   159    array readback; retry already_created; 3 real changes collide; ordinary unchanged; conversion reported + idempotent
+
+=== TOTALS ===
+total=46 passed=46 failed=0
+
+ALL CASES PASSED
+✔  Script exited successfully (code 0)
+i  emulators: Shutting down emulators.
+i  database: Stopping Database Emulator
+i  hub: Stopping emulator hub
+i  logging: Stopping Logging Emulator

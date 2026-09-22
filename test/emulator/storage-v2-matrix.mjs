@@ -30,6 +30,7 @@ import vm from "node:vm";
 import { validateFirebaseConfig } from "./rtdb-authorization-matrix.mjs";
 import { createLegacyPreflight } from "../../tools/storage-v2/preflight.mjs";
 import { createStorageV2Upgrader } from "../../tools/storage-v2/upgrade.mjs";
+import { createDashboard, makeSdkStorage, loadProductionWindow } from "../support/dashboard-wiring-harness.mjs";
 
 const PROJECT = "demo-marjin-rules", NAMESPACE = "demo-marjin-rules-default-rtdb";
 const EMU = "127.0.0.1:9000", DB_URL = `http://${EMU}?ns=${NAMESPACE}`;
@@ -80,7 +81,7 @@ for (const anchor of ['return `tenants/${tenantId}/${safe}`;',
 const { preflightLegacyNode } = createLegacyPreflight({
   parseEntriesNode: ML.parseEntriesNode, isValidEntryId: ML.isValidEntryId,
   isPlainRow: (r) => !!r && typeof r === "object" && !Array.isArray(r),
-  entryDateKey: ME.entryDateKey, detectStorageMode: V2.detectStorageMode, rowGenKey: V2.ROW_GEN_KEY,
+  entryDateKey: ME.entryDateKey, detectStorageMode: V2.detectStorageMode, rowGenKey: V2.ROW_GEN_KEY, mapFields: V2.MAP_FIELDS,
 });
 const { upgradeBusinessToV2, unsafeReadThenWriteUpgrade_NEGATIVE_CONTROL } = createStorageV2Upgrader({
   preflightLegacyNode, isV2Node: V2.isV2Node, stampRow: V2.stampRow, generationFirst: V2.GENERATION_FIRST,
@@ -827,13 +828,130 @@ async function main() {
     return "blocked/storage_mode_mismatch ×2";
   });
 
+  // ══ HARDENING R2 — Codex R1-F1 / R1-F2 / R1-F3 through the PRODUCTION wiring ═
+  // The ACTUAL dashboard initialization block and selection-effect listener block of
+  // index.html (test/support/dashboard-wiring-harness.mjs) over the REAL SDK.
+  function dashboard(appKey, { bizId = "bizA", hooks = {} } = {}) {
+    const db = apps[appKey].database();
+    const storage = makeSdkStorage(db, "tenantA", hooks);
+    const d = createDashboard({ storage, tenantId: "tenantA", bizId, W: loadProductionWindow() });
+    d.storage = storage;
+    LIVE.push({ detach: () => { try { d.selectBusiness("__detached__"); } catch (_) {} } });
+    d.select = async (b) => { d.selectBusiness(b); await d.until(() => d.mode() !== null); };
+    d.until = (pred, ms = 4000) => new Promise((res, rej) => { const t0 = Date.now(); (function tick() {
+      if (pred()) return res(); if (Date.now() - t0 > ms) return rej(new Error("timeout waiting for dashboard state")); setTimeout(tick, 10); })(); });
+    return d;
+  }
+  await run("V2-W01", "production-wiring", "absent first save, create, edit, delete and clear-all commit through the REAL dashboard wiring", async () => {
+    await reseed(); await seedDb().ref(PATH()).remove();
+    const d = dashboard("manager"); await d.select("bizA");
+    eq(d.mode().mode, "absent", "absent destination");
+    const r1 = await d.submitLaborEntry("2026-09-01", "450");
+    eq(r1.status, "committed", `first save ${r1.status}/${r1.reason || ""}`); eq(r1.generation, 1, "epoch 1");
+    const node = await readNode(); eq(node.schemaVersion, 2, "V2"); eq(node._v, undefined, "no legacy blob");
+    await d.until(() => d.mode().mode === "v2" && d.displayed().length === 1);
+    const NEW = uuid("w-new");
+    const rc = await d.coord().submitIntent(create({ ...EMPTY_ENTRY, id: NEW, date: "2026-09-02", sales: 5 }));
+    eq(rc.status, "committed", `create ${rc.status}/${rc.reason || ""}`);
+    const re = await d.coord().submitIntent(upsert(NEW, { sales: 55 }, { sales: 5 }));
+    eq(re.status, "committed", `edit ${re.status}/${re.reason || ""}`); eq((await readNode()).rows[NEW].sales, 55, "edited");
+    await d.until(() => d.salesOf(NEW) === 55);
+    const rd = await d.coord().submitIntent(buildDelete(d.displayed().find((x) => x.id === NEW)));
+    eq(rd.status, "committed", `delete ${rd.status}/${rd.reason || ""}`); eq((await readNode()).rows[NEW], undefined, "deleted");
+    await d.until(() => d.salesOf(NEW) === undefined);
+    const rx = await d.clearAll();
+    eq(rx.status, "committed", `clear ${rx.status}/${rx.reason || ""}`); eq(rx.generation, 2, "rotated");
+    eq((await readNode()).generation, 2, "epoch 2"); eq((await readNode()).rows, undefined, "empty");
+    await d.until(() => d.mode().generation === 2 && d.displayed().length === 0);
+    return "absent→V2 gen1, create, edit, delete, clear→gen2 — all through index.html's own wiring";
+  });
+  await run("V2-W02", "production-wiring", "a retired binding is refused and a business switch never reuses the previous binding (real wiring)", async () => {
+    await reseed(); await seedV2(3, LEGACY_ROWS(), "bizA"); await seedV2(1, [row(uuid("b1"), "2026-03-01", 9)], "bizB");
+    const d = dashboard("owner"); await d.select("bizA"); eq(d.mode().generation, 3, "A at epoch 3");
+    // hold the in-flight row write; a second intent queues behind it bound to epoch 3
+    let release; const gate = new Promise((r) => { release = r; });
+    d.storage.hooks.beforeRow = () => gate;
+    const held = d.coord().submitIntent(upsert(ID1, { sales: 1 }, { sales: 101 }));
+    const queued = d.coord().submitIntent(create(row(uuid("w-stale"), "2026-08-09", 9)));
+    await d.settle(2);
+    d.storage.hooks.beforeRow = undefined;
+    await seedDb().ref(PATH()).set({ schemaVersion: 2, generation: 4, _v: "[]" });          // a clear-all elsewhere rotates 3 -> 4 (fixture)
+    await d.until(() => d.mode().generation === 4);
+    release();
+    const rh = await held, rq = await queued;
+    eq(rh.reason, "target_not_found", `held edit ${rh.status}/${rh.reason}`);
+    eq(rq.status, "blocked", `queued create ${rq.status}`); eq(rq.reason, "generation_retired", "bound to the retired epoch, refused before any transaction");
+    eq((await readNode()).rows, undefined, "nothing resurrected");
+    const fresh = await d.coord().submitIntent(create(row(uuid("w-stale"), "2026-08-09", 9)));   // a NEW intent is bound to 4
+    eq(fresh.status, "committed", `fresh ${fresh.status}/${fresh.reason || ""}`); eq((await readNode()).rows[uuid("w-stale")][GK], 4, "stamped 4");
+    // switch business: B's binding, never A's
+    await d.select("bizB"); eq(d.mode().generation, 1, "B hydrated from its own node");
+    const rb = await d.coord().submitIntent(create(row(uuid("w-b"), "2026-03-02", 2)));
+    eq(rb.status, "committed", `B create ${rb.status}/${rb.reason || ""}`); eq(rb.generation, 1, "B's epoch");
+    eq((await readNode("bizB")).rows[uuid("w-b")][GK], 1, "stamped with B's epoch"); eq((await readNode("bizA")).rows[uuid("w-b")], undefined, "A untouched");
+    return "retired binding refused before transaction; business switch bound to the new node";
+  });
+  await run("V2-W03", "listener-ordering", "clear completion never overwrites a NEWER authoritative snapshot (real SDK, two clients)", async () => {
+    await reseed(); await seedV2();
+    const NEW = uuid("w-777");
+    const B = await v2Client("owner", { generation: 2 }).attach();
+    const seen = seedDb().ref(PATH());
+    const d = dashboard("manager", { hooks: { afterNode: async () => {
+      // the clear committed; B (epoch 2) creates a row; wait until the clearing client's
+      // own listener has received that exact row, THEN let the clear promise resolve
+      const rb = await B.mutate(create(row(NEW, "2026-08-05", 777)));
+      eq(rb.status, "committed", `B create ${rb.status}/${rb.reason || ""}`);
+      await new Promise((res) => { const h = (snap) => { const v = snap.val(); if (v && v.rows && v.rows[NEW]) { seen.off("value", h); res(); } }; seen.on("value", h); });
+      await d.settle(4);
+    } } });
+    await d.select("bizA"); eq(d.mode().generation, 1, "hydrated at epoch 1");
+    const r = await d.clearAll();
+    eq(r.status, "committed", `clear ${r.status}/${r.reason || ""}`); eq(r.generation, 2, "rotated");
+    await d.until(() => d.salesOf(NEW) === 777);
+    eq(d.displayed().length, 1, "only the new row"); eq(d.coord()._state().deferredPending, false, "nothing parked");
+    eq((await readNode()).rows[NEW].sales, 777, "persisted row intact");
+    return "newer snapshot (row 777) displayed after the clear promise resolved";
+  });
+  await run("V2-W04", "idempotency", "numeric-key MAP fields: real RTDB array readback, identical retry idempotent, real changes collide (create + conversion)", async () => {
+    await reseed(); await seedV2(1, []);
+    const d = dashboard("manager"); await d.select("bizA");
+    const NEW = uuid("w-pay");
+    const intent = create({ ...EMPTY_ENTRY, id: NEW, date: "2026-08-09", sales: 5, hourly_payroll: { "0": 10, "1": 20 }, supplier_payments: { "7": 30 } });
+    const r1 = await d.coord().submitIntent(intent); eq(r1.status, "committed", `create ${r1.status}/${r1.reason || ""}`);
+    const stored = (await readNode()).rows[NEW];
+    expect(Array.isArray(stored.hourly_payroll), "RTDB reads the numeric-key map back as an array"); eq(JSON.stringify(stored.hourly_payroll), "[10,20]", "values");
+    const r2 = await d.coord().submitIntent(intent); eq(r2.status, "committed_idempotent", `retry ${r2.status}/${r2.reason || ""}`); eq(r2.reason, "already_created", "typed");
+    const r3 = await d.coord().submitIntent(create({ ...intent.newRow, hourly_payroll: { "0": 10, "1": 21 } })); eq(r3.detail, "id_collision", "changed amount");
+    const r4 = await d.coord().submitIntent(create({ ...intent.newRow, hourly_payroll: { "0": 10, "1": 20, "2": 5 } })); eq(r4.detail, "id_collision", "changed cardinality");
+    const r5 = await d.coord().submitIntent(create({ ...intent.newRow, supplier_payments: { "8": 30 } })); eq(r5.detail, "id_collision", "changed key");
+    const ORD = uuid("w-ord");
+    const plainIntent = create({ ...EMPTY_ENTRY, id: ORD, date: "2026-08-10", sales: 1, supplier_payments: { s1: "1200" }, hourly_payroll: { e1: 400 } });
+    eq((await d.coord().submitIntent(plainIntent)).status, "committed", "ordinary object");
+    eq((await d.coord().submitIntent(plainIntent)).reason, "already_created", "ordinary equality unchanged");
+    // NEGATIVE CONTROL: the pre-R2 comparator (whole-row canonicalStorageValue) reports a false difference on the real readback
+    const sem = { ...stored }; delete sem[GK];
+    const oldKey = (r) => ML.stableStringify(V2.canonicalStorageValue(r) || {});
+    expect(oldKey(sem) !== oldKey(intent.newRow), "old comparator: false collision"); eq(V2.canonicalRowKey(sem), V2.canonicalRowKey(intent.newRow), "new comparator: equal");
+    // conversion path: a legacy row with a numeric-key payroll map is REPORTED, converted, and an identical retry is idempotent
+    await reseed();
+    const legacyRow = row(uuid("w-leg"), "2026-08-01", 1, { hourly_payroll: { "0": 10, "1": 20 } });
+    await seedDb().ref(PATH()).set(envelope([legacyRow]));
+    const rep = preflightLegacyNode(await readNode());
+    expect(rep.ok, "preflight ok"); eq(rep.normalization.numericKeyMaps.rowsAffected, 1, "numeric-key map reported"); eq(rep.normalization.numericKeyMaps.rows[0].fields.join(","), "hourly_payroll", "field named");
+    eq((await upgradeBusinessToV2(legacyIo("manager"), { tenantId: "tenantA", bizId: "bizA" })).status, "committed", "converted");
+    expect(Array.isArray((await readNode()).rows[legacyRow.id].hourly_payroll), "array readback after conversion");
+    const d2 = dashboard("owner"); await d2.select("bizA");
+    const rr = await d2.coord().submitIntent(create(legacyRow)); eq(rr.status, "committed_idempotent", `converted-row retry ${rr.status}/${rr.reason || ""}`);
+    return "array readback; retry already_created; 3 real changes collide; ordinary unchanged; conversion reported + idempotent";
+  });
+
   // ─── report ───────────────────────────────────────────────────────────────
   const w = (s, n) => String(s).padEnd(n).slice(0, n);
   console.log("");
   console.log(`${w("case", 8)} ${w("area", 14)} ${w("status", 6)} ${w("ms", 6)} notes`);
   console.log("-".repeat(120));
   for (const r of results) console.log(`${w(r.id, 8)} ${w(r.area, 14)} ${w(r.status, 6)} ${w(r.ms, 6)} ${r.notes}`);
-  const EXPECTED = 42;
+  const EXPECTED = 46;
   console.log("\n=== TOTALS ===");
   console.log(`total=${results.length} passed=${results.length - failures} failed=${failures}`);
   if (results.length !== EXPECTED) { console.error(`\nINCOMPLETE MATRIX: expected ${EXPECTED}, ran ${results.length}`); process.exitCode = 3; return; }
