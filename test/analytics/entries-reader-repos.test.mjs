@@ -34,14 +34,16 @@ test("equivalence: every fixture yields the same metrics from `_v` and from rows
   assert.equal(v.latest, "2026-08-03"); assert.equal(v.labor[0].employeeCount, 2, "e1 + e2 hourly keys (e2 = 0 still a key) … plus manual payroll 0 → not counted");
   await withNode(asLegacy([])); assert.equal((await all()).latest, null); await withNode(null); assert.deepEqual((await all()).daily, []);
 });
-test("date window is inclusive and every row inside it is kept (duplicate dates → two records)", async () => {
+test("date window is inclusive; duplicate dates → ONE daily metric with every row counted (R1 / D1); labor & purchases keep every row", async () => {
   await withNode(asV2(FIXTURES.F3_dup));
   const daily = plain(await DM.getDailyMetrics(T, "2026-08-10", "2026-08-10", B));
-  assert.equal(daily.length, 2); assert.deepEqual(daily.map((x) => x.revenue).sort(), [100, 500]);
+  assert.deepEqual(daily, [{ date: "2026-08-10", revenue: 600, laborCost: 6, laborPct: 1, foodCost: 60, foodCostPct: 10, transactionCount: 0, avgTicket: 0 }], "100+500 sales, 1+5 hourly payroll, 10+50 supplier payments — no winner");
   const purchases = plain(await PR.getPurchaseMetrics(T, "2026-08-10", "2026-08-10", B)); assert.deepEqual(purchases.map((p) => p.amount).sort(), [10, 50]);
   const labor = plain(await LR.getLaborMetrics(T, "2026-08-10", "2026-08-10", B)); assert.deepEqual(labor.map((l) => l.totalCost).sort(), [1, 5]);
   await withNode(asLegacy(FIXTURES.F3_dup));
-  assert.equal((await DM.getDailyMetrics(T, "2026-08-10", "2026-08-10", B)).length, 2, "same under legacy");
+  assert.deepEqual(plain(await DM.getDailyMetrics(T, "2026-08-10", "2026-08-10", B)), daily, "identical under legacy");
+  await withNode(asLegacy(FIXTURES.F3_dup.slice().reverse()));
+  assert.deepEqual(plain(await DM.getDailyMetrics(T, "2026-08-10", "2026-08-10", B)), daily, "identical with the legacy array reversed");
   assert.equal(await DM.getLatestDailyDate(T, B), "2026-08-11");
 });
 test("NO-FALLBACK poison: metrics come from rows; the stale `_v` never contributes", async () => {

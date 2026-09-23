@@ -87,6 +87,7 @@ const AS = await srv.import("src/services/analyticsService.js");
 const EX = await srv.import("lib/repositories/entryExceptionsRepo.js");
 const CK = await srv.import("src/alerts/checkers.js");
 const RN = await srv.import("src/alerts/runner.js");
+const PJ = await srv.import("src/agent/proactive/runProactiveJob.js");
 
 // ─── apps / seeding ──────────────────────────────────────────────────────────
 const T = "tenantA";
@@ -267,7 +268,9 @@ async function main() {
       deq(e.ids, [uuid("f3a"), uuid("f3b")].sort(), form + " ids named");
       eq(await readPath(analyticsPath("bizA", "2026-08-10")), null, form + ": nothing persisted");
       const ok = await DBLD.buildAnalyticsForBiz(T, "bizA", "2026-08-11"); eq(ok.revenue.sales, 700, form + " unique date builds");
-      const r = await repoAll("bizA"); eq(r.daily.filter((d) => d.date === "2026-08-10").length, 2, form + " repo keeps both rows");
+      const r = await repoAll("bizA");
+      deq(r.daily.filter((d) => d.date === "2026-08-10").map((d) => [d.revenue, d.laborCost, d.foodCost]), [[600, 6, 60]], form + " daily metric: ONE record per date, both rows summed (R1)");
+      eq(r.labor.filter((d) => d.date === "2026-08-10").length, 2, form + " labor keeps both rows");
       const ex = await listEx("bizA", "2026-08-10", "2026-08-10");
       const rec = ex["2026-08-10"];
       expect(rec && rec.origin === "legacy_ambiguous" && rec.source === "legacy_ambiguous" && rec.duplicateCount === 2, form + " exceptions fallback is explicit ambiguity, not a winner");
@@ -275,6 +278,34 @@ async function main() {
       const dup = duplicateDates(readEntriesNode(await readNode("bizA")).rows); deq(dup, [{ date: "2026-08-10", ids: [uuid("f3a"), uuid("f3b")].sort() }], form + " duplicateDates");
     }
     return "both forms: typed refusal, sibling date ok, both rows aggregated, legacy_ambiguous, node untouched";
+  });
+
+  // ══ 11. D1 DOWNSTREAM (R1 / Codex SR-F1) — actual proactive flow, order/UUID independent ══
+  await run("SR-11", "d1-downstream", "duplicate 'yesterday' (100 + 500) in legacy [A,B] / [B,A] and V2 keyed both ways: runForBiz persists the SAME insight (currentValue 600) and digest; pre-fix repo would have chosen by order", async () => {
+    const dayBefore = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+    const y = dayBefore(1);
+    const hist = Array.from({ length: 20 }, (_, i) => ({ id: `22222222-2222-4222-8222-${String(i + 2).padStart(12, "0")}`, date: dayBefore(i + 2), sales: 1000, deliveries: 0, other_income: 0, payroll: 100, supplier_payments: { s1: 300 } }));
+    const mk = (idA, idB) => ({ A: { id: idA, date: y, sales: 100, deliveries: 0, other_income: 0, payroll: 20, supplier_payments: { s1: 30 } }, B: { id: idB, date: y, sales: 500, deliveries: 0, other_income: 0, payroll: 40, supplier_payments: { s1: 70 } } });
+    const LO = "11111111-1111-4111-8111-000000000001", HI = "11111111-1111-4111-8111-000000000002";
+    const v2 = (rowsArr) => { const map = {}; for (const r of rowsArr) map[r.id] = { ...r, _gen: 1 }; return { schemaVersion: 2, generation: 1, rows: map }; };
+    const strip = (v) => JSON.parse(JSON.stringify(v, (k, x) => (/At$|^generatedAt$/.test(k) ? undefined : x)));
+    const reps = [];
+    for (const [tag, { A, B: Bv }] of [["", mk(LO, HI)], ["rev-uuid ", mk(HI, LO)]]) {
+      reps.push([tag + "legacy [A,B]", asLegacy([...hist, A, Bv])], [tag + "legacy [B,A]", asLegacy([Bv, ...hist, A])], [tag + "v2 A→B", v2([...hist, A, Bv])], [tag + "v2 B→A", v2([Bv, A, ...hist])]);
+    }
+    const snaps = [];
+    for (const [name, node] of reps) {
+      await reseed({ bizA: node });
+      const res = await PJ.runForBiz(T, "bizA");
+      deq(res.errors, [], name + " errors");
+      const daily = await DM.getDailyMetrics(T, dayBefore(28), y, "bizA");
+      eq(daily.filter((d) => d.date === y).length, 1, name + ": one daily record for the duplicate day");
+      snaps.push([name, strip({ res, daily, insights: await readPath(`tenants/${T}/proactive_insights/bizA`), digests: await readPath(`tenants/${T}/proactive_digests/bizA`) })]);
+    }
+    for (const [name, s] of snaps) deq(s, snaps[0][1], name + " ≠ " + snaps[0][0]);
+    const ins = Object.values(snaps[0][1].insights || {}).find((i) => i.type === "revenue_underperformance");
+    expect(ins && ins.currentValue === 600, "insight persisted from the AGGREGATED day (600), not from row A or B");
+    return `8 representations → identical insight (currentValue 600) + digest`;
   });
 
   // ══ 8. D2 — checkers stay externally non-firing ══════════════════════════════
@@ -331,7 +362,7 @@ async function main() {
   console.log(`${w("case", 8)} ${w("area", 16)} ${w("status", 6)} ${w("ms", 6)} notes`);
   console.log("-".repeat(120));
   for (const r of results) console.log(`${w(r.id, 8)} ${w(r.area, 16)} ${w(r.status, 6)} ${w(r.ms, 6)} ${r.status === "PASS" ? r.notes : r.notes.split("\n")[0]}`);
-  const EXPECTED = 10;
+  const EXPECTED = 11;
   console.log("\n=== TOTALS ===");
   console.log(`total=${results.length} passed=${results.length - failures} failed=${failures}`);
   if (results.length !== EXPECTED) { console.error(`\nINCOMPLETE MATRIX: expected ${EXPECTED}, ran ${results.length}`); process.exitCode = 3; return; }

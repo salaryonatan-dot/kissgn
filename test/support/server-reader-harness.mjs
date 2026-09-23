@@ -27,7 +27,8 @@ export function compileServer() {
   writeFileSync(join(dir, "lib", "sendEmail.js"), `export async function sendEmail(to, subject, html) { (globalThis.__EMAILS ||= []).push({ kind: "email", to, subject }); return { messageId: "m" }; }\nexport async function sendAlertDigest(to, bizName, alerts) { (globalThis.__EMAILS ||= []).push({ kind: "digest", to, bizName, alerts }); return { messageId: "d" }; }\n`);
   const entries = ["src/analytics/dailyBuilder.ts", "src/snapshot/snapshotBuilder.ts", "src/alerts/checkers.ts", "src/alerts/runner.ts",
     "src/repositories/analytics/dailyMetricsRepo.ts", "src/repositories/analytics/laborRepo.ts", "src/repositories/analytics/purchasesRepo.ts",
-    "src/services/analyticsService.ts"].map((f) => join(dir, f));
+    "src/services/analyticsService.ts", "src/agent/proactive/runProactiveJob.ts",
+    "src/agent/proactive/detectors/detectDailyRevenueUnderperformance.ts"].map((f) => join(dir, f));
   const r = spawnSync("node", [TSC, "--module", "esnext", "--target", "es2022", "--moduleResolution", "bundler", "--skipLibCheck", "--noEmitOnError", "false", "--allowJs", "false", ...entries], { encoding: "utf8" });
   if (!existsSync(join(dir, "src", "analytics", "dailyBuilder.js")) || !existsSync(join(dir, "src", "services", "analyticsService.js"))) {
     throw new Error("server compile failed:\n" + r.stdout + r.stderr);

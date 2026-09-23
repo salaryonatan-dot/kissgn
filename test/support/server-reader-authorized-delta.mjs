@@ -1,5 +1,9 @@
-// Marjin — S0 anti-migration guard, LAYER B: the AUTHORIZED SERVER-READER DELTA for the
-// five historically protected runtime files, pinned EXACTLY.
+// Marjin — S0 anti-migration guard, LAYER B: the APPROVED SERVER-READER FILES pinned by
+// EXACT CONTENT IDENTITY (git blob SHA-1 of the reviewed bytes).
+//
+// (The file keeps its R0 name for import stability; R0 pinned a normalized line delta,
+// which Codex SR-F2 showed accepts a relocated declaration that changes execution
+// semantics. R1 replaces that model entirely — nothing here inspects diff lines.)
 //
 // Layer A of the guard (test/finance/vat-invariant.test.mjs) keeps the historical S0
 // contract intact for the whole range BASE (686b4350) → the Codex-approved Storage V2
@@ -7,22 +11,24 @@
 // src/snapshot/, src/forecast/, package files, vercel.json or stored-data scripts, and
 // database.rules.json only through the semantic entries-contract exception.
 //
-// Layer B (this module) authorizes ONE further change on top of that core — the
-// P0-DATA-01 server-reader convergence (CTO decision, 2026-09-23) — and authorizes it
-// by CONTENT, never by path: for each of exactly five named files the normalized
-// unified diff `8cac71c1 → working tree` must equal the literal delta pinned below.
-// Any other protected path that changes, any extra line in one of the five files, a
-// partial revert that leaves the expected tokens in place, an inserted parser, a
-// touched revenue/VAT expression — all differ from the pinned lines and are rejected.
-// Directories, globs and patterns are not accepted as authorized entries at all.
+// Layer B (this module) authorizes the P0-DATA-01 server-reader convergence on top of
+// that core, and it authorizes it by IDENTITY, never by path and never by content
+// heuristics: for each of exactly five named files the working-tree bytes must hash to
+// the pinned blob of the reviewed version. The guard therefore proves "this protected
+// file IS the reviewed version" — a relocated declaration, reordered statements, an extra
+// statement, a partial revert, a touched formula, even a changed comment or whitespace,
+// all produce a different blob and are rejected. Any other protected path that changes
+// is rejected. Directories, globs and patterns are not accepted as authorized entries.
 //
-// Widening this authorization therefore REQUIRES editing this file in the same reviewed
-// change — that is the point. When the reader slice is merged and a new guard base is
-// adopted, the pinned delta is retired, not extended.
+// Re-approving a change to one of these files REQUIRES re-pinning its blob here in the
+// same reviewed change — that is the point.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { gitIn } from "./git-context.mjs";
 
-/** The Codex-approved Storage V2 core; the reader delta is authorized on top of it. */
+/** The Codex-approved Storage V2 core; the reader files are authorized on top of it. */
 export const SERVER_READER_BASE = "8cac71c1248ad5cc49dfa1a727bf292398ae74e8";
 
 /** Protected roots under which a change is otherwise forbidden by the S0 guard. */
@@ -33,9 +39,11 @@ export const PROTECTED_ROOTS = Object.freeze([
 export const isProtectedPath = (rel) => PROTECTED_ROOTS.some((re) => re.test(rel));
 
 /**
- * An authorized entry must name ONE existing TypeScript source file by its exact
- * repository-relative path under a protected src root: no directory, no trailing
- * slash, no glob or regex metacharacters, no `..`, no leading slash.
+ * An authorized entry must name ONE TypeScript source file by its exact repository-
+ * relative path under a protected src root: no directory, no trailing slash, no glob or
+ * regex metacharacters, no `..`, no leading slash. `src/agent/**` and `src/forecast/**` are
+ * never authorizable here (R1 changed no agent file; a future review that must pin one
+ * exact detector file has to widen THIS rule in the same reviewed change).
  */
 export function isPlainAuthorizedFile(rel) {
   if (typeof rel !== "string" || !rel) return false;
@@ -45,164 +53,72 @@ export function isPlainAuthorizedFile(rel) {
   return /^src\/(?:analytics|repositories|snapshot)\/[A-Za-z0-9_./-]+\.ts$/.test(rel);
 }
 
-/**
- * Normalize a unified diff (`--unified=0`) to its content lines only: every added or
- * removed line, marker kept, leading/trailing whitespace trimmed and internal runs
- * collapsed. Hunk headers, index lines and file headers carry no content and are
- * dropped; blank added/removed lines are dropped too. Formatting-only noise is thus
- * tolerated; any token change is not.
- */
-export function normalizeUnifiedDiff(text) {
-  return String(text || "").split(/\r?\n/)
-    .filter((l) => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l))
-    .map((l) => l[0] + " " + l.slice(1).trim().replace(/\s+/g, " "))
-    .filter((l) => l !== "+ " && l !== "- ");
+/** git blob identity of a byte buffer: sha1("blob <len>\0" + bytes). */
+export function blobSha(bytes) {
+  const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(String(bytes), "utf8");
+  return createHash("sha1").update(`blob ${buf.length}\0`).update(buf).digest("hex");
 }
+const SHA1_RE = /^[0-9a-f]{40}$/;
 
-/** Exactly the five files the CTO authorized for this slice — nothing under a directory. */
-export const SERVER_READER_AUTHORIZED_DELTA = Object.freeze({
-  "src/analytics/dailyBuilder.ts": Object.freeze([
-    "+ import { requireEntriesRows, requireRowForDate } from \"../../lib/analytics/entriesReader.js\";",
-    "- const entries = parseFirebaseData<DailyEntry[]>(entriesSnap.val(), []);",
-    "+ // Server reader convergence: the entries node is read through the shared dual-mode",
-    "+ // reader (legacy `_v` | Storage V2 rows | absent) — never through the generic",
-    "+ // envelope parser. A malformed node throws a typed EntriesStorageError before any",
-    "+ // external fetch or derived write (CTO D3); a business date carried by more than",
-    "+ // one immutable row throws a typed EntriesAmbiguityError (duplicate_business_date)",
-    "+ // — there is no silent first/last/position winner (CTO D1). Both propagate to the",
-    "+ // caller: buildAnalyticsForAll records the business failure and continues.",
-    "+ const readerCtx = { tenantId, bizId, site: \"dailyBuilder\" };",
-    "+ const rows = requireEntriesRows(entriesSnap.val(), readerCtx) as unknown as DailyEntry[];",
-    "- const todayEntry = entries.find((e) => e.date === date);",
-    "+ const todayEntry = (requireRowForDate(rows as unknown as Array<{ date?: string }>, date, readerCtx) as unknown as DailyEntry | null) ?? undefined;",
-  ]),
-  "src/repositories/analytics/dailyMetricsRepo.ts": Object.freeze([
-    "+ import { requireEntriesRows } from \"../../../lib/analytics/entriesReader.js\";",
-    "- function parseV(snapshot: any): RawEntry[] {",
-    "- const raw = snapshot.val();",
-    "- if (!raw) return [];",
-    "- // Data is wrapped in { _v: \"JSON_STRING\" }",
-    "- if (raw._v && typeof raw._v === \"string\") {",
-    "- try { return JSON.parse(raw._v); } catch { return []; }",
-    "- }",
-    "- // Fallback: might be direct array or object",
-    "- if (Array.isArray(raw)) return raw;",
-    "- if (typeof raw === \"object\") return Object.values(raw);",
-    "- return [];",
-    "+ // Server reader convergence: the shared dual-mode reader (legacy `_v` | Storage V2",
-    "+ // rows | absent). Every stored row is returned (duplicate business dates included —",
-    "+ // this repository aggregates, it never picks one row per date); a malformed node",
-    "+ // throws a typed EntriesStorageError instead of silently yielding an empty dataset.",
-    "+ function readRows(snapshot: any, tenantId: string, bizId: string, site: string): RawEntry[] {",
-    "+ return requireEntriesRows(snapshot.val(), { tenantId, bizId, site }) as unknown as RawEntry[];",
-    "- const entries = parseV(snapshot);",
-    "+ const rows = readRows(snapshot, tenantId, bizId, \"dailyMetricsRepo.getDailyMetrics\");",
-    "- return entries",
-    "+ return rows",
-    "- const entries = parseV(snapshot);",
-    "- if (entries.length === 0) return null;",
-    "- const sorted = entries.filter((e) => e.date).sort((a, b) => b.date.localeCompare(a.date));",
-    "+ const rows = readRows(snapshot, tenantId, bizId, \"dailyMetricsRepo.getLatestDailyDate\");",
-    "+ if (rows.length === 0) return null;",
-    "+ const sorted = rows.filter((e) => e.date).sort((a, b) => b.date.localeCompare(a.date));",
-  ]),
-  "src/repositories/analytics/laborRepo.ts": Object.freeze([
-    "+ import { requireEntriesRows } from \"../../../lib/analytics/entriesReader.js\";",
-    "- function parseV(snapshot: any): any[] {",
-    "- const raw = snapshot.val();",
-    "- if (!raw) return [];",
-    "- if (raw._v && typeof raw._v === \"string\") {",
-    "- try { return JSON.parse(raw._v); } catch { return []; }",
-    "- }",
-    "- if (Array.isArray(raw)) return raw;",
-    "- if (typeof raw === \"object\") return Object.values(raw);",
-    "- return [];",
-    "- }",
-    "+ // Server reader convergence: shared dual-mode reader; all rows; typed failure on a",
-    "+ // malformed node (never an empty labor dataset from corrupt storage).",
-    "- const entries = parseV(snapshot);",
-    "+ const rows: any[] = requireEntriesRows(snapshot.val(), { tenantId, bizId, site: \"laborRepo.getLaborMetrics\" });",
-    "- return entries",
-    "+ return rows",
-  ]),
-  "src/repositories/analytics/purchasesRepo.ts": Object.freeze([
-    "+ import { requireEntriesRows } from \"../../../lib/analytics/entriesReader.js\";",
-    "- function parseV(snapshot: any): any[] {",
-    "+ // The SUPPLIERS list is a legacy `_v` envelope that is NOT part of Storage V2; this",
-    "+ // parser is kept for it alone. Entries go through the shared dual-mode reader below.",
-    "+ function parseLegacyListEnvelope(snapshot: any): any[] {",
-    "- const suppliers = parseV(suppSnap) as Array<{ id: string | number; name: string }>;",
-    "+ const suppliers = parseLegacyListEnvelope(suppSnap) as Array<{ id: string | number; name: string }>;",
-    "- // Get entries",
-    "+ // Entries: shared dual-mode reader; every stored row contributes its payments;",
-    "+ // a malformed node throws a typed EntriesStorageError (no silent empty result).",
-    "- const entries = parseV(snapshot);",
-    "+ const rows: any[] = requireEntriesRows(snapshot.val(), { tenantId, bizId, site: \"purchasesRepo.getPurchaseMetrics\" });",
-    "- for (const e of entries) {",
-    "+ for (const e of rows) {",
-  ]),
-  "src/snapshot/snapshotBuilder.ts": Object.freeze([
-    "+ import { requireEntriesRows } from \"../../lib/analytics/entriesReader.js\";",
-    "- const entries = parseFirebaseData<DailyEntry[]>(entriesSnap.val());",
-    "+ // Server reader convergence: entries through the shared dual-mode reader — every",
-    "+ // stored row (duplicate business dates included) is aggregated exactly as before; a",
-    "+ // malformed node throws a typed EntriesStorageError, so no snapshot (and no email)",
-    "+ // is ever derived from the frozen `_v` (CTO D3).",
-    "+ const rows = requireEntriesRows(entriesSnap.val(), { tenantId, bizId, site: \"snapshotBuilder\" }) as unknown as DailyEntry[];",
-    "- const monthEntries = entries.filter((e) => e.date?.startsWith(currentMonth));",
-    "+ const monthEntries = rows.filter((e) => e.date?.startsWith(currentMonth));",
-  ]),
+/**
+ * Exactly the files the CTO authorized for the server-reader slice, each pinned to the
+ * blob of its REVIEWED bytes (R1 candidate). Nothing under a directory.
+ */
+export const SERVER_READER_APPROVED_BLOBS = Object.freeze({
+  "src/analytics/dailyBuilder.ts": "a327186c90e957a44aeeb40a023734e2f0c027c1",
+  "src/repositories/analytics/dailyMetricsRepo.ts": "51675f0af60cc33926ae74281e8295eb3df4b3b4",
+  "src/repositories/analytics/laborRepo.ts": "33a646e92523f758d70b1707652cf39fc36c4605",
+  "src/repositories/analytics/purchasesRepo.ts": "6a3f9be2a5c4ceec7d5339cbda50d61fd28513af",
+  "src/snapshot/snapshotBuilder.ts": "e36df4d83d945d16e158dacc82b12ce2500f9956",
 });
-export const SERVER_READER_AUTHORIZED_FILES = Object.freeze(Object.keys(SERVER_READER_AUTHORIZED_DELTA));
+export const SERVER_READER_AUTHORIZED_FILES = Object.freeze(Object.keys(SERVER_READER_APPROVED_BLOBS));
 
 /**
  * Pure verdict. Inputs:
- *   changedProtectedPaths — protected paths that differ between SERVER_READER_BASE and
- *                           the working tree (already filtered by isProtectedPath);
- *   deltas                — { [rel]: unified diff text of SERVER_READER_BASE → working tree }
- *                           for at least every authorized file (missing ⇒ empty diff);
- *   authorized            — the pinned delta table (defaults to the one above; mutation
- *                           tests pass altered tables to prove the checks bite).
+ *   changedProtectedPaths — protected paths that differ between SERVER_READER_BASE and the
+ *                           working tree;
+ *   blobs                 — { [rel]: blob sha of the working-tree bytes } for every
+ *                           authorized file (missing ⇒ treated as absent → mismatch);
+ *   baseBlobs             — { [rel]: blob sha at SERVER_READER_BASE } (optional); a pin equal
+ *                           to the base blob means the file is not a reviewed change and
+ *                           must not be listed;
+ *   authorized            — the pin table (defaults to the one above; mutation tests pass
+ *                           altered tables to prove the checks bite).
  * Returns { ok:true } or { ok:false, reason, detail }.
  */
-export function serverReaderScopeVerdict({ changedProtectedPaths, deltas, authorized = SERVER_READER_AUTHORIZED_DELTA }) {
+export function serverReaderScopeVerdict({ changedProtectedPaths, blobs, baseBlobs, authorized = SERVER_READER_APPROVED_BLOBS }) {
   const keys = Object.keys(authorized || {});
   if (keys.length === 0) return { ok: false, reason: "empty_allowlist" };
   for (const k of keys) {
     if (!isPlainAuthorizedFile(k)) return { ok: false, reason: "invalid_allowlist_entry", detail: k };
-    const pinned = authorized[k];
-    if (!Array.isArray(pinned) || pinned.length === 0 || !pinned.every((l) => typeof l === "string" && /^[+-] \S/.test(l))) {
-      return { ok: false, reason: "invalid_pinned_delta", detail: k };
-    }
+    if (typeof authorized[k] !== "string" || !SHA1_RE.test(authorized[k])) return { ok: false, reason: "invalid_pin", detail: k };
+    if (baseBlobs && baseBlobs[k] === authorized[k]) return { ok: false, reason: "pin_equals_base", detail: k };
   }
   const changed = Array.from(new Set(changedProtectedPaths || []));
-  const stray = changed.filter((rel) => isProtectedPath(rel) && !Object.prototype.hasOwnProperty.call(authorized, rel));
-  if (stray.length) return { ok: false, reason: "unauthorized_protected_path", detail: stray.sort() };
+  const stray = changed.filter((rel) => isProtectedPath(rel) && !Object.prototype.hasOwnProperty.call(authorized, rel)).sort();
+  if (stray.length) return { ok: false, reason: "unauthorized_protected_path", detail: stray };
   for (const k of keys) {
-    const actual = normalizeUnifiedDiff((deltas || {})[k]);
-    const pinned = authorized[k];
-    const n = Math.max(actual.length, pinned.length);
-    for (let i = 0; i < n; i++) {
-      if (actual[i] !== pinned[i]) {
-        return { ok: false, reason: "authorized_delta_mismatch",
-                 detail: { file: k, index: i, expected: pinned[i] ?? null, actual: actual[i] ?? null, expectedLines: pinned.length, actualLines: actual.length } };
-      }
+    const actual = (blobs || {})[k];
+    if (actual !== authorized[k]) {
+      return { ok: false, reason: "approved_content_mismatch", detail: { file: k, expected: authorized[k], actual: actual ?? null } };
     }
   }
   return { ok: true };
 }
 
-/** Collect the real inputs from git for `root` (the working tree vs SERVER_READER_BASE). */
+/** Collect the real inputs from the working tree at `root` (blobs) and git (paths, base blobs). */
 export function collectServerReaderScopeInputs(root, base = SERVER_READER_BASE) {
   const names = gitIn(root, ["diff", "--name-only", base, "--"]);
   if (names.status !== 0) throw new Error("git diff --name-only failed: " + names.stderr);
   const changedAll = names.stdout.trim().split(/\n/).filter(Boolean);
   const changedProtectedPaths = changedAll.filter(isProtectedPath);
-  const deltas = {};
+  const blobs = {}, baseBlobs = {};
   for (const rel of SERVER_READER_AUTHORIZED_FILES) {
-    const d = gitIn(root, ["-c", "diff.algorithm=myers", "diff", "--no-color", "--no-ext-diff", "--unified=0", base, "--", rel]);
-    if (d.status !== 0) throw new Error("git diff failed for " + rel + ": " + d.stderr);
-    deltas[rel] = d.stdout;
+    let bytes = null;
+    try { bytes = readFileSync(join(root, rel)); } catch { bytes = null; }
+    blobs[rel] = bytes === null ? null : blobSha(bytes);
+    const b = gitIn(root, ["rev-parse", `${base}:${rel}`]);
+    baseBlobs[rel] = b.status === 0 ? b.stdout.trim() : null;
   }
-  return { changedAll, changedProtectedPaths, deltas };
+  return { changedAll, changedProtectedPaths, blobs, baseBlobs };
 }

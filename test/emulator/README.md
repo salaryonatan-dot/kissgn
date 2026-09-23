@@ -300,8 +300,12 @@ siblings continue when a business is ambiguous or malformed (`buildAnalyticsForA
 `buildSnapshotForAll`); CTO D1 duplicate-date ambiguity in both physical forms (typed
 refusal, both rows aggregated, `legacy_ambiguous` exception fallback, node untouched);
 CTO D2 non-firing checkers on anomaly bait in four node forms; the preflight duplicate-date
-report (informational, conversion keeps both rows); and a post-conversion direct row change
-that every reader sees while the frozen `_v` still holds the old value. Outbound `fetch`
+report (informational, conversion keeps both rows); a post-conversion direct row change
+that every reader sees while the frozen `_v` still holds the old value; and (`SR-11`, server
+readers R1 / Codex SR-F1) the ACTUAL proactive flow (`runForBiz`) on a duplicate "yesterday"
+in eight logically identical representations (legacy `[A,B]` / `[B,A]`, V2 keyed both ways,
+each with the UUID lexical order reversed) — one daily metric per date, the same persisted
+insight (`currentValue` = the aggregate) and the same digest every time. Outbound `fetch`
 is fenced to the emulator host, so the weather / oref lookups fail closed as they do
 offline.
 
@@ -315,7 +319,7 @@ Expected:
 
 ```
 === TOTALS ===
-total=10 passed=10 failed=0
+total=11 passed=11 failed=0
 
 ALL CASES PASSED
 ```

@@ -219,14 +219,15 @@ test("S0 diff contains no historical data transform, migration, RTDB rules, or f
   const rulesExemptLive = rulesChangeIsOnlyAuthorizedEntriesValidation(read("database.rules.json"));
   assert.equal(rulesExemptLive, true, "database.rules.json must carry only the authorized entries contract");
 
-  // ── LAYER B — the approved server-reader delta, core → working tree ──────────────
+  // ── LAYER B — the approved server-reader files, core → working tree ──────────────
   // CTO decision (2026-09-23): the P0-DATA-01 server-reader convergence may change
-  // exactly five historically protected runtime files, and only by the delta pinned
-  // literally in test/support/server-reader-authorized-delta.mjs. The authorization is
-  // by CONTENT: the normalized unified diff of each file against the approved core
-  // must equal the pinned lines. A sixth protected file, an extra line, a partial
-  // revert, an inserted parser or a touched revenue expression all fail. The Rules are
-  // frozen from the core onward — they are not part of this authorization.
+  // exactly five historically protected runtime files. R1 (Codex SR-F2): the
+  // authorization is by IDENTITY — each file's working-tree bytes must hash to the git
+  // blob of its reviewed version, pinned in test/support/server-reader-authorized-delta.mjs.
+  // The guard proves "this file IS the reviewed version": a relocated declaration,
+  // reordered statements, an extra statement, a partial revert, a touched formula, a
+  // sixth protected file or a directory/glob entry all fail. Nothing is normalized.
+  // The Rules are frozen from the core onward — they are not part of this authorization.
   assert.deepEqual([...SERVER_READER_AUTHORIZED_FILES].sort(), [
     "src/analytics/dailyBuilder.ts",
     "src/repositories/analytics/dailyMetricsRepo.ts",
@@ -237,9 +238,13 @@ test("S0 diff contains no historical data transform, migration, RTDB rules, or f
   const live = collectServerReaderScopeInputs(ROOT);
   assert.ok(!live.changedAll.includes("database.rules.json"), "database.rules.json must not change after the approved Storage V2 core");
   assert.deepEqual(live.changedProtectedPaths.filter((rel) => !isProtectedPath(rel)), [], "collector sanity");
+  for (const rel of SERVER_READER_AUTHORIZED_FILES) {
+    assert.match(String(live.blobs[rel]), /^[0-9a-f]{40}$/, rel + " is present in the working tree");
+    assert.notEqual(live.blobs[rel], live.baseBlobs[rel], rel + " is a reviewed change on top of the core (otherwise it must not be listed)");
+  }
   const verdict = serverReaderScopeVerdict(live);
   assert.deepEqual(verdict, { ok: true },
-    "S0 must not touch historical transforms, forecast/KPI areas, packages, or stored-data scripts beyond the pinned server-reader delta");
+    "S0 must not touch historical transforms, forecast/KPI areas, packages, or stored-data scripts beyond the pinned (exact-content) server-reader files");
 
   const runtimeDiff = gitIn(ROOT, ["diff", "--unified=0", BASE, "--", "index.html", "api", "lib", "src"]);
   assert.equal(runtimeDiff.status, 0, runtimeDiff.stderr);
