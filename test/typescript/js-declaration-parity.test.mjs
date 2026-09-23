@@ -18,6 +18,7 @@ function declaredValueExports(dtsRel) {
   const names = new Set();
   for (const m of src.matchAll(/export\s+(?:declare\s+)?function\s+([A-Za-z0-9_]+)/g)) names.add(m[1]);
   for (const m of src.matchAll(/export\s+(?:declare\s+)?const\s+([A-Za-z0-9_]+)/g)) names.add(m[1]);
+  for (const m of src.matchAll(/export\s+(?:declare\s+)?class\s+([A-Za-z0-9_]+)/g)) names.add(m[1]);   // typed error classes
   return names;
 }
 
@@ -30,6 +31,7 @@ const PAIRS = [
   ["lib/memoryInsightType.js", "lib/memoryInsightType.d.ts"],
   ["lib/llmResponse.js", "lib/llmResponse.d.ts"],
   ["lib/proactiveCore.js", "lib/proactiveCore.d.ts"],
+  ["lib/analytics/entriesReader.js", "lib/analytics/entriesReader.d.ts"],
 ];
 
 for (const [jsRel, dtsRel] of PAIRS) {

@@ -279,6 +279,47 @@ mutations=12 proven_weakening_and_guard_rejected=12 failed=0
 ALL MUTATIONS PROVEN: each guard rejection corresponds to a real loss of server enforcement
 ```
 
-There are now FIVE emulator scripts, and they all reseed the database root (the mutation
+## Run the server-reader convergence matrix
+
+`server-readers-matrix.mjs` proves the P0-DATA-01 server-reader convergence against the
+real emulator with the REAL compiled server modules (`test/support/server-reader-harness.mjs`
+compiles `src/` + `lib/` with only the Admin-SDK and email seams replaced; the Admin seam is
+then pointed at the real Admin SDK database). Every converged reader — `dailyBuilder`,
+`snapshotBuilder`, the three analytics repositories and `fetchPlannedData` routing,
+`entryExceptionsRepo`, the two non-firing alert checkers through `runAlertsForBiz`, and the
+legacy preflight report — runs through the shared reader (`lib/analytics/entriesReader.js`)
+against nodes stored by RTDB, including nodes converted by the approved
+`upgradeBusinessToV2` transaction, so RTDB's own readback normalization (numeric-key maps
+read back as arrays) is what the readers see.
+
+Cases `SR-01`…`SR-10`: legacy business; migrated V2 (identical analytics doc, repository
+metrics, snapshot and exceptions before and after conversion); native V2 without `_v`;
+stale-`_v` poison (rows win, the stale exception flag is never surfaced); every malformed
+V2 variant fails closed in every reader with nothing persisted and no email; healthy
+siblings continue when a business is ambiguous or malformed (`buildAnalyticsForAll`,
+`buildSnapshotForAll`); CTO D1 duplicate-date ambiguity in both physical forms (typed
+refusal, both rows aggregated, `legacy_ambiguous` exception fallback, node untouched);
+CTO D2 non-firing checkers on anomaly bait in four node forms; the preflight duplicate-date
+report (informational, conversion keeps both rows); and a post-conversion direct row change
+that every reader sees while the frozen `_v` still holds the old value. Outbound `fetch`
+is fenced to the emulator host, so the weather / oref lookups fail closed as they do
+offline.
+
+```
+... emulators:exec --only database --project demo-marjin-rules \
+      --config test/emulator/firebase.json \
+      "node test/emulator/server-readers-matrix.mjs"
+```
+
+Expected:
+
+```
+=== TOTALS ===
+total=10 passed=10 failed=0
+
+ALL CASES PASSED
+```
+
+There are now SIX emulator scripts, and they all reseed the database root (the mutation
 probe also swaps the loaded Rules), so they still must run one at a time against a single
 emulator.

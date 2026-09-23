@@ -22,6 +22,10 @@ mkdirSync(join(dir, "src", "firebase"), { recursive: true });
 for (const f of ["types.ts", "baselines.ts", "rules.ts", "buildInsights.ts"])
   copyFileSync(join(REPO, "src", "insights", f), join(dir, "src", "insights", f));
 copyFileSync(join(REPO, "src", "analytics", "dailyBuilder.ts"), join(dir, "src", "analytics", "dailyBuilder.ts"));
+// P0-DATA-01: dailyBuilder reads entries through the shared server reader (real module, not a stub)
+mkdirSync(join(dir, "lib", "analytics"), { recursive: true });
+for (const f of ["entriesReader.js", "entriesReader.d.ts"])
+  copyFileSync(join(REPO, "lib", "analytics", f), join(dir, "lib", "analytics", f));
 // stubs for dailyBuilder's external imports (resolved by Node at runtime)
 writeFileSync(join(dir, "src", "firebase", "admin.js"), `export function getDb(){ return globalThis.__DB; }`);
 writeFileSync(join(dir, "src", "analytics", "regionResolver.js"), `export function resolveOrefAreas(){ return ["חדרה"]; }`);

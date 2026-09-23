@@ -111,7 +111,7 @@ export function createLegacyPreflight(deps) {
       return { ok: false, mode: "legacy", rowCount: null, blockers: [{ code: PREFLIGHT_BLOCKERS.NOT_AN_ARRAY }] };
     }
     const missing = [], malformedRows = [], badDate = [], firstSeen = Object.create(null), dupIds = [];
-    const reserved = [], badKeys = [], badValues = [], normalized = [], numericMaps = [];
+    const reserved = [], badKeys = [], badValues = [], normalized = [], numericMaps = [], byDate = new Map();
     rows.forEach((r, i) => {
       if (!isPlainRow(r)) { malformedRows.push(i); return; }
       const id = r.id;
@@ -120,6 +120,7 @@ export function createLegacyPreflight(deps) {
       if (firstSeen[id] !== undefined) { if (dupIds.indexOf(id) === -1) dupIds.push(id); }
       else firstSeen[id] = i;
       if (!entryDateKey(r.date)) badDate.push(i);
+      else { const dk = entryDateKey(r.date); if (!byDate.has(dk)) byDate.set(dk, []); byDate.get(dk).push(String(id)); }
       if (Object.prototype.hasOwnProperty.call(r, rowGenKey)) reserved.push(i);
       const rep = representation(r, rowGenKey, mapFields);
       rep.bad.forEach((b) => (b.reason === "invalid_key" ? badKeys : badValues).push({ index: i, path: b.path, reason: b.reason }));
@@ -153,9 +154,16 @@ export function createLegacyPreflight(deps) {
     // arrays; the runtime's canonical equality treats that readback as the same value.
     const normalization = { rowsAffected: normalized.length, rows: normalized,
                             numericKeyMaps: { rowsAffected: numericMaps.length, rows: numericMaps } };
+    // CTO D1 — PRE-CUTOVER OPERATOR REPORT, never a blocker and never a repair: every
+    // business date carried by more than one immutable row, with the stable ids. The
+    // converted business will refuse one-row-per-date derivations for these dates
+    // (`duplicate_business_date`) until the operator resolves them through the stable-id
+    // delete path. Nothing here deletes or merges anything.
+    const duplicateDates = [...byDate.entries()].filter(([, ids]) => ids.length > 1)
+      .map(([date, ids]) => ({ date, ids: ids.slice().sort() })).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     return ok
-      ? { ok: true, mode: "legacy", rowCount: rows.length, rows, blockers: [], normalization }
-      : { ok: false, mode: "legacy", rowCount: rows.length, blockers, normalization };
+      ? { ok: true, mode: "legacy", rowCount: rows.length, rows, blockers: [], normalization, duplicateDates }
+      : { ok: false, mode: "legacy", rowCount: rows.length, blockers, normalization, duplicateDates };
   }
 
   return { preflightLegacyNode };

@@ -1,4 +1,5 @@
 import { getDb } from "../firebase/admin.js";
+import { requireEntriesRows } from "../../lib/analytics/entriesReader.js";
 
 export interface SnapshotData {
   tenantId: string;
@@ -169,7 +170,11 @@ export async function buildSnapshotForBiz(
     db.ref(`tenants/${tenantId}/app/business`).once("value"),
   ]);
 
-  const entries = parseFirebaseData<DailyEntry[]>(entriesSnap.val());
+  // Server reader convergence: entries through the shared dual-mode reader — every
+  // stored row (duplicate business dates included) is aggregated exactly as before; a
+  // malformed node throws a typed EntriesStorageError, so no snapshot (and no email)
+  // is ever derived from the frozen `_v` (CTO D3).
+  const rows = requireEntriesRows(entriesSnap.val(), { tenantId, bizId, site: "snapshotBuilder" }) as unknown as DailyEntry[];
   const fixedExpenses = parseFirebaseData<FixedExpense[]>(fixedSnap.val());
   const config = parseFirebaseData<Config>(configSnap.val());
   const businesses = parseFirebaseData<Business[]>(businessSnap.val());
@@ -179,7 +184,7 @@ export async function buildSnapshotForBiz(
   const bizName = business?.name || "Unknown";
 
   // Filter entries for current month
-  const monthEntries = entries.filter((e) => e.date?.startsWith(currentMonth));
+  const monthEntries = rows.filter((e) => e.date?.startsWith(currentMonth));
 
   // Initialize metrics
   let totalSales = 0;

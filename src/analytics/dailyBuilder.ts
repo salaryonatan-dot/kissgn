@@ -17,6 +17,7 @@
  */
 
 import { getDb } from "../firebase/admin.js";
+import { requireEntriesRows, requireRowForDate } from "../../lib/analytics/entriesReader.js";
 import { resolveOrefAreas, type RegionSelection } from "./regionResolver.js";
 import { buildInsights } from "../insights/buildInsights.js";
 import type { InsightsDailyDoc } from "../insights/types.js";
@@ -395,7 +396,15 @@ export async function buildAnalyticsForBiz(
   const structuredExceptionEnvelope = exceptionSnap.val() as
     { state?: { status?: string; reasonCode?: string; reasonText?: string; updatedAt?: number; updatedBy?: string } } | null;
 
-  const entries = parseFirebaseData<DailyEntry[]>(entriesSnap.val(), []);
+  // Server reader convergence: the entries node is read through the shared dual-mode
+  // reader (legacy `_v` | Storage V2 rows | absent) — never through the generic
+  // envelope parser. A malformed node throws a typed EntriesStorageError before any
+  // external fetch or derived write (CTO D3); a business date carried by more than
+  // one immutable row throws a typed EntriesAmbiguityError (duplicate_business_date)
+  // — there is no silent first/last/position winner (CTO D1). Both propagate to the
+  // caller: buildAnalyticsForAll records the business failure and continues.
+  const readerCtx = { tenantId, bizId, site: "dailyBuilder" };
+  const rows = requireEntriesRows(entriesSnap.val(), readerCtx) as unknown as DailyEntry[];
   const config = parseFirebaseData<BusinessConfig>(configSnap.val(), {});
   const businesses = parseFirebaseData<Array<{ id: string; name: string }>>(
     businessSnap.val(),
@@ -407,7 +416,7 @@ export async function buildAnalyticsForBiz(
     config.businessName ||
     "Unknown";
 
-  const todayEntry = entries.find((e) => e.date === date);
+  const todayEntry = (requireRowForDate(rows as unknown as Array<{ date?: string }>, date, readerCtx) as unknown as DailyEntry | null) ?? undefined;
 
   // Resolve location with sane defaults (Hadera) until the user sets it
   // explicitly through the map picker in SetupWizard.

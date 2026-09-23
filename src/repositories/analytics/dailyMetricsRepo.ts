@@ -1,4 +1,5 @@
 import { bizEntriesRef } from "../../firebase/refs.js";
+import { requireEntriesRows } from "../../../lib/analytics/entriesReader.js";
 import type { DailyMetric } from "../../agent/types/analytics.js";
 
 interface RawEntry {
@@ -12,17 +13,12 @@ interface RawEntry {
   supplier_payments?: Record<string, number | string>;
 }
 
-function parseV(snapshot: any): RawEntry[] {
-  const raw = snapshot.val();
-  if (!raw) return [];
-  // Data is wrapped in { _v: "JSON_STRING" }
-  if (raw._v && typeof raw._v === "string") {
-    try { return JSON.parse(raw._v); } catch { return []; }
-  }
-  // Fallback: might be direct array or object
-  if (Array.isArray(raw)) return raw;
-  if (typeof raw === "object") return Object.values(raw);
-  return [];
+// Server reader convergence: the shared dual-mode reader (legacy `_v` | Storage V2
+// rows | absent). Every stored row is returned (duplicate business dates included —
+// this repository aggregates, it never picks one row per date); a malformed node
+// throws a typed EntriesStorageError instead of silently yielding an empty dataset.
+function readRows(snapshot: any, tenantId: string, bizId: string, site: string): RawEntry[] {
+  return requireEntriesRows(snapshot.val(), { tenantId, bizId, site }) as unknown as RawEntry[];
 }
 
 function num(v: unknown): number {
@@ -59,9 +55,9 @@ export async function getDailyMetrics(
 ): Promise<DailyMetric[]> {
   const ref = bizEntriesRef(tenantId, bizId);
   const snapshot = await ref.once("value");
-  const entries = parseV(snapshot);
+  const rows = readRows(snapshot, tenantId, bizId, "dailyMetricsRepo.getDailyMetrics");
 
-  return entries
+  return rows
     .filter((e) => e.date && e.date >= startDate && e.date <= endDate)
     .map(toDaily)
     .sort((a, b) => a.date.localeCompare(b.date));
@@ -70,8 +66,8 @@ export async function getDailyMetrics(
 export async function getLatestDailyDate(tenantId: string, bizId: string): Promise<string | null> {
   const ref = bizEntriesRef(tenantId, bizId);
   const snapshot = await ref.once("value");
-  const entries = parseV(snapshot);
-  if (entries.length === 0) return null;
-  const sorted = entries.filter((e) => e.date).sort((a, b) => b.date.localeCompare(a.date));
+  const rows = readRows(snapshot, tenantId, bizId, "dailyMetricsRepo.getLatestDailyDate");
+  if (rows.length === 0) return null;
+  const sorted = rows.filter((e) => e.date).sort((a, b) => b.date.localeCompare(a.date));
   return sorted[0]?.date ?? null;
 }

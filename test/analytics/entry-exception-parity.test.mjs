@@ -21,6 +21,9 @@ mkdirSync(join(dir, "src", "firebase"), { recursive: true });
 for (const f of ["types.ts", "baselines.ts", "rules.ts", "buildInsights.ts"])
   copyFileSync(join(REPO, "src", "insights", f), join(dir, "src", "insights", f));
 copyFileSync(join(REPO, "src", "analytics", "dailyBuilder.ts"), join(dir, "src", "analytics", "dailyBuilder.ts"));
+// server reader convergence: dailyBuilder imports the shared entries reader (pure ESM + .d.ts)
+mkdirSync(join(dir, "lib", "analytics"), { recursive: true });
+for (const f of ["entriesReader.js", "entriesReader.d.ts"]) copyFileSync(join(REPO, "lib", "analytics", f), join(dir, "lib", "analytics", f));
 writeFileSync(join(dir, "src", "firebase", "admin.js"), `export function getDb(){ return globalThis.__DB; }`);
 writeFileSync(join(dir, "src", "analytics", "regionResolver.js"), `export function resolveOrefAreas(){ return ["x"]; }`);
 const r = spawnSync("node", [TSC, "--module","esnext","--target","es2020","--moduleResolution","bundler","--skipLibCheck","--noEmitOnError","false",

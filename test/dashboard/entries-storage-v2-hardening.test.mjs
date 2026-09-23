@@ -519,12 +519,22 @@ test("[H10] the VAT S0 guard consumes the semantic module (no token checks remai
   assert.ok(vat.includes("return authorizedEntriesRulesDelta(before, after).ok === true;"));
   assert.ok(!vat.includes('.includes("matches(")'), "token presence is no longer an acceptance criterion");
   assert.ok(!vat.includes("biz:[^:]+:entries\")) return false"), "token presence is no longer an acceptance criterion");
-  // Against the candidate's parent: the ONLY differences are the import and the body
-  // of the rules-exception closure. Every VAT assertion is byte-identical.
+  // P0-DATA-01 server readers (CTO, 2026-09-23): the scope test is now two-layered —
+  // Layer A keeps the historical contract BASE → approved core, Layer B authorizes the
+  // pinned server-reader delta by CONTENT through the semantic module.
+  assert.ok(vat.includes('from "../support/server-reader-authorized-delta.mjs";'));
+  assert.ok(vat.includes("const verdict = serverReaderScopeVerdict(live);"));
+  assert.ok(vat.includes("assert.deepEqual(verdict, { ok: true },"));
+  assert.ok(!/authorized\s*[:=]\s*\[\s*["']src\/[a-z]+\/["']/.test(vat), "no directory allowlist in the guard");
+  // Against the candidate's parent: the ONLY differences are the imports and the body
+  // of the S0 scope test up to its added-line content check. Every VAT assertion (1–4)
+  // and the added-line regex are byte-identical.
   const parent = gitIn(ROOT, ["show", "cb8ac84e2dbc5c23b6fe0eee2083be6f326d3894:test/finance/vat-invariant.test.mjs"]);
   assert.equal(parent.status, 0, parent.stderr);
   const strip = (src) => src
     .replace('import { authorizedEntriesRulesDelta } from "../support/rules-authorized-delta.mjs";\n', "")
-    .replace(/  \/\/ R10\.1-GATE-018\.[\s\S]*?(?=  const rulesExempt = )/, "<rules-exception>");
-  assert.equal(strip(vat), strip(parent.stdout), "nothing outside the rules-exception closure changed");
+    .replace(/import \{[^}]*\} from "\.\.\/support\/server-reader-authorized-delta\.mjs";\n/, "")
+    .replace(/(test\("S0 diff contains no historical data transform, migration, RTDB rules, or forbidden runtime area", \(\) => \{\n)[\s\S]*?(?=  const runtimeDiff = )/, "$1<scope-checks>");
+  assert.equal(strip(vat), strip(parent.stdout), "nothing outside the scope-check body changed");
+  assert.ok(strip(vat).includes("<scope-checks>"), "the scope test was located");
 });

@@ -1,12 +1,15 @@
 import { bizEntriesRef } from "../../firebase/refs.js";
 import { bizSuppliersRef } from "../../firebase/refs.js";
+import { requireEntriesRows } from "../../../lib/analytics/entriesReader.js";
 import type { PurchaseMetric } from "../../agent/types/analytics.js";
 
 function num(v: unknown): number {
   return Number(v) || 0;
 }
 
-function parseV(snapshot: any): any[] {
+// The SUPPLIERS list is a legacy `_v` envelope that is NOT part of Storage V2; this
+// parser is kept for it alone. Entries go through the shared dual-mode reader below.
+function parseLegacyListEnvelope(snapshot: any): any[] {
   const raw = snapshot.val();
   if (!raw) return [];
   if (raw._v && typeof raw._v === "string") {
@@ -26,19 +29,20 @@ export async function getPurchaseMetrics(
 ): Promise<PurchaseMetric[]> {
   // Get supplier names for lookup
   const suppSnap = await bizSuppliersRef(tenantId, bizId).once("value");
-  const suppliers = parseV(suppSnap) as Array<{ id: string | number; name: string }>;
+  const suppliers = parseLegacyListEnvelope(suppSnap) as Array<{ id: string | number; name: string }>;
   const nameMap: Record<string, string> = {};
   for (const s of suppliers) {
     nameMap[String(s.id)] = s.name;
   }
 
-  // Get entries
+  // Entries: shared dual-mode reader; every stored row contributes its payments;
+  // a malformed node throws a typed EntriesStorageError (no silent empty result).
   const ref = bizEntriesRef(tenantId, bizId);
   const snapshot = await ref.once("value");
-  const entries = parseV(snapshot);
+  const rows: any[] = requireEntriesRows(snapshot.val(), { tenantId, bizId, site: "purchasesRepo.getPurchaseMetrics" });
 
   const results: PurchaseMetric[] = [];
-  for (const e of entries) {
+  for (const e of rows) {
     if (!e.date || e.date < startDate || e.date > endDate) continue;
     if (!e.supplier_payments || typeof e.supplier_payments !== "object") continue;
     for (const [suppId, amount] of Object.entries(e.supplier_payments)) {

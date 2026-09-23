@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 // assertions below are unchanged; only how git is invoked is.
 import { gitIn } from "../support/git-context.mjs";
 import { authorizedEntriesRulesDelta } from "../support/rules-authorized-delta.mjs";
+import { SERVER_READER_BASE, SERVER_READER_AUTHORIZED_FILES, isProtectedPath, collectServerReaderScopeInputs, serverReaderScopeVerdict } from "../support/server-reader-authorized-delta.mjs";
 import vm from "node:vm";
 import { dailyReportMessage } from "../../lib/whatsappMessages.js";
 
@@ -166,9 +167,6 @@ test("runtime source has one VAT-rate literal and one sanctioned VAT division si
 });
 
 test("S0 diff contains no historical data transform, migration, RTDB rules, or forbidden runtime area", () => {
-  const names = gitIn(ROOT, ["diff", "--name-only", BASE, "--"]);
-  assert.equal(names.status, 0, names.stderr);
-  const changed = names.stdout.trim().split(/\n/).filter(Boolean);
   const forbiddenPaths = [
     /^src\/analytics\//,
     /^src\/repositories\//,
@@ -192,21 +190,56 @@ test("S0 diff contains no historical data transform, migration, RTDB rules, or f
   // wrapper (`true || (…)`), a loosened comparison, a dropped clause or a smuggled
   // child rule all differ from the pinned expressions and fail. Nothing about the VAT
   // invariant itself is relaxed.
-  const rulesChangeIsOnlyAuthorizedEntriesValidation = () => {
+  const rulesChangeIsOnlyAuthorizedEntriesValidation = (afterText) => {
     const show = gitIn(ROOT, ["show", `${BASE}:database.rules.json`]);
     if (show.status !== 0) return false;
     let before, after;
-    try { before = JSON.parse(show.stdout); after = JSON.parse(read("database.rules.json")); }
+    try { before = JSON.parse(show.stdout); after = JSON.parse(afterText); }
     catch { return false; }
     return authorizedEntriesRulesDelta(before, after).ok === true;
   };
-  const rulesExempt = changed.includes("database.rules.json") && rulesChangeIsOnlyAuthorizedEntriesValidation();
+
+  // ── LAYER A — historical S0 protection, BASE → the Codex-approved Storage V2 core ──
+  // Unchanged contract: across the whole S0 + Storage V2 history no forbidden path may
+  // change, and the Rules may change only through the semantic entries exception.
+  const H = SERVER_READER_BASE;
+  const hist = gitIn(ROOT, ["diff", "--name-only", BASE, H, "--"]);
+  assert.equal(hist.status, 0, hist.stderr);
+  const changedHist = hist.stdout.trim().split(/\n/).filter(Boolean);
+  const rulesAtH = gitIn(ROOT, ["show", `${H}:database.rules.json`]);
+  assert.equal(rulesAtH.status, 0, rulesAtH.stderr);
+  const rulesExemptHist = changedHist.includes("database.rules.json") && rulesChangeIsOnlyAuthorizedEntriesValidation(rulesAtH.stdout);
   assert.deepEqual(
-    changed.filter((rel) => forbiddenPaths.some((re) => re.test(rel)))
-           .filter((rel) => !(rulesExempt && rel === "database.rules.json")),
+    changedHist.filter((rel) => forbiddenPaths.some((re) => re.test(rel)))
+               .filter((rel) => !(rulesExemptHist && rel === "database.rules.json")),
     [],
-    "S0 must not touch historical transforms, RTDB rules, forecast/KPI areas, packages, or stored-data scripts",
+    "S0 history must not touch historical transforms, RTDB rules, forecast/KPI areas, packages, or stored-data scripts",
   );
+  // The live Rules file must still be exactly the authorized contract (never a path exemption).
+  const rulesExemptLive = rulesChangeIsOnlyAuthorizedEntriesValidation(read("database.rules.json"));
+  assert.equal(rulesExemptLive, true, "database.rules.json must carry only the authorized entries contract");
+
+  // ── LAYER B — the approved server-reader delta, core → working tree ──────────────
+  // CTO decision (2026-09-23): the P0-DATA-01 server-reader convergence may change
+  // exactly five historically protected runtime files, and only by the delta pinned
+  // literally in test/support/server-reader-authorized-delta.mjs. The authorization is
+  // by CONTENT: the normalized unified diff of each file against the approved core
+  // must equal the pinned lines. A sixth protected file, an extra line, a partial
+  // revert, an inserted parser or a touched revenue expression all fail. The Rules are
+  // frozen from the core onward — they are not part of this authorization.
+  assert.deepEqual([...SERVER_READER_AUTHORIZED_FILES].sort(), [
+    "src/analytics/dailyBuilder.ts",
+    "src/repositories/analytics/dailyMetricsRepo.ts",
+    "src/repositories/analytics/laborRepo.ts",
+    "src/repositories/analytics/purchasesRepo.ts",
+    "src/snapshot/snapshotBuilder.ts",
+  ], "the reader authorization names exactly the five approved files");
+  const live = collectServerReaderScopeInputs(ROOT);
+  assert.ok(!live.changedAll.includes("database.rules.json"), "database.rules.json must not change after the approved Storage V2 core");
+  assert.deepEqual(live.changedProtectedPaths.filter((rel) => !isProtectedPath(rel)), [], "collector sanity");
+  const verdict = serverReaderScopeVerdict(live);
+  assert.deepEqual(verdict, { ok: true },
+    "S0 must not touch historical transforms, forecast/KPI areas, packages, or stored-data scripts beyond the pinned server-reader delta");
 
   const runtimeDiff = gitIn(ROOT, ["diff", "--unified=0", BASE, "--", "index.html", "api", "lib", "src"]);
   assert.equal(runtimeDiff.status, 0, runtimeDiff.stderr);

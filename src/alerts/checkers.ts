@@ -6,6 +6,18 @@ import type { FiredAlert, AlertThresholds, AlertSeverity } from "./types.js";
 import { getDb } from "../firebase/admin.js";
 import { todayIso, daysAgoIso } from "../utils/dates.js";
 import { strictLegacyDailyMetric } from "../../lib/analytics/strictDailyMetrics.js";
+import { requireEntriesRows, rowsInRange } from "../../lib/analytics/entriesReader.js";
+
+// ── CTO D2 — entries-backed anomaly checkers stay NON-FIRING in this slice ────
+// checkSupplierAnomaly and checkExpensiveEmployee historically queried the entries
+// node with `orderByKey().startAt(date)`; the node's children are `_v` / `generation` /
+// `rows` / `schemaVersion`, never date keys, so the query returned null and neither
+// checker ever produced an alert. Their storage access is converged below (whole node
+// through the shared dual-mode reader, date window applied after decoding, every row
+// counted), but activating them is a separate product decision: while this constant is
+// `false` both return `[]` BEFORE any read, so no alert is saved and no digest is sent.
+// Activation requires a separately reviewed change that removes this constant.
+export const ENTRIES_ANOMALY_CHECKS_ENABLED = false;
 
 // Read the AUTHORIZED per-business flat analytics source
 // (tenants/{tid}/biz:{bizId}:analytics:daily:{date}). The legacy tenant-wide
@@ -189,26 +201,22 @@ export async function checkSupplierAnomaly(
   thresholds: AlertThresholds
 ): Promise<FiredAlert[]> {
   const alerts: FiredAlert[] = [];
+  if (!ENTRIES_ANOMALY_CHECKS_ENABLED) return alerts;   // CTO D2: non-firing, no read
   const today = todayIso();
   const db = getDb();
 
-  // Read raw entries (last 28 days) to extract supplier payments
+  // Entries (last 28 days): the whole node through the shared dual-mode reader, the
+  // date window applied AFTER decoding; every stored row contributes its payments in
+  // (date, id) order. A malformed node throws a typed EntriesStorageError.
   const start = daysAgoIso(28);
-  const snap = await db.ref(`tenants/${tenantId}/biz:${bizId}:entries`)
-    .orderByKey().startAt(start).endAt(today).once("value");
+  const snap = await db.ref(`tenants/${tenantId}/biz:${bizId}:entries`).once("value");
+  const rows = rowsInRange(requireEntriesRows(snap.val(), { tenantId, bizId, site: "checkers.checkSupplierAnomaly" }), start, today);
+  if (!rows.length) return alerts;
 
-  const raw = snap.val();
-  if (!raw) return alerts;
-
-  // Parse entries and collect per-supplier payments
+  // Collect per-supplier payments
   const supplierPayments: Record<string, number[]> = {};
 
-  for (const [_date, entryRaw] of Object.entries(raw)) {
-    let entry: any = entryRaw;
-    // Handle { _v: "JSON" } wrapper
-    if (entry?._v && typeof entry._v === "string") {
-      try { entry = JSON.parse(entry._v); } catch { continue; }
-    }
+  for (const entry of rows as any[]) {
     if (!entry?.supplier_payments) continue;
 
     for (const [suppId, amount] of Object.entries(entry.supplier_payments)) {
@@ -302,24 +310,19 @@ export async function checkExpensiveEmployee(
   thresholds: AlertThresholds
 ): Promise<FiredAlert[]> {
   const alerts: FiredAlert[] = [];
+  if (!ENTRIES_ANOMALY_CHECKS_ENABLED) return alerts;   // CTO D2: non-firing, no read
   const today = todayIso();
   const db = getDb();
 
   const start = daysAgoIso(28);
-  const snap = await db.ref(`tenants/${tenantId}/biz:${bizId}:entries`)
-    .orderByKey().startAt(start).endAt(today).once("value");
-
-  const raw = snap.val();
-  if (!raw) return alerts;
+  const snap = await db.ref(`tenants/${tenantId}/biz:${bizId}:entries`).once("value");
+  const rows = rowsInRange(requireEntriesRows(snap.val(), { tenantId, bizId, site: "checkers.checkExpensiveEmployee" }), start, today);
+  if (!rows.length) return alerts;
 
   // Collect per-employee payments
   const employeePayments: Record<string, number[]> = {};
 
-  for (const [_date, entryRaw] of Object.entries(raw)) {
-    let entry: any = entryRaw;
-    if (entry?._v && typeof entry._v === "string") {
-      try { entry = JSON.parse(entry._v); } catch { continue; }
-    }
+  for (const entry of rows as any[]) {
     if (!entry?.hourly_payroll) continue;
 
     for (const [empId, amount] of Object.entries(entry.hourly_payroll)) {

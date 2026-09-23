@@ -1,4 +1,5 @@
 import { bizEntriesRef } from "../../firebase/refs.js";
+import { requireEntriesRows } from "../../../lib/analytics/entriesReader.js";
 import type { LaborMetric } from "../../agent/types/analytics.js";
 
 function num(v: unknown): number {
@@ -10,16 +11,8 @@ function sumObj(obj: Record<string, unknown> | undefined | null): number {
   return Object.values(obj).reduce((a: number, v) => a + num(v), 0);
 }
 
-function parseV(snapshot: any): any[] {
-  const raw = snapshot.val();
-  if (!raw) return [];
-  if (raw._v && typeof raw._v === "string") {
-    try { return JSON.parse(raw._v); } catch { return []; }
-  }
-  if (Array.isArray(raw)) return raw;
-  if (typeof raw === "object") return Object.values(raw);
-  return [];
-}
+// Server reader convergence: shared dual-mode reader; all rows; typed failure on a
+// malformed node (never an empty labor dataset from corrupt storage).
 
 export async function getLaborMetrics(
   tenantId: string,
@@ -30,9 +23,9 @@ export async function getLaborMetrics(
 ): Promise<LaborMetric[]> {
   const ref = bizEntriesRef(tenantId, bizId);
   const snapshot = await ref.once("value");
-  const entries = parseV(snapshot);
+  const rows: any[] = requireEntriesRows(snapshot.val(), { tenantId, bizId, site: "laborRepo.getLaborMetrics" });
 
-  return entries
+  return rows
     .filter((e: any) => e.date && e.date >= startDate && e.date <= endDate)
     .map((e: any) => {
       const revenue = num(e.sales) + num(e.deliveries) + num(e.other_income);
