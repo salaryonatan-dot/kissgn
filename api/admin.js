@@ -28,6 +28,7 @@ import { isValidBusinessDate, isValidOperationId, isValidExpectedRevision,
   validateSetInput, requestHash as eeRequestHash, safeStateView,
   dateRangeDays, MAX_LIST_RANGE_DAYS } from "../lib/entryExceptions.js";
 import { runEntryExceptionTxn, listEntryExceptions } from "../lib/repositories/entryExceptionsRepo.js";
+import { parsePolicyRecord, decideAdminAdmission } from "../lib/storagePolicy.js";
 import { readBizDoc, writeBizDoc, readBizDailyRange, getBizDocWithToken, setBizDocGuarded } from "../lib/repositories/bizDataRepo.js";
 import { canonicalizeChecklistDocument } from "../lib/checklistVersion.js";
 import { sendEmail } from "../lib/sendEmail.js";
@@ -1860,6 +1861,16 @@ async function eeAuthorizeWrite(req, res) {
   const db = getAdminDb();
   try { await requireBizAccess(db, tenantId, bizId, claims.uid, role); }
   catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "business_access_denied" }); return null; }
+  // VERSION FENCE (P0-DATA-01): the Admin SDK bypasses Rules, so the business's server-
+  // owned storage policy is checked HERE before any ledger mutation. A quiesced or
+  // recovery-held business (or a malformed / unreadable record) refuses admission with
+  // a typed 423 — nothing is written, no ledger side effect. Absent record ⇒ admitted.
+  // This gates admission only; in-flight commits are drained operationally.
+  let policyRaw;
+  try { const snap = await db.ref(`storage_v2_control/${tenantId}/${bizId}`).once("value"); policyRaw = snap.exists() ? snap.val() : null; }
+  catch { res.status(423).json({ error: "maintenance", reason: "policy_unavailable" }); return null; }
+  const admission = decideAdminAdmission(parsePolicyRecord(policyRaw));
+  if (!admission.admitted) { res.status(423).json({ error: "maintenance", reason: admission.reason, ...(admission.phase ? { phase: admission.phase } : {}) }); return null; }
   return { claims, role, body, tenantId, bizId, businessDate, expectedRevision, operationId };
 }
 

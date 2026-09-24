@@ -26,10 +26,17 @@ const upsert = (id, fields, base) => ({ type: "upsert_entry", target: { id }, pa
 const KEY = (biz) => `biz:${biz}:entries`;
 const v2node = (gen, rows) => { const m = {}; rows.forEach((r) => { m[r.id] = { ...r, _gen: gen }; }); const n = { schemaVersion: 2, generation: gen, _v: JSON.stringify(rows) }; if (rows.length) n.rows = m; return n; };
 
-async function boot({ nodeA = v2node(1, [row(ID1, "2026-08-01", 101), row(ID2, "2026-08-02", 202)]), nodeB, html = HTML } = {}) {
+// VERSION FENCE: V2 businesses in these cases run under an explicit, VALID server-owned
+// `v2_active` policy (allowV2Initialization=true so the absent-first-save case initialises);
+// the legacy case runs with NO record (legacy defaults). Fence behaviour itself is proven in
+// test/dashboard/entries-version-fence.test.mjs and the emulator fence matrix.
+const ACTIVE_INIT = { contractVersion: 1, phase: "v2_active", policyRevision: 1, allowV2Initialization: true, minStorageProtocol: 2 };
+async function boot({ nodeA = v2node(1, [row(ID1, "2026-08-01", 101), row(ID2, "2026-08-02", 202)]), nodeB, html = HTML, policyA = ACTIVE_INIT, policyB = ACTIVE_INIT } = {}) {
   const storage = makeMemoryStorage();
   if (nodeA !== undefined) storage.seed(KEY("A"), nodeA);
   if (nodeB !== undefined) storage.seed(KEY("B"), nodeB);
+  if (policyA) storage.seedPolicy("T1", "A", policyA);
+  if (policyB) storage.seedPolicy("T1", "B", policyB);
   const dash = createDashboard({ html, storage, tenantId: "T1", bizId: "A" });
   dash.selectBusiness("A");
   await dash.settle();
@@ -124,7 +131,7 @@ test("[B1-G] switching business after a binding was captured: no cross-business 
   assert.equal(storage.read(KEY("A")).generation, 3);
 });
 test("[B1-legacy] a legacy business still routes to the legacy engine and the binding is irrelevant to it", async () => {
-  const { storage, dash } = await boot({ nodeA: { _v: JSON.stringify([row(ID1, "2026-08-01", 101)]) } });
+  const { storage, dash } = await boot({ nodeA: { _v: JSON.stringify([row(ID1, "2026-08-01", 101)]) }, policyA: null });
   assert.deepEqual(plain(dash.mode()), { mode: "legacy", generation: null });
   const r = await dash.coord().submitIntent(upsert(ID1, { sales: 555 }, { sales: 101 }));
   assert.equal(r.status, "committed"); assert.deepEqual(plain(r.rows).map((x) => x.sales), [555]);
@@ -136,7 +143,9 @@ test("[B1-H] NEGATIVE CONTROL: the parent commit's dashboard block drops the bin
   const parent = gitIn(ROOT, ["show", `${PARENT}:index.html`]);
   assert.equal(parent.status, 0, parent.stderr);
   assert.ok(extractInitBlock(parent.stdout).includes("mutate: (intent, ctx) => entriesStorageRouterRef.current.mutate(intent, ctx),"), "the parent adapter is two-argument");
-  assert.ok(extractInitBlock(HTML).includes("mutate: (intent, ctx, binding) => entriesStorageRouterRef.current.mutate(intent, ctx, binding),"), "the candidate adapter forwards the binding");
+  // VERSION FENCE: the candidate adapter forwards the ORIGINAL binding to the unchanged router
+  // behind the policy dispatch gate (see test/dashboard/entries-version-fence.test.mjs)
+  assert.ok(extractInitBlock(HTML).includes("return entriesStorageRouterRef.current.mutate(intent, ctx, binding);"), "the candidate adapter forwards the binding");
   for (const kind of ["create", "edit", "delete", "clear", "absent-create"]) {
     const { storage, dash } = await boot({ nodeA: kind === "absent-create" ? null : undefined, html: parent.stdout });
     let r;
@@ -212,7 +221,7 @@ test("[B2-E] no post-clear row: the display is empty (parked clear echo and no e
   const rb = await b.dash.clearAll(); b.storage.setHooks({});
   assert.equal(rb.status, "committed"); assert.deepEqual(plain(b.dash.displayed()), []);
   // legacy engine: its collection result is still applied as before
-  const c = await boot({ nodeA: { _v: JSON.stringify([row(ID1, "2026-08-01", 101)]) } });
+  const c = await boot({ nodeA: { _v: JSON.stringify([row(ID1, "2026-08-01", 101)]) }, policyA: null });
   const rcl = await c.dash.clearAll(); assert.equal(rcl.status, "committed"); assert.deepEqual(plain(c.dash.displayed()), []);
   assert.equal(c.storage.read(KEY("A"))._v, "[]");
 });

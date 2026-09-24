@@ -7,13 +7,14 @@ never uses a real project ID.
 
 ## What it verifies
 
-108 authorization cases (37 expected‑allow, 71 expected‑deny) across: tenant &
+128 authorization cases (41 expected‑allow, 87 expected‑deny) across: tenant &
 auth isolation, `biz_access` business isolation, role tiers
 (viewer/shift_manager/manager/owner/super_owner), manager‑tier biz keys, shift‑tier
 operational keys, server‑mediated checklist paths, legacy & flat analytics/insights,
 PIN & unknown/malformed keys, `entry_exceptions`, security metadata
-(`roles`/`members`/`biz_access`/`access_meta`), delete semantics, validation and
-multi‑location writes. Read/create/update/delete/patch are all exercised.
+(`roles`/`members`/`biz_access`/`access_meta`), delete semantics, validation,
+multi‑location writes and the server‑owned `storage_v2_control/{tenant}/{biz}` policy
+records (member‑scoped read, never client‑writable). Read/create/update/delete/patch are all exercised.
 
 ## How authentication is enforced (no extra dependency)
 
@@ -80,7 +81,7 @@ A per‑case table, then:
 
 ```
 === TOTALS ===
-total=108 expected_allow=37 expected_deny=71 passed=108 failed=0
+total=128 expected_allow=41 expected_deny=87 passed=128 failed=0
 unexpected_allow=0 unexpected_deny=0 errored=0
 
 ALL CASES PASSED
@@ -262,7 +263,12 @@ consumed by `test/finance/vat-invariant.test.mjs`) pins the authorized delta as 
 expressions and compares a whitespace-normalized expression tree, so an inert wrapper such as
 `true || (…)` is rejected. This probe loads each rejected mutation into the real emulator
 through its local settings endpoint, shows that a write the shipped Rules deny becomes
-allowed, restores the shipped Rules and shows it is denied again.
+allowed, restores the shipped Rules and shows it is denied again. Since the version fence the
+guard is two‑layered — S0 base → Storage V2 core (`authorizedEntriesRulesDelta`) and core →
+live (`authorizedVersionFenceRulesDelta`, the exact fence delta) — and eight of the mutations
+weaken a fence conjunct (guard dropped/inert, malformed record failing open, `recovery_hold`
+admitted, initialization flag ignored, client conversion admitted, control record
+client‑writable / world‑readable).
 
 ```
 ... emulators:exec --only database --project demo-marjin-rules \
@@ -274,7 +280,7 @@ Expected:
 
 ```
 === TOTALS ===
-mutations=12 proven_weakening_and_guard_rejected=12 failed=0
+mutations=20 proven_weakening_and_guard_rejected=20 failed=0
 
 ALL MUTATIONS PROVEN: each guard rejection corresponds to a real loss of server enforcement
 ```
@@ -327,6 +333,37 @@ total=12 passed=12 failed=0
 ALL CASES PASSED
 ```
 
-There are now SIX emulator scripts, and they all reseed the database root (the mutation
-probe also swaps the loaded Rules), so they still must run one at a time against a single
-emulator.
+## Run the version-fence matrix
+
+`storage-v2-version-fence.mjs` proves P0-DATA-01 VF-01…VF-26 against the real Rules engine:
+old-client transport shapes (whole-node `{_v}` set / CAS, child `_v` set/remove, whole-node
+remove, multipath update — the production legacy engine included) are allowed on legacy
+businesses and DENIED on `quiesced`, `recovery_hold` and `v2_active` ones; the compatible
+client (the real dashboard blocks over the real SDK) writes only under `v2_active`; a
+malformed existing control record denies everything; an absent business is initialised only
+with `allowV2Initialization=true`; client conversion of a populated legacy node is denied in
+every phase (the Admin lane converts under `quiesced`); the frozen `_v` cannot change; the
+control record is never client-writable; the control plane (`tools/storage-v2/policy.mjs`)
+serialises transitions by `policyRevision` CAS and operation ownership over the real Admin SDK;
+and an OLD OPEN TAB that hydrated before activation has every write denied after `quiesced`
+and after `v2_active`. Pre-fence negative controls load the core Rules (`47f7f888`) through
+the emulator's settings endpoint.
+
+```
+... emulators:exec --only database --project demo-marjin-rules \
+      --config test/emulator/firebase.json \
+      "node test/emulator/storage-v2-version-fence.mjs"
+```
+
+Expected:
+
+```
+=== TOTALS ===
+total=26 passed=26 failed=0
+
+ALL CASES PASSED
+```
+
+There are now SEVEN emulator scripts, and they all reseed the database root (the mutation
+probe and the fence matrix also swap the loaded Rules), so they still must run one at a time
+against a single emulator.

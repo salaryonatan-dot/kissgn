@@ -19,12 +19,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { validateFirebaseConfig } from "./rtdb-authorization-matrix.mjs";
 import { gitIn } from "../support/git-context.mjs";
-import { authorizedEntriesRulesDelta, CUTOVER_GUARD } from "../support/rules-authorized-delta.mjs";
+import { authorizedEntriesRulesDelta, authorizedVersionFenceRulesDelta, CUTOVER_GUARD, FENCE_GUARD } from "../support/rules-authorized-delta.mjs";
 
 const PROJECT = "demo-marjin-rules", NAMESPACE = "demo-marjin-rules-default-rtdb";
 const EMU = "127.0.0.1:9000", DB_URL = `http://${EMU}?ns=${NAMESPACE}`;
 const DIR = dirname(fileURLToPath(import.meta.url)), ROOT = join(DIR, "..", "..");
 const S0_BASE = "686b4350c6b6186c81d7f821d8c26a960428d30b";
+const CORE_SHA = "47f7f8882846b4b0c90fba2947ca3053eb90a9f0";   // Storage V2 core Rules (approved); live = core + exact version-fence delta
 const fail = (m) => { console.error(`SAFETY ABORT: ${m}`); process.exit(2); };
 const DEMO = new Set(["https://demo-marjin-rules.firebaseio.com", "https://demo-marjin-rules-default-rtdb.firebaseio.com"]);
 const isLocal = (u) => /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?([/?].*)?$/.test(String(u));
@@ -50,6 +51,8 @@ const V2ROW = (id, gen = 1) => ({ id, [ "_gen" ]: gen, date: "2026-08-01", sales
 const V2NODE = () => ({ schemaVersion: 2, generation: 1, rows: { [ID1]: V2ROW(ID1) }, _v: JSON.stringify([{ id: ID1, date: "2026-08-01", sales: 1 }]) });
 const LEGACY = () => ({ _v: JSON.stringify([{ id: ID1, date: "2026-08-01", sales: 1 }]) });
 const P = (biz) => `tenants/tenantA/biz:${biz}:entries`;
+const POLICY = (phase) => ({ contractVersion: 1, phase, policyRevision: 1, allowV2Initialization: false, minStorageProtocol: phase === "legacy" || phase === "quiesced" ? 1 : 2 });
+const CTRL = "root.child('storage_v2_control').child($tenantId).child($dataKey.replace('biz:','').replace(':entries',''))";
 
 const apps = {};
 const seedDb = () => apps.seed.database();
@@ -60,9 +63,10 @@ async function loadRules(rules) {
 async function fixtures() {
   await seedDb().ref("/").set({ tenants: { tenantA: {
     members: { u_owner: true, u_manager: true }, roles: { u_owner: "owner", u_manager: "manager" },
-    biz_access: { v2: { u_manager: true }, legacy: { u_manager: true }, empty: { u_manager: true }, none: { u_manager: true } },
+    biz_access: { v2: { u_manager: true }, legacy: { u_manager: true }, empty: { u_manager: true }, none: { u_manager: true }, quiesced: { u_manager: true }, held: { u_manager: true }, broken: { u_manager: true }, pending: { u_manager: true } },
     "biz:v2:entries": V2NODE(), "biz:legacy:entries": LEGACY(), "biz:empty:entries": { schemaVersion: 2, generation: 2, _v: "[]" },
-  } } });
+    "biz:quiesced:entries": LEGACY(), "biz:held:entries": V2NODE(), "biz:broken:entries": LEGACY(), "biz:pending:entries": LEGACY(),
+  } }, storage_v2_control: { tenantA: { v2: POLICY("v2_active"), empty: POLICY("v2_active"), none: POLICY("v2_active"), quiesced: POLICY("quiesced"), held: POLICY("recovery_hold"), broken: { policyRevision: 7 }, pending: POLICY("v2_active") } } });
 }
 const denied = (e) => /permission[_ ]denied/i.test(String((e && (e.message || "")) + (e && e.code || "")));
 async function attempt(path, value) {
@@ -86,13 +90,13 @@ const MUTATIONS = [
     probe: () => attempt(P("legacy"), { foo: 1 }), what: "legacy node replaced by a blob-less object" },
   { name: "inert generation validator wrapper", mutate: (d) => { d.generation[".validate"] = "true || (" + d.generation[".validate"] + ")"; },
     probe: () => attempt(`${P("legacy")}/generation`, 1), what: "epoch written under a legacy node (stripped-V2, fail-closed)" },
-  { name: "inert _v validator wrapper", mutate: (d) => { d._v[".validate"] = "true || (" + d._v[".validate"] + ")"; },
+  { name: "inert _v validator wrapper + fence _v freeze dropped (held twice)", mutate: (d) => { d._v[".validate"] = "true || (" + d._v[".validate"] + ")"; d[".write"] = d[".write"].replace(" && (!data.child('_v').exists() || newData.child('_v').val() === data.child('_v').val())", ""); },
     probe: () => attempt(`${P("v2")}/_v`, "[]"), what: "frozen snapshot rewritten after cutover" },
-  { name: "inert schemaVersion + envelope wrappers (marker invariant held twice)", mutate: (d) => { d.schemaVersion[".validate"] = "(" + d.schemaVersion[".validate"] + ") || true"; d[".validate"] = "true || (" + d[".validate"] + ")"; },
+  { name: "inert schemaVersion + envelope wrappers + fence legacy-shape conjunct (marker invariant held thrice)", mutate: (d) => { d.schemaVersion[".validate"] = "(" + d.schemaVersion[".validate"] + ") || true"; d[".validate"] = "true || (" + d[".validate"] + ")"; d[".write"] = d[".write"].replace(" && !(newData.child('schemaVersion').val() === 2) && !(data.child('schemaVersion').val() === 2))", " && !(data.child('schemaVersion').val() === 2))"); },
     probe: () => attempt(`${P("legacy")}/schemaVersion`, 2), what: "marker-only write onto a legacy node (bricks it fail-closed)" },
   { name: "cutover guard dropped from .write", mutate: (d, base) => { d[".write"] = dk(base)[".write"]; },
     probe: () => attempt(P("v2"), null), what: "whole-node delete of a converted business" },
-  { name: "cutover guard weakened to `true`", mutate: (d) => { d[".write"] = d[".write"].replace(CUTOVER_GUARD, "true"); },
+  { name: "cutover guard weakened to `true` (+ fence, held twice)", mutate: (d) => { d[".write"] = d[".write"].replace(CUTOVER_GUARD, "true").replace(FENCE_GUARD, "true"); },
     probe: () => attempt(P("v2"), null), what: "whole-node delete of a converted business" },
   { name: "rows-must-be-a-map dropped (held twice)", mutate: (d) => { delete d.rows[".validate"]; d[".validate"] = d[".validate"].replace(" && (!newData.child('rows').exists() || newData.child('rows').hasChildren())", ""); },
     probe: () => attempt(`${P("v2")}/rows`, "corrupt"), what: "row map replaced by a scalar" },
@@ -102,6 +106,23 @@ const MUTATIONS = [
     probe: () => attempt(`${P("empty")}/generation`, 1), what: "epoch rolled back to a retired value" },
   { name: "row stamp renamed away from the reserved key", mutate: (d) => { d.rows["$rowId"][".validate"] = d.rows["$rowId"][".validate"].split("'_gen'").join("'gen'"); },
     probe: () => attempt(`${P("v2")}/rows/${UUID("g")}`, { id: UUID("g"), gen: 1, date: "2026-08-01" }), what: "row stamped under an application field name" },
+  // ── VERSION FENCE (P0-DATA-01): each fence conjunct is load-bearing on the emulator ──
+  { name: "fence guard dropped from .write (core write restored)", mutate: (d, base, core) => { d[".write"] = dk(core)[".write"]; },
+    probe: () => attempt(P("quiesced"), LEGACY()), what: "old-client legacy overwrite of a QUIESCED business" },
+  { name: "fence guard weakened to `true`", mutate: (d) => { d[".write"] = d[".write"].replace(FENCE_GUARD, "true"); },
+    probe: () => attempt(P("quiesced"), LEGACY()), what: "old-client legacy overwrite of a QUIESCED business" },
+  { name: "malformed record fails OPEN (validity predicate replaced by a phase-only check)", mutate: (d) => { d[".write"] = d[".write"].split(FENCE_GUARD).join(FENCE_GUARD.replace(`(!${CTRL}.exists() || (`, `(!${CTRL}.child('phase').exists() || (`)); },
+    probe: () => attempt(P("broken"), LEGACY()), what: "legacy write under a MALFORMED existing control record (phase missing)" },
+  { name: "recovery_hold admitted as v2_active", mutate: (d) => { d[".write"] = d[".write"].replace(`&& ${CTRL}.child('phase').val() === 'v2_active' && newData`, `&& (${CTRL}.child('phase').val() === 'v2_active' || ${CTRL}.child('phase').val() === 'recovery_hold') && newData`); },
+    probe: () => attempt(`${P("held")}/rows/${UUID("h")}`, V2ROW(UUID("h"))), what: "V2 row written while the business is in RECOVERY_HOLD" },
+  { name: "initialization flag ignored (absent business may be initialised in v2_active)", mutate: (d) => { d[".write"] = d[".write"].replace(`: ${CTRL}.child('allowV2Initialization').val() === true)`, ": true)"); },
+    probe: () => attempt(P("none"), { schemaVersion: 2, generation: 1, rows: { [ID1]: V2ROW(ID1) } }), what: "V2 initialisation with allowV2Initialization=false" },
+  { name: "populated-legacy conversion by a client admitted", mutate: (d) => { d[".write"] = d[".write"].replace("(data.exists() ? data.child('schemaVersion').val() === 2 : ", "(data.exists() ? true : "); },
+    probe: () => attempt(P("pending"), V2NODE()), what: "client-side conversion of a populated legacy node under v2_active (bypasses the Admin lane)" },
+  { name: "control record writable by authenticated clients", mutate: (d, base, core, whole) => { whole.rules.storage_v2_control["$tenantId"]["$bizId"][".write"] = "auth !== null"; },
+    probe: () => attempt("storage_v2_control/tenantA/quiesced", POLICY("v2_active")), what: "a client flips its own business to v2_active" },
+  { name: "control record readable by any authenticated user (scope widened)", mutate: (d, base, core, whole) => { whole.rules.storage_v2_control["$tenantId"]["$bizId"][".read"] = "auth !== null"; },
+    probe: async () => { try { await apps.outsider.database().ref("storage_v2_control/tenantA/v2").once("value"); return "allow"; } catch (e) { return denied(e) ? "deny" : "error:" + e.message; } }, what: "an outsider reads another tenant's policy" },
 ];
 
 const results = []; let failures = 0;
@@ -109,16 +130,23 @@ async function main() {
   assertSafe();
   apps.seed = admin.initializeApp({ databaseURL: DB_URL }, "seed");
   apps.manager = admin.initializeApp({ databaseURL: DB_URL, databaseAuthVariableOverride: { uid: "u_manager", token: { email: "m@demo.example" } } }, "manager");
+  apps.outsider = admin.initializeApp({ databaseURL: DB_URL, databaseAuthVariableOverride: { uid: "u_outsider", token: { email: "x@demo.example" } } }, "outsider");
   const show = gitIn(ROOT, ["show", `${S0_BASE}:database.rules.json`]);
   if (show.status !== 0) throw new Error("cannot read the S0 base rules: " + show.stderr);
   const base = JSON.parse(show.stdout);
-  const guardOnCanonical = authorizedEntriesRulesDelta(base, canonical);
+  const showCore = gitIn(ROOT, ["show", `${CORE_SHA}:database.rules.json`]);
+  if (showCore.status !== 0) throw new Error("cannot read the core rules: " + showCore.stderr);
+  const core = JSON.parse(showCore.stdout);
+  // Two-layer guard: S0 base → core (entries delta) and core → live (exact version-fence delta).
+  const guardOf = (live) => { const a = authorizedEntriesRulesDelta(base, core); if (!a.ok) return a; return authorizedVersionFenceRulesDelta(core, live); };
+  const guardOnCanonical = guardOf(canonical);
   if (!guardOnCanonical.ok) throw new Error("the guard rejects the shipped rules: " + guardOnCanonical.reason);
+  const apply = (m, x) => m.mutate(dk(x), base, core, x);
   // Each mutation must be a real textual change (a no-op replace would prove nothing).
-  for (const m of MUTATIONS) { const x = structuredClone(canonical); m.mutate(dk(x), base); if (JSON.stringify(x) === JSON.stringify(canonical)) throw new Error("mutation is a no-op: " + m.name); }
+  for (const m of MUTATIONS) { const x = structuredClone(canonical); apply(m, x); if (JSON.stringify(x) === JSON.stringify(canonical)) throw new Error("mutation is a no-op: " + m.name); }
   for (const m of MUTATIONS) {
-    const mutated = structuredClone(canonical); m.mutate(dk(mutated), base);
-    const guard = authorizedEntriesRulesDelta(base, mutated);
+    const mutated = structuredClone(canonical); apply(m, mutated);
+    const guard = guardOf(mutated);
     const row = { name: m.name, what: m.what, guard: guard.ok ? "ACCEPTED(!)" : "rejected:" + guard.reason };
     try {
       await loadRules(canonical); await fixtures();

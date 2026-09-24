@@ -27,9 +27,17 @@ import {
   collectServerReaderScopeInputs, serverReaderScopeVerdict, blobSha, isPlainAuthorizedFile, isProtectedPath,
 } from "../support/server-reader-authorized-delta.mjs";
 import { gitIn } from "../support/git-context.mjs";
+import { authorizedVersionFenceRulesDelta } from "../support/rules-authorized-delta.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const REAL = collectServerReaderScopeInputs(ROOT);
+// VERSION FENCE: database.rules.json changed after the core by the exact reviewed fence
+// delta. The reader layer still treats it as PROTECTED (the raw collector reports it);
+// the caller validates the fence delta FIRST and projects out only that one validated
+// change — exactly as test/finance/vat-invariant.test.mjs does.
+const RAW = collectServerReaderScopeInputs(ROOT);
+const CORE_RULES = JSON.parse(gitIn(ROOT, ["show", `${SERVER_READER_BASE}:database.rules.json`]).stdout);
+const FENCE_OK = authorizedVersionFenceRulesDelta(CORE_RULES, JSON.parse(readFileSync(join(ROOT, "database.rules.json"), "utf8"))).ok === true;
+const REAL = { ...RAW, changedProtectedPaths: RAW.changedProtectedPaths.filter((rel) => !(FENCE_OK && rel === "database.rules.json")) };
 const DB = "src/analytics/dailyBuilder.ts", DM = "src/repositories/analytics/dailyMetricsRepo.ts", SB = "src/snapshot/snapshotBuilder.ts";
 const src = (rel) => readFileSync(join(ROOT, rel), "utf8");
 const clone = (o) => JSON.parse(JSON.stringify(o));
@@ -42,6 +50,10 @@ const line = (text, needle) => { const l = text.split("\n").find((x) => x.includ
 test("I. positive control: the exact approved tree passes; five plain files; pins are reviewed changes on top of the core; git agrees on the identity", () => {
   assert.equal(SERVER_READER_BASE, "8cac71c1248ad5cc49dfa1a727bf292398ae74e8");
   assert.deepEqual(serverReaderScopeVerdict(REAL), { ok: true });
+  // the reader layer itself still rejects the Rules change: only the validated fence projection admits it
+  assert.equal(FENCE_OK, true);
+  assert.ok(RAW.changedProtectedPaths.includes("database.rules.json"));
+  assert.deepEqual(serverReaderScopeVerdict(RAW), { ok: false, reason: "unauthorized_protected_path", detail: ["database.rules.json"] }, "unprojected: Rules remain a protected path for the reader layer");
   assert.deepEqual([...SERVER_READER_AUTHORIZED_FILES].sort(), [DB, DM, "src/repositories/analytics/laborRepo.ts", "src/repositories/analytics/purchasesRepo.ts", SB]);
   for (const f of SERVER_READER_AUTHORIZED_FILES) {
     assert.ok(isPlainAuthorizedFile(f) && isProtectedPath(f), f);

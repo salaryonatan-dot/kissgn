@@ -791,6 +791,22 @@
       return onValue(ref(db, path), (snap) => { if (snap.exists()) callback(snap.val()); },
         (err) => { if (typeof onError === "function") { try { onError(err); } catch(_){} } });
     };
+    // VERSION FENCE (P0-DATA-01): the server-owned per-business storage policy lives
+    // OUTSIDE the tenant subtree (`storage_v2_control/{tenantId}/{bizId}`), readable by
+    // authorized members, never writable by a client. `subscribePolicy` delivers `null`
+    // for a CONFIRMED-absent record (legacy defaults) and calls `onError` for a failed
+    // read — the two are never conflated: a read failure is "unresolved", not "absent".
+    const policyPath = (tenantId, bizId) => "storage_v2_control/" + String(tenantId).replace(/[.#$\[\]]/g, "_") + "/" + String(bizId).replace(/[.#$\[\]]/g, "_");
+    window.storage.subscribePolicy = (tenantId, bizId, callback, onError) => {
+      if (!tenantId || !bizId) return () => {};
+      return onValue(ref(db, policyPath(tenantId, bizId)), (snap) => callback(snap.exists() ? snap.val() : null),
+        (err) => { if (typeof onError === "function") { try { onError(err); } catch(_){} } });
+    };
+    window.storage.getPolicy = async (tenantId, bizId) => {
+      if (!tenantId || !bizId) throw new Error("explicit tenant and business required");
+      const snap = await get(ref(db, policyPath(tenantId, bizId)));
+      return snap.exists() ? snap.val() : null;
+    };
     // R-V2: row-scoped compare-and-swap. Same contract as mutateFor, addressed at a
     // child path, so two operators editing different rows never contend.
     window.storage.mutateForPath = async (tenantId, key, subPath, txnFn) => {
@@ -1767,6 +1783,19 @@ function describeSaveOutcome(outcome, partialException) {
   if (status === "blocked" && (reason === "duplicate_id" || reason === "invalid_identity" || reason === "malformed_remote")) {
     return describeSaveOutcome(reason, partialException);
   }
+  // VERSION FENCE: a refusal by the storage-policy lane (before any transaction). The
+  // policy state names the reason precisely; nothing was written.
+  if (status === "blocked_policy") {
+    switch (reason) {
+      case "update_required": return "נדרש עדכון גרסה של האפליקציה. רענן את הדף ונסה שוב — השינוי שלך לא נשמר.";
+      case "maintenance_read_only": return "העסק במצב תחזוקה (צפייה בלבד) — השינוי שלך לא נשמר.";
+      case "initialization_not_enabled": return "העסק עדיין לא הופעל לאחסון החדש. פנה לתמיכה — השינוי שלך לא נשמר.";
+      case "policy_changed": return "מדיניות האחסון של העסק עודכנה במהלך השמירה. רענן ונסה שוב — השינוי שלך לא נשמר.";
+      case "policy_unresolved": case "storage_unresolved": case "policy_unavailable":
+        return "מדיניות האחסון של העסק עדיין נטענת. המתן לסיום הטעינה ונסה שוב — השינוי שלך לא נשמר.";
+      default: return "מדיניות האחסון של העסק אינה תקינה. פנה לתמיכה — השינוי שלך לא נשמר.";
+    }
+  }
   switch (status) {
     case "conflict":
       return "הנתונים שונו בינתיים ממכשיר אחר. רענן כדי לראות את הערכים העדכניים ונסה שוב — השינוי שלך לא נשמר.";
@@ -2693,6 +2722,124 @@ function createEntriesStorageRouter(io) {
   };
 }
 window.MarjinStorageV2 = Object.freeze({ STORAGE_V2, GENERATION_FIRST, ROW_GEN_KEY, MAP_FIELDS, isV2Node, detectStorageMode, readV2Rows, readEntriesNode, applyRowIntent, createV2EntriesMutator, createEntriesStorageRouter, isGenerationToken, nextGenerationOf, canonicalStorageValue, canonicalMapField, canonicalRowValue, canonicalRowKey, stampRow });
+
+// ── VERSION FENCE — honest-client storage policy (P0-DATA-01, CTO D-VF1/D-VF2) ────────
+// Browser mirror of lib/storagePolicy.js (parity pinned by test/dashboard/entries-version-
+// fence.test.mjs). The server-owned record at storage_v2_control/{tenantId}/{bizId} is
+// decoded EXACTLY as the Rules FENCE_GUARD reads it: only a missing WHOLE record means
+// legacy defaults; a present record must be valid (contractVersion 1, recognised phase,
+// positive integer policyRevision, boolean allowV2Initialization — true only in
+// v2_active — positive integer minStorageProtocol) or the lane is fail-closed. These
+// constants describe THIS build for honest behaviour and diagnostics; none of them is
+// trusted by Rules — server safety is the policy phase × the write's resulting shape.
+const STORAGE_PROTOCOL = STORAGE_V2;
+const POLICY_CONTRACT_VERSION = 1;
+const MARJIN_RELEASE_ID = "2026-09-24-version-fence-p0";
+const POLICY_PHASES = Object.freeze(["legacy", "quiesced", "v2_active", "recovery_hold"]);
+const POLICY_OPERATION_KINDS = Object.freeze(["cutover", "recovery"]);
+const isPolicyPosInt = (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 1;
+function parsePolicyRecord(raw) {
+  if (raw === null || raw === undefined) return { status: "absent" };
+  if (!isPlainRow(raw)) return { status: "malformed", reason: "not_an_object" };
+  if (raw.contractVersion !== POLICY_CONTRACT_VERSION) {
+    if (isPolicyPosInt(raw.contractVersion) && raw.contractVersion > POLICY_CONTRACT_VERSION && POLICY_PHASES.includes(raw.phase) && isPolicyPosInt(raw.policyRevision)) {
+      return { status: "unsupported_contract", contractVersion: raw.contractVersion };
+    }
+    return { status: "malformed", reason: "contract_version" };
+  }
+  if (!POLICY_PHASES.includes(raw.phase)) return { status: "malformed", reason: raw.phase === undefined ? "phase_missing" : "phase_invalid" };
+  if (!isPolicyPosInt(raw.policyRevision)) return { status: "malformed", reason: "policy_revision" };
+  if (typeof raw.allowV2Initialization !== "boolean") return { status: "malformed", reason: "allow_v2_initialization" };
+  if (raw.allowV2Initialization === true && raw.phase !== "v2_active") return { status: "malformed", reason: "initialization_flag_outside_active" };
+  if (!isPolicyPosInt(raw.minStorageProtocol)) return { status: "malformed", reason: "min_storage_protocol" };
+  let operation = null;
+  if (raw.operation !== undefined && raw.operation !== null) {
+    const o = raw.operation;
+    if (!isPlainRow(o) || typeof o.id !== "string" || !o.id || !POLICY_OPERATION_KINDS.includes(o.kind) || typeof o.owner !== "string" || !o.owner || !isPolicyPosInt(o.startedAt)) {
+      return { status: "malformed", reason: "operation" };
+    }
+    operation = { id: o.id, kind: o.kind, owner: o.owner, startedAt: o.startedAt };
+  }
+  if (raw.conversionAttempted !== undefined && typeof raw.conversionAttempted !== "boolean") return { status: "malformed", reason: "conversion_attempted" };
+  const record = { contractVersion: POLICY_CONTRACT_VERSION, phase: raw.phase, policyRevision: raw.policyRevision, allowV2Initialization: raw.allowV2Initialization,
+                   minStorageProtocol: raw.minStorageProtocol, operation, conversionAttempted: raw.conversionAttempted === true };
+  if (typeof raw.updatedAt === "number") record.updatedAt = raw.updatedAt;
+  if (typeof raw.updatedBy === "string") record.updatedBy = raw.updatedBy;
+  if (typeof raw.approvedReleaseId === "string") record.approvedReleaseId = raw.approvedReleaseId;
+  return { status: "valid", record };
+}
+function decideEntriesAccess(parsed, entriesMode, clientProtocol) {
+  if (clientProtocol === undefined) clientProtocol = STORAGE_PROTOCOL;
+  if (!parsed) return { state: "policy_unresolved", writable: false, revision: null };
+  if (parsed.status === "malformed") return { state: "policy_malformed", writable: false, reason: parsed.reason, revision: null };
+  if (parsed.status === "unsupported_contract") return { state: "update_required", writable: false, reason: "contract_version", revision: null };
+  const rec = parsed.status === "valid" ? parsed.record : null;
+  const revision = rec ? rec.policyRevision : 0;
+  if (rec && rec.minStorageProtocol > clientProtocol) return { state: "update_required", writable: false, reason: "min_storage_protocol", revision };
+  if (rec && (rec.phase === "quiesced" || rec.phase === "recovery_hold")) return { state: "maintenance_read_only", writable: false, reason: rec.phase, revision };
+  if (entriesMode === null || entriesMode === undefined) return { state: "storage_unresolved", writable: false, revision };
+  if (entriesMode === "malformed") return { state: "storage_malformed", writable: false, revision };
+  const phase = rec ? rec.phase : "legacy";
+  if (phase === "legacy") {
+    if (entriesMode === "v2") return { state: "v2_without_policy", writable: false, revision };
+    if (entriesMode === "absent") return { state: "initialization_not_enabled", writable: false, reason: rec ? "phase_legacy" : "no_policy", revision };
+    return { state: "legacy", writable: true, revision };
+  }
+  if (entriesMode === "legacy") return { state: "conversion_pending", writable: false, revision };
+  if (entriesMode === "absent") return rec.allowV2Initialization === true
+    ? { state: "v2", writable: true, revision, initialization: true }
+    : { state: "initialization_not_enabled", writable: false, reason: "flag_false", revision };
+  return { state: "v2", writable: true, revision };
+}
+// Selection-scoped policy lane: resolves the record, remembers the highest revision it has
+// seen (a later LOWER revision is a rollback → fail closed), and re-derives the decision
+// whenever the policy or the RAW storage mode changes.
+function createPolicyLane(clientProtocol) {
+  let resolved = false, parsed = null, error = false, maxRevision = 0, decision = null;
+  const derive = (mode) => {
+    if (!resolved) decision = { state: error ? "policy_unavailable" : "policy_unresolved", writable: false, revision: null };
+    else {
+      decision = decideEntriesAccess(parsed, mode, clientProtocol);
+      if (parsed.status === "valid" && parsed.record.policyRevision < maxRevision) decision = { state: "policy_rollback", writable: false, revision: null, observed: maxRevision, current: parsed.record.policyRevision };
+    }
+    return decision;
+  };
+  return {
+    resolve: (raw, mode) => { resolved = true; error = false; parsed = parsePolicyRecord(raw); if (parsed.status === "valid" && parsed.record.policyRevision > maxRevision) maxRevision = parsed.record.policyRevision; return derive(mode); },
+    fail: (mode) => { resolved = false; error = true; parsed = null; return derive(mode); },
+    recompute: (mode) => derive(mode),
+    decision: () => decision,
+    parsed: () => parsed,
+    revision: () => (decision ? decision.revision : null),
+  };
+}
+// Dispatch gate: the coordinator hands every job to the router through this check with
+// the binding it captured at SUBMISSION. A non-writable policy state, or a revision that
+// moved since submission, is a typed refusal BEFORE any transaction. Never restamps.
+function gatePolicyDispatch(decision, binding) {
+  if (!decision) return { status: "blocked_policy", reason: "policy_unresolved" };
+  if (!decision.writable) return { status: "blocked_policy", reason: decision.state, detail: decision.reason };
+  if (!binding || typeof binding !== "object" || !Object.prototype.hasOwnProperty.call(binding, "policyRevision")) return { status: "blocked_policy", reason: "intent_not_bound_to_policy" };
+  if (binding.policyRevision !== decision.revision) return { status: "blocked_policy", reason: "policy_changed", bound: binding.policyRevision, live: decision.revision };
+  return null;
+}
+// Operator-facing surface for a non-writable lane (null = nothing to show).
+function describePolicyState(decision) {
+  if (!decision || decision.writable) return null;
+  switch (decision.state) {
+    case "update_required":
+      return { kind: "update", reload: true, text: "נדרש עדכון גרסה של האפליקציה. השינויים שלך לא יישמרו עד שתרענן את הדף." };
+    case "maintenance_read_only":
+      return { kind: "maintenance", text: decision.reason === "recovery_hold" ? "העסק במצב שחזור — צפייה בלבד. שינויים לא יישמרו." : "העסק במצב תחזוקה (מעבר אחסון) — צפייה בלבד. שינויים לא יישמרו." };
+    case "initialization_not_enabled":
+      return { kind: "maintenance", text: "העסק עדיין לא הופעל לאחסון החדש. פנה לתמיכה לפני הזנת רשומה ראשונה." };
+    case "policy_malformed": case "policy_rollback": case "v2_without_policy": case "conversion_pending": case "storage_malformed": case "policy_unavailable":
+      return { kind: "blocked", text: "מדיניות האחסון של העסק אינה תקינה או אינה זמינה — צפייה בלבד. פנה לתמיכה." };
+    default:
+      return null;   // policy_unresolved / storage_unresolved: transient loading, no banner
+  }
+}
+window.MarjinStoragePolicy = Object.freeze({ STORAGE_PROTOCOL, POLICY_CONTRACT_VERSION, MARJIN_RELEASE_ID, POLICY_PHASES, parsePolicyRecord, decideEntriesAccess, createPolicyLane, gatePolicyDispatch, describePolicyState });
 
 const TARGETS = {
   salesGrowthPct: 5,
@@ -4354,6 +4501,7 @@ function PilotDashboard() {
   const [dashboardInsightsWarning, setDashboardInsightsWarning] = useState("");
   const [entrySaveInFlight, setEntrySaveInFlight] = useState(false);
   const [entrySaveError, setEntrySaveError] = useState("");
+  const [entriesPolicyUi, setEntriesPolicyUi] = useState(null); // VERSION FENCE: the selected business's storage-policy decision (display only)
   const activeBizIdRef = useRef(null); // P0-DATA-01: current business selection, for stale-async guards
   const editingDateRef = useRef(null); // R2: stable edit identity — canonical business date captured at editor-open (never an array index)
   const suppressNextDashboardInsightsLoadForBizRef = useRef(null);
@@ -4395,6 +4543,10 @@ function PilotDashboard() {
   // generation. Set ONLY by the entries listener, from the raw node. Until it is known
   // the router writes nothing — an unknown storage mode is not a writable state.
   const entriesStorageModeRef = useRef(null);
+  // VERSION FENCE: the storage-policy lane of the CURRENT selection (created by the
+  // selection effect, never shared across businesses). Its decision gates every dispatch
+  // and its revision is captured into every binding at submission.
+  const entriesPolicyRef = useRef(null);
   const entriesV2MutatorRef = useRef(null);
   if (!entriesV2MutatorRef.current) entriesV2MutatorRef.current = window.MarjinStorageV2.createV2EntriesMutator({
     selection: selectionCtrlRef.current,
@@ -4420,14 +4572,23 @@ function PilotDashboard() {
     // R-V2-H2: captured at submission for every intent (see submitIntent).
     storageBinding: () => {
       const m = entriesStorageModeRef.current;
-      return m ? { mode: m.mode, generation: m.generation === undefined ? null : m.generation } : undefined;
+      const lane = entriesPolicyRef.current;
+      return m ? { mode: m.mode, generation: m.generation === undefined ? null : m.generation, policyRevision: lane ? lane.revision() : null } : undefined;
     },
     applyRows: setEntries,
     // R2-B1: the binding the coordinator captured at SUBMISSION travels with the job
     // through this adapter to the router and engine. Dropping it here refused every
     // V2 operation before any transaction (Codex R1-F1); nothing is fabricated at a
     // lower layer — the engine still requires the captured binding.
-    mutate: (intent, ctx, binding) => entriesStorageRouterRef.current.mutate(intent, ctx, binding),
+    // VERSION FENCE: the policy gate sits in front of the UNCHANGED router. A lane that is
+    // not writable, or a revision that moved since submission, is a typed refusal before
+    // any transaction; otherwise the ORIGINAL binding is forwarded untouched.
+    mutate: (intent, ctx, binding) => {
+      const lane = entriesPolicyRef.current;
+      const gate = window.MarjinStoragePolicy.gatePolicyDispatch(lane ? lane.decision() : null, binding);
+      if (gate) return Promise.resolve(gate);
+      return entriesStorageRouterRef.current.mutate(intent, ctx, binding);
+    },
   });
   // Collision-resistant id generated BEFORE submission so a transaction retry reuses
   // it. Never derived from a date, counter, index or fingerprint.
@@ -4704,6 +4865,8 @@ function PilotDashboard() {
     // R-V2-H5: the storage mode/epoch belongs to ONE destination. A new selection starts
     // unknown and is set only by its own listener or its own absent-node probe.
     entriesStorageModeRef.current = null;
+    entriesPolicyRef.current = null;   // VERSION FENCE: a new selection starts with no policy lane
+    setEntriesPolicyUi(null);
     setEntries([]);
     setFixedList(FIXED_EXPENSES_DEFAULT);
     setSuppliers([]);
@@ -4740,14 +4903,39 @@ function PilotDashboard() {
       unsubs.push(window.storage.subscribeNode(key, (raw) => { if (live) onNode(raw); },
         (err) => { if (live) onErr(err); }));
     };
+    // VERSION FENCE: one policy lane per selection, bound to ctxAtSetup. Resolved from a
+    // live subscription (absent record ⇒ legacy defaults; read failure ⇒ unresolved,
+    // fail-closed) and re-checked on foreground / reconnect. Every mode change re-derives
+    // the decision so the UI and the dispatch gate never disagree.
+    const __policyLane = window.MarjinStoragePolicy.createPolicyLane(window.MarjinStoragePolicy.STORAGE_PROTOCOL);
+    entriesPolicyRef.current = __policyLane;
+    const __policyPublish = () => { if (!live || !isSelectionLive(ctxAtSetup)) return; const m = entriesStorageModeRef.current; setEntriesPolicyUi(__policyLane.recompute(m ? m.mode : null)); };
+    const __policyResolve = (raw) => { if (!live || !isSelectionLive(ctxAtSetup)) return; const m = entriesStorageModeRef.current; __policyLane.resolve(raw, m ? m.mode : null); __policyPublish(); };
+    const __policyFail = () => { if (!live || !isSelectionLive(ctxAtSetup)) return; const m = entriesStorageModeRef.current; __policyLane.fail(m ? m.mode : null); __policyPublish(); };
+    if (window.storage.subscribePolicy) {
+      unsubs.push(window.storage.subscribePolicy(ctxAtSetup.tenantId, currentBizId, (raw) => __policyResolve(raw), () => __policyFail()));
+    } else { __policyFail(); }
+    const __policyRefresh = async () => {
+      if (!live || !window.storage.getPolicy) return;
+      try { const raw = await window.storage.getPolicy(ctxAtSetup.tenantId, currentBizId); __policyResolve(raw); }
+      catch (_) { __policyFail(); }
+    };
+    if (typeof window.addEventListener === "function") {
+      const __onVisible = () => { if (!window.document || window.document.visibilityState === "visible") __policyRefresh(); };
+      window.addEventListener("visibilitychange", __onVisible);
+      window.addEventListener("online", __policyRefresh);
+      unsubs.push(() => { window.removeEventListener("visibilitychange", __onVisible); window.removeEventListener("online", __policyRefresh); });
+    }
     subNodeEntries(`biz:${currentBizId}:entries`, (raw) => {
       const read = window.MarjinStorageV2.readEntriesNode(raw);
       if (read.status) {
         entriesStorageModeRef.current = { mode: "malformed", reason: read.reason || read.status };
+        __policyPublish();
         entriesWriteCoordRef.current.onListenerError(ctxAtSetup);
         return;
       }
       entriesStorageModeRef.current = { mode: read.mode, generation: read.generation === undefined ? null : read.generation };
+      __policyPublish();
       __entriesHydrate(read.rows);
     }, () => {
       entriesWriteCoordRef.current.onListenerError(ctxAtSetup);
@@ -4789,6 +4977,7 @@ function PilotDashboard() {
         // initialises the row-keyed shape. The listener remains the authority: if it
         // already reported a node (created meanwhile), this stale probe sets nothing.
         if (entriesStorageModeRef.current === null) entriesStorageModeRef.current = { mode: "absent", generation: null };
+        __policyPublish();
         entriesWriteCoordRef.current.markHydrated(ctxAtSetup, []);
       }
       else if (failed) entriesWriteCoordRef.current.onListenerError(ctxAtSetup);
@@ -5790,6 +5979,16 @@ function PilotDashboard() {
   return (
     <div dir="rtl" className="app">
       <div /><div />
+      {/* VERSION FENCE: the selected business's storage-policy state (read-only / update required) */}
+      {(() => { const b = window.MarjinStoragePolicy.describePolicyState(entriesPolicyUi); if (!b) return null;
+        const bg = b.kind === "update" ? "#FEF3C7" : b.kind === "maintenance" ? "#EFF6FF" : "#FEF2F2";
+        const fg = b.kind === "update" ? "#92400E" : b.kind === "maintenance" ? "#1E40AF" : "#B91C1C";
+        return (
+          <div data-policy-state={entriesPolicyUi ? entriesPolicyUi.state : ""} style={{background:bg,border:"1px solid "+fg+"33",borderRadius:6,padding:"10px 14px",textAlign:"center",fontWeight:600,color:fg,fontSize:13,margin:"8px 12px 0"}}>
+            {b.text}
+            {b.reload && <button onClick={()=>{ window.location.reload(); }} style={{marginRight:10,background:fg,color:"#fff",border:"none",borderRadius:4,padding:"4px 10px",cursor:"pointer",fontWeight:600}}>רענן</button>}
+          </div>
+        ); })()}
 
       {/* Business Switch Modal */}
       {showBizSelect && (

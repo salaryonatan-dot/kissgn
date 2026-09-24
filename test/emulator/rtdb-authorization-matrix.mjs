@@ -176,8 +176,12 @@ function fixtures() {
     user_tenants: { u_viewer: "tenantA" },
     user_active_biz: { u_viewer: "bizA", u_shift: "bizA" },
     "app-users": { seeded: true },
+    // VERSION FENCE (P0-DATA-01): server-owned storage policy records, never client-writable
+    storage_v2_control: { tenantA: { bizA: POLICY_LEGACY, bizB: POLICY_LEGACY }, tenantB: { bizA: POLICY_LEGACY } },
   };
 }
+const POLICY_LEGACY = { contractVersion: 1, phase: "legacy", policyRevision: 1, allowV2Initialization: false, minStorageProtocol: 1 };
+const POLICY_ACTIVE = { contractVersion: 1, phase: "v2_active", policyRevision: 2, allowV2Initialization: false, minStorageProtocol: 2 };
 
 // ─── App wiring ──────────────────────────────────────────────────────────────
 const apps = {};
@@ -352,6 +356,29 @@ const CASES = [
   R("A1-106","auth/tenant","unauth",      `username_index/alice`,"deny"),
   R("A1-107","auth/tenant","owner",       `app-users`,"deny"),
   R("A4-108","mgr-keys","viewer",         `${TA}/proactive_insights/bizA`,"allow"),
+
+  // 13) VERSION FENCE — storage_v2_control/{tenant}/{biz}: read for authorized members of that
+  //     business, NEVER client-writable (create / update / delete / patch), no listing.
+  R("A13-109","storage_policy","owner",         `storage_v2_control/tenantA/bizA`,"allow"),
+  R("A13-110","storage_policy","super",         `storage_v2_control/tenantA/bizA`,"allow"),
+  R("A13-111","storage_policy","manager",       `storage_v2_control/tenantA/bizA`,"allow"),
+  R("A13-112","storage_policy","viewer",        `storage_v2_control/tenantA/bizA`,"allow"),
+  R("A13-113","storage_policy","viewer",        `storage_v2_control/tenantA/bizB`,"deny"),      // no biz_access to B
+  R("A13-114","storage_policy","viewer_nobiz",  `storage_v2_control/tenantA/bizA`,"deny"),
+  R("A13-115","storage_policy","nomember",      `storage_v2_control/tenantA/bizA`,"deny"),
+  R("A13-116","storage_policy","tenantB",       `storage_v2_control/tenantA/bizA`,"deny"),
+  R("A13-117","storage_policy","unauth",        `storage_v2_control/tenantA/bizA`,"deny"),
+  R("A13-118","storage_policy","owner",         `storage_v2_control/tenantA`,"deny"),           // no listing
+  R("A13-119","storage_policy","owner",         `storage_v2_control`,"deny"),
+  W("A13-120","storage_policy","owner",         `storage_v2_control/tenantA/bizA`,POLICY_ACTIVE,"deny"),
+  W("A13-121","storage_policy","super",         `storage_v2_control/tenantA/bizA`,POLICY_ACTIVE,"deny"),
+  W("A13-122","storage_policy","manager",       `storage_v2_control/tenantA/bizA/phase`,"v2_active","deny"),
+  W("A13-123","storage_policy","owner",         `storage_v2_control/tenantA/bizA/policyRevision`,99,"deny"),
+  C("A13-124","storage_policy","owner",         `storage_v2_control/tenantA/bizC`,POLICY_ACTIVE,"deny"),
+  D("A13-125","storage_policy","owner",         `storage_v2_control/tenantA/bizA`,"deny"),
+  D("A13-126","storage_policy","super",         `storage_v2_control/tenantA`,"deny"),
+  W("A13-127","storage_policy","unauth",        `storage_v2_control/tenantA/bizA`,POLICY_ACTIVE,"deny"),
+  P("A13-128","storage_policy","owner",         "/",{"storage_v2_control/tenantA/bizA/phase":"v2_active","tenants/tenantA/biz:bizA:entries":V_ENTRIES},"deny"), // combined control + entries
 ];
 
 // ─── Runner ──────────────────────────────────────────────────────────────────

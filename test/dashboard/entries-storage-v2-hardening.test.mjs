@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { gitIn } from "../support/git-context.mjs";
-import { authorizedEntriesRulesDelta, EXPECTED_ENTRIES_DELTA, expectedWriteRule, CUTOVER_GUARD } from "../support/rules-authorized-delta.mjs";
+import { authorizedEntriesRulesDelta, EXPECTED_ENTRIES_DELTA, expectedWriteRule, CUTOVER_GUARD, authorizedVersionFenceRulesDelta, expectedFencedWriteRule, FENCE_GUARD, EXPECTED_STORAGE_V2_CONTROL_RULES } from "../support/rules-authorized-delta.mjs";
 import { createLegacyPreflight, PREFLIGHT_BLOCKERS } from "../../tools/storage-v2/preflight.mjs";
 import { createStorageV2Upgrader } from "../../tools/storage-v2/upgrade.mjs";
 
@@ -483,10 +483,19 @@ test("[H8] the shipped Rules ARE the pinned contract: rows must be a map, epochs
 test("[H10] the S0 rules exception accepts the candidate and rejects every inert / loosening / smuggling mutation", () => {
   const show = gitIn(ROOT, ["show", `${S0_BASE}:database.rules.json`]);
   assert.equal(show.status, 0, show.stderr);
-  const before = JSON.parse(show.stdout), after = rulesNow();
-  assert.deepEqual(authorizedEntriesRulesDelta(before, after), { ok: true });
-  assert.equal(dkOf(after)[".write"], expectedWriteRule(dkOf(before)[".write"]));
-  const mutate = (f) => { const x = structuredClone(after); f(dkOf(x), x); return authorizedEntriesRulesDelta(before, x); };
+  // VERSION FENCE: the live Rules are the approved Storage V2 core (8cac71c1) plus the exact
+  // fence delta. Layer 1: core == BASE + entries contract. Layer 2: live == core + fence.
+  const coreShow = gitIn(ROOT, ["show", "8cac71c1248ad5cc49dfa1a727bf292398ae74e8:database.rules.json"]);
+  assert.equal(coreShow.status, 0, coreShow.stderr);
+  const before = JSON.parse(show.stdout), core = JSON.parse(coreShow.stdout), after = rulesNow();
+  assert.deepEqual(authorizedEntriesRulesDelta(before, core), { ok: true });
+  assert.equal(dkOf(core)[".write"], expectedWriteRule(dkOf(before)[".write"]));
+  assert.deepEqual(authorizedVersionFenceRulesDelta(core, after), { ok: true });
+  assert.equal(dkOf(after)[".write"], expectedFencedWriteRule(dkOf(core)[".write"]));
+  assert.deepEqual(after.rules.storage_v2_control, EXPECTED_STORAGE_V2_CONTROL_RULES);
+  assert.equal(authorizedEntriesRulesDelta(before, after).ok, false, "the fenced rules are NOT accepted as a plain core (no blanket exemption)");
+  // mutations are applied to the LIVE rules and checked against the core→fence exception
+  const mutate = (f) => { const x = structuredClone(after); f(dkOf(x), x); return authorizedVersionFenceRulesDelta(core, x); };
   const cases = {
     "unrelated authorization change": (d) => { d[".write"] = "true"; },
     "unexpected rule path": (d) => { d.unexpected = { ".validate": "true" }; },
@@ -497,8 +506,21 @@ test("[H10] the S0 rules exception accepts the candidate and rejects every inert
     "inert _v retaining tokens": (d) => { d._v[".validate"] = "true || (" + d._v[".validate"] + ")"; },
     "inert schemaVersion retaining tokens": (d) => { d.schemaVersion[".validate"] = "(" + d.schemaVersion[".validate"] + ") || true"; },
     "row child authorization injection": (d) => { d.rows["$rowId"].id[".write"] = "true"; },
-    "cutover guard dropped": (d) => { d[".write"] = dkOf(before)[".write"]; },
+    "cutover guard dropped": (d) => { d[".write"] = d[".write"].replace(" && " + CUTOVER_GUARD, ""); },
     "cutover guard weakened": (d) => { d[".write"] = d[".write"].replace(CUTOVER_GUARD, "true"); },
+    "fence guard dropped (core rules)": (d) => { d[".write"] = dkOf(core)[".write"]; },
+    "fence guard wrapped inert": (d) => { d[".write"] = d[".write"].replace(FENCE_GUARD, "(true || " + FENCE_GUARD + ")"); },
+    "fence: whole-record absence replaced by missing-phase test": (d) => { d[".write"] = d[".write"].replace(".exists() ||", ".child('phase').exists() === false ||"); },
+    "fence: init flag conjunct removed": (d) => { d[".write"] = d[".write"].replace(": root.child('storage_v2_control').child($tenantId).child($dataKey.replace('biz:','').replace(':entries','')).child('allowV2Initialization').val() === true)", ": true)"); },
+    "fence: populated-legacy conversion allowed": (d) => { d[".write"] = d[".write"].replace("(data.exists() ? data.child('schemaVersion').val() === 2 : ", "(data.exists() ? true : "); },
+    "fence: frozen _v guard removed": (d) => { d[".write"] = d[".write"].replace(" && (!data.child('_v').exists() || newData.child('_v').val() === data.child('_v').val())", ""); },
+    "fence: quiesced admitted to the legacy branch": (d) => { d[".write"] = d[".write"].replace("=== 'legacy')) && !(newData", "=== 'legacy' || root.child('storage_v2_control').child($tenantId).child($dataKey.replace('biz:','').replace(':entries','')).child('phase').val() === 'quiesced')) && !(newData"); },
+    "fence: contract validity conjunct removed": (d) => { d[".write"] = d[".write"].replace(".child('contractVersion').val() === 1 && ", ""); },
+    "control root client-writable at the business node": (d, x) => { x.rules.storage_v2_control["$tenantId"]["$bizId"][".write"] = "auth !== null"; },
+    "control root client-writable at the tenant node": (d, x) => { x.rules.storage_v2_control["$tenantId"][".write"] = "true"; },
+    "control root widened read": (d, x) => { x.rules.storage_v2_control["$tenantId"]["$bizId"][".read"] = "auth !== null"; },
+    "control root missing": (d, x) => { delete x.rules.storage_v2_control; },
+    "control root extra child": (d, x) => { x.rules.storage_v2_control.extra = { ".write": "true" }; },
     "rows map rule dropped": (d) => { delete d.rows[".validate"]; },
     "epoch step loosened": (d) => { d.generation[".validate"] = d.generation[".validate"].replace("data.val() + 1", "data.val() + 2"); },
     "epoch rollback permitted": (d) => { d.generation[".validate"] = d.generation[".validate"].replace("newData.val() === data.val() ||", "newData.val() <= data.val() ||"); },
@@ -511,11 +533,19 @@ test("[H10] the S0 rules exception accepts the candidate and rejects every inert
     const r = mutate(f); assert.equal(r.ok, false, name); assert.ok(r.reason, name);
   }
   const ws = structuredClone(after); dkOf(ws).generation[".validate"] = dkOf(ws).generation[".validate"].replace(/ && /g, "  &&  ");
-  assert.deepEqual(authorizedEntriesRulesDelta(before, ws), { ok: true }, "whitespace normalization only");
+  assert.deepEqual(authorizedVersionFenceRulesDelta(core, ws), { ok: true }, "whitespace normalization only (outside the exact-string write rule)");
+  // the fence predicate itself is compared as an EXACT string: even whitespace inside it is a change
+  const fw = structuredClone(after); dkOf(fw)[".write"] = dkOf(fw)[".write"].replace("=== 'v2_active' &&", "=== 'v2_active'  &&");
+  assert.equal(authorizedVersionFenceRulesDelta(core, fw).ok, false, "fence guard is exact");
 });
 test("[H10] the VAT S0 guard consumes the semantic module (no token checks remain) and its VAT assertions are untouched", () => {
   const vat = readFileSync(join(ROOT, "test/finance/vat-invariant.test.mjs"), "utf8");
-  assert.ok(vat.includes('import { authorizedEntriesRulesDelta } from "../support/rules-authorized-delta.mjs";'));
+  assert.ok(vat.includes('import { authorizedEntriesRulesDelta, authorizedVersionFenceRulesDelta, APPROVED_FENCE_RULES_BLOB } from "../support/rules-authorized-delta.mjs";'));
+  // VERSION FENCE: Layer A validates the exact core→fence Rules delta and the reviewed blob;
+  // no blanket post-core allowance and no path exemption
+  assert.ok(vat.includes("const fenceDelta = authorizedVersionFenceRulesDelta(coreRules, liveRules);"));
+  assert.ok(vat.includes("APPROVED_FENCE_RULES_BLOB, \"database.rules.json is the reviewed fenced version (exact blob)\""));
+  assert.ok(vat.includes('rel === "database.rules.json"))'), "only the validated Rules change is projected out of the reader layer");
   assert.ok(vat.includes("return authorizedEntriesRulesDelta(before, after).ok === true;"));
   assert.ok(!vat.includes('.includes("matches(")'), "token presence is no longer an acceptance criterion");
   assert.ok(!vat.includes("biz:[^:]+:entries\")) return false"), "token presence is no longer an acceptance criterion");
@@ -532,7 +562,7 @@ test("[H10] the VAT S0 guard consumes the semantic module (no token checks remai
   const parent = gitIn(ROOT, ["show", "cb8ac84e2dbc5c23b6fe0eee2083be6f326d3894:test/finance/vat-invariant.test.mjs"]);
   assert.equal(parent.status, 0, parent.stderr);
   const strip = (src) => src
-    .replace('import { authorizedEntriesRulesDelta } from "../support/rules-authorized-delta.mjs";\n', "")
+    .replace(/import \{[^}]*\} from "\.\.\/support\/rules-authorized-delta\.mjs";\n/, "")
     .replace(/import \{[^}]*\} from "\.\.\/support\/server-reader-authorized-delta\.mjs";\n/, "")
     .replace(/(test\("S0 diff contains no historical data transform, migration, RTDB rules, or forbidden runtime area", \(\) => \{\n)[\s\S]*?(?=  const runtimeDiff = )/, "$1<scope-checks>");
   assert.equal(strip(vat), strip(parent.stdout), "nothing outside the scope-check body changed");

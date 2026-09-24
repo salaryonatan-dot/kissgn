@@ -122,11 +122,17 @@ const fixtures = () => ({ tenants: { tenantA: {
   "biz:bizB:entries": envelope([row(uuid("b1"), "2026-03-01", 9)]),
 } } });
 async function reseed() { detachAll(); await seedDb().ref("/").set(fixtures()); }
+// VERSION FENCE (P0-DATA-01): a V2 business is writable only under a valid `v2_active` control
+// record, and an absent business may be initialised only with allowV2Initialization=true.
+// Legacy businesses carry no record (legacy behaviour unchanged). The record is Admin-owned.
+const ACTIVE_POLICY = (allowV2Initialization = false) => ({ contractVersion: 1, phase: "v2_active", policyRevision: 1, allowV2Initialization, minStorageProtocol: 2 });
+const setPolicy = (biz, rec) => seedDb().ref(`storage_v2_control/tenantA/${biz}`).set(rec);
 async function seedV2(generation = GEN1, rows = LEGACY_ROWS(), biz = "bizA") {
   const map = {}; rows.forEach((r) => { map[r.id] = { ...r, [GK]: generation }; });
   const node = { schemaVersion: 2, generation, _v: JSON.stringify(rows) };
   if (rows.length) node.rows = map;
   await seedDb().ref(PATH(biz)).set(node);
+  await setPolicy(biz, ACTIVE_POLICY());
 }
 const readNode = async (biz = "bizA", tenant = "tenantA") => {
   const s = await seedDb().ref(PATH(biz, tenant)).once("value"); return s.exists() ? s.val() : null;
@@ -166,6 +172,9 @@ function v2Client(appKey, { tenantId = "tenantA", bizId = "bizA", generation = G
   return client;
 }
 function detachAll() { while (LIVE.length) { try { LIVE.pop().detach(); } catch (_) {} } }
+// Conversion is an Admin-lane operation since the fence (an ordinary client's V2-shaped result over
+// a populated legacy node is denied by Rules — proven in V2-M01 and the version-fence matrix).
+const adminIo = () => legacyIo("__seed");
 const legacyIo = (appKey) => ({
   transactNode: async (t, key, fn) => {
     const r = await apps[appKey].database().ref(`tenants/${t}/${key}`).transaction(fn, undefined, false);
@@ -251,7 +260,11 @@ async function main() {
   // ══ CUTOVER ══════════════════════════════════════════════════════════════
   await run("V2-M01", "cutover", "a valid business converts atomically; every row, and duplicate dates, survive", async () => {
     await reseed();
-    const res = await upgradeBusinessToV2(legacyIo("manager"), { tenantId: "tenantA", bizId: "bizA" });
+    const byClient = await upgradeBusinessToV2(legacyIo("manager"), { tenantId: "tenantA", bizId: "bizA" });
+    eq(byClient.status, "failed", "a client-side conversion is DENIED by the fence: " + byClient.status); expect(/permission/i.test(byClient.error || ""), "typed permission denial");
+    eq(V2.detectStorageMode(await readNode()).mode, "legacy", "nothing written by the denied client conversion");
+    const res = await upgradeBusinessToV2(adminIo(), { tenantId: "tenantA", bizId: "bizA" });
+    await setPolicy("bizA", ACTIVE_POLICY());
     eq(res.status, "committed", `cutover ${res.status} ${JSON.stringify(res.report || "")}`);
     const node = await readNode();
     eq(node.schemaVersion, 2, "schemaVersion"); eq(node.generation, GEN1, "generation starts at the first epoch");
@@ -263,9 +276,9 @@ async function main() {
     return `3 rows, schemaVersion=2, generation set, _v frozen`;
   });
   await run("V2-M02", "cutover", "converting an already-converted business is refused", async () => {
-    const res = await upgradeBusinessToV2(legacyIo("manager"), { tenantId: "tenantA", bizId: "bizA" });
+    const res = await upgradeBusinessToV2(adminIo(), { tenantId: "tenantA", bizId: "bizA" });
     eq(res.status, "already_v2", `got ${res.status}`);
-    const chosen = await upgradeBusinessToV2(legacyIo("manager"), { tenantId: "tenantA", bizId: "bizA", generation: 7 });
+    const chosen = await upgradeBusinessToV2(adminIo(), { tenantId: "tenantA", bizId: "bizA", generation: 7 });
     eq(chosen.reason, "generation_not_callable", "the epoch is never a caller input");
     eq((await readNode()).generation, GEN1, "generation untouched");
     return "refused";
@@ -273,7 +286,7 @@ async function main() {
   await run("V2-M03", "cutover", "preflight blockers refuse the cutover", async () => {
     await reseed();
     await seedDb().ref(PATH()).set(envelope([{ date: "2026-08-02", sales: 2 }]));
-    const res = await upgradeBusinessToV2(legacyIo("manager"), { tenantId: "tenantA", bizId: "bizA" });
+    const res = await upgradeBusinessToV2(adminIo(), { tenantId: "tenantA", bizId: "bizA" });
     eq(res.status, "preflight_blocked", `got ${res.status}`);
     eq(V2.detectStorageMode(await readNode()).mode, "legacy", "still legacy — nothing was written");
     return `refused: ${res.report.blockers.map((b) => b.code).join(",")}`;
@@ -317,7 +330,7 @@ async function main() {
   await run("V2-M05", "cutover", "NEGATIVE CONTROL: a read-then-write cutover loses the same write", async () => {
     await reseed();
     const extra = row(uuid("late2"), "2026-08-03", 888);
-    const io = legacyIo("manager");
+    const io = adminIo();
     const res = await unsafeReadThenWriteUpgrade_NEGATIVE_CONTROL(io, {
       tenantId: "tenantA", bizId: "bizA",
       // the legacy writer commits inside the read-to-write window
@@ -555,7 +568,7 @@ async function main() {
   // ══ AUTHORIZATION — unchanged ════════════════════════════════════════════
   await run("V2-A01", "authorization", "business isolation and role gating are unchanged for V2 rows", async () => {
     await reseed(); await seedV2();
-    await seedDb().ref(PATH("bizB")).set({ schemaVersion: 2, generation: GEN1 });
+    await seedDb().ref(PATH("bizB")).set({ schemaVersion: 2, generation: GEN1 }); await setPolicy("bizB", ACTIVE_POLICY());
     const beforeB = JSON.stringify(await readNode("bizB"));
     await attempt("manager -> other business", rowPath(uuid("x"), "bizB"), { id: uuid("x"), [GK]: GEN1, date: "2026-08-01" }, "deny", "manager");
     await attempt("viewer -> own business", rowPath(uuid("y")), { id: uuid("y"), [GK]: GEN1, date: "2026-08-01" }, "deny", "viewer");
@@ -644,11 +657,16 @@ async function main() {
     await attempt("a live-epoch row", rowPath(uuid("new")), { id: uuid("new"), [GK]: 3, date: "2026-08-01" }, "allow");
     await attempt("a non-integer-looking epoch type", `${PATH()}/generation`, "4", "deny");
     await attempt("initialise a new business at epoch 5", PATH("bizC"), { schemaVersion: 2, generation: 5 }, "deny", "owner");
+    await attempt("initialise a new business at the first epoch WITHOUT explicit activation (fence)", PATH("bizC"), { schemaVersion: 2, generation: 1 }, "deny", "owner");
+    await setPolicy("bizC", ACTIVE_POLICY(true));
     await attempt("initialise a new business at the first epoch", PATH("bizC"), { schemaVersion: 2, generation: 1 }, "allow", "owner");
     await seedDb().ref(PATH("bizD")).set(envelope(LEGACY_ROWS()));
     await attempt("convert a legacy business at epoch 2", PATH("bizD"), { schemaVersion: 2, generation: 2, rows: rowsAt(2), _v: v }, "deny", "owner");
-    await attempt("convert a legacy business at epoch 1", PATH("bizD"), { schemaVersion: 2, generation: 1, rows: rowsAt(1), _v: v }, "allow", "owner");
-    return "deny ×10, allow ×6";
+    // Since the fence a CLIENT can no longer convert a populated legacy business at any epoch; the
+    // first epoch of a conversion is guaranteed by the Admin-lane tool (GENERATION_FIRST).
+    await attempt("convert a legacy business at epoch 1 (client — fenced)", PATH("bizD"), { schemaVersion: 2, generation: 1, rows: rowsAt(1), _v: v }, "deny", "owner");
+    eq((await upgradeBusinessToV2(adminIo(), { tenantId: "tenantA", bizId: "bizD" })).generation, GEN1, "Admin-lane conversion starts at the first epoch");
+    return "deny ×12, allow ×5; Admin-lane conversion at epoch 1";
   });
   await run("V2-H03", "rows-map", "the row map cannot be replaced by a scalar (Rules)", async () => {
     await reseed(); await seedV2();
@@ -734,7 +752,7 @@ async function main() {
     return `displayed converged after edit, queued edits, foreign write, delete and clear-all`;
   });
   await run("V2-H07", "bootstrap", "an absent business initialises straight into V2 on its first create, then uses the row lane", async () => {
-    await reseed(); await seedDb().ref(PATH()).remove();
+    await reseed(); await seedDb().ref(PATH()).remove(); await setPolicy("bizA", ACTIVE_POLICY(true));   // explicit native activation (CTO D-VF1)
     const A = await parityClient("manager").attach();
     eq(A.st.mode.mode, "absent", "absent destination"); expect(A.coord.isReady(), "ready for a create");
     const NEW = uuid("first");
@@ -753,7 +771,7 @@ async function main() {
     eq(again.status, "committed_idempotent", `identical first save repeated: ${again.status}/${again.reason || ""}`); eq(again.reason, "already_created", "typed");
     // Two absent clients racing: exactly one initialises; the other is refused typed and
     // succeeds once it has hydrated the new node.
-    await seedDb().ref(PATH("bizB")).remove();
+    await seedDb().ref(PATH("bizB")).remove(); await setPolicy("bizB", ACTIVE_POLICY(true));
     const X = await parityClient("owner", { bizId: "bizB" }).attach(), Y = await parityClient("owner#2", { bizId: "bizB" }).attach();
     const [rx, ry] = await Promise.all([
       X.coord.submitIntent(create(row(uuid("x"), "2026-09-03", 1))),
@@ -779,7 +797,7 @@ async function main() {
     expect(rep.ok, `preflight ${JSON.stringify(rep.blockers)}`);
     eq(rep.normalization.rowsAffected, 1, "one row is canonicalized");
     eq(rep.normalization.rows[0].paths.join(","), "nullable,supplier_payments,hourly_payroll,list", "exactly the values RTDB cannot hold");
-    const res = await upgradeBusinessToV2(legacyIo("manager"), { tenantId: "tenantA", bizId: "bizA" });
+    const res = await upgradeBusinessToV2(adminIo(), { tenantId: "tenantA", bizId: "bizA" });
     eq(res.status, "committed", `cutover ${res.status}`);
     const node = await readNode(), stored = node.rows[ID1];
     eq(stored.gen, "legacy-domain-value", "the domain field survives under its own name");
@@ -837,13 +855,13 @@ async function main() {
     const d = createDashboard({ storage, tenantId: "tenantA", bizId, W: loadProductionWindow() });
     d.storage = storage;
     LIVE.push({ detach: () => { try { d.selectBusiness("__detached__"); } catch (_) {} } });
-    d.select = async (b) => { d.selectBusiness(b); await d.until(() => d.mode() !== null); };
+    d.select = async (b) => { d.selectBusiness(b); await d.until(() => d.mode() !== null && d.policyUi() !== null && d.policyUi().state !== "policy_unresolved" && d.policyUi().state !== "storage_unresolved"); };
     d.until = (pred, ms = 4000) => new Promise((res, rej) => { const t0 = Date.now(); (function tick() {
       if (pred()) return res(); if (Date.now() - t0 > ms) return rej(new Error("timeout waiting for dashboard state")); setTimeout(tick, 10); })(); });
     return d;
   }
   await run("V2-W01", "production-wiring", "absent first save, create, edit, delete and clear-all commit through the REAL dashboard wiring", async () => {
-    await reseed(); await seedDb().ref(PATH()).remove();
+    await reseed(); await seedDb().ref(PATH()).remove(); await setPolicy("bizA", ACTIVE_POLICY(true));   // explicit native activation (CTO D-VF1)
     const d = dashboard("manager"); await d.select("bizA");
     eq(d.mode().mode, "absent", "absent destination");
     const r1 = await d.submitLaborEntry("2026-09-01", "450");
@@ -938,7 +956,7 @@ async function main() {
     await seedDb().ref(PATH()).set(envelope([legacyRow]));
     const rep = preflightLegacyNode(await readNode());
     expect(rep.ok, "preflight ok"); eq(rep.normalization.numericKeyMaps.rowsAffected, 1, "numeric-key map reported"); eq(rep.normalization.numericKeyMaps.rows[0].fields.join(","), "hourly_payroll", "field named");
-    eq((await upgradeBusinessToV2(legacyIo("manager"), { tenantId: "tenantA", bizId: "bizA" })).status, "committed", "converted");
+    eq((await upgradeBusinessToV2(adminIo(), { tenantId: "tenantA", bizId: "bizA" })).status, "committed", "converted"); await setPolicy("bizA", ACTIVE_POLICY());
     expect(Array.isArray((await readNode()).rows[legacyRow.id].hourly_payroll), "array readback after conversion");
     const d2 = dashboard("owner"); await d2.select("bizA");
     const rr = await d2.coord().submitIntent(create(legacyRow)); eq(rr.status, "committed_idempotent", `converted-row retry ${rr.status}/${rr.reason || ""}`);

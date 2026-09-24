@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 // guard for reasons that had nothing to do with the VAT invariant. The invariant
 // assertions below are unchanged; only how git is invoked is.
 import { gitIn } from "../support/git-context.mjs";
-import { authorizedEntriesRulesDelta } from "../support/rules-authorized-delta.mjs";
+import { authorizedEntriesRulesDelta, authorizedVersionFenceRulesDelta, APPROVED_FENCE_RULES_BLOB } from "../support/rules-authorized-delta.mjs";
 import { SERVER_READER_BASE, SERVER_READER_AUTHORIZED_FILES, isProtectedPath, collectServerReaderScopeInputs, serverReaderScopeVerdict } from "../support/server-reader-authorized-delta.mjs";
 import vm from "node:vm";
 import { dailyReportMessage } from "../../lib/whatsappMessages.js";
@@ -215,9 +215,20 @@ test("S0 diff contains no historical data transform, migration, RTDB rules, or f
     [],
     "S0 history must not touch historical transforms, RTDB rules, forecast/KPI areas, packages, or stored-data scripts",
   );
-  // The live Rules file must still be exactly the authorized contract (never a path exemption).
-  const rulesExemptLive = rulesChangeIsOnlyAuthorizedEntriesValidation(read("database.rules.json"));
-  assert.equal(rulesExemptLive, true, "database.rules.json must carry only the authorized entries contract");
+  // VERSION FENCE (CTO D-VF2, 2026-09-24): from the approved core onward the Rules may
+  // change ONLY by the exact fence delta pinned in test/support/rules-authorized-delta.mjs
+  // (the storage_v2_control root + FENCE_GUARD in the entries granting branch), checked
+  // semantically against the CORE rules (never a path exemption, never a blanket
+  // post-core allowance) — and the live file must be the reviewed bytes (blob pin) with
+  // a byte-identical emulator mirror.
+  let coreRules, liveRules;
+  try { coreRules = JSON.parse(rulesAtH.stdout); liveRules = JSON.parse(read("database.rules.json")); } catch { assert.fail("rules unparseable"); }
+  const fenceDelta = authorizedVersionFenceRulesDelta(coreRules, liveRules);
+  assert.deepEqual(fenceDelta, { ok: true }, "database.rules.json must be the approved core plus the exact version-fence delta");
+  const liveRulesBlob = gitIn(ROOT, ["hash-object", "database.rules.json"]);
+  assert.equal(liveRulesBlob.status, 0, liveRulesBlob.stderr);
+  assert.equal(liveRulesBlob.stdout.trim(), APPROVED_FENCE_RULES_BLOB, "database.rules.json is the reviewed fenced version (exact blob)");
+  assert.equal(read("test/emulator/database.rules.json"), read("database.rules.json"), "emulator Rules mirror is byte-identical");
 
   // ── LAYER B — the approved server-reader files, core → working tree ──────────────
   // CTO decision (2026-09-23): the P0-DATA-01 server-reader convergence may change
@@ -227,7 +238,8 @@ test("S0 diff contains no historical data transform, migration, RTDB rules, or f
   // The guard proves "this file IS the reviewed version": a relocated declaration,
   // reordered statements, an extra statement, a partial revert, a touched formula, a
   // sixth protected file or a directory/glob entry all fail. Nothing is normalized.
-  // The Rules are frozen from the core onward — they are not part of this authorization.
+  // The Rules are not part of THIS authorization: their only permitted post-core change is
+  // the version-fence delta validated in Layer A above.
   assert.deepEqual([...SERVER_READER_AUTHORIZED_FILES].sort(), [
     "src/analytics/dailyBuilder.ts",
     "src/repositories/analytics/dailyMetricsRepo.ts",
@@ -235,8 +247,11 @@ test("S0 diff contains no historical data transform, migration, RTDB rules, or f
     "src/repositories/analytics/purchasesRepo.ts",
     "src/snapshot/snapshotBuilder.ts",
   ], "the reader authorization names exactly the five approved files");
-  const live = collectServerReaderScopeInputs(ROOT);
-  assert.ok(!live.changedAll.includes("database.rules.json"), "database.rules.json must not change after the approved Storage V2 core");
+  const collected = collectServerReaderScopeInputs(ROOT);
+  // The fence Rules change was validated ABOVE (semantic delta + exact blob); only that one
+  // validated change is excluded from the reader-layer protected-path projection. The
+  // general protected-path function and the five-file table are untouched.
+  const live = { ...collected, changedProtectedPaths: collected.changedProtectedPaths.filter((rel) => !(fenceDelta.ok === true && rel === "database.rules.json")) };
   assert.deepEqual(live.changedProtectedPaths.filter((rel) => !isProtectedPath(rel)), [], "collector sanity");
   for (const rel of SERVER_READER_AUTHORIZED_FILES) {
     assert.match(String(live.blobs[rel]), /^[0-9a-f]{40}$/, rel + " is present in the working tree");

@@ -62,6 +62,7 @@ export function makeDb() {
   const ref = (path, q = null) => ({
     child: (c) => ref(path + "/" + c),
     once: async (ev) => snap(path, q),
+    get: async () => snap(path, q),   // Admin SDK `ref.get()` shape (helpers/securityContext use it)
     set: async (v) => { writes.push({ op: "set", path, value: JSON.parse(JSON.stringify(v ?? null)) }); setAt(path, v); },
     update: async (v) => { writes.push({ op: "update", path, value: v }); for (const [k, x] of Object.entries(v)) setAt(path + "/" + k, x); },
     remove: async () => { writes.push({ op: "remove", path }); setAt(path, null); },
