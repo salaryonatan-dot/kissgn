@@ -48,33 +48,96 @@ function rowComponents(e: RawEntry): { revenue: number; laborCost: number; foodC
   return { revenue, laborCost, foodCost };
 }
 
+// ── Server readers R2 — DETERMINISTIC DECIMAL ACCUMULATION (CTO D-R2-1 / D-R2-2) ──
+// The per-row components above are the semantic operands and are NOT recomputed. When
+// more than one row carries a business date, their existing Number values are summed
+// EXACTLY in decimal: each finite operand is taken as its canonical round-trip decimal
+// (`Number.prototype.toString`), split into a BigInt coefficient and a decimal scale,
+// aligned by powers of ten and added as integers; the exact total is converted to a
+// Number exactly once. Binary intermediate addition — whose rounding and whose
+// intermediate overflow both depend on operand order — never happens, so the aggregate
+// is identical for every physical row order and every UUID assignment. A single row
+// passes its component through unchanged. No rounding, clamp or monetary limit is
+// introduced: the one final Number conversion is the existing output representation
+// (a final exact total beyond the finite range still becomes ±Infinity, as before).
+// Non-finite operands keep their category semantics: any NaN → NaN; +∞ with −∞ → NaN;
+// otherwise the surviving infinity.
+const CANONICAL_DECIMAL = /^(-?)([0-9]+)(?:\.([0-9]+))?(?:e([+-]?[0-9]+))?$/;
+
+function canonicalDecimal(x: number): { coefficient: bigint; scale: number } {
+  const m = CANONICAL_DECIMAL.exec(x.toString());
+  if (!m) throw new Error("non_canonical_number:" + String(x));
+  const digits = m[2] + (m[3] || "");
+  let coefficient = BigInt(digits);
+  if (m[1] === "-") coefficient = -coefficient;
+  let scale = (m[3] || "").length - (m[4] ? parseInt(m[4], 10) : 0);
+  if (scale < 0) {
+    coefficient *= 10n ** BigInt(-scale);
+    scale = 0;
+  }
+  return { coefficient, scale };
+}
+
+function decimalSum(values: number[]): number {
+  if (values.length === 1) return values[0];
+  let posInf = false;
+  let negInf = false;
+  for (const v of values) {
+    if (Number.isNaN(v)) return NaN;
+    if (v === Infinity) posInf = true;
+    else if (v === -Infinity) negInf = true;
+  }
+  if (posInf && negInf) return NaN;
+  if (posInf) return Infinity;
+  if (negInf) return -Infinity;
+  let total = 0n;
+  let scale = 0;
+  for (const v of values) {
+    const d = canonicalDecimal(v);
+    if (d.scale > scale) {
+      total *= 10n ** BigInt(d.scale - scale);
+      scale = d.scale;
+    }
+    const c = d.scale < scale ? d.coefficient * 10n ** BigInt(scale - d.scale) : d.coefficient;
+    total += c;
+  }
+  if (total === 0n) return 0;
+  return Number(total.toString() + "e-" + String(scale));
+}
+
 // One DailyMetric per business date. Additive components are summed over every row
-// of the date; the ratios are derived from the sums. Insertion order of `rows` is
-// irrelevant: sums are order-independent and the result is sorted by date.
+// of the date exactly in decimal (above); the ratios are derived from the final sums.
+// Insertion order of `rows` is irrelevant: the exact sums are order-independent and
+// the result is sorted by date.
 function aggregateByDate(rows: RawEntry[]): DailyMetric[] {
-  const byDate = new Map<string, { revenue: number; laborCost: number; foodCost: number }>();
+  const byDate = new Map<string, { revenue: number[]; laborCost: number[]; foodCost: number[] }>();
   for (const e of rows) {
     const c = rowComponents(e);
     const acc = byDate.get(e.date);
     if (acc) {
-      acc.revenue += c.revenue;
-      acc.laborCost += c.laborCost;
-      acc.foodCost += c.foodCost;
+      acc.revenue.push(c.revenue);
+      acc.laborCost.push(c.laborCost);
+      acc.foodCost.push(c.foodCost);
     } else {
-      byDate.set(e.date, { revenue: c.revenue, laborCost: c.laborCost, foodCost: c.foodCost });
+      byDate.set(e.date, { revenue: [c.revenue], laborCost: [c.laborCost], foodCost: [c.foodCost] });
     }
   }
   return [...byDate.entries()]
-    .map(([date, t]) => ({
-      date,
-      revenue: t.revenue,
-      laborCost: t.laborCost,
-      laborPct: t.revenue > 0 ? (t.laborCost / t.revenue) * 100 : 0,
-      foodCost: t.foodCost,
-      foodCostPct: t.revenue > 0 ? (t.foodCost / t.revenue) * 100 : 0,
-      transactionCount: 0, // not available in manual entries
-      avgTicket: 0,
-    }))
+    .map(([date, parts]) => {
+      const revenue = decimalSum(parts.revenue);
+      const laborCost = decimalSum(parts.laborCost);
+      const foodCost = decimalSum(parts.foodCost);
+      return {
+        date,
+        revenue,
+        laborCost,
+        laborPct: revenue > 0 ? (laborCost / revenue) * 100 : 0,
+        foodCost,
+        foodCostPct: revenue > 0 ? (foodCost / revenue) * 100 : 0,
+        transactionCount: 0, // not available in manual entries
+        avgTicket: 0,
+      };
+    })
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 

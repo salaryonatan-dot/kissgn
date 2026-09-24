@@ -66,7 +66,7 @@ const SHA1_RE = /^[0-9a-f]{40}$/;
  */
 export const SERVER_READER_APPROVED_BLOBS = Object.freeze({
   "src/analytics/dailyBuilder.ts": "a327186c90e957a44aeeb40a023734e2f0c027c1",
-  "src/repositories/analytics/dailyMetricsRepo.ts": "51675f0af60cc33926ae74281e8295eb3df4b3b4",
+  "src/repositories/analytics/dailyMetricsRepo.ts": "301f95993258f75051e4a4ee91ca22a1e8839207",
   "src/repositories/analytics/laborRepo.ts": "33a646e92523f758d70b1707652cf39fc36c4605",
   "src/repositories/analytics/purchasesRepo.ts": "6a3f9be2a5c4ceec7d5339cbda50d61fd28513af",
   "src/snapshot/snapshotBuilder.ts": "e36df4d83d945d16e158dacc82b12ce2500f9956",

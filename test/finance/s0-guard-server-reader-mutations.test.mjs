@@ -92,7 +92,7 @@ test("B. helper / function block moved elsewhere → approved_content_mismatch",
 
 test("C. same tokens, reordered statements → approved_content_mismatch", () => {
   mustFail(mutate(DM, (t) => {
-    const l1 = "      acc.revenue += c.revenue;", l2 = "      acc.laborCost += c.laborCost;";
+    const l1 = "      acc.revenue.push(c.revenue);", l2 = "      acc.laborCost.push(c.laborCost);";
     assert.ok(t.includes(l1 + "\n" + l2)); return t.replace(l1 + "\n" + l2, l2 + "\n" + l1);
   }, "two accumulator statements swapped"), "approved_content_mismatch", "statements reordered");
   mustFail(mutate(DB, (t) => {
@@ -110,17 +110,29 @@ test("D. an extra harmless-looking statement → approved_content_mismatch (comm
 
 test("E. financial formula changed → approved_content_mismatch", () => {
   mustFail(mutate(DM, (t) => t.replace("const revenue = num(e.sales) + num(e.deliveries) + num(e.other_income);", "const revenue = (num(e.sales) + num(e.deliveries) + num(e.other_income)) / 1.18;"), "VAT division"), "approved_content_mismatch", "VAT division inserted");
-  mustFail(mutate(DM, (t) => t.replace("laborPct: t.revenue > 0 ? (t.laborCost / t.revenue) * 100 : 0,", "laborPct: t.revenue > 0 ? (t.laborCost / t.revenue) * 100 : 100,"), "ratio default"), "approved_content_mismatch", "ratio default changed");
+  mustFail(mutate(DM, (t) => t.replace("laborPct: revenue > 0 ? (laborCost / revenue) * 100 : 0,", "laborPct: revenue > 0 ? (laborCost / revenue) * 100 : 100,"), "ratio default"), "approved_content_mismatch", "ratio default changed");
+  mustFail(mutate(DM, (t) => t.replace("return Number(total.toString() + \"e-\" + String(scale));", "return Number(total) / 10 ** scale;"), "final conversion weakened"), "approved_content_mismatch", "Number(C)/10**S substituted");
   mustFail(mutate(SB, (t) => { const l = line(t, "totalSales +="); return t.replace(l, l.replace(";", " * 1.18;")); }, "snapshot gross-up"), "approved_content_mismatch", "snapshot sales grossed up");
 });
 
 test("F. part of the reader change reverted (tokens still present elsewhere) → approved_content_mismatch", () => {
   mustFail(mutate(DB, (t) => t.replace(line(t, "const todayEntry = (requireRowForDate("), "  const todayEntry = rows.find((e) => e.date === date);"), "D1 line reverted, import kept"), "approved_content_mismatch", "todayEntry reverted");
   mustFail(mutate(DM, (t) => t.replace("  return aggregateByDate(\n", "  return rows.map((e) => ({ date: e.date, ...rowComponents(e), laborPct: 0, foodCostPct: 0, transactionCount: 0, avgTicket: 0 })).sort((a, b) => a.date.localeCompare(b.date)); //\n  return aggregateByDate(\n"), "aggregation bypassed"), "approved_content_mismatch", "aggregation bypassed");
+  mustFail(mutate(DM, (t) => t.replace("      const revenue = decimalSum(parts.revenue);", "      const revenue = parts.revenue.reduce((a, b) => a + b, 0);"), "binary accumulation restored"), "approved_content_mismatch", "exact accumulator bypassed");
   // a full revert of one file to the approved core is also a mismatch (and would be flagged as pin ≠ base anyway)
   const base = gitIn(ROOT, ["show", `${SERVER_READER_BASE}:${DM}`]); assert.equal(base.status, 0);
   const v = mustFail(withText(DM, base.stdout), "approved_content_mismatch", "full revert to core");
   assert.equal(v.detail.actual, REAL.baseBlobs[DM]);
+  // R2 re-pin: the PREVIOUSLY reviewed bytes of dailyMetricsRepo (R1 candidate c46c2727, binary
+  // accumulation) are no longer the approved version — reverting to them is denied
+  const r1 = gitIn(ROOT, ["show", `c46c27278966e517a02a91e7adc0911084012b20:${DM}`]); assert.equal(r1.status, 0, r1.stderr);
+  const r1v = mustFail(withText(DM, r1.stdout), "approved_content_mismatch", "R1 (c46c2727) dailyMetricsRepo bytes");
+  assert.equal(r1v.detail.actual, blobSha(r1.stdout)); assert.notEqual(r1v.detail.actual, r1v.detail.expected);
+  // and the other four pins are byte-identical to their c46c2727 versions (R2 touched one file only)
+  for (const f of [DB, "src/repositories/analytics/laborRepo.ts", "src/repositories/analytics/purchasesRepo.ts", SB]) {
+    const at = gitIn(ROOT, ["rev-parse", `c46c27278966e517a02a91e7adc0911084012b20:${f}`]); assert.equal(at.status, 0);
+    assert.equal(at.stdout.trim(), SERVER_READER_APPROVED_BLOBS[f], f + ": pin unchanged since R1");
+  }
   // and a file missing from the tree
   const gone = clone(REAL); gone.blobs[DB] = null; mustFail(gone, "approved_content_mismatch", "file absent");
 });

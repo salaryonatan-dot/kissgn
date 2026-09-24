@@ -308,6 +308,45 @@ async function main() {
     return `8 representations → identical insight (currentValue 600) + digest`;
   });
 
+  // ══ 12. DECIMAL DETERMINISM (R2 / Codex counterexample) — real RTDB, real proactive flow ══
+  await run("SR-12", "decimal-r2", "17×600, 812, 500, 500 + duplicate 'yesterday' {100.1, 200.2, 300.3}: exactly 600.6, detector null, identical persisted insight-set and digest across 6 permutations × 2 uuid assignments × 2 forms", async () => {
+    const dayBefore = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+    const y = dayBefore(1);
+    const mk = (id, date, sales) => ({ id, date, sales, deliveries: 0, other_income: 0, payroll: 0 });
+    const hist = [...Array.from({ length: 17 }, (_, i) => mk(`22222222-2222-4222-8222-${String(100 + i).padStart(12, "0")}`, dayBefore(21 - i), 600)), mk("22222222-2222-4222-8222-000000000200", dayBefore(4), 812), mk("22222222-2222-4222-8222-000000000201", dayBefore(3), 500), mk("22222222-2222-4222-8222-000000000202", dayBefore(2), 500)];
+    const IDS3 = ["11111111-1111-4111-8111-000000000001", "11111111-1111-4111-8111-000000000002", "11111111-1111-4111-8111-000000000003"];
+    const perms = (a) => a.length <= 1 ? [a] : a.flatMap((x, i) => perms([...a.slice(0, i), ...a.slice(i + 1)]).map((p) => [x, ...p]));
+    const v2 = (rowsArr) => { const map = {}; for (const r of rowsArr) map[r.id] = { ...r, _gen: 1 }; return { schemaVersion: 2, generation: 1, rows: map }; };
+    const strip = (v) => JSON.parse(JSON.stringify(v, (k, x) => (/At$|^generatedAt$/.test(k) ? undefined : x)));
+    const reps = [];
+    for (const ids of [IDS3, IDS3.slice().reverse()]) {
+      const three = [100.1, 200.2, 300.3].map((v, i) => mk(ids[i], y, v));
+      for (const perm of perms(three)) {
+        reps.push([`legacy ${ids.map((x) => x.slice(-1)).join("")}/${perm.map((r) => r.sales).join(",")}`, asLegacy([...hist, ...perm])]);
+        reps.push([`v2 ${ids.map((x) => x.slice(-1)).join("")}/${perm.map((r) => r.sales).join(",")}`, v2([...perm, ...hist])]);
+      }
+    }
+    eq(reps.length, 24, "representations");
+    const snaps = [];
+    for (const [name, node] of reps) {
+      await reseed({ bizA: node });
+      const daily = await DM.getDailyMetrics(T, dayBefore(28), dayBefore(0), "bizA");
+      const rec = daily.find((d) => d.date === y);
+      expect(rec && Object.is(rec.revenue, Number("600.6")), name + `: revenue ${rec && rec.revenue}`);
+      eq(daily.length, 21, name + ": 21 dates");
+      const res = await PJ.runForBiz(T, "bizA");
+      deq(res.errors, [], name + " errors");
+      const insights = (await readPath(`tenants/${T}/proactive_insights/bizA`)) || {};
+      expect(!Object.values(insights).some((i) => i.type === "revenue_underperformance"), name + ": no revenue-underperformance insight");
+      const digests = await readPath(`tenants/${T}/proactive_digests/bizA`);
+      expect(digests && digests.daily && Object.keys(digests.daily).length === 1, name + ": digest persisted");
+      snaps.push([name, strip({ res, daily, insights, digests })]);
+    }
+    for (const [name, s] of snaps) deq(s, snaps[0][1], name + " ≠ " + snaps[0][0]);
+    const dg = Object.values(snaps[0][1].digests.daily)[0];
+    return `24 representations → revenue 600.6, detector null, identical insights/digest (detected=${dg.totalDetected}, suppressed=${dg.totalSuppressed})`;
+  });
+
   // ══ 8. D2 — checkers stay externally non-firing ══════════════════════════════
   await run("SR-08", "alerts-d2", "anomaly bait in legacy, V2, poisoned and malformed nodes: supplier/employee checkers return [], runAlertsForBiz persists no such alert and no digest names them", async () => {
     eq(CK.ENTRIES_ANOMALY_CHECKS_ENABLED, false, "kill switch");
@@ -362,7 +401,7 @@ async function main() {
   console.log(`${w("case", 8)} ${w("area", 16)} ${w("status", 6)} ${w("ms", 6)} notes`);
   console.log("-".repeat(120));
   for (const r of results) console.log(`${w(r.id, 8)} ${w(r.area, 16)} ${w(r.status, 6)} ${w(r.ms, 6)} ${r.status === "PASS" ? r.notes : r.notes.split("\n")[0]}`);
-  const EXPECTED = 11;
+  const EXPECTED = 12;
   console.log("\n=== TOTALS ===");
   console.log(`total=${results.length} passed=${results.length - failures} failed=${failures}`);
   if (results.length !== EXPECTED) { console.error(`\nINCOMPLETE MATRIX: expected ${EXPECTED}, ran ${results.length}`); process.exitCode = 3; return; }

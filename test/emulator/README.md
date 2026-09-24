@@ -305,7 +305,10 @@ that every reader sees while the frozen `_v` still holds the old value; and (`SR
 readers R1 / Codex SR-F1) the ACTUAL proactive flow (`runForBiz`) on a duplicate "yesterday"
 in eight logically identical representations (legacy `[A,B]` / `[B,A]`, V2 keyed both ways,
 each with the UUID lexical order reversed) — one daily metric per date, the same persisted
-insight (`currentValue` = the aggregate) and the same digest every time. Outbound `fetch`
+insight (`currentValue` = the aggregate) and the same digest every time; and (`SR-12`, R2) the
+Codex decimal counterexample (17×600, 812, 500, 500 + {100.1, 200.2, 300.3}) in 24
+representations — exactly 600.6, detector null, identical persisted insight-set and digest.
+Outbound `fetch`
 is fenced to the emulator host, so the weather / oref lookups fail closed as they do
 offline.
 
@@ -319,7 +322,7 @@ Expected:
 
 ```
 === TOTALS ===
-total=11 passed=11 failed=0
+total=12 passed=12 failed=0
 
 ALL CASES PASSED
 ```
