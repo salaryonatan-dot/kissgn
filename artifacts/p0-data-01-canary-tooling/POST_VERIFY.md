@@ -1,0 +1,10 @@
+# POST-MIGRATION VERIFY (`verify --phase post|active`, repeatable)
+
+Inputs: the capture bundle (source rows, raw `_v` bytes, expected node digest, reader baseline) and the live node/control/exceptions/context. Same inputs ⇒ byte-identical findings (CT-28, CT-E08).
+
+Structural (`compareStructural`): `schemaVersion === 2`, `generation === GENERATION_FIRST`, row count = source count (`row_loss` / `unexplained_new_row`), id sets equal (`id_loss` / `unexplained_new_id`), each row key = `row.id`, `_gen` = first generation, date groups identical (`date_group_changed`, catches swapped rows), frozen `_v` present with identical sha256 AND byte length (`frozen_v_missing|changed`), expected-node `digestV1` equal, control record valid and in the expected phase (`quiesced` + owned + `conversionAttempted` for post; `v2_active` + protocol 2 + flag false for active).
+Logical (`compareLogical`): for every source row, canonical source value vs canonical actual value minus `_gen` — any field change, type change, Hebrew text alteration, rounding ⇒ `row_content_changed` / `text_altered`; every raw→canonical drop must be a normalisation path the core reported (`unreported_normalization`).
+Context: exceptions and config/fixed/suppliers digests unchanged since capture.
+Readers (`compareReaders`): every approved reader (`daily`, `latestDate`, `labor`, `purchases`, `dailyBuilder` per date, `snapshot`, `exceptions`, `plannedData`) over the live node vs the baseline — `Object.is` on numbers, typed diff paths (`financial_drift` STOP); reader exceptions surface as `reader_error` / `malformed_v2` STOP.
+No `_v` fallback: the readers are run again over the live node with `_v` replaced by `"[]"`; any output difference ⇒ `stale_v_fallback` STOP, else `no_v_fallback` OK.
+Result: `classify` ⇒ level, recommendation (`RECOVERY_HOLD_RECOMMENDED` under v2_active, `REMAIN_QUIESCED` under quiesced), `automaticTransition:false`; a clean `post` writes the checkpoint bundle `post-<digest>` that `activate` requires (and re-checks the digest is still current).

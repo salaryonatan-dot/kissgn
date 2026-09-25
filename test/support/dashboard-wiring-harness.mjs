@@ -21,35 +21,11 @@ import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-export const HTML = readFileSync(join(ROOT, "index.html"), "utf8");
+import { HTML, loadProductionWindow } from "../../tools/storage-v2/production-window.mjs";
+export { HTML, loadProductionWindow };
 export const plain = (v) => JSON.parse(JSON.stringify(v));
 
 // ── production modules ───────────────────────────────────────────────────────
-export function loadProductionWindow(html = HTML) {
-  const start = html.indexOf("// ── P0-DATA-01: canonical daily-entries identity & upsert helpers");
-  assert.notEqual(start, -1, "P0-DATA-01 anchor");
-  // VERSION FENCE: the policy block (window.MarjinStoragePolicy) directly follows the
-  // storage block and is part of the production window the dashboard blocks call into.
-  // (a pre-fence html — used as a NEGATIVE CONTROL by some suites — has no policy block;
-  // the window then ends at the storage block exactly as before)
-  const fv2 = html.indexOf("window.MarjinStorageV2 = Object.freeze({", start);
-  assert.notEqual(fv2, -1, "MarjinStorageV2 export");
-  const fp = html.indexOf("window.MarjinStoragePolicy = Object.freeze({", start);
-  const f = fp === -1 ? fv2 : fp;
-  if (fp !== -1) assert.ok(fv2 < fp, "MarjinStorageV2 export precedes the policy block");
-  const events = new Map();
-  const win = { crypto: globalThis.crypto,
-    // browser event surface the selection effect uses for foreground / reconnect re-checks
-    addEventListener: (n, fn) => { if (!events.has(n)) events.set(n, new Set()); events.get(n).add(fn); },
-    removeEventListener: (n, fn) => { events.get(n)?.delete(fn); },
-    dispatchEvent: (n) => { for (const fn of events.get(n) || []) fn(); return (events.get(n) || new Set()).size; },
-    listenerCount: (n) => (events.get(n) || new Set()).size,
-    document: { visibilityState: "visible" },
-    location: { reload: () => { win.__reloads = (win.__reloads || 0) + 1; } } };
-  const sandbox = { window: win, Math, Number, Object, Array, JSON, console, Error, Promise, encodeURIComponent, setImmediate };
-  vm.runInNewContext(html.slice(start, html.indexOf("});", f) + 3), sandbox);
-  return sandbox.window;
-}
 
 // ── the two production blocks, by anchor ─────────────────────────────────────
 export const INIT_START = "  const entriesMutatorRef = useRef(null);";

@@ -1,0 +1,12 @@
+# KNOWN LIMITATIONS (honest scope)
+
+1. **Quiescence is evidence, not proof.** Equal fingerprints across the interval cannot exclude a write-and-revert inside it; the attestation is human. The compensating control is the source-bound transaction: the conversion callback refuses any node whose digest differs from the captured evidence, on every SDK retry.
+2. **Unknown outcomes are reconciled, not solved.** A transport exception after the CAS marker (or after the entries commit) leaves `conversionAttempted:true`; the tool refuses a second `migrate` and `status` classifies the node (A2 / B / HOLD). A person decides.
+3. **Option B does not send a legacy-shaped write in Production.** Production old-client denial rests on: deployed Rules fingerprint (byte/structural vs the approved blob), the client-authenticated control-record denial, the referenced emulator/historical-page evidence for every legacy shape, and monitoring counters. This is the CTO's chosen scope (D-CT-1).
+4. **Emulator-mode relaxations** (never in production): tool identity / dirty tree are WARNING, drain floor is `max(1, W+1)` s, the REST probe uses `?auth=` (the emulator treats Bearer as admin). Production keeps BLOCKER, `max(120, W+60)` s and the Bearer header.
+5. **Reader sandbox is offline by design**: weather/oref enrichment is absent in both baseline and post (as in the readers matrix), so `dailyBuilder` docs carry `undefinedPaths` under `meta.location`; parity — not persistability — is what is asserted.
+6. **In-transaction drift on the real emulator** is exercised only in the unit suite (transaction hook); the emulator matrix injects out-of-band drift before the transaction (CT-E04). The bound callback logic is identical in both.
+7. **`repoIdentity` needs a reachable git** for `repoSha`/`treeClean` (reported `null`/WARNING in the emulator when the worktree pointer is not resolvable, e.g. inside a container mount); Rules fingerprints and per-file blob ids are computed without git.
+8. **`monitor` derived receipts are operator-supplied** (snapshot email message id, alerts, UI check, owner totals); unsupplied items are `UNKNOWN` and keep the cycle INCOMPLETE — by design, never PASS.
+9. **Reports are per-run files with millisecond + random suffix**; the tool never prunes its evidence directory.
+10. **Not covered here (later gates, not tooling):** Production credential provisioning, the real Production dry run, the actual canary execution, owner/observer scheduling, and the deploy of any release — all remain operational gates outside this commit.

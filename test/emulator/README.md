@@ -422,6 +422,27 @@ Expected: `total=5 passed=5 failed=0` — `ALL CASES PASSED — server truth hel
 rendered historical page`. Missing deps exit with code 5 (`EVIDENCE_DEPS_MISSING`), never a
 silent skip.
 
-There are now TEN emulator scripts, and they all reseed the database root (the mutation
+## Run the canary operator matrix (Canary Tooling)
+
+`canary-operator-matrix.mjs` drives the REAL operator CLI (`tools/storage-v2/canary.mjs`,
+`main()` in-process with a fresh Admin app per command — a cold SDK cache every time, exactly
+like separate operator invocations) through the whole one-business canary workflow against the
+real Rules, the real policy control plane, the UNCHANGED conversion core and the real dashboard
+blocks of `index.html` for the live writes: identity refusal, plan/preflight, enroll → quiesce →
+drain-check → capture, drift/stale/not-quiesced refusals, migrate (core exactly once), verify
+(repeatable), activate (checkpoint + observer ack), the Option-B old-client probe (ordinary and
+intruder tokens over the emulator's Rules-evaluated `?auth=` form — `Bearer` is admin on the
+emulator — plus test-only Rules evidence that the legacy shapes are denied), live-check
+create/edit/delete and a clear-all ⇒ STOP, malformed V2 ⇒ STOP, monitor ledger cycles and
+corrections, explicit hold/resume, unknown-outcome reconciliation and the environment gates.
+Evidence bundles are written to a per-run temporary directory (printed at the end).
+
+```
+... "node test/emulator/canary-operator-matrix.mjs"
+```
+
+Expected: `total=17 passed=17 failed=0` — `ALL CASES PASSED`.
+
+There are now ELEVEN emulator scripts, and they all reseed the database root (the mutation
 probe, the fence matrix and the historical page proof also swap the loaded Rules), so they
 still must run one at a time against a single emulator.
