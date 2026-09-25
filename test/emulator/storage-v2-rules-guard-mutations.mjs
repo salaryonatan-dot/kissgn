@@ -53,6 +53,13 @@ const LEGACY = () => ({ _v: JSON.stringify([{ id: ID1, date: "2026-08-01", sales
 const P = (biz) => `tenants/tenantA/biz:${biz}:entries`;
 const POLICY = (phase) => ({ contractVersion: 1, phase, policyRevision: 1, allowV2Initialization: false, minStorageProtocol: phase === "legacy" || phase === "quiesced" ? 1 : 2 });
 const CTRL = "root.child('storage_v2_control').child($tenantId).child($dataKey.replace('biz:','').replace(':entries',''))";
+const CF = (f) => `${CTRL}.child('${f}')`;
+const OPF = (f) => `${CTRL}.child('operation').child('${f}')`;
+const SAFEINT = (x) => `(${x}.isNumber() && ${x}.val() % 1 === 0 && ${x}.val() >= 1 && ${x}.val() <= 9007199254740991)`;
+const OPERATION_CONJUNCT = `(!${CF("operation")}.exists() || (${OPF("id")}.isString() && ${OPF("id")}.val() !== '' && (${OPF("kind")}.val() === 'cutover' || ${OPF("kind")}.val() === 'recovery') && ${OPF("owner")}.isString() && ${OPF("owner")}.val() !== '' && ${SAFEINT(OPF("startedAt"))}))`;
+const CONVERSION_CONJUNCT = `(!${CF("conversionAttempted")}.exists() || ${CF("conversionAttempted")}.isBoolean())`;
+const FLAG_PHASE_CONJUNCT = ` && (${CF("allowV2Initialization")}.val() !== true || ${CF("phase")}.val() === 'v2_active')`;
+const all = (str, a, b) => { if (!str.includes(a)) throw new Error("mutation anchor missing: " + a.slice(0, 80)); return str.split(a).join(b); };
 
 const apps = {};
 const seedDb = () => apps.seed.database();
@@ -63,10 +70,13 @@ async function loadRules(rules) {
 async function fixtures() {
   await seedDb().ref("/").set({ tenants: { tenantA: {
     members: { u_owner: true, u_manager: true }, roles: { u_owner: "owner", u_manager: "manager" },
-    biz_access: { v2: { u_manager: true }, legacy: { u_manager: true }, empty: { u_manager: true }, none: { u_manager: true }, quiesced: { u_manager: true }, held: { u_manager: true }, broken: { u_manager: true }, pending: { u_manager: true } },
+    biz_access: { v2: { u_manager: true }, legacy: { u_manager: true }, empty: { u_manager: true }, none: { u_manager: true }, quiesced: { u_manager: true }, held: { u_manager: true }, broken: { u_manager: true }, pending: { u_manager: true }, fracrev: { u_manager: true }, unsaferev: { u_manager: true }, fracproto: { u_manager: true }, legacyflag: { u_manager: true }, badop: { u_manager: true }, badconv: { u_manager: true } },
     "biz:v2:entries": V2NODE(), "biz:legacy:entries": LEGACY(), "biz:empty:entries": { schemaVersion: 2, generation: 2, _v: "[]" },
     "biz:quiesced:entries": LEGACY(), "biz:held:entries": V2NODE(), "biz:broken:entries": LEGACY(), "biz:pending:entries": LEGACY(),
-  } }, storage_v2_control: { tenantA: { v2: POLICY("v2_active"), empty: POLICY("v2_active"), none: POLICY("v2_active"), quiesced: POLICY("quiesced"), held: POLICY("recovery_hold"), broken: { policyRevision: 7 }, pending: POLICY("v2_active") } } });
+    "biz:fracrev:entries": LEGACY(), "biz:unsaferev:entries": LEGACY(), "biz:fracproto:entries": LEGACY(), "biz:legacyflag:entries": LEGACY(), "biz:badop:entries": LEGACY(), "biz:badconv:entries": LEGACY(),
+  } }, storage_v2_control: { tenantA: { v2: POLICY("v2_active"), empty: POLICY("v2_active"), none: POLICY("v2_active"), quiesced: POLICY("quiesced"), held: POLICY("recovery_hold"), broken: { policyRevision: 7 }, pending: POLICY("v2_active"),
+    fracrev: { ...POLICY("legacy"), policyRevision: 1.5 }, unsaferev: { ...POLICY("legacy"), policyRevision: 9007199254740992 }, fracproto: { ...POLICY("legacy"), minStorageProtocol: 1.5 },
+    legacyflag: { ...POLICY("legacy"), allowV2Initialization: true }, badop: { ...POLICY("legacy"), operation: { id: "op", kind: "bogus", owner: "x", startedAt: 1 } }, badconv: { ...POLICY("legacy"), conversionAttempted: "true" } } } });
 }
 const denied = (e) => /permission[_ ]denied/i.test(String((e && (e.message || "")) + (e && e.code || "")));
 async function attempt(path, value) {
@@ -119,6 +129,19 @@ const MUTATIONS = [
     probe: () => attempt(P("none"), { schemaVersion: 2, generation: 1, rows: { [ID1]: V2ROW(ID1) } }), what: "V2 initialisation with allowV2Initialization=false" },
   { name: "populated-legacy conversion by a client admitted", mutate: (d) => { d[".write"] = d[".write"].replace("(data.exists() ? data.child('schemaVersion').val() === 2 : ", "(data.exists() ? true : "); },
     probe: () => attempt(P("pending"), V2NODE()), what: "client-side conversion of a populated legacy node under v2_active (bypasses the Admin lane)" },
+  // ── R1: every numeric / structural conjunct of VALID is load-bearing ──
+  { name: "R1 integer check dropped for policyRevision (fractional revision admitted)", mutate: (d) => { d[".write"] = all(d[".write"], `${CF("policyRevision")}.val() % 1 === 0 && `, ""); },
+    probe: () => attempt(P("fracrev"), LEGACY()), what: "legacy write under policyRevision 1.5" },
+  { name: "R1 safe-integer bound dropped for policyRevision (unsafe revision admitted)", mutate: (d) => { d[".write"] = all(d[".write"], ` && ${CF("policyRevision")}.val() <= 9007199254740991`, ""); },
+    probe: () => attempt(P("unsaferev"), LEGACY()), what: "legacy write under policyRevision 2^53" },
+  { name: "R1 integer check dropped for minStorageProtocol (fractional protocol admitted)", mutate: (d) => { d[".write"] = all(d[".write"], `${CF("minStorageProtocol")}.val() % 1 === 0 && `, ""); },
+    probe: () => attempt(P("fracproto"), LEGACY()), what: "legacy write under minStorageProtocol 1.5" },
+  { name: "R1 flag×phase relationship dropped (legacy + allowV2Initialization=true admitted)", mutate: (d) => { d[".write"] = all(d[".write"], FLAG_PHASE_CONJUNCT, ""); },
+    probe: () => attempt(P("legacyflag"), LEGACY()), what: "legacy write under a legacy record carrying allowV2Initialization=true" },
+  { name: "R1 operation structure check dropped (malformed operation admitted)", mutate: (d) => { d[".write"] = all(d[".write"], " && " + OPERATION_CONJUNCT, ""); },
+    probe: () => attempt(P("badop"), LEGACY()), what: "legacy write under a record whose operation.kind is unknown" },
+  { name: "R1 conversionAttempted type check dropped (nonboolean admitted)", mutate: (d) => { d[".write"] = all(d[".write"], " && " + CONVERSION_CONJUNCT, ""); },
+    probe: () => attempt(P("badconv"), LEGACY()), what: "legacy write under conversionAttempted:'true'" },
   { name: "control record writable by authenticated clients", mutate: (d, base, core, whole) => { whole.rules.storage_v2_control["$tenantId"]["$bizId"][".write"] = "auth !== null"; },
     probe: () => attempt("storage_v2_control/tenantA/quiesced", POLICY("v2_active")), what: "a client flips its own business to v2_active" },
   { name: "control record readable by any authenticated user (scope widened)", mutate: (d, base, core, whole) => { whole.rules.storage_v2_control["$tenantId"]["$bizId"][".read"] = "auth !== null"; },

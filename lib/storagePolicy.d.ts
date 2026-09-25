@@ -50,6 +50,10 @@ export interface TransitionOptions extends TransitionContext {
   approvedReleaseId?: string;
 }
 export function planTransition(current: ParsedPolicy | unknown, target: PolicyPhase, opts?: TransitionOptions): PolicyRecord;
+/** +1 inside the safe-integer domain; throws `revision_exhausted` at Number.MAX_SAFE_INTEGER (never wraps or reuses). */
+export function nextPolicyRevision(currentRevision: number): number;
+/** Throws `invalid_next_record` unless the record satisfies the canonical contract; returns the normalised record. */
+export function assertValidNextRecord(next: unknown): PolicyRecord;
 
 export interface StoragePolicyError extends Error { name: "StoragePolicyError"; code: string; detail?: unknown }
 export function policyError(code: string, detail?: unknown): StoragePolicyError;

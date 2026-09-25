@@ -1,3 +1,5 @@
+> **Superseded in R1**: the canonical, field-by-field validity contract and the parser ↔ Rules parity proof are in `artifacts/p0-data-01-version-fence-r1/POLICY_CONTRACT_PARITY.md`. The R0 note "Rules cannot test integer-ness" no longer holds — Rules now enforce the same integer / safe-integer domain as the parser.
+
 # CONTROL RECORD CONTRACT — `/storage_v2_control/{tenantId}/{bizId}`
 
 Server-owned. Written ONLY by Admin tooling (`tools/storage-v2/policy.mjs`). Rules: `.write:false` at the root, the tenant and the business level; `.read` for authenticated members of the tenant who are owner/super_owner or have `biz_access` to that business; no listing of a tenant's records (`storage_v2_control/{tenant}` read denied).

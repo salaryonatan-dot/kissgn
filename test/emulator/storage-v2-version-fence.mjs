@@ -597,13 +597,45 @@ async function main() {
     return "before: ok; quiesced: denied; v2_active: denied; server truth intact";
   });
 
+  // ══ VF-27 (R1) — revision domain boundary on the real record ═══════════════
+  await run("VF-27", "control-plane", "revision boundary on the real record: MAX_SAFE_INTEGER is VALID for Rules; at MAX every transition (quiesce/native/hold; abort/conversion/activate from a quiesced record) is revision_exhausted BEFORE any write; 2^53 is parser-invalid and denies everything", async () => {
+    const MAXR = Number.MAX_SAFE_INTEGER;
+    await reseed({ policy: POL({ policyRevision: MAXR }) });
+    eq((await (await oldEngine("owner")).edit(ID1, 5, 101)).status, "committed", "Rules accept policyRevision === MAX_SAFE_INTEGER (legacy write allowed)");
+    const C = createStoragePolicyControl(controlIo);
+    let calls = 0; const conv = C.createFencedConversion({ upgradeBusinessToV2: async (...a) => { calls++; return upgradeBusinessToV2(...a); }, entriesIo: adminEntriesIo });
+    const refuse = async (name, op) => { let err = null; try { await op(); } catch (e) { err = e; } eq(err && err.code, "revision_exhausted", name + " at MAX"); };
+    let before = JSON.stringify((await seedDb().ref(CTRL()).once("value")).val());
+    await refuse("quiesce", () => C.quiesce("tenantA", "bizA", { expectedRevision: MAXR, operator: "operator", operationId: "op-max" }));
+    eq(JSON.stringify((await seedDb().ref(CTRL()).once("value")).val()), before, "legacy record byte-identical");
+    await reseed({ policy: QUIESCED({ policyRevision: MAXR }) });
+    before = JSON.stringify((await seedDb().ref(CTRL()).once("value")).val());
+    await refuse("abort", () => C.abortQuiescence("tenantA", "bizA", { expectedRevision: MAXR, operator: "operator", operationId: "op-1" }));
+    await refuse("conversion", () => conv("tenantA", "bizA", { expectedRevision: MAXR, operator: "operator", operationId: "op-1" }));
+    eq(calls, 0, "conversion core never invoked");
+    eq(JSON.stringify((await seedDb().ref(CTRL()).once("value")).val()), before, "quiesced record byte-identical");
+    eq(typeof (await readNode())._v, "string", "entries untouched (not converted)");
+    await reseed({ entries: v2node(1, LEGACY_ROWS()), policy: QUIESCED({ policyRevision: MAXR, conversionAttempted: true }) });
+    await refuse("activate", () => C.activateV2("tenantA", "bizA", { expectedRevision: MAXR, operator: "operator", operationId: "op-1" }));
+    await reseed({ entries: v2node(1, LEGACY_ROWS()), policy: ACTIVE({ policyRevision: MAXR, allowV2Initialization: true }) });
+    await refuse("enterRecoveryHold", () => C.enterRecoveryHold("tenantA", "bizA", { expectedRevision: MAXR, operator: "operator", operationId: "rec" }));
+    await refuse("closeInitialization", () => C.closeInitialization("tenantA", "bizA", { expectedRevision: MAXR, operator: "operator" }));
+    await reseed({ entries: v2node(1, LEGACY_ROWS()), policy: HOLD({ policyRevision: MAXR }) });
+    await refuse("resume", () => C.resumeV2Active("tenantA", "bizA", { expectedRevision: MAXR, operator: "operator", operationId: "rec-1" }));
+    await reseed({ policy: POL({ policyRevision: MAXR + 1 }) });
+    await expectAllDenied(oldWrites("owner"), "bizA", "policyRevision 2^53 (parser-invalid) denies everything");
+    let err = null; try { await C.quiesce("tenantA", "bizA", { expectedRevision: MAXR + 1, operator: "operator", operationId: "x" }); } catch (e) { err = e; }
+    eq(err && err.code, "current_policy_malformed", "tooling refuses a 2^53 record as malformed");
+    return "MAX valid; quiesce/abort/conversion/activate/hold/close/resume exhausted at MAX; 2^53 denied + malformed";
+  });
+
   // ─── report ───────────────────────────────────────────────────────────────
   const w = (s, n) => String(s).padEnd(n).slice(0, n);
   console.log("");
   console.log(`${w("case", 8)} ${w("area", 16)} ${w("status", 6)} ${w("ms", 6)} notes`);
   console.log("-".repeat(120));
   for (const r of results) console.log(`${w(r.id, 8)} ${w(r.area, 16)} ${w(r.status, 6)} ${w(r.ms, 6)} ${r.status === "PASS" ? r.notes : r.notes.split("\n")[0]}`);
-  const EXPECTED = 26;
+  const EXPECTED = 27;
   console.log("\n=== TOTALS ===");
   console.log(`total=${results.length} passed=${results.length - failures} failed=${failures}`);
   if (results.length !== EXPECTED) { console.error(`\nINCOMPLETE MATRIX: expected ${EXPECTED}, ran ${results.length}`); process.exitCode = 3; return; }

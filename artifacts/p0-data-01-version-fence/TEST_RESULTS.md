@@ -1,3 +1,5 @@
+> **Superseded in R1** by `artifacts/p0-data-01-version-fence-r1/TEST_RESULTS.md` (fence matrix 27, mutations 26, parity 708, admin gate 8, historical page 5, full suite 836).
+
 # TEST RESULTS — Version Fence P0 (worktree `kissgn-p0-data-01-version-fence`, uncommitted tree = candidate)
 
 ## Focused (node --test)

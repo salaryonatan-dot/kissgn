@@ -17,9 +17,7 @@
 //   • grants no authorization to touch any Production business. The Admin SDK bypasses
 //     Rules: these checks are an APPLICATION-LEVEL invariant, never a Rules guarantee.
 
-import {
-  parsePolicyRecord, planTransition, policyError, isAllowedTransition, POLICY_CONTRACT_VERSION,
-} from "../../lib/storagePolicy.js";
+import { parsePolicyRecord, planTransition, policyError, isAllowedTransition, POLICY_CONTRACT_VERSION, nextPolicyRevision, assertValidNextRecord } from "../../lib/storagePolicy.js";
 
 export const CONTROL_ROOT = "storage_v2_control";
 export const controlPath = (tenantId, bizId) => `${CONTROL_ROOT}/${tenantId}/${bizId}`;
@@ -71,7 +69,10 @@ export function createStoragePolicyControl(io) {
       if (parsed.status === "unsupported_contract") { error = policyError("current_policy_unsupported"); return undefined; }
       if (current !== expectedRevision) { error = policyError("stale_revision", `expected ${expectedRevision}, current ${current}`); return undefined; }
       try { next = mutate(parsed, entriesMode); } catch (e) { error = e; return undefined; }
-      if (!next || next.policyRevision !== current + 1 || next.contractVersion !== POLICY_CONTRACT_VERSION) { error = policyError("invalid_next_record"); return undefined; }
+      if (!next || next.policyRevision !== current + 1 || next.contractVersion !== POLICY_CONTRACT_VERSION) { error = policyError("invalid_next_record", "revision/contract"); return undefined; }
+      // R1: the FULL next record is validated against the canonical contract before anything is written —
+      // a record the parser (and Rules) would reject can never be persisted by the control plane.
+      try { assertValidNextRecord(next); } catch (e) { error = e; return undefined; }
       return next;
     });
     if (error) throw error;
@@ -132,7 +133,7 @@ export function createStoragePolicyControl(io) {
   const closeInitialization = (tenantId, bizId, { expectedRevision, operator } = {}) =>
     cas(tenantId, bizId, expectedRevision, (parsed) => {
       if (parsed.status !== "valid" || parsed.record.phase !== "v2_active") throw policyError("transition_not_allowed", "not v2_active");
-      return { ...parsed.record, policyRevision: parsed.record.policyRevision + 1, allowV2Initialization: false, updatedAt: now(), ...(operator ? { updatedBy: operator } : {}) };
+      return { ...parsed.record, policyRevision: nextPolicyRevision(parsed.record.policyRevision), allowV2Initialization: false, updatedAt: now(), ...(operator ? { updatedBy: operator } : {}) };
     });
 
   /** v2_active → recovery_hold (incident); opens a recovery operation. */
@@ -167,7 +168,7 @@ export function createStoragePolicyControl(io) {
         if (parsed.status !== "valid") throw policyError("policy_required");
         if (parsed.record.phase !== "quiesced") throw policyError("conversion_requires_quiesced", parsed.record.phase);
         requireOwnedOperation(parsed.record, "cutover", operator, operationId);
-        return { ...parsed.record, policyRevision: parsed.record.policyRevision + 1, conversionAttempted: true, updatedAt: now(), updatedBy: String(operator) };
+        return { ...parsed.record, policyRevision: nextPolicyRevision(parsed.record.policyRevision), conversionAttempted: true, updatedAt: now(), updatedBy: String(operator) };
       });
       const result = await upgradeBusinessToV2(entriesIo, { tenantId, bizId });
       return { policyRevision: marked.record.policyRevision, result };

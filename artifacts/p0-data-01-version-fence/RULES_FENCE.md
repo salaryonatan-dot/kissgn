@@ -1,3 +1,5 @@
+> **Superseded in R1** (`artifacts/p0-data-01-version-fence-r1/RULES_GUARD_UPDATE.md`, `POLICY_CONTRACT_PARITY.md`): the `VALID` predicate below was the R0 form. R1 extends it with integer/safe-integer checks (`% 1 === 0`, `≤ 9007199254740991`) for `policyRevision`, `minStorageProtocol` and `operation.startedAt`, the `allowV2Initialization`×phase relationship, the operation structure and the `conversionAttempted` type; live blob `1e5dea2f9b1eac037c766b325b927c20285c0eec`.
+
 # RULES FENCE — the reviewed delta (core `47f7f888` → live blob `11799bd7e0560caf8d6b5512b4694f6ee865fa6b`)
 
 ## 1. Entries `.write` (path `tenants/$tenantId/$dataKey`, `$dataKey = biz:{bizId}:entries` branch)

@@ -480,10 +480,22 @@ async function handleDeleteClient(req, res) {
     }
 
     const tenantData = tenantSnap.val();
+
+    // VERSION FENCE R1 (Codex F2): deleting a tenant destroys EVERY business's authoritative
+    // entries. The Admin SDK bypasses Rules, so the tenant's storage policy records are
+    // inspected here, BEFORE anything is written: if ANY business is quiesced / recovery-held,
+    // or carries a malformed record, or the records cannot be read, the whole destructive
+    // operation is refused with a typed 423 — nothing is deleted (the multi-path update below
+    // is atomic, so a tenant is never partially deleted). Absent / legacy / v2_active admit.
+    const hold = await tenantMaintenanceHold(db, tenantId);
+    if (hold) { res.status(423).json({ error: "maintenance", ...hold }); return; }
+
     const updates = {};
 
     // Remove tenant node
     updates[`tenants/${tenantId}`] = null;
+    // A deleted tenant leaves no server-owned storage policy state behind (same atomic update).
+    updates[`storage_v2_control/${tenantId}`] = null;
 
     // Clean up user_tenants for each member
     const members = tenantData.members || {};
@@ -1843,6 +1855,22 @@ async function handleListEntryExceptions(req, res) {
     console.error("[list-entry-exceptions]", e?.message);
     res.status(500).json({ error: "list_failed" });
   }
+}
+
+// VERSION FENCE R1: tenant-scoped maintenance check for destructive Admin operations.
+// Returns null when every business of the tenant admits (absent / legacy / v2_active records),
+// else a typed hold { reason, bizId?, phase? }. Unreadable records fail closed.
+async function tenantMaintenanceHold(db, tenantId) {
+  let records;
+  try { const snap = await db.ref(`storage_v2_control/${tenantId}`).once("value"); records = snap.exists() ? snap.val() : null; }
+  catch { return { reason: "policy_unavailable" }; }
+  if (records === null || records === undefined) return null;
+  if (typeof records !== "object") return { reason: "policy_malformed", detail: "control root is not a map" };
+  for (const bizId of Object.keys(records).sort()) {
+    const admission = decideAdminAdmission(parsePolicyRecord(records[bizId]));
+    if (!admission.admitted) return { reason: admission.reason, bizId, ...(admission.phase ? { phase: admission.phase } : {}) };
+  }
+  return null;
 }
 
 async function eeAuthorizeWrite(req, res) {

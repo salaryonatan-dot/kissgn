@@ -1,0 +1,24 @@
+# POLICY CONTRACT PARITY — the ONE control-record validity contract
+
+Record: `/storage_v2_control/{tenantId}/{bizId}`. **PRESENT + INVALID ⇒ every client entries mutation denied** (both Rules branches require `VALID`); **only WHOLE-record absence ⇒ legacy/default compatibility**. RTDB stores no `null` and no empty object: a null/empty child is an absent child, for the parser and for Rules alike (`test/support/policy-fixtures.mjs#rtdbNormalize` turns every fixture into its server-deliverable form before it is seeded).
+
+| field | required | exact type | allowed range / values | phase relationship | null / absence semantics | Rules conjunct (`CTRL = root.child('storage_v2_control').child($tenantId).child(<bizId>)`) |
+|---|---|---|---|---|---|---|
+| `contractVersion` | yes | number | `=== 1` (a well-formed newer value is `unsupported_contract`: clients update-required, Admin/tooling refuse, Rules deny) | — | absent ⇒ malformed | `CTRL.child('contractVersion').val() === 1` |
+| `phase` | yes | string | `legacy` · `quiesced` · `v2_active` · `recovery_hold` (exact, case-sensitive) | — | absent/empty ⇒ malformed (**never legacy**) | `phase === 'legacy' || … 'recovery_hold'` |
+| `policyRevision` | yes | number | integer, `1 ≤ x ≤ 9007199254740991` (`Number.MAX_SAFE_INTEGER`); fractional, zero, negative, `2^53`+ rejected | — | absent ⇒ malformed | `isNumber() && val() % 1 === 0 && val() >= 1 && val() <= 9007199254740991` |
+| `allowV2Initialization` | yes | boolean | `true` / `false` | `true` ONLY while `phase === 'v2_active'` | absent ⇒ malformed | `isBoolean() && (val() !== true || phase === 'v2_active')` |
+| `minStorageProtocol` | yes | number | integer, `1 ≤ x ≤ MAX_SAFE_INTEGER` | — | absent ⇒ malformed | same safe-integer conjunct |
+| `operation` | no | object | `{ id: non-empty string, kind: 'cutover' \| 'recovery', owner: non-empty string, startedAt: integer 1..MAX_SAFE_INTEGER }`; extra keys ignored | tooling sets it in `quiesced` (cutover) / `recovery_hold` (recovery); Rules do not bind kind to phase (tooling invariant) | absent / `null` ⇒ no operation; any present non-conforming value (scalar, array, missing/empty/mistyped field) ⇒ malformed | `!CTRL.child('operation').exists() \|\| (id.isString() && id !== '' && (kind === 'cutover' \|\| kind === 'recovery') && owner.isString() && owner !== '' && SAFEINT(startedAt))` |
+| `conversionAttempted` | no | boolean | `true` / `false` | — | absent ⇒ `false`; any present non-boolean ⇒ malformed | `!exists() \|\| isBoolean()` |
+| `updatedAt`, `updatedBy`, `approvedReleaseId` | no | any | diagnostic only — never authorization; wrong types are ignored by the parser and by Rules | — | — | (none) |
+| unknown keys | — | — | ignored by both | — | — | (none) |
+
+**Safe-integer parity.** Rules cannot call `Number.isSafeInteger`, but for the positive domain the predicate `isNumber() && val() % 1 === 0 && val() >= 1 && val() <= 9007199254740991` is exactly `Number.isSafeInteger(x) && x >= 1`: `%` is a supported Rules arithmetic operator (proven on the emulator: `1` allow, `1.5` / `0` / `-1` / `2.0000001` / `2^53` / `2^53+1` / `1e16` / `"1"` / `true` deny) and both sides are IEEE doubles. This IS the same domain — the claim is proven, not assumed (`storage-policy-parity.mjs`).
+
+**Parser ↔ Rules divergences: none** on server-deliverable inputs. In-memory-only shapes (`conversionAttempted: null`, `operation: {}`) never reach either enforcement point; the parser treats an explicit `null` conversionAttempted as malformed, the tooling never writes one.
+
+## Proofs
+- `test/security/storage-policy-parity.test.mjs` (4): every valid fixture parses valid before/after RTDB normalisation; every invalid fixture and generated mutant (>100) is `malformed`/`unsupported_contract`, never normalises to `absent`/`valid`, closes every consumer (`decideEntriesAccess` all modes, `decideAdminAdmission`); the `FENCE_GUARD` literal contains each contract conjunct.
+- `test/emulator/storage-policy-parity.mjs` — **708/708**: 695 invalid records (76 hand-written: missing/unknown/empty/typed phase, bad contract, fractional/unsafe/zero/negative/typed revision, fractional/zero/unsafe/typed protocol, flag×phase on legacy/quiesced/recovery_hold, typed flag, operation scalar/array/missing or malformed id/kind/owner/startedAt, typed conversionAttempted, scalar/array/partial whole policy, combinations; + 619 generated type mutants of every required field of every valid record) each: parser rejects → owner set / owner CAS / manager set / manager CAS denied on a legacy node → owner V2 row denied on a V2 node → node byte-identical; the server-stored form never parses valid. 13 valid records behave per phase (legacy allow; quiesced/recovery_hold deny; v2_active: V2 rows allow, legacy overwrite deny).
+- `storage-v2-rules-guard-mutations.mjs` — each new conjunct is load-bearing (`RULES_GUARD_UPDATE.md`).

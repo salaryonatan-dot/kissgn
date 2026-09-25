@@ -265,10 +265,12 @@ expressions and compares a whitespace-normalized expression tree, so an inert wr
 through its local settings endpoint, shows that a write the shipped Rules deny becomes
 allowed, restores the shipped Rules and shows it is denied again. Since the version fence the
 guard is two‑layered — S0 base → Storage V2 core (`authorizedEntriesRulesDelta`) and core →
-live (`authorizedVersionFenceRulesDelta`, the exact fence delta) — and eight of the mutations
+live (`authorizedVersionFenceRulesDelta`, the exact fence delta) — and fourteen of the mutations
 weaken a fence conjunct (guard dropped/inert, malformed record failing open, `recovery_hold`
 admitted, initialization flag ignored, client conversion admitted, control record
-client‑writable / world‑readable).
+client‑writable / world‑readable, and — R1 — the integer / safe‑integer checks of
+`policyRevision` and `minStorageProtocol`, the flag×phase relationship, the operation structure
+and the `conversionAttempted` type).
 
 ```
 ... emulators:exec --only database --project demo-marjin-rules \
@@ -280,7 +282,7 @@ Expected:
 
 ```
 === TOTALS ===
-mutations=20 proven_weakening_and_guard_rejected=20 failed=0
+mutations=26 proven_weakening_and_guard_rejected=26 failed=0
 
 ALL MUTATIONS PROVEN: each guard rejection corresponds to a real loss of server enforcement
 ```
@@ -359,11 +361,67 @@ Expected:
 
 ```
 === TOTALS ===
-total=26 passed=26 failed=0
+total=27 passed=27 failed=0
 
 ALL CASES PASSED
 ```
 
-There are now SEVEN emulator scripts, and they all reseed the database root (the mutation
-probe and the fence matrix also swap the loaded Rules), so they still must run one at a time
-against a single emulator.
+## Run the parser ↔ Rules parity matrix (R1)
+
+`storage-policy-parity.mjs` drives ONE fixture matrix (`test/support/policy-fixtures.mjs`:
+hand‑written invalid records + generated type mutants of every valid record) through the
+parser and through the Rules `VALID` predicate with ordinary member auth: every invalid record
+is rejected by the parser and denies the owner and the manager (set + CAS on a legacy node, row
+write on a V2 node) with a byte‑identical node; every valid record behaves per phase.
+
+```
+... emulators:exec --only database --project demo-marjin-rules \
+      --config test/emulator/firebase.json \
+      "node test/emulator/storage-policy-parity.mjs"
+```
+
+Expected:
+
+```
+=== TOTALS ===
+invalid_fixtures=695 valid_fixtures=13 total=708 passed=708 failed=0
+
+ALL CASES PASSED — parser and Rules agree on the control-record validity contract
+```
+
+## Run the Admin maintenance gate (R1)
+
+`admin-maintenance-gate.mjs` executes the ACTUAL `api/admin.js` handler over the real Admin SDK
+transport (only the auth / email seams are stubbed): `delete-client` (tenant‑wide destructive)
+and `set/clear-entry-exception` refuse with `423 maintenance` and write nothing while any
+affected business is quiesced / recovery‑held / malformed / unreadable, and behave as before
+otherwise.
+
+```
+... "node test/emulator/admin-maintenance-gate.mjs"
+```
+
+Expected: `total=8 passed=8 failed=0` — `ALL CASES PASSED`.
+
+## Run the rendered historical page proof (R1, Gate F)
+
+`historical-page-version-fence.mjs` boots the ACTUAL `index.html` of the last all‑legacy client
+build (`git show 1038b4cd…:index.html`) as a rendered page in jsdom (real React 18 render, the
+page's own inline scripts and `window.storage` transport bytes; only the CDN Firebase imports
+are supplied by a shim over an ordinary‑member Admin app), auto‑logs‑in from a retained session,
+and drives the page's OWN UI (history screen per‑row delete, clear‑all) through legacy →
+quiesced → conversion → v2_active without reloading it. Requires the page's browser‑side
+builds, installed once outside package.json:
+
+```
+bash test/historical/install-deps.sh        # → test/historical/.deps (git-ignored)
+... "node test/emulator/historical-page-version-fence.mjs"
+```
+
+Expected: `total=5 passed=5 failed=0` — `ALL CASES PASSED — server truth held against a retained
+rendered historical page`. Missing deps exit with code 5 (`EVIDENCE_DEPS_MISSING`), never a
+silent skip.
+
+There are now TEN emulator scripts, and they all reseed the database root (the mutation
+probe, the fence matrix and the historical page proof also swap the loaded Rules), so they
+still must run one at a time against a single emulator.

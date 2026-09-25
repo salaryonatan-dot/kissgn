@@ -1,3 +1,5 @@
+> **Updated in R1** (`artifacts/p0-data-01-version-fence-r1/KNOWN_LIMITATIONS.md`): item 2 (Rules cannot verify integer-ness) is CLOSED; item 4 is extended (tenant-wide `delete-client` is now gated); item 1 now has a rendered historical-page proof.
+
 # KNOWN LIMITATIONS — recorded, not hidden
 
 1. **Old page display after activation.** An old tab keeps its listener; after activation it receives a V2 node its generic reader does not understand (VF-26 negative control). Every write it can emit is denied; data is safe; UX is a reload. Not fixable server-side for JS already running.
