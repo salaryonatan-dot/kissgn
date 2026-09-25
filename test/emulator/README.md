@@ -434,14 +434,15 @@ drain-check → capture, drift/stale/not-quiesced refusals, migrate (core exactl
 intruder tokens over the emulator's Rules-evaluated `?auth=` form — `Bearer` is admin on the
 emulator — plus test-only Rules evidence that the legacy shapes are denied), live-check
 create/edit/delete and a clear-all ⇒ STOP, malformed V2 ⇒ STOP, monitor ledger cycles and
-corrections, explicit hold/resume, unknown-outcome reconciliation and the environment gates.
-Evidence bundles are written to a per-run temporary directory (printed at the end).
+corrections, explicit hold/resume, unknown-outcome reconciliation, the environment gates, the
+mandatory operator-supplied `--expected-revision` on every write command (R1) and the drain→capture→
+migrate state binding (R1). Evidence bundles are written to a per-run temporary directory (printed at the end).
 
 ```
 ... "node test/emulator/canary-operator-matrix.mjs"
 ```
 
-Expected: `total=17 passed=17 failed=0` — `ALL CASES PASSED`.
+Expected: `total=18 passed=18 failed=0` — `ALL CASES PASSED`.
 
 There are now ELEVEN emulator scripts, and they all reseed the database root (the mutation
 probe, the fence matrix and the historical page proof also swap the loaded Rules), so they

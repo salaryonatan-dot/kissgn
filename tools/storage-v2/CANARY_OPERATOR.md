@@ -56,7 +56,14 @@ all refused (`manifest_invalid`, exit 14).
 ## Commands
 
 Read-only (never write to RTDB): `plan preflight drain-check capture verify live-check status monitor`
-Write (dry-run unless `--execute --confirm <token>`): `enroll quiesce abort migrate activate hold resume probe-legacy-denial`
+Write (dry-run unless `--execute --confirm <token>`; **`--expected-revision <n>` is MANDATORY, dry-run included**): `enroll quiesce abort migrate activate hold resume probe-legacy-denial`
+
+**Expected revision (R1).** Every write command requires the operator to state the policy revision it
+expects (`--expected-revision <n>`; `0` only for `enroll` on an absent record). The tool never infers it
+from the record it reads: omitted ⇒ `expected_revision_required`, malformed ⇒ `expected_revision_invalid`,
+different from the observed record ⇒ `stale_revision` — all typed refusals with exit 10 before any
+mutation. The confirmation token is bound to that stated revision, so a token minted for revision N is
+refused with revision N+1 (`confirmation_mismatch`, exit 15).
 
 ```
 node tools/storage-v2/canary.mjs <command> --manifest m.json --env production --credentials-file sa.json --evidence-dir /secure/canary [options]
@@ -68,14 +75,14 @@ node tools/storage-v2/canary.mjs <command> --manifest m.json --env production --
 | `preflight` | pure read-only report: PASS / WARNING / OPERATOR_ACTION_REQUIRED / BLOCKER per finding, aggregate + eligibility; never repairs; `--resolved code,…` records operator resolutions | — |
 | `enroll` | absent → `legacy` control record (`initializeLegacy`) | token |
 | `quiesce` | `legacy` → `quiesced`, opens the owned cutover operation | token |
-| `drain-check` | three fingerprint samples over `--interval` seconds (floor `max(120, W+60)` with `--writer-bound W`), plus `--attest <file>`; verdict vocabulary `STABLE_INTERVAL` / `ATTESTED` / `DRAIN_EVIDENCE_COMPLETE` / `INCOMPLETE` — never "proof" | — |
-| `capture` | requires owned `quiesced` + `DRAIN_EVIDENCE_COMPLETE`; writes the **COMPLETE evidence bundle** (source bytes, raw `_v` bytes, expected V2 node, reader baseline, preflight, environment) and prints the `migrate` token bound to the source digest | — |
-| `migrate` | wrapper around the unchanged core: identity → env → owned quiesced → revision → no prior attempt → clean COMPLETE bundle → warm listener → source digest equal → fresh preflight → CAS `conversionAttempted` → core exactly once through a **source-bound** transaction | token + `--ack` |
+| `drain-check` | three fingerprint samples over `--interval` seconds (floor `max(120, W+60)` with `--writer-bound W`), plus `--attest <file>`; verdict vocabulary `STABLE_INTERVAL` / `ATTESTED` / `DRAIN_EVIDENCE_COMPLETE` / `INCOMPLETE` — never "proof". The report carries the **binding** (R1): start/mid/end digests of entries, exceptions, context, control and derived docs, the accepted digests, and the policy revision / phase / operation it was observed under | — |
+| `capture` | requires owned `quiesced` + a `DRAIN_EVIDENCE_COMPLETE` drain whose bound digests and policy state equal the CURRENT state (otherwise `drain_evidence_stale`, exit 11, nothing written); writes the **COMPLETE evidence bundle** (source bytes, raw `_v` bytes, expected V2 node, reader baseline, preflight, environment, `drain.json`) and prints the `migrate` token bound to the source digest | — |
+| `migrate` | wrapper around the unchanged core: identity → env → owned quiesced → **operator revision** → no prior attempt → clean COMPLETE bundle (full filesystem re-verification) → bundled drain must be COMPLETE, its accepted entries digest must equal the evidence digest, and its bound state must equal the current state (`drain_evidence_stale`) → warm listener → source digest equal → fresh preflight → CAS `conversionAttempted` → core exactly once through a **source-bound** transaction | token + `--ack` |
 | `verify --phase pre\|post\|active` | repeatable comparison: structure, ids, dates, frozen `_v` bytes, expected-node digest, logical rows, exceptions/context digests, all readers vs baseline, no `_v` fallback; a clean `post` writes a checkpoint bundle | — |
 | `activate` | `quiesced` → `v2_active` (`activateV2`) — requires `--checkpoint <post checkpoint>` whose digest still matches the node | token + `--ack` |
 | `probe-legacy-denial` | **Option B**: with `--token-file` (ordinary member ID token from stdin/file, never argv): authenticated read of the entries node, then a same-value PUT of the control record's `phase` (harmless if it were accepted) — DENIED is the expected result; plus the deployed Rules fingerprint and references to the emulator/historical evidence. No entries-shaped write exists. | token |
 | `live-check --action create\|edit\|delete --step before\|after` | observation only: the owner performs the write in the real client; the tool diffs rows, checks the frozen `_v`, the generation, the policy and the readers; a generation change ⇒ STOP. There is no clear-all action. | — |
-| `monitor --cycle YYYY-MM-DD [--receipts r.json]` | appends one immutable ledger record per cycle (idempotent; a changed body is a correction that supersedes); `UNKNOWN` is never `PASS`; window = ≥168 h **and** ≥7 consecutive COMPLETE clean cycles | — |
+| `monitor --cycle YYYY-MM-DD [--receipts r.json]` | appends one immutable ledger record per cycle (idempotent; a changed body is a correction that supersedes); `UNKNOWN` is never `PASS`; window = ≥168 h **and** ≥7 clean COMPLETE cycles on seven **adjacent business calendar dates** (a missing date, an INCOMPLETE/UNKNOWN cycle or a STOP breaks the streak; calendar arithmetic, DST-neutral) | — |
 | `status` | reconciles node vs evidence: `A1/A2` (source intact), `B` (converted, held), `C` (active), `HOLD_UNRECOGNISED_STATE`; prints the window arithmetic | — |
 | `hold` / `resume` | `v2_active` → `recovery_hold` / back, **only** when the operator runs them; `verify`/`monitor`/`status` only ever print `RECOVERY_HOLD_RECOMMENDED` | token |
 
@@ -102,26 +109,30 @@ evidenceId|checkpointId }` bound to the bundle / checkpoint being acted on.
   ledger/cycle-<date>[-cN].json, ledger.jsonl
 ```
 
-Files are created exclusively (never overwritten), symlinks in the path are refused, and
-`COMPLETE.json` lists every file with its size and sha256; `status --verify-evidence <bundleId>`
-re-checks them.
+The evidence root is canonicalised ONCE (`realpath`, so an OS alias such as macOS `/var → /private/var`
+is fine) and every descendant is validated with `lstat` below it. Files are created exclusively (never
+overwritten); `COMPLETE.json` lists every file with its type, mode, size and sha256. **Every** verify —
+at `migrate`, `verify`, `activate` and `status --verify-evidence` — re-validates the whole filesystem
+state (R1): the bundle is a real `0700` directory, every artifact and `COMPLETE.json` is a real `0600`
+regular file directly inside it (no symlink, no traversal, no outside path), sizes and hashes match and
+no unlisted entry exists. A bundle that fails any of these is INCOMPLETE and never authorises anything.
 
 ## Sequence for the first canary
 
 1. `plan` → `preflight` (fix OPERATOR_ACTION_REQUIRED items outside the tool; BLOCKER ⇒ stop).
-2. `enroll` (if no record) → `quiesce` (observer present, owner attests all clients closed).
+2. `enroll --expected-revision 0` (if no record) → `quiesce --expected-revision <n>` (observer present, owner attests all clients closed).
 3. `drain-check --interval ≥ floor --writer-bound W --attest attestation.json` until `DRAIN_EVIDENCE_COMPLETE`.
 4. `capture` → review the bundle → observer signs the ack for that `bundleId`.
-5. `migrate --execute --confirm <token> --ack ack-migrate.json` → `MIGRATED_HELD` (anything else: `status`, then decide; never re-run blindly).
+5. `migrate --expected-revision <n> --execute --confirm <token> --ack ack-migrate.json` → `MIGRATED_HELD` (anything else: `status`, then decide; never re-run blindly).
 6. `verify --phase post` (twice, identical) → observer signs the ack for the checkpoint.
-7. `activate --checkpoint <id> --execute --confirm <token> --ack ack-activate.json` → `verify --phase active`.
-8. `probe-legacy-denial --execute --confirm <token> --token-file -` (Option B evidence).
+7. `activate --checkpoint <id> --expected-revision <n> --execute --confirm <token> --ack ack-activate.json` → `verify --phase active`.
+8. `probe-legacy-denial --expected-revision <n> --execute --confirm <token> --token-file -` (Option B evidence).
 9. `live-check` create → edit → delete with the owner, `--step before` / `--step after` each.
 10. `monitor --cycle <date> --receipts r.json` every day; `status` for the window. `hold` only on a decision.
 
 ## Emulator rehearsal
 
-`test/emulator/canary-operator-matrix.mjs` (17 cases) runs this whole sequence against the real
+`test/emulator/canary-operator-matrix.mjs` (18 cases) runs this whole sequence against the real
 emulator with a fresh Admin app per command; `test/storage-v2/canary-*.test.mjs` cover the pure logic
 over an in-memory database. In emulator mode the tool identity is reported as a WARNING (the matrix
 runs on a work tree) and the drain floor is `max(1, W+1)` seconds; both are BLOCKER / `max(120, W+60)`

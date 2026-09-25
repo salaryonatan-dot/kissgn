@@ -75,7 +75,8 @@ test("enhanced preflight: malformed, duplicate id, duplicate date, numeric maps,
   const r15 = pre(X.asLegacy(X.LEGACY_ROWS()), { environment: { ...ENV, repoSha: "f".repeat(40) } }); assert.ok(r15.findings.some((f) => f.code === "tool_identity_mismatch" && f.classification === "WARNING"));
   const r16 = pre(X.asLegacy(X.LEGACY_ROWS()), { readErrors: { entries: "permission_denied" } }); assert.ok(codes(r16).includes("read_failed")); assert.equal(r16.aggregate, "BLOCKER");
   const r17 = pre(X.asLegacy(X.LEGACY_ROWS()), { held: true, control: X.QUIESCED(), drain: null }); assert.ok(codes(r17).includes("final_preflight_conditions"));
-  const r18 = pre(X.asLegacy(X.LEGACY_ROWS()), { held: true, control: X.QUIESCED(), drain: { verdict: "DRAIN_EVIDENCE_COMPLETE" } }); assert.ok(codes(r18).includes("final_held_conditions")); assert.equal(r18.aggregate, "PASS");
+  const r18 = pre(X.asLegacy(X.LEGACY_ROWS()), { held: true, control: X.QUIESCED(), drain: { verdict: "DRAIN_EVIDENCE_COMPLETE", binding: { status: "BOUND", mismatches: [] } } }); assert.ok(codes(r18).includes("final_held_conditions")); assert.equal(r18.aggregate, "PASS");
+  const r19 = pre(X.asLegacy(X.LEGACY_ROWS()), { held: true, control: X.QUIESCED(), drain: { verdict: "DRAIN_EVIDENCE_COMPLETE" } }); assert.ok(codes(r19).includes("final_preflight_conditions"), "an unbound drain verdict is not enough");
 });
 
 function bundleFor(raw) {
@@ -132,24 +133,69 @@ test("confirmation tokens bind identity, command, revision and source digest (CT
   assert.equal(C.checkConfirmation({ manifest: m, command: "migrate", expectedRevision: 2, sourceDigest: "abc", provided: t.toUpperCase() }).reason, "confirmation_mismatch");
 });
 
-test("window arithmetic: 168 h AND 7 consecutive COMPLETE clean cycles; UNKNOWN/INCOMPLETE/STOP break the streak; DST-neutral (CT-23)", () => {
-  const rec = (day, cycle = "COMPLETE", level = "OK") => ({ cycleId: `2026-10-${String(day).padStart(2, "0")}`, anchorDate: `2026-10-${String(day).padStart(2, "0")}`, cycle, classification: { level } });
-  const seven = [1, 2, 3, 4, 5, 6, 7].map((d) => rec(d));
-  const w = C.windowArithmetic({ records: seven, liveWriteCleanupAt: "2026-10-01T05:00:00Z", now: "2026-10-08T05:00:00Z" }); assert.equal(w.windowMet, true); assert.equal(w.cleanStreak, 7);
-  assert.equal(C.windowArithmetic({ records: seven, liveWriteCleanupAt: "2026-10-01T05:00:00Z", now: "2026-10-08T04:59:00Z" }).windowMet, false, "167.98 h is not 168 h");
-  assert.equal(C.windowArithmetic({ records: seven.slice(0, 6), liveWriteCleanupAt: "2026-10-01T05:00:00Z", now: "2026-10-09T05:00:00Z" }).windowMet, false, "6 cycles");
-  const broken = [...seven.slice(0, 3), rec(4, "INCOMPLETE", "REVIEW_REQUIRED"), ...seven.slice(4)]; assert.equal(C.windowArithmetic({ records: broken, liveWriteCleanupAt: "2026-10-01T05:00:00Z", now: "2026-10-09T05:00:00Z" }).cleanStreak, 3);
-  const stopped = [...seven, rec(8, "INCOMPLETE", "STOP")]; const ws = C.windowArithmetic({ records: stopped, liveWriteCleanupAt: "2026-10-01T05:00:00Z", now: "2026-10-09T05:00:00Z" }); assert.equal(ws.windowMet, false); assert.deepEqual(ws.stops, ["2026-10-08"]);
-  // a correction record for the same cycle replaces the earlier one
-  const corrected = [...seven, { ...rec(7, "INCOMPLETE", "STOP"), correction: 1 }]; assert.equal(C.windowArithmetic({ records: corrected, liveWriteCleanupAt: "2026-10-01T05:00:00Z", now: "2026-10-09T05:00:00Z" }).windowMet, false);
-  // DST: Israel leaves DST on 2026-10-25; slot mapping keeps UTC anchors and only the local rendering shifts
+test("R1-F4 monitoring calendar: 7 clean COMPLETE cycles on 7 ADJACENT business dates AND ≥168 h; missing day / INCOMPLETE / STOP / UNKNOWN break the streak; corrections count once; DST-neutral (CT-23)", () => {
+  const rec = (date, cycle = "COMPLETE", level = "OK") => ({ cycleId: date, anchorDate: date, cycle, classification: { level } });
+  const days = (from, n) => { const out = []; let d = from; for (let i = 0; i < n; i++) { out.push(d); d = C.nextBusinessDate(d); } return out; };
+  const W = (records, hours = 200) => C.windowArithmetic({ records, liveWriteCleanupAt: "2026-09-01T05:00:00Z", now: new Date(Date.parse("2026-09-01T05:00:00Z") + hours * 3600000).toISOString() });
+  assert.equal(C.nextBusinessDate("2026-09-30"), "2026-10-01"); assert.equal(C.nextBusinessDate("2026-12-31"), "2027-01-01"); assert.equal(C.nextBusinessDate("2028-02-28"), "2028-02-29");
+  // A: Sep 1–7 complete + ≥168 h ⇒ pass
+  const A = W(days("2026-09-01", 7).map((d) => rec(d)), 168); assert.equal(A.cleanStreak, 7); assert.equal(A.hoursMet, true); assert.equal(A.streakMet, true); assert.equal(A.windowMet, true);
+  // B: Sep 1,2,4,5,6,7,8 (Sep 3 missing) ⇒ streak breaks at the gap: 5, not 7
+  const B = W(["2026-09-01", "2026-09-02", "2026-09-04", "2026-09-05", "2026-09-06", "2026-09-07", "2026-09-08"].map((d) => rec(d)), 200); assert.equal(B.cleanStreak, 5); assert.equal(B.streakStart, "2026-09-04"); assert.equal(B.windowMet, false, "missing calendar day breaks the streak");
+  // C: 7 adjacent clean days but only 160 h ⇒ fail window (hours gate alone)
+  const Cc = W(days("2026-09-01", 7).map((d) => rec(d)), 160); assert.equal(Cc.streakMet, true); assert.equal(Cc.hoursMet, false); assert.equal(Cc.windowMet, false);
+  // D: ≥168 h but only 6 consecutive clean days ⇒ fail (streak gate alone)
+  const D = W(days("2026-09-01", 6).map((d) => rec(d)), 300); assert.equal(D.hoursMet, true); assert.equal(D.streakMet, false); assert.equal(D.windowMet, false);
+  // E / F / G: day 4 INCOMPLETE / STOP / UNKNOWN evidence ⇒ streak resets (later 4 days count from day 5)
+  for (const [cycle, level] of [["INCOMPLETE", "REVIEW_REQUIRED"], ["INCOMPLETE", "STOP"], ["INCOMPLETE", "OK"]]) {
+    const recs = days("2026-09-01", 8).map((d, i) => (i === 3 ? rec(d, cycle, level) : rec(d)));
+    const r = W(recs, 300); assert.equal(r.cleanStreak, 4, cycle + "/" + level); assert.equal(r.streakStart, "2026-09-05"); assert.equal(r.windowMet, false);
+  }
+  const unknown = C.buildCycleRecord({ cycleId: "2026-09-04", anchorDate: "2026-09-04", manifest: m, now: "t", versions: { policy: { phase: "v2_active" }, storageMode: "v2" }, source: {}, mutations: { rowsStart: 3, creates: 0, deletes: 0, rowsEnd: 3 }, ui: {}, counters: {}, derived: { analyticsDaily: { status: "UNKNOWN" } }, reconciliation: { drift: [] } });
+  assert.equal(C.isCleanCompleteCycle(unknown), false, "UNKNOWN derived evidence never counts as a clean complete day");
+  // H: a corrected date is exactly one effective cycle (the correction supersedes; a duplicate never counts twice)
+  const H = W([...days("2026-09-01", 7).map((d) => rec(d)), { ...rec("2026-09-04", "INCOMPLETE", "STOP"), correction: 1 }], 300); assert.equal(H.cycles, 7); assert.equal(H.cleanStreak, 3); assert.equal(H.windowMet, false);
+  const H2 = W([...days("2026-09-01", 7).map((d) => rec(d)), { ...rec("2026-09-04"), correction: 1 }], 300); assert.equal(H2.cycles, 7); assert.equal(H2.cleanStreak, 7); assert.equal(H2.windowMet, true);
+  const dup = W([...days("2026-09-01", 6).map((d) => rec(d)), rec("2026-09-06")], 300); assert.equal(dup.cycles, 6); assert.equal(dup.cleanStreak, 6, "a duplicate record for one date is one day");
+  // I: DST transition (Israel leaves DST on 2026-10-25) across seven adjacent calendar dates ⇒ adjacency intact
+  const I = C.windowArithmetic({ records: days("2026-10-22", 7).map((d) => rec(d)), liveWriteCleanupAt: "2026-10-21T05:00:00Z", now: "2026-10-29T05:00:00Z" }); assert.equal(I.cleanStreak, 7); assert.equal(I.windowMet, true);
   const before = C.slotMapping("2026-10-20", "Asia/Jerusalem"), after = C.slotMapping("2026-10-27", "Asia/Jerusalem");
   assert.equal(before.analytics.utc, "2026-10-20T23:00:00Z"); assert.match(before.analytics.local, /GMT\+3/); assert.match(after.analytics.local, /GMT\+2/);
+  // seven records that are not adjacent at all never meet the streak, however many there are
+  const sparse = W(["2026-09-01", "2026-09-03", "2026-09-05", "2026-09-07", "2026-09-09", "2026-09-11", "2026-09-13", "2026-09-15"].map((d) => rec(d)), 400); assert.equal(sparse.cleanStreak, 1); assert.equal(sparse.windowMet, false);
+  // last cycle a STOP ⇒ not met even with an earlier 7-day streak
+  const stopped = W([...days("2026-09-01", 7).map((d) => rec(d)), rec("2026-09-08", "INCOMPLETE", "STOP")], 300); assert.equal(stopped.windowMet, false); assert.deepEqual(stopped.stops, ["2026-09-08"]);
   assert.deepEqual(C.rowCountEquation({ rowsStart: 10, creates: 2, deletes: 1, rowsEnd: 11 }).ok, true); assert.equal(C.rowCountEquation({ rowsStart: 10, creates: 0, deletes: 0, rowsEnd: 9 }).ok, false);
   const r = C.buildCycleRecord({ cycleId: "2026-10-01", anchorDate: "2026-10-01", manifest: m, now: "2026-10-02T06:00:00Z", versions: { policy: { phase: "v2_active" }, generation: 1, generationPrev: 1, storageMode: "v2" }, source: { startDigest: "a", previousDigest: "a", rawVSha: "v", rawVShaPrev: "v" }, mutations: { rowsStart: 3, creates: 0, deletes: 0, rowsEnd: 3 }, ui: {}, counters: { oldClientWriteSucceeded: { value: 0 } }, derived: { analyticsDaily: { status: "PRESENT" }, snapshotEmail: { status: "UNKNOWN" } }, reconciliation: { drift: [] } });
   assert.equal(r.cycle, "INCOMPLETE"); assert.deepEqual(r.incompleteReasons, ["snapshotEmail"]); assert.ok(r.findings.some((f) => f.code === "derived_output_unknown"));
   const r2 = C.buildCycleRecord({ ...r, manifest: m, derived: { analyticsDaily: { status: "PRESENT" } }, counters: { oldClientWriteSucceeded: { value: 1 } } }); assert.equal(r2.classification.level, "STOP"); assert.ok(r2.findings.some((f) => f.code === "old_client_write_succeeded"));
   const r3 = C.buildCycleRecord({ ...r, manifest: m, derived: { analyticsDaily: { status: "PRESENT" } }, counters: {} }); assert.equal(r3.cycle, "COMPLETE"); assert.equal(r3.classification.level, "OK"); assert.equal(typeof r3.bodyDigest, "string");
+});
+
+test("R1-F3 drain binding helpers: start/mid/end + accepted digests + policy state; BOUND only on full agreement", () => {
+  const s = (i, over = {}) => ({ at: `t${i}`, entries: "e", exceptions: "x", context: "c", control: "k", derived: "d", ...over });
+  const b = C.drainBinding({ samples: [s(0), s(1), s(2)], control: X.QUIESCED(), manifest: m, derivedDate: "2026-09-25" });
+  assert.deepEqual(b.accepted, { entries: "e", exceptions: "x", context: "c", control: "k", derived: "d" }); assert.equal(b.policyRevision, 2); assert.equal(b.phase, "quiesced"); assert.deepEqual(b.operation, { id: "canary-op-1", kind: "cutover", owner: "alice" });
+  assert.equal(C.drainBinding({ samples: [s(0), s(1, { entries: "e2" }), s(2)], control: X.QUIESCED(), manifest: m }).accepted, null, "unstable ⇒ nothing accepted");
+  const drain = { verdict: "DRAIN_EVIDENCE_COMPLETE", bound: b };
+  const cur = { entries: "e", exceptions: "x", context: "c", control: "k" };
+  assert.equal(C.checkDrainBinding({ drain, current: cur, control: X.QUIESCED(), manifest: m }).status, "BOUND");
+  for (const k of ["entries", "exceptions", "context", "control"]) { const r = C.checkDrainBinding({ drain, current: { ...cur, [k]: "changed" }, control: X.QUIESCED(), manifest: m }); assert.equal(r.status, "STALE", k); assert.ok(r.mismatches.some((x) => x.key === k)); }
+  assert.ok(C.checkDrainBinding({ drain, current: cur, control: X.QUIESCED({ policyRevision: 3 }), manifest: m }).mismatches.some((x) => x.key === "policyRevision"));
+  assert.ok(C.checkDrainBinding({ drain, current: cur, control: X.QUIESCED({ operation: { id: "canary-op-1", kind: "cutover", owner: "eve", startedAt: 1 } }), manifest: m }).mismatches.some((x) => x.key === "operation"));
+  assert.ok(C.checkDrainBinding({ drain, current: cur, control: X.POLICY(), manifest: m }).mismatches.some((x) => x.key === "phase"));
+  assert.equal(C.checkDrainBinding({ drain, current: { ...cur, derived: "d2", derivedDate: "2026-09-25" }, control: X.QUIESCED(), manifest: m }).status, "STALE", "derived on the same day is bound");
+  assert.equal(C.checkDrainBinding({ drain, current: { ...cur, derived: "d2", derivedDate: "2026-09-26" }, control: X.QUIESCED(), manifest: m }).status, "BOUND", "derived on another day is not comparable");
+  assert.equal(C.checkDrainBinding({ drain: { verdict: "STABLE_INTERVAL", bound: b }, current: cur, control: X.QUIESCED(), manifest: m }).status, "UNPROVEN");
+  assert.equal(C.checkDrainBinding({ drain: null, current: cur, control: X.QUIESCED(), manifest: m }).status, "MISSING");
+  assert.ok(C.checkDrainBinding({ drain, current: cur, control: X.QUIESCED(), manifest: X.manifestFor({ bizId: "bizB" }) }).mismatches.some((x) => x.key === "target"));
+  // held preflight: a STALE binding is an unresolved operator action and the held conditions are not met
+  const H = C.helpersFrom(loadProductionWindow());
+  const stale = { verdict: "DRAIN_EVIDENCE_COMPLETE", bound: b, binding: { status: "STALE", mismatches: [{ key: "entries" }] } };
+  const pre = C.enhancedPreflight({ raw: X.asLegacy(X.LEGACY_ROWS()), control: X.QUIESCED(), exceptions: null, context: ctx(), manifest: m, H, environment: ENV, held: true, drain: stale });
+  assert.ok(pre.findings.some((f) => f.code === "drain_evidence_stale" && f.classification === "OPERATOR_ACTION_REQUIRED")); assert.ok(pre.findings.some((f) => f.code === "final_preflight_conditions")); assert.equal(pre.aggregate, "OPERATOR_ACTION_REQUIRED");
+  const ok = C.enhancedPreflight({ raw: X.asLegacy(X.LEGACY_ROWS()), control: X.QUIESCED(), exceptions: null, context: ctx(), manifest: m, H, environment: ENV, held: true, drain: { ...stale, binding: { status: "BOUND", mismatches: [] } } });
+  assert.ok(ok.findings.some((f) => f.code === "final_held_conditions"));
 });
 
 test("drain verdict vocabulary: STABLE_INTERVAL / ATTESTED / DRAIN_EVIDENCE_COMPLETE, never 'proof' (CT-11)", () => {

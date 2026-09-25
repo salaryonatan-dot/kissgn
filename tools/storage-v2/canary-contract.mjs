@@ -252,7 +252,10 @@ export function enhancedPreflight({ raw, control, exceptions, context, manifest,
   if (ids && ids.duplicateDates.length && exc.active.some((d) => ids.duplicateDates.some((g) => g.date === d))) findings.push(F("duplicate_date_with_exception", "OPERATOR_ACTION_REQUIRED", { observed: exc.active.filter((d) => ids.duplicateDates.some((g) => g.date === d)), resolved: resolved.has("duplicate_date_with_exception") }));
   // final held preflight
   if (held) {
-    const okHeld = policy.phase === "quiesced" && policy.operation && policy.operation.id === manifest.operation.id && drain && drain.verdict === "DRAIN_EVIDENCE_COMPLETE";
+    // FINDING 3: the drain evidence must be bound to the state being captured/migrated, not merely recent
+    const bound = !!(drain && drain.binding && drain.binding.status === "BOUND");
+    if (drain && drain.binding && drain.binding.status === "STALE") findings.push(F("drain_evidence_stale", "OPERATOR_ACTION_REQUIRED", { observed: drain.binding.mismatches, reason: "state changed after the drain interval — re-run drain-check", resolved: false }));
+    const okHeld = policy.phase === "quiesced" && policy.operation && policy.operation.id === manifest.operation.id && drain && drain.verdict === "DRAIN_EVIDENCE_COMPLETE" && bound;
     findings.push(okHeld ? F("final_held_conditions", "PASS", {}) : F("final_preflight_conditions", "OPERATOR_ACTION_REQUIRED", { observed: { phase: policy.phase, drain: drain ? drain.verdict : null }, resolved: false }));
   }
   const aggregate = aggregateClassification(findings);
@@ -451,15 +454,72 @@ export function buildCycleRecord(input) {
     versions, source, mutations: eq, ui, counters, derived, reconciliation, incidents, receipts, findings, classification: cls, cycle, incompleteReasons: incomplete };
   return { ...body, recordedAt: now, bodyDigest: digestV1(body) };
 }
+const BUSINESS_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** Calendar successor of a business date (ISO YYYY-MM-DD, calendar arithmetic — DST-neutral). */
+export function nextBusinessDate(d) { const t = new Date(d + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + 1); return t.toISOString().slice(0, 10); }
+export const isCleanCompleteCycle = (r) => !!r && r.cycle === "COMPLETE" && !!r.classification && ["OK", "EXPECTED", "WARNING"].includes(r.classification.level);
+/**
+ * FINDING 4: "seven consecutive complete daily cycles" = seven clean COMPLETE cycles on seven ADJACENT
+ * business calendar dates. One effective record per date (the last/correction wins); a missing date,
+ * an INCOMPLETE/UNKNOWN cycle or a STOP breaks the streak. Both gates are evaluated independently:
+ * elapsed monitoring time ≥ requiredHours AND clean adjacent-date streak ≥ requiredCycles.
+ */
 export function windowArithmetic({ records, liveWriteCleanupAt, now, requiredHours = 168, requiredCycles = 7 }) {
   const byCycle = new Map();
-  for (const r of records) byCycle.set(r.cycleId, r);   // last record (correction) wins
-  const ordered = [...byCycle.values()].sort((a, b) => (a.anchorDate < b.anchorDate ? -1 : 1));
-  let streak = 0;
-  for (const r of ordered) { if (r.cycle === "COMPLETE" && ["OK", "EXPECTED", "WARNING"].includes(r.classification.level)) streak++; else streak = 0; }
+  for (const r of records) if (r && BUSINESS_DATE_RE.test(String(r.cycleId))) byCycle.set(r.cycleId, r);   // effective record per business date (corrections supersede)
+  const ordered = [...byCycle.values()].sort((a, b) => (a.cycleId < b.cycleId ? -1 : 1));
+  let streak = 0, prev = null, streakStart = null;
+  for (const r of ordered) {
+    if (!isCleanCompleteCycle(r)) { streak = 0; prev = null; streakStart = null; continue; }
+    if (prev !== null && r.cycleId === nextBusinessDate(prev)) streak++; else { streak = 1; streakStart = r.cycleId; }
+    prev = r.cycleId;
+  }
   const elapsedHours = liveWriteCleanupAt ? Math.max(0, (Date.parse(now) - Date.parse(liveWriteCleanupAt)) / 3600000) : 0;
-  const stops = ordered.filter((r) => r.classification.level === "STOP" || r.classification.level === "RECOVERY_HOLD_RECOMMENDED").map((r) => r.cycleId);
-  return { cycles: ordered.length, cleanStreak: streak, elapsedHours, requiredHours, requiredCycles, stops, windowMet: elapsedHours >= requiredHours && streak >= requiredCycles && !(stops.length && stops[stops.length - 1] === ordered[ordered.length - 1]?.cycleId) };
+  const stops = ordered.filter((r) => r.classification && (r.classification.level === "STOP" || r.classification.level === "RECOVERY_HOLD_RECOMMENDED")).map((r) => r.cycleId);
+  const last = ordered[ordered.length - 1];
+  const hoursMet = elapsedHours >= requiredHours, streakMet = streak >= requiredCycles, lastNotStop = !(last && stops.includes(last.cycleId));
+  return { cycles: ordered.length, effectiveDates: ordered.map((r) => r.cycleId), cleanStreak: streak, streakStart, streakEnd: prev, elapsedHours, requiredHours, requiredCycles, hoursMet, streakMet, stops, calendar: "adjacent ISO business dates (calendar arithmetic, not elapsed 24 h)", windowMet: hoursMet && streakMet && lastNotStop };
+}
+
+// ── drain state binding (FINDING 3) ──────────────────────────────────────────
+/** Deterministic digests of every path the drain contract samples, as the capture/migration boundary sees them. */
+export function currentStateDigests({ raw, control, exceptions, context, derived = null, derivedDate = null }) {
+  return { entries: digestV1(raw === undefined ? null : raw), exceptions: digestV1(exceptions === undefined ? null : exceptions), context: digestV1(context === undefined ? null : context), control: digestV1(control === undefined ? null : control),
+    ...(derived !== null ? { derived, derivedDate } : {}) };
+}
+/**
+ * The immutable binding a SUCCESSFUL drain carries: start / mid / end digests of every sampled path,
+ * the accepted (stable) digests, and the policy state (revision, phase, operation) it was observed under.
+ */
+export function drainBinding({ samples, control, manifest, derivedDate = null }) {
+  const pp = parsePolicyRecord(control === undefined ? null : control);
+  const rec = pp.status === "valid" ? pp.record : null;
+  const pick = (s) => ({ entries: s.entries, exceptions: s.exceptions, context: s.context, control: s.control, derived: s.derived });
+  const [start, mid, end] = [samples[0], samples[1], samples[samples.length - 1]].map((s) => (s ? pick(s) : null));
+  const stable = !!(start && mid && end && ["entries", "exceptions", "context", "control", "derived"].every((k) => start[k] === mid[k] && mid[k] === end[k]));
+  return { bindingVersion: CONTRACT_VERSION, target: { tenantId: manifest.tenantId, bizId: manifest.bizId, operationId: manifest.operation.id }, start, mid, end, accepted: stable ? end : null, derivedDate,
+    policyRevision: rec ? rec.policyRevision : null, phase: rec ? rec.phase : pp.status, operation: rec && rec.operation ? { id: rec.operation.id, kind: rec.operation.kind, owner: rec.operation.owner } : null };
+}
+/**
+ * Compare a drain's accepted digests + policy binding with the CURRENT state. `BOUND` only when every
+ * sampled path digest, the policy revision, the phase and the operation ownership are identical;
+ * `STALE` on any difference; `UNPROVEN` when the drain never reached DRAIN_EVIDENCE_COMPLETE; `MISSING` without a drain.
+ */
+export function checkDrainBinding({ drain, current, control, manifest }) {
+  if (!drain) return { status: "MISSING", mismatches: [] };
+  const b = drain.bound;
+  if (drain.verdict !== "DRAIN_EVIDENCE_COMPLETE" || !b || !b.accepted) return { status: "UNPROVEN", mismatches: [{ key: "verdict", observed: drain.verdict }] };
+  const mismatches = [];
+  if (!b.target || b.target.tenantId !== manifest.tenantId || b.target.bizId !== manifest.bizId || b.target.operationId !== manifest.operation.id) mismatches.push({ key: "target", observed: b.target });
+  for (const k of ["entries", "exceptions", "context", "control"]) if (b.accepted[k] !== current[k]) mismatches.push({ key: k, expected: b.accepted[k], observed: current[k] });
+  if (current.derived !== undefined && b.derivedDate && current.derivedDate === b.derivedDate && b.accepted.derived !== current.derived) mismatches.push({ key: "derived", expected: b.accepted.derived, observed: current.derived });
+  const pp = parsePolicyRecord(control === undefined ? null : control);
+  const rec = pp.status === "valid" ? pp.record : null;
+  if (!rec || rec.policyRevision !== b.policyRevision) mismatches.push({ key: "policyRevision", expected: b.policyRevision, observed: rec ? rec.policyRevision : pp.status });
+  if (!rec || rec.phase !== b.phase) mismatches.push({ key: "phase", expected: b.phase, observed: rec ? rec.phase : pp.status });
+  const op = rec && rec.operation ? { id: rec.operation.id, kind: rec.operation.kind, owner: rec.operation.owner } : null;
+  if (digestV1(op) !== digestV1(b.operation)) mismatches.push({ key: "operation", expected: b.operation, observed: op });
+  return { status: mismatches.length ? "STALE" : "BOUND", mismatches };
 }
 
 // ── drain ─────────────────────────────────────────────────────────────────────

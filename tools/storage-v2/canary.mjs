@@ -55,9 +55,12 @@ export async function createContext({ command, flags, processEnv = process.env, 
   if (!flags.manifest) throw new CanaryError("manifest_required", "--manifest <file>", EXIT.USAGE);
   const manifest = C.assertManifest(JSON.parse(readFileSync(flags.manifest, "utf8")));
   if (!flags["evidence-dir"]) throw new CanaryError("evidence_dir_required", "--evidence-dir <dir>", EXIT.USAGE);
-  const evidenceDir = resolve(flags["evidence-dir"]);
+  // FINDING 5: the APPROVED ROOT is canonicalised ONCE (OS aliases such as macOS /var → /private/var are
+  // resolved here); every descendant is then validated with lstat and never canonicalised again.
+  const evidenceDir = E.canonicalRoot(resolve(flags["evidence-dir"]));
   const inTree = spawnSync("git", ["-C", evidenceDir, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
   if (existsSync(evidenceDir) && inTree.status === 0 && inTree.stdout.trim() === "true") throw new CanaryError("evidence_dir_inside_git", evidenceDir, EXIT.ENV);
+  E.ensurePrivateDir(evidenceDir, evidenceDir);   // the canonical root itself: a real 0700 directory
   const env = T.resolveEnvironment({ manifest, envFlag: flags.env, credentialsFile: flags["credentials-file"], processEnv, ...(adminApps ? { adminApps } : {}) });
   const isWrite = C.WRITE_COMMANDS.includes(command);
   const execute = isWrite && flags.execute === true;
@@ -71,13 +74,13 @@ export async function createContext({ command, flags, processEnv = process.env, 
   return ctx;
 }
 function writeReport(ctx, name, body) {
-  E.ensurePrivateDir(ctx.opDir); E.ensurePrivateDir(ctx.reportsDir);
+  E.ensurePrivateDir(ctx.opDir, ctx.evidenceDir); E.ensurePrivateDir(ctx.reportsDir, ctx.evidenceDir);
   const report = { reportVersion: C.CONTRACT_VERSION, command: ctx.command, environment: ctx.env.mode, target: { tenantId: ctx.manifest.tenantId, bizId: ctx.manifest.bizId, path: C.derivePaths(ctx.manifest).entries }, operationId: ctx.manifest.operation.id, startedAt: ctx.startedAt, endedAt: nowIso(), executed: !!ctx.execute, transportMode: ctx.isWrite ? (ctx.execute ? "admin-write" : "admin-dry-run") : "admin-read-surface", ...body };
   const file = join(ctx.reportsDir, `${name}-${compact(report.endedAt)}-${report.endedAt.slice(20, 23)}${randomBytes(2).toString("hex")}.json`);
-  E.writeExclusive(file, JSON.stringify(report, null, 2) + "\n");
+  E.writeExclusive(file, JSON.stringify(report, null, 2) + "\n", ctx.evidenceDir);
   return { report, file };
 }
-const receipt = (ctx, extra) => E.appendReceipt(ctx.opDir, { at: nowIso(), command: ctx.command, operationId: ctx.manifest.operation.id, environment: ctx.env.mode, executed: !!ctx.execute, ...extra });
+const receipt = (ctx, extra) => E.appendReceipt(ctx.opDir, { at: nowIso(), command: ctx.command, operationId: ctx.manifest.operation.id, environment: ctx.env.mode, executed: !!ctx.execute, ...extra }, ctx.evidenceDir);
 async function must(r, what) { if (!r.ok) throw new CanaryError("read_failed", `${what}: ${r.error}`, EXIT.BLOCKER); return r.value; }
 async function readAll(ctx) {
   const t = ctx.transport;
@@ -108,7 +111,7 @@ function latestBundle(ctx, flags) {
   const ids = E.listBundles(ctx.opDir).filter((b) => !b.startsWith("post-"));
   const id = flags.bundle || ids[ids.length - 1];
   if (!id) return null;
-  return E.openBundle(join(ctx.opDir, id));
+  return E.openBundle(join(ctx.opDir, id), { root: ctx.evidenceDir });
 }
 function confirmOrDryRun(ctx, expectedRevision, sourceDigest) {
   const token = C.confirmationToken({ manifest: ctx.manifest, command: ctx.command, expectedRevision, sourceDigest });
@@ -117,6 +120,22 @@ function confirmOrDryRun(ctx, expectedRevision, sourceDigest) {
   const chk = C.checkConfirmation({ manifest: ctx.manifest, command: ctx.command, expectedRevision, sourceDigest, provided });
   if (!chk.ok) throw new CanaryError(chk.reason, JSON.stringify(chk.expectedFor || {}), EXIT.CONFIRM);
   return { executed: true, token };
+}
+/**
+ * FINDING 1: an OPERATOR-SUPPLIED `--expected-revision` is MANDATORY for every write command (dry-run
+ * included). The tool never infers the expected revision from the record it just read: the observed
+ * revision is only compared against the operator's stated intent. Typed refusals, before any mutation:
+ * `expected_revision_required` (omitted), `expected_revision_invalid` (malformed / outside the
+ * policyRevision domain), `stale_revision` (differs from the observed record).
+ */
+export function requireExpectedRevision(ctx, observedRevision) {
+  const raw = ctx.flags["expected-revision"];
+  if (raw === undefined || raw === true) throw new CanaryError("expected_revision_required", "--expected-revision <n> must be supplied by the operator; it is never inferred from the current record", EXIT.BLOCKER);
+  if (!/^(0|[1-9]\d*)$/.test(String(raw))) throw new CanaryError("expected_revision_invalid", `not a non-negative integer: ${JSON.stringify(raw)}`, EXIT.BLOCKER);
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n) || n > 9007199254740991) throw new CanaryError("expected_revision_invalid", "outside the policyRevision domain (0 … 2^53−1)", EXIT.BLOCKER);
+  if (n !== observedRevision) throw new CanaryError("stale_revision", `operator expected ${n}, observed ${observedRevision}`, EXIT.BLOCKER);
+  return n;
 }
 function requireAck(ctx, stage, boundId) {
   if (!ctx.execute) return null;
@@ -140,14 +159,14 @@ export const commands = {
     let identity = null, identityError = null; try { identity = requireIdentity(ctx, data); } catch (e) { identityError = e.code; }
     const mode = ctx.H.detectStorageMode(data.raw === undefined ? null : data.raw);
     const body = { identity: { expected: ctx.manifest.expectedIdentity.businessName, observed: identity, error: identityError }, environment: envEv, policy: pp.status === "valid" ? { phase: pp.record.phase, policyRevision: rev, operation: pp.record.operation, conversionAttempted: pp.record.conversionAttempted } : { status: pp.status, reason: pp.reason || null },
-      storage: { mode: mode.mode, reason: mode.reason || null }, latestBundle: bundle ? bundle.complete.bundleId : null, sourceDigest, readErrors: data.readErrors, confirmationTokens: tokens, note: "tokens bind identity + command + current policy revision (+ source digest for migrate/activate); re-run plan after any change" };
+      storage: { mode: mode.mode, reason: mode.reason || null }, latestBundle: bundle ? bundle.complete.bundleId : null, sourceDigest, readErrors: data.readErrors, confirmationTokens: tokens, tokensForRevision: rev, note: "tokens bind identity + command + THIS observed policy revision (+ source digest for migrate/activate); every write command must restate it as --expected-revision; re-run plan after any change" };
     const { report, file } = writeReport(ctx, "plan", body);
     return { exitCode: identityError || envEv.deployedRulesMatch === "mismatch" ? EXIT.ENV : EXIT.OK, report, file };
   },
   async preflight(ctx) {
     const data = await readAll(ctx); const envEv = await environmentEvidence(ctx);
     const pp = parsedPolicy(data.control); const held = pp.status === "valid" && pp.record.phase === "quiesced";
-    const drain = held ? latestDrain(ctx) : null;
+    const drain = held ? drainFor(ctx, data) : null;
     const resolved = ctx.flags.resolved ? String(ctx.flags.resolved).split(",") : [];
     const report = C.enhancedPreflight({ raw: data.raw === undefined ? null : data.raw, control: data.control, exceptions: data.exceptions, context: data.context, manifest: ctx.manifest, H: ctx.H, environment: envEv, held, resolvedActions: resolved, drain, readErrors: data.readErrors });
     const again = await ctx.transport.readEntries();
@@ -165,7 +184,8 @@ export const commands = {
   async "drain-check"(ctx) {
     const data = await readAll(ctx); requireIdentity(ctx, data);
     const interval = Number(ctx.flags.interval || 120), W = ctx.flags["writer-bound"] !== undefined ? Number(ctx.flags["writer-bound"]) : NaN;
-    const sample = async () => { const d = await readAll(ctx); const derived = await ctx.transport.readDerived(new Date().toISOString().slice(0, 10));
+    const derivedDate = new Date().toISOString().slice(0, 10);
+    const sample = async () => { const d = await readAll(ctx); const derived = await ctx.transport.readDerived(derivedDate);
       return { at: nowIso(), entries: C.digestV1(d.raw === undefined ? null : d.raw), exceptions: C.digestV1(d.exceptions === undefined ? null : d.exceptions), context: C.digestV1(d.context), control: C.digestV1(d.control === undefined ? null : d.control), derived: C.digestV1({ a: derived.analyticsDaily.ok ? derived.analyticsDaily.value : "ERR", i: derived.insightsDaily.ok ? derived.insightsDaily.value : "ERR", d: derived.proactiveDigest.ok ? derived.proactiveDigest.value : "ERR" }), readErrors: d.readErrors }; };
     const samples = [await sample()];
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -174,7 +194,9 @@ export const commands = {
     const attestation = ctx.flags.attest ? JSON.parse(readFileSync(ctx.flags.attest, "utf8")) : null;
     const floorSeconds = C.drainFloorSeconds(W, ctx.env.mode);
     const verdict = C.drainVerdict({ samples, attestation, manifest: ctx.manifest, control: data.control, writerBoundSeconds: W, intervalSeconds: interval, floorSeconds });
-    const out = writeReport(ctx, "drain", { ...verdict, attestation, floorPolicy: ctx.env.mode === "production" ? "max(120, W+60) seconds" : "emulator: max(1, W+1) seconds (same arithmetic, matrix pace)" });
+    // FINDING 3: the report carries the immutable binding (start/mid/end digests, accepted digests, policy state)
+    const bound = C.drainBinding({ samples, control: data.control, manifest: ctx.manifest, derivedDate });
+    const out = writeReport(ctx, "drain", { ...verdict, attestation, bound, floorPolicy: ctx.env.mode === "production" ? "max(120, W+60) seconds" : "emulator: max(1, W+1) seconds (same arithmetic, matrix pace)" });
     const cls = C.classify(verdict.findings, { phase: "quiesced" });
     return { exitCode: verdict.proven ? EXIT.OK : cls.level === "STOP" ? EXIT.BLOCKER : EXIT.ACTION, report: out.report, file: out.file };
   },
@@ -183,7 +205,8 @@ export const commands = {
     if (Object.keys(data.readErrors).length) throw new CanaryError("read_failed", JSON.stringify(data.readErrors), EXIT.BLOCKER);
     const pp = parsedPolicy(data.control);
     if (pp.status !== "valid" || pp.record.phase !== "quiesced" || !pp.record.operation || pp.record.operation.id !== ctx.manifest.operation.id) throw new CanaryError("capture_requires_owned_quiesced", pp.status === "valid" ? pp.record.phase : pp.status, EXIT.BLOCKER);
-    const drain = latestDrain(ctx);
+    const drain = drainFor(ctx, data);
+    if (drain && drain.binding.status === "STALE") throw new CanaryError("drain_evidence_stale", JSON.stringify(drain.binding.mismatches), EXIT.ACTION);
     const resolved = ctx.flags.resolved ? String(ctx.flags.resolved).split(",") : [];
     const preflight = C.enhancedPreflight({ raw: data.raw, control: data.control, exceptions: data.exceptions, context: data.context, manifest: ctx.manifest, H: ctx.H, environment: envEv, held: true, resolvedActions: resolved, drain, readErrors: data.readErrors });
     if (preflight.aggregate === "BLOCKER") { const out = writeReport(ctx, "capture", { preflight, captured: false }); return { exitCode: EXIT.BLOCKER, report: out.report, file: out.file }; }
@@ -197,12 +220,14 @@ export const commands = {
     const again = await ctx.transport.readEntries(); const againDigest = C.digestV1(again.ok ? again.value : "ERR");
     const sourceDigest = C.digestV1(data.raw);
     if (againDigest !== sourceDigest) throw new CanaryError("source_moved_during_capture", `${sourceDigest} → ${againDigest}`, EXIT.BLOCKER);
+    if (drain && drain.binding.status === "BOUND" && drain.bound.accepted.entries !== sourceDigest) throw new CanaryError("drain_evidence_stale", "accepted drain digest ≠ captured source digest", EXIT.ACTION);
     const rawV = typeof data.raw._v === "string" ? data.raw._v : null;
     const bundleId = `${compact(nowIso())}-${sourceDigest.slice(0, 8)}`;
     const sourceManifest = { serializer: C.SERIALIZER_VERSION, sourceDigest, rawVSha256: rawV === null ? null : C.rawVSha256(rawV), rawVBytes: rawV === null ? null : C.utf8Bytes(rawV), nodeBytes: preflight.storage.nodeBytes, rowCount: ids.rowCount, orderedIds: ids.orderedIds, sortedIds: ids.sortedIds, sortedIdsDigest: ids.sortedIdsDigest, idDateMultiset: ids.idDateMultiset, dateGroups: ids.dateGroups, duplicateDates: ids.duplicateDates, perRow: ids.perRow, domainGen: ids.domainGen, latestDate: ids.latestDate, oldestDate: ids.oldestDate, normalization: core.normalization, semanticDigest: C.semanticDigest(rows, H), exceptionsDigest: C.digestV1(data.exceptions === undefined ? null : data.exceptions), contextDigest: C.digestV1(data.context), policyRevision: pp.record.policyRevision };
     const financialSummary = summariseFinancials(baseline);
     const files = { "manifest.json": { json: { ...ctx.manifest, bundleId, capturedAt: ctx.startedAt, serializer: C.SERIALIZER_VERSION, expected: { ...ctx.manifest.expected, sourceDigest, evidenceId: bundleId } } }, "environment.json": { json: envEv }, "entries.source.json": JSON.stringify(data.raw), "exceptions.source.json": { json: data.exceptions === undefined ? null : data.exceptions }, "context.source.json": { json: data.context }, "policy.source.json": { json: { raw: data.control, parsed: pp.record } }, "source-manifest.json": { json: sourceManifest }, "expected-v2.json": { json: { node: expected.node, digest: expected.digest, logicalDigest: expected.logicalDigest, rowCount: expected.rowCount } }, "reader-baseline.json": { json: { ...baseline, financialSummary } }, "preflight.json": { json: preflight }, "financial-summary.json": { json: financialSummary } };
     if (rawV !== null) files["entries.raw-v.utf8"] = Buffer.from(rawV, "utf8");
+    if (drain) files["drain.json"] = { json: drain };
     if (ctx.flags.deployment) files["deployment-evidence.json"] = readFileSync(ctx.flags.deployment);
     const b = E.createBundle({ root: ctx.evidenceDir, operationId: ctx.manifest.operation.id, bundleId, files, observerAck: ctx.flags.ack ? JSON.parse(readFileSync(ctx.flags.ack, "utf8")) : null, now: nowIso() });
     receipt(ctx, { bundleId, sourceDigest, policyRevision: pp.record.policyRevision, result: "captured" });
@@ -221,15 +246,19 @@ export const commands = {
     if (!rec.operation || rec.operation.id !== ctx.manifest.operation.id || rec.operation.owner !== ctx.manifest.operation.operator) throw new CanaryError("operation_not_owned", JSON.stringify(rec.operation), EXIT.BLOCKER);
     const mode = ctx.H.detectStorageMode(data.raw);
     if (mode.mode === "v2" || rec.conversionAttempted) throw new CanaryError("reconcile_required", "a conversion was already attempted/committed — run `status`", EXIT.UNKNOWN);
-    const expectedRevision = rec.policyRevision, sourceDigest = bundle.sourceManifest.sourceDigest;
-    if (ctx.flags["expected-revision"] !== undefined && Number(ctx.flags["expected-revision"]) !== expectedRevision) throw new CanaryError("stale_revision", `expected ${ctx.flags["expected-revision"]}, current ${expectedRevision}`, EXIT.BLOCKER);
+    const expectedRevision = requireExpectedRevision(ctx, rec.policyRevision), sourceDigest = bundle.sourceManifest.sourceDigest;
+    // FINDING 3: evidence digest, drain-bound digest and current state must agree before anything is written
+    if (!bundle.drain || bundle.drain.verdict !== "DRAIN_EVIDENCE_COMPLETE" || !bundle.drain.bound || !bundle.drain.bound.accepted) throw new CanaryError("drain_evidence_required", "the evidence bundle carries no DRAIN_EVIDENCE_COMPLETE binding — re-run drain-check and capture", EXIT.BLOCKER);
+    if (bundle.drain.bound.accepted.entries !== sourceDigest) throw new CanaryError("drain_evidence_mismatch", `drain ${bundle.drain.bound.accepted.entries} ≠ evidence ${sourceDigest}`, EXIT.BLOCKER);
+    const drainNow = drainFor(ctx, data, bundle.drain);
+    if (drainNow.binding.status !== "BOUND") throw new CanaryError("drain_evidence_stale", JSON.stringify(drainNow.binding.mismatches), EXIT.BLOCKER);
     const s0 = await ctx.transport.warmEntries();
     const s0Digest = C.digestV1(s0);
     if (s0Digest !== sourceDigest) throw new CanaryError("source_drift_before_transaction", `${sourceDigest} → ${s0Digest}`, EXIT.BLOCKER);
-    const fresh = C.enhancedPreflight({ raw: s0, control: data.control, exceptions: data.exceptions, context: data.context, manifest: ctx.manifest, H: ctx.H, environment: envEv, held: true, resolvedActions: bundle.preflight.findings.filter((f) => f.resolved).map((f) => f.code), drain: latestDrain(ctx), readErrors: data.readErrors });
+    const fresh = C.enhancedPreflight({ raw: s0, control: data.control, exceptions: data.exceptions, context: data.context, manifest: ctx.manifest, H: ctx.H, environment: envEv, held: true, resolvedActions: bundle.preflight.findings.filter((f) => f.resolved).map((f) => f.code), drain: drainNow, readErrors: data.readErrors });
     if (fresh.aggregate === "BLOCKER") throw new CanaryError("new_blocker_since_capture", JSON.stringify(fresh.findings.filter((f) => f.classification === "BLOCKER").map((f) => f.code)), EXIT.BLOCKER);
     const { executed, token } = confirmOrDryRun(ctx, expectedRevision, sourceDigest);
-    const plan = { transaction: "entries node CAS via unchanged upgradeBusinessToV2, source-bound per callback", expectedSourceDigest: sourceDigest, expectedV2Digest: bundle.expectedV2.digest, policyCas: { from: expectedRevision, to: expectedRevision + 1, conversionAttempted: true }, bundleId: bundle.complete.bundleId };
+    const plan = { transaction: "entries node CAS via unchanged upgradeBusinessToV2, source-bound per callback", expectedSourceDigest: sourceDigest, drainBoundDigest: bundle.drain.bound.accepted.entries, drainPolicyRevision: bundle.drain.bound.policyRevision, expectedV2Digest: bundle.expectedV2.digest, policyCas: { from: expectedRevision, to: expectedRevision + 1, conversionAttempted: true }, bundleId: bundle.complete.bundleId };
     if (!executed) { const out = writeReport(ctx, "migrate", { executed: false, wouldWrite: plan, confirmationToken: token, note: "NOT EXECUTED — commit outcome unknown by design; CAS conflicts, cold-cache probe and Rules evaluation happen only on --execute" }); return { exitCode: EXIT.OK, report: out.report, file: out.file }; }
     requireAck(ctx, "migrate", bundle.complete.bundleId);
     receipt(ctx, { stage: "migrate", intent: plan, expectedRevision, sourceDigest, confirmToken: token, result: "attempting" });
@@ -292,7 +321,7 @@ export const commands = {
   async activate(ctx) {
     const data = await readAll(ctx); requireIdentity(ctx, data); const envEv = await environmentEvidence(ctx); requireEnvironmentMatch(ctx, envEv);
     const cp = ctx.flags.checkpoint; if (!cp) throw new CanaryError("checkpoint_required", "--checkpoint <post checkpoint id> (from verify --phase post)", EXIT.BLOCKER);
-    const dir = join(ctx.opDir, cp); const v = E.verifyBundle(dir); if (!v.ok) throw new CanaryError("checkpoint_invalid", v.problems.join("; "), EXIT.BLOCKER);
+    const dir = join(ctx.opDir, cp); const v = E.verifyBundle(dir, { root: ctx.evidenceDir }); if (!v.ok) throw new CanaryError("checkpoint_invalid", v.problems.join("; "), EXIT.BLOCKER);
     const checkpoint = E.readJson(join(dir, "checkpoint.json"));
     if (checkpoint.actualDigest !== C.digestV1(data.raw)) throw new CanaryError("node_changed_since_checkpoint", "re-run verify --phase post", EXIT.BLOCKER);
     const pp = parsedPolicy(data.control); if (pp.status !== "valid" || pp.record.phase !== "quiesced") throw new CanaryError("not_quiesced", pp.status === "valid" ? pp.record.phase : pp.status, EXIT.BLOCKER);
@@ -304,7 +333,8 @@ export const commands = {
     // (3) referenced emulator + historical-page evidence, (4) monitoring for blocked attempts.
     const data = await readAll(ctx); requireIdentity(ctx, data); const envEv = await environmentEvidence(ctx);
     const pp = parsedPolicy(data.control); if (pp.status !== "valid") throw new CanaryError("policy_invalid", pp.status, EXIT.BLOCKER);
-    const { executed, token } = confirmOrDryRun(ctx, pp.record.policyRevision, null);
+    const expectedRevision = requireExpectedRevision(ctx, pp.record.policyRevision);
+    const { executed, token } = confirmOrDryRun(ctx, expectedRevision, null);
     const evidenceRefs = { rulesBlob: ctx.manifest.approved.rulesBlob, emulator: ["test/emulator/storage-v2-version-fence.mjs VF-03/VF-04/VF-10/VF-18/VF-19/VF-26", "test/emulator/storage-policy-parity.mjs", "test/emulator/storage-v2-rules-guard-mutations.mjs", "test/emulator/historical-page-version-fence.mjs HP-03/HP-04", "test/emulator/canary-operator-matrix.mjs CT-E10"] };
     if (!executed) { const out = writeReport(ctx, "probe", { executed: false, option: "B", wouldAttempt: ["authenticated read of the entries node", "same-value PUT of storage_v2_control/{t}/{b}/phase (expected DENIED; harmless if hypothetically accepted)"], rulesFingerprint: envEv.deployedRulesMatch, evidenceRefs, confirmationToken: token }); return { exitCode: EXIT.OK, report: out.report, file: out.file }; }
     const tokenFile = ctx.flags["token-file"]; const idToken = tokenFile === "-" ? readFileSync(0, "utf8").trim() : readFileSync(tokenFile, "utf8").trim();
@@ -331,7 +361,7 @@ export const commands = {
     const pp = parsedPolicy(data.control); if (pp.status !== "valid" || pp.record.phase !== "v2_active") throw new CanaryError("not_active", pp.status === "valid" ? pp.record.phase : pp.status, EXIT.BLOCKER);
     const H = ctx.H, step = ctx.flags.step || (ctx.flags.await ? "await" : "before");
     // one observation = one numbered before-state; `after` consumes the latest unconsumed one (files are never rewritten)
-    const liveDir = join(ctx.opDir, "live"); E.ensurePrivateDir(ctx.opDir); E.ensurePrivateDir(liveDir);
+    const liveDir = join(ctx.opDir, "live"); E.ensurePrivateDir(ctx.opDir, ctx.evidenceDir); E.ensurePrivateDir(liveDir, ctx.evidenceDir);
     const seqs = readdirSafe(liveDir).map((f) => { const m = f.match(new RegExp(`^${action}-(\\d+)-before\\.json$`)); return m ? Number(m[1]) : 0; });
     const consumed = new Set(readdirSafe(liveDir).map((f) => { const m = f.match(new RegExp(`^${action}-(\\d+)-after\\.json$`)); return m ? Number(m[1]) : 0; }));
     const open = seqs.filter((n) => n > 0 && !consumed.has(n)).sort((a, b) => a - b);
@@ -342,7 +372,7 @@ export const commands = {
       if (action === "create") { const rows = data.raw && data.raw.rows ? Object.values(data.raw.rows) : []; if (rows.some((r) => H.entryDateKey(r.date) === lw.date)) throw new CanaryError("live_date_occupied", lw.date, EXIT.BLOCKER); }
       const before = { at: nowIso(), action, snapshot: snapshotOf(data), digest: C.digestV1(data.raw), liveRowId: ctx.flags["live-row-id"] || readLiveRowId(ctx) };
       if (open.length) throw new CanaryError("before_state_open", `observation ${action} #${open[open.length - 1]} has no --step after yet`, EXIT.ENV);
-      E.writeExclusive(stateFile, JSON.stringify(before, null, 2));
+      E.writeExclusive(stateFile, JSON.stringify(before, null, 2), ctx.evidenceDir);
       const out = writeReport(ctx, `live-${action}-before`, { action, digest: before.digest, generation: data.raw && data.raw.generation, liveRowId: before.liveRowId, instruction: `perform the ${action} in the owner's current client now, then run live-check --action ${action} --step after` });
       return { exitCode: EXIT.OK, report: out.report, file: out.file };
     }
@@ -359,8 +389,8 @@ export const commands = {
     const post = await runReaders({ tenantId: ctx.manifest.tenantId, bizId: ctx.manifest.bizId, snapshot: { ...afterData.context, entries: afterData.raw, exceptions: afterData.exceptions, businessName }, dates: [lw.date] });
     const readerDelta = C.deepDiff(baseline.outputs, post.outputs);
     const cls = C.classify(res.findings, { phase: "v2_active" });
-    if (step !== "await") E.writeExclusive(join(liveDir, `${action}-${seq}-after.json`), JSON.stringify({ at: nowIso(), digest: C.digestV1(afterData.raw === undefined ? null : afterData.raw), level: cls.level }));
-    if (action === "create" && cls.level === "OK" && !existsSync(join(ctx.opDir, "live-row-id.json"))) E.writeExclusive(join(ctx.opDir, "live-row-id.json"), JSON.stringify({ liveRowId, createdAt: nowIso() }));
+    if (step !== "await") E.writeExclusive(join(liveDir, `${action}-${seq}-after.json`), JSON.stringify({ at: nowIso(), digest: C.digestV1(afterData.raw === undefined ? null : afterData.raw), level: cls.level }), ctx.evidenceDir);
+    if (action === "create" && cls.level === "OK" && !existsSync(join(ctx.opDir, "live-row-id.json"))) E.writeExclusive(join(ctx.opDir, "live-row-id.json"), JSON.stringify({ liveRowId, createdAt: nowIso() }), ctx.evidenceDir);
     receipt(ctx, { stage: `live-${action}`, result: cls.level, diff: res.diff, liveRowId });
     const out = writeReport(ctx, `live-${action}`, { action, before: { at: before.at, digest: before.digest, generation: before.snapshot.entries && before.snapshot.entries.generation }, after: { digest: C.digestV1(afterData.raw), generation: afterData.raw && afterData.raw.generation }, diff: res.diff, liveRowId, findings: res.findings, readerImpact: readerDelta, frozenVUnchanged: res.diff.rawVUnchanged, policy: { before: before.snapshot.control, after: afterData.control }, classification: cls, cleanup: action === "delete" ? "live-write window closed; start the observation window after derived reconciliation" : "pending", automaticTransition: false });
     return { exitCode: cls.exitCode, report: out.report, file: out.file };
@@ -372,7 +402,7 @@ export const commands = {
     const ledger = E.readLedger(ctx.opDir); const receipts = E.readReceipts(ctx.opDir);
     const cleanup = receipts.filter((r) => r.stage === "live-delete" && r.result === "OK").map((r) => r.at).pop() || null;
     const win = C.windowArithmetic({ records: ledger, liveWriteCleanupAt: cleanup, now: nowIso() });
-    const evidenceCheck = ctx.flags["verify-evidence"] ? E.verifyBundle(join(ctx.opDir, ctx.flags["verify-evidence"])) : null;
+    const evidenceCheck = ctx.flags["verify-evidence"] ? E.verifyBundle(join(ctx.opDir, ctx.flags["verify-evidence"]), { root: ctx.evidenceDir }) : null;
     const out = writeReport(ctx, "status", { reconciliation: rec, bundleId: bundle ? bundle.complete.bundleId : null, evidenceCheck, receipts: receipts.length, ledgerCycles: ledger.length, window: win, readErrors: data.readErrors, advancementBlocked: win.stops.length > 0 && !receipts.some((r) => r.stage === "incident-ack" && r.ref === win.stops[win.stops.length - 1]) });
     return { exitCode: rec.level === "STOP" ? EXIT.STOP : EXIT.OK, report: out.report, file: out.file };
   },
@@ -404,7 +434,7 @@ export const commands = {
       mutations: { rowsStart: prev ? prev.source.rowCount : rows.length, creates: Number(receipts.creates || 0), deletes: Number(receipts.deletes || 0), edits: Number(receipts.edits || 0), rowsEnd: rows.length },
       ui: receipts.ui || { status: "UNKNOWN" }, counters: { ...(receipts.counters || {}), malformedV2: { value: Object.keys(readers.errors).length, source: "readers" }, storageModeMismatch: { value: mode.mode === "v2" ? 0 : 1, source: "detectStorageMode" } },
       derived, reconciliation: { daily: readers.outputs.daily && !readers.outputs.daily.error ? readers.outputs.daily.filter((x) => x.date === cycleId) : null, latestDate: readers.outputs.latestDate, drift }, incidents: receipts.incidents || [], receipts: { supplied: Object.keys(receipts) } });
-    const app = E.appendLedger(ctx.opDir, record);
+    const app = E.appendLedger(ctx.opDir, record, ctx.evidenceDir);
     const win = C.windowArithmetic({ records: E.readLedger(ctx.opDir), liveWriteCleanupAt: receipts.liveWriteCleanupAt || null, now: nowIso() });
     const out = writeReport(ctx, `monitor-${cycleId}`, { cycleId, appended: app.appended, reason: app.reason, record: app.record, window: win, holdCommand: record.classification.level === "STOP" ? "canary.mjs hold --execute --confirm <token from plan> --reason <ref>" : null, automaticTransition: false });
     return { exitCode: record.classification.exitCode, report: out.report, file: out.file };
@@ -414,7 +444,13 @@ function latestDrain(ctx) {
   if (!existsSync(ctx.reportsDir)) return null;
   const files = readdirSafe(ctx.reportsDir).filter((f) => f.startsWith("drain-")).sort();
   if (!files.length) return null;
-  const r = E.readJson(join(ctx.reportsDir, files[files.length - 1])); return { verdict: r.verdict, at: r.endedAt, file: files[files.length - 1] };
+  const r = E.readJson(join(ctx.reportsDir, files[files.length - 1])); return { verdict: r.verdict, proven: !!r.proven, at: r.endedAt, file: files[files.length - 1], bound: r.bound || null };
+}
+/** FINDING 3: the latest drain, evaluated against the CURRENT state (digests + policy revision/phase/ownership). */
+function drainFor(ctx, data, drain = latestDrain(ctx)) {
+  if (!drain) return null;
+  const binding = C.checkDrainBinding({ drain, current: C.currentStateDigests(data), control: data.control, manifest: ctx.manifest });
+  return { ...drain, binding };
 }
 function readdirSafe(dir) { try { return existsSync(dir) && statSync(dir).isDirectory() ? readdirSync(dir) : []; } catch (_) { return []; } }
 function readLiveRowId(ctx) { const p = join(ctx.opDir, "live-row-id.json"); return existsSync(p) ? E.readJson(p).liveRowId : null; }
@@ -427,8 +463,7 @@ async function policyTransition(ctx, { stage, run, requirePhase, requireOwned = 
   const rec = pp.status === "valid" ? pp.record : null;
   if (requireOwned && (!rec.operation || rec.operation.id !== ctx.manifest.operation.id || rec.operation.owner !== ctx.manifest.operation.operator)) throw new CanaryError("operation_not_owned", JSON.stringify(rec.operation), EXIT.BLOCKER);
   if (requireNoAttempt && rec.conversionAttempted) throw new CanaryError("transition_not_allowed", "conversion already attempted — abort is impossible by design", EXIT.BLOCKER);
-  const expectedRevision = rec ? rec.policyRevision : 0;
-  if (ctx.flags["expected-revision"] !== undefined && Number(ctx.flags["expected-revision"]) !== expectedRevision) throw new CanaryError("stale_revision", `expected ${ctx.flags["expected-revision"]}, current ${expectedRevision}`, EXIT.BLOCKER);
+  const expectedRevision = requireExpectedRevision(ctx, rec ? rec.policyRevision : 0);
   const { executed, token } = confirmOrDryRun(ctx, expectedRevision, sourceDigest);
   if (!executed) { const out = writeReport(ctx, stage, { executed: false, stage, currentPhase: rec ? rec.phase : "absent", expectedRevision, wouldWrite: `policy CAS ${expectedRevision} → ${expectedRevision + 1} (${stage})`, confirmationToken: token, reason }); return { exitCode: EXIT.OK, report: out.report, file: out.file }; }
   if (stage === "activate") requireAck(ctx, "activate", ackBound);

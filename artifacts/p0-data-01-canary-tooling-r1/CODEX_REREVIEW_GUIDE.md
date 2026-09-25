@@ -1,0 +1,10 @@
+# CODEX RE-REVIEW GUIDE — Canary Tooling R1
+
+Candidate: ONE child commit of `875fe9c529ba5bd68be033cf89fb3e72670f8ec9`; 9 files (`tools/storage-v2/{canary,canary-contract,canary-evidence}.mjs`, `CANARY_OPERATOR.md`, `test/storage-v2/canary-{cli,contract,evidence}.test.mjs`, `test/emulator/canary-operator-matrix.mjs`, `test/emulator/README.md`) + `artifacts/p0-data-01-canary-tooling-r1/`.
+
+1. **F1** — `canary.mjs#requireExpectedRevision`; every call site: `policyTransition` (enroll/quiesce/abort/activate/hold/resume), `migrate`, `probe-legacy-denial`. Probe: any write command without the flag ⇒ `expected_revision_required`; `--expected-revision 1.5` ⇒ `expected_revision_invalid`; token(N) with N+1 ⇒ `stale_revision` / `confirmation_mismatch`. `grep -n "expected-revision\|requireExpectedRevision" tools/storage-v2/canary.mjs`.
+2. **F2** — `canary-evidence.mjs#verifyBundle`: re-run Codex's probe (chmod 0755 dir, chmod 0644 file, symlink artifact) against a captured bundle then `status --verify-evidence <id>` or `migrate`: `evidence_incomplete` / problems list. Note `O_NOFOLLOW`, lstat everywhere, `NAME_RE`, containment.
+3. **F3** — `canary-contract.mjs#drainBinding/currentStateDigests/checkDrainBinding`, `canary.mjs#drainFor` and its three uses (`preflight --held`, `capture`, `migrate`). Probe: drain → Admin write → capture ⇒ 11 `drain_evidence_stale`; drain → capture → Admin write to `fixed` → migrate ⇒ 10 before any CAS (control record byte-identical afterwards).
+4. **F4** — `canary-contract.mjs#windowArithmetic` + `nextBusinessDate`; Codex's Sept 1,2,4,5,6,7,8 reproduction ⇒ `cleanStreak: 5`, `windowMet: false`.
+5. **F5** — `canary-evidence.mjs#canonicalRoot/scope/assertNoSymlinkBelow`; run the suites on macOS with the ordinary `TMPDIR` — expected 44/44 unit, 18/18 emulator, no override. `test/storage-v2/canary-evidence.test.mjs` "R1-F5" shows the alias model.
+6. Boundary: `git diff --stat 875fe9c5 -- index.html database.rules.json api src lib tools/storage-v2/{preflight,upgrade,policy,canary-transport,canary-readers,production-window,reader-sandbox}.mjs package.json package-lock.json vercel.json` is empty.

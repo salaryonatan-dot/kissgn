@@ -102,16 +102,16 @@ const attestFile = () => jsonFile("attestation.json", ATTESTATION());
 const digestOf = async () => C.digestV1(await readNode());
 async function bringToCapture() {
   await reseed({ policy: POLICY() }); writeManifest();
-  const q = await cli("quiesce", ["--execute", "--confirm", token(manifest, "quiesce", 1)]); eq(q.exitCode, 0, "quiesce " + JSON.stringify(q.error));
+  const q = await cli("quiesce", ["--expected-revision", "1", "--execute", "--confirm", token(manifest, "quiesce", 1)]); eq(q.exitCode, 0, "quiesce " + JSON.stringify(q.error));
   const d = await cli("drain-check", ["--interval", "2", "--writer-bound", "0", "--attest", attestFile()]); eq(d.exitCode, 0, "drain " + JSON.stringify(d.error)); eq(d.report.verdict, "DRAIN_EVIDENCE_COMPLETE", "drain verdict");
   const c = await cli("capture"); eq(c.exitCode, 0, "capture " + JSON.stringify(c.error)); expect(c.report.captured, "captured");
   return c.report;
 }
 async function bringToActive() {
   const cap = await bringToCapture();
-  const m = await cli("migrate", ["--execute", "--confirm", token(manifest, "migrate", 2, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]); eq(m.exitCode, 0, "migrate " + JSON.stringify(m.error)); eq(m.report.outcome.status, "MIGRATED_HELD", "held");
+  const m = await cli("migrate", ["--expected-revision", "2", "--execute", "--confirm", token(manifest, "migrate", 2, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]); eq(m.exitCode, 0, "migrate " + JSON.stringify(m.error)); eq(m.report.outcome.status, "MIGRATED_HELD", "held");
   const v = await cli("verify", ["--phase", "post"]); eq(v.exitCode, 0, "verify " + JSON.stringify(v.error));
-  const a = await cli("activate", ["--checkpoint", v.report.checkpointId, "--execute", "--confirm", token(manifest, "activate", 3, await digestOf()), "--ack", ack("activate", v.report.checkpointId)]); eq(a.exitCode, 0, "activate " + JSON.stringify(a.error));
+  const a = await cli("activate", ["--checkpoint", v.report.checkpointId, "--expected-revision", "3", "--execute", "--confirm", token(manifest, "activate", 3, await digestOf()), "--ack", ack("activate", v.report.checkpointId)]); eq(a.exitCode, 0, "activate " + JSON.stringify(a.error));
   return { cap, checkpointId: v.report.checkpointId };
 }
 
@@ -149,7 +149,7 @@ async function main_() {
   await run("CT-E01", "identity", "wrong business identity (config name differs) ⇒ every command exits 14, nothing written", async () => {
     await reseed({ policy: POLICY(), name: "Some Other Business" }); writeManifest();
     const before = JSON.stringify(await readNode("/"));
-    for (const [cmd, extra] of [["quiesce", ["--execute", "--confirm", token(manifest, "quiesce", 1)]], ["capture", []], ["migrate", ["--execute", "--confirm", "x"]], ["activate", ["--checkpoint", "x", "--execute", "--confirm", "x"]], ["hold", []], ["drain-check", []], ["probe-legacy-denial", []], ["monitor", ["--cycle", "2026-09-02"]]]) {
+    for (const [cmd, extra] of [["quiesce", ["--expected-revision", "1", "--execute", "--confirm", token(manifest, "quiesce", 1)]], ["capture", []], ["migrate", ["--expected-revision", "1", "--execute", "--confirm", "x"]], ["activate", ["--checkpoint", "x", "--expected-revision", "1", "--execute", "--confirm", "x"]], ["hold", ["--expected-revision", "1"]], ["drain-check", []], ["probe-legacy-denial", ["--expected-revision", "1"]], ["monitor", ["--cycle", "2026-09-02"]]]) {
       const r = await cli(cmd, extra); eq(r.exitCode, 14, cmd); eq(r.error.error, "identity_mismatch", cmd);
     }
     const p = await cli("plan"); eq(p.exitCode, 14, "plan"); eq(p.report.identity.error, "identity_mismatch", "plan report");
@@ -171,9 +171,9 @@ async function main_() {
 
   await run("CT-E03", "lifecycle", "enroll (absent) → quiesce → drain-check stable → capture COMPLETE (CT-11)", async () => {
     await reseed({ policy: undefined }); writeManifest();
-    const dry = await cli("enroll"); eq(dry.exitCode, 0, "dry"); eq(dry.report.executed, false, "dry-run"); eq(await readNode(CTRL), null, "dry-run wrote nothing");
-    const en = await cli("enroll", ["--execute", "--confirm", token(manifest, "enroll", 0)]); eq(en.exitCode, 0, JSON.stringify(en.error)); eq((await readNode(CTRL)).phase, "legacy", "legacy record");
-    const q = await cli("quiesce", ["--execute", "--confirm", token(manifest, "quiesce", 1)]); eq(q.exitCode, 0, JSON.stringify(q.error)); const c1 = await readNode(CTRL); eq(c1.phase, "quiesced", "quiesced"); eq(c1.operation.id, "canary-op-1", "owned");
+    const dry = await cli("enroll", ["--expected-revision", "0"]); eq(dry.exitCode, 0, "dry " + JSON.stringify(dry.error)); eq(dry.report.executed, false, "dry-run"); eq(await readNode(CTRL), null, "dry-run wrote nothing");
+    const en = await cli("enroll", ["--expected-revision", "0", "--execute", "--confirm", token(manifest, "enroll", 0)]); eq(en.exitCode, 0, JSON.stringify(en.error)); eq((await readNode(CTRL)).phase, "legacy", "legacy record");
+    const q = await cli("quiesce", ["--expected-revision", "1", "--execute", "--confirm", token(manifest, "quiesce", 1)]); eq(q.exitCode, 0, JSON.stringify(q.error)); const c1 = await readNode(CTRL); eq(c1.phase, "quiesced", "quiesced"); eq(c1.operation.id, "canary-op-1", "owned");
     const noAtt = await cli("drain-check", ["--interval", "2", "--writer-bound", "0"]); eq(noAtt.exitCode, 11, "no attestation ⇒ operator action"); eq(noAtt.report.verdict, "STABLE_INTERVAL", "vocabulary");
     const d = await cli("drain-check", ["--interval", "2", "--writer-bound", "0", "--attest", attestFile()]); eq(d.exitCode, 0, JSON.stringify(d.error)); eq(d.report.verdict, "DRAIN_EVIDENCE_COMPLETE", "verdict"); eq(d.report.samples.length, 3, "3 samples");
     const c = await cli("capture"); eq(c.exitCode, 0, JSON.stringify(c.error)); expect(c.report.captured, "captured");
@@ -185,23 +185,25 @@ async function main_() {
   await run("CT-E04", "migrate", "source changes after capture (Admin out-of-band) ⇒ migrate aborts before the core, node preserved (CT-08)", async () => {
     const cap = await bringToCapture();
     const rows = ROWS(); rows[0].sales = "101"; await seedDb().ref(PATH).set(asLegacy(rows)); const drifted = await digestOf();
-    const m = await cli("migrate", ["--execute", "--confirm", token(manifest, "migrate", 2, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]);
-    eq(m.exitCode, 10, JSON.stringify(m.error)); eq(m.error.error, "source_drift_before_transaction", "code");
+    const m = await cli("migrate", ["--expected-revision", "2", "--execute", "--confirm", token(manifest, "migrate", 2, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]);
+    eq(m.exitCode, 10, JSON.stringify(m.error)); eq(m.error.error, "drain_evidence_stale", "R1-F3: refused on the drain-bound digest before the warm read");
     eq(await digestOf(), drifted, "node untouched"); expect(!(await readNode(CTRL)).conversionAttempted, "no CAS marker");
     const st = await cli("status"); eq(st.report.reconciliation.state, "HOLD_UNRECOGNISED_STATE", "status"); eq(st.report.reconciliation.automaticTransition, false, "never automatic"); eq((await readNode(CTRL)).phase, "quiesced", "still quiesced");
-    return "abort source_drift_before_transaction; status HOLD (recommendation only)";
+    return "abort drain_evidence_stale (bound digest); status HOLD (recommendation only)";
   });
 
   await run("CT-E05", "migrate", "not quiesced ⇒ migrate refused before any write (CT-09); stale revision ⇒ refused (CT-10)", async () => {
     const cap = await bringToCapture();
-    const ab = await cli("abort", ["--execute", "--confirm", token(manifest, "abort", 2)]); eq(ab.exitCode, 0, JSON.stringify(ab.error)); eq((await readNode(CTRL)).phase, "legacy", "back to legacy");
+    const ab = await cli("abort", ["--expected-revision", "2", "--execute", "--confirm", token(manifest, "abort", 2)]); eq(ab.exitCode, 0, JSON.stringify(ab.error)); eq((await readNode(CTRL)).phase, "legacy", "back to legacy");
     const before = JSON.stringify(await readNode("/"));
-    const m = await cli("migrate", ["--execute", "--confirm", token(manifest, "migrate", 3, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]); eq(m.exitCode, 10, JSON.stringify(m.error)); eq(m.error.error, "not_quiesced", "code");
-    const q = await cli("quiesce", ["--execute", "--confirm", token(manifest, "quiesce", 3)]); eq(q.exitCode, 0, "re-quiesce");
-    const stale = await cli("migrate", ["--expected-revision", "2", "--execute", "--confirm", token(manifest, "migrate", 2, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]); eq(stale.exitCode, 10, "stale"); eq(stale.error.error, "stale_revision", "stale code");
-    const wrongTok = await cli("migrate", ["--execute", "--confirm", token(manifest, "migrate", 2, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]); eq(wrongTok.exitCode, 15, "token for an old revision is refused");
+    const m = await cli("migrate", ["--expected-revision", "3", "--execute", "--confirm", token(manifest, "migrate", 3, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]); eq(m.exitCode, 10, JSON.stringify(m.error)); eq(m.error.error, "not_quiesced", "code");
+    const q = await cli("quiesce", ["--expected-revision", "3", "--execute", "--confirm", token(manifest, "quiesce", 3)]); eq(q.exitCode, 0, "re-quiesce");
+    const stale = await cli("migrate", ["--expected-revision", "2", "--expected-revision", "2", "--execute", "--confirm", token(manifest, "migrate", 2, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]); eq(stale.exitCode, 10, "stale"); eq(stale.error.error, "stale_revision", "stale code");
+    const wrongTok = await cli("migrate", ["--expected-revision", "4", "--execute", "--confirm", token(manifest, "migrate", 2, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]); eq(wrongTok.exitCode, 10, "refused (" + JSON.stringify(wrongTok.error) + ")"); eq(wrongTok.error.error, "drain_evidence_stale", "R1-F3: the drain was bound to the PREVIOUS quiescence (revision 2) — a re-quiesce invalidates it before the token is even examined");
+    const staleTokOnly = await cli("abort", ["--expected-revision", "4", "--execute", "--confirm", token(manifest, "abort", 2)]); eq(staleTokOnly.exitCode, 15, "R1-F1: a token minted for revision 2 presented with revision 4 ⇒ confirmation_mismatch"); eq(staleTokOnly.error.error, "confirmation_mismatch", "code");
+    const noRev = await cli("migrate", ["--execute", "--confirm", token(manifest, "migrate", 4, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]); eq(noRev.exitCode, 10, "no revision"); eq(noRev.error.error, "expected_revision_required", "R1-F1");
     eq(JSON.stringify(await readNode(PATH)), JSON.stringify(JSON.parse(before).tenants[TENANT][`biz:${BIZ}:entries`]), "entries untouched");
-    return "not_quiesced, stale_revision, stale token: all refused, entries untouched";
+    return "not_quiesced, stale_revision, missing revision, stale drain, stale token: all refused, entries untouched";
   });
 
   await run("CT-E06", "drain", "Admin write mid-interval ⇒ drain-check exit 10 unstable_fingerprint (CT-12)", async () => {
@@ -214,18 +216,18 @@ async function main_() {
 
   await run("CT-E07", "migrate", "happy path: MIGRATED_HELD, core exactly once, conversionAttempted, readback digest = expected (CT-13/14/15/17)", async () => {
     const cap = await bringToCapture();
-    const dry = await cli("migrate"); eq(dry.exitCode, 0, "dry"); eq(dry.report.executed, false, "dry"); eq((await readNode()).schemaVersion, undefined, "dry-run converted nothing");
-    const m = await cli("migrate", ["--execute", "--confirm", token(manifest, "migrate", 2, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]);
+    const dry = await cli("migrate", ["--expected-revision", "2"]); eq(dry.exitCode, 0, "dry " + JSON.stringify(dry.error)); eq(dry.report.executed, false, "dry"); eq((await readNode()).schemaVersion, undefined, "dry-run converted nothing");
+    const m = await cli("migrate", ["--expected-revision", "2", "--execute", "--confirm", token(manifest, "migrate", 2, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]);
     eq(m.exitCode, 0, JSON.stringify(m.error)); eq(m.report.outcome.status, "MIGRATED_HELD", "outcome"); eq(m.report.transactionStats.coreRuns, 1, "core exactly once"); eq(m.report.coreResult.status, "committed", "core");
     eq(m.report.afterDigest, cap.expectedV2Digest, "readback = expected"); const c = await readNode(CTRL); eq(c.phase, "quiesced", "still held"); eq(c.conversionAttempted, true, "marker"); eq(c.policyRevision, 3, "rev");
     const n = await readNode(); eq(n.schemaVersion, 2, "v2"); eq(n.generation, 1, "gen"); eq(Object.keys(n.rows).length, 3, "rows"); eq(n._v, readFileSync(join(cap.dir, "entries.raw-v.utf8"), "utf8"), "frozen _v");
-    const again = await cli("migrate", ["--execute", "--confirm", token(manifest, "migrate", 3, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]); eq(again.exitCode, 13, "second migrate"); eq(again.error.error, "reconcile_required", "no blind retry");
+    const again = await cli("migrate", ["--expected-revision", "3", "--execute", "--confirm", token(manifest, "migrate", 3, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]); eq(again.exitCode, 13, "second migrate"); eq(again.error.error, "reconcile_required", "no blind retry");
     return `runs=${m.report.transactionStats.runs} coreRuns=1 rev=3`;
   });
 
   await run("CT-E08", "verify", "verify --phase post PASS; twice ⇒ identical findings (CT-28); readers pre/post equal (CT-16)", async () => {
     const cap = await bringToCapture();
-    const m = await cli("migrate", ["--execute", "--confirm", token(manifest, "migrate", 2, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]); eq(m.exitCode, 0, "migrate");
+    const m = await cli("migrate", ["--expected-revision", "2", "--execute", "--confirm", token(manifest, "migrate", 2, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]); eq(m.exitCode, 0, "migrate");
     const v1 = await cli("verify", ["--phase", "post"]); eq(v1.exitCode, 0, JSON.stringify(v1.error)); eq(v1.report.classification.level, "OK", JSON.stringify(v1.report.findings));
     for (const code of ["structural_checkpoint", "logical_checkpoint", "reader_parity", "no_v_fallback"]) expect(v1.report.findings.some((f) => f.code === code), code);
     const v2 = await cli("verify", ["--phase", "post"]); eq(JSON.stringify(v2.report.findings), JSON.stringify(v1.report.findings), "repeatable"); eq(v2.report.checkpointId, v1.report.checkpointId, "same checkpoint");
@@ -234,13 +236,13 @@ async function main_() {
 
   await run("CT-E09", "activate", "activate refused without post checkpoint (CT-18); with checkpoint ⇒ v2_active, rev+1, protocol 2, flag false", async () => {
     const cap = await bringToCapture();
-    await cli("migrate", ["--execute", "--confirm", token(manifest, "migrate", 2, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]);
+    await cli("migrate", ["--expected-revision", "2", "--execute", "--confirm", token(manifest, "migrate", 2, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]);
     const d = await digestOf();
-    const no = await cli("activate", ["--execute", "--confirm", token(manifest, "activate", 3, d)]); eq(no.exitCode, 10, "no checkpoint"); eq(no.error.error, "checkpoint_required", "code");
-    const bad = await cli("activate", ["--checkpoint", "post-doesnotexist", "--execute", "--confirm", token(manifest, "activate", 3, d)]); eq(bad.exitCode, 10, "bad checkpoint"); eq(bad.error.error, "checkpoint_invalid", "code");
+    const no = await cli("activate", ["--expected-revision", "3", "--execute", "--confirm", token(manifest, "activate", 3, d)]); eq(no.exitCode, 10, "no checkpoint"); eq(no.error.error, "checkpoint_required", "code");
+    const bad = await cli("activate", ["--checkpoint", "post-doesnotexist", "--expected-revision", "3", "--execute", "--confirm", token(manifest, "activate", 3, d)]); eq(bad.exitCode, 10, "bad checkpoint"); eq(bad.error.error, "checkpoint_invalid", "code");
     const v = await cli("verify", ["--phase", "post"]); eq(v.exitCode, 0, "verify");
-    const noAck = await cli("activate", ["--checkpoint", v.report.checkpointId, "--execute", "--confirm", token(manifest, "activate", 3, d)]); eq(noAck.exitCode, 15, "ack required");
-    const a = await cli("activate", ["--checkpoint", v.report.checkpointId, "--execute", "--confirm", token(manifest, "activate", 3, d), "--ack", ack("activate", v.report.checkpointId)]); eq(a.exitCode, 0, JSON.stringify(a.error));
+    const noAck = await cli("activate", ["--checkpoint", v.report.checkpointId, "--expected-revision", "3", "--execute", "--confirm", token(manifest, "activate", 3, d)]); eq(noAck.exitCode, 15, "ack required");
+    const a = await cli("activate", ["--checkpoint", v.report.checkpointId, "--expected-revision", "3", "--execute", "--confirm", token(manifest, "activate", 3, d), "--ack", ack("activate", v.report.checkpointId)]); eq(a.exitCode, 0, JSON.stringify(a.error));
     const c = await readNode(CTRL); eq(c.phase, "v2_active", "active"); eq(c.policyRevision, 4, "rev"); eq(c.minStorageProtocol, 2, "protocol"); eq(c.allowV2Initialization, false, "flag"); expect(!c.operation, "operation closed");
     const va = await cli("verify", ["--phase", "active"]); eq(va.exitCode, 0, JSON.stringify(va.error));
     return "v2_active rev=4 protocol=2 flag=false";
@@ -249,13 +251,13 @@ async function main_() {
   await run("CT-E10", "old-client", "Option B probe: ordinary token ⇒ read READABLE + control PUT DENIED; intruder ⇒ INCONCLUSIVE; test-only Rules evidence: legacy shapes DENIED under quiesced/v2_active via ?auth= (CT-19/29/30)", async () => {
     await reseed({ entries: asV2(ROWS(), { keepV: true }), policy: ACTIVE() }); writeManifest();
     const owner = unsignedJwt("u_owner", "o@demo.example"), intruder = unsignedJwt("u_intruder", "x@demo.example");
-    const dry = await cli("probe-legacy-denial"); eq(dry.exitCode, 0, "dry"); eq(dry.report.option, "B", "option"); eq(dry.report.wouldAttempt.length, 2, "two harmless attempts only");
+    const dry = await cli("probe-legacy-denial", ["--expected-revision", "4"]); eq(dry.exitCode, 0, "dry " + JSON.stringify(dry.error)); eq(dry.report.option, "B", "option"); eq(dry.report.wouldAttempt.length, 2, "two harmless attempts only");
     const before = JSON.stringify(await readNode("/"));
     writeFileSync(join(EV, "owner.raw"), owner); chmodSync(join(EV, "owner.raw"), 0o600); writeFileSync(join(EV, "intruder.raw"), intruder); chmodSync(join(EV, "intruder.raw"), 0o600);
-    const ok = await cli("probe-legacy-denial", ["--execute", "--confirm", token(manifest, "probe-legacy-denial", 4), "--token-file", join(EV, "owner.raw")]);
+    const ok = await cli("probe-legacy-denial", ["--expected-revision", "4", "--execute", "--confirm", token(manifest, "probe-legacy-denial", 4), "--token-file", join(EV, "owner.raw")]);
     eq(ok.exitCode, 0, JSON.stringify(ok.error) + JSON.stringify(ok.report && ok.report.findings)); eq(ok.report.transportForm, "query", "emulator form"); eq(ok.report.authenticatedRead.outcome, "READABLE", "read"); eq(ok.report.controlWrite.outcome, "DENIED", "control PUT denied");
     expect(ok.report.findings.some((f) => f.code === "control_record_client_write_denied"), "finding");
-    const bad = await cli("probe-legacy-denial", ["--execute", "--confirm", token(manifest, "probe-legacy-denial", 4), "--token-file", join(EV, "intruder.raw")]); eq(bad.exitCode, 13, "intruder ⇒ inconclusive"); eq(bad.report.authenticatedRead.outcome, "DENIED", "intruder read denied");
+    const bad = await cli("probe-legacy-denial", ["--expected-revision", "4", "--execute", "--confirm", token(manifest, "probe-legacy-denial", 4), "--token-file", join(EV, "intruder.raw")]); eq(bad.exitCode, 13, "intruder ⇒ inconclusive"); eq(bad.report.authenticatedRead.outcome, "DENIED", "intruder read denied");
     eq(JSON.stringify(await readNode("/")), before, "probe changed nothing");
     // ── TEST-ONLY Rules evidence (no tool command): legacy shapes denied for the ordinary owner under v2_active, then quiesced; positive control under legacy
     const shapes = [["whole-node {_v}", () => rest(PATH, "PUT", { _v: "[]" }, owner)], ["_v child", () => rest(PATH + "/_v", "PUT", "[]", owner)], ["_v delete", () => rest(PATH + "/_v", "DELETE", undefined, owner)], ["node delete", () => rest(PATH, "DELETE", undefined, owner)]];
@@ -324,10 +326,10 @@ async function main_() {
     await bringToActive();
     const node = await readNode(); await seedDb().ref(PATH + "/generation").set(2);
     const v = await cli("verify", ["--phase", "active"]); eq(v.exitCode, 12, "STOP"); eq(v.report.recommendation, "RECOVERY_HOLD_RECOMMENDED", "rec"); expect(v.report.holdCommand.includes("hold --execute"), "hold command printed"); eq((await readNode(CTRL)).phase, "v2_active", "not transitioned");
-    const dry = await cli("hold", ["--reason", "inc-1"]); eq(dry.exitCode, 0, "dry"); eq((await readNode(CTRL)).phase, "v2_active", "dry-run holds nothing");
-    const h = await cli("hold", ["--execute", "--confirm", token(manifest, "hold", 4), "--reason", "inc-1"]); eq(h.exitCode, 0, JSON.stringify(h.error)); const c = await readNode(CTRL); eq(c.phase, "recovery_hold", "held"); eq(c.operation.kind, "recovery", "recovery op");
+    const dry = await cli("hold", ["--expected-revision", "4", "--reason", "inc-1"]); eq(dry.exitCode, 0, "dry " + JSON.stringify(dry.error)); eq((await readNode(CTRL)).phase, "v2_active", "dry-run holds nothing");
+    const h = await cli("hold", ["--expected-revision", "4", "--execute", "--confirm", token(manifest, "hold", 4), "--reason", "inc-1"]); eq(h.exitCode, 0, JSON.stringify(h.error)); const c = await readNode(CTRL); eq(c.phase, "recovery_hold", "held"); eq(c.operation.kind, "recovery", "recovery op");
     await seedDb().ref(PATH).set(node);
-    const r = await cli("resume", ["--execute", "--confirm", token(manifest, "resume", 5)]); eq(r.exitCode, 0, JSON.stringify(r.error)); eq((await readNode(CTRL)).phase, "v2_active", "resumed");
+    const r = await cli("resume", ["--expected-revision", "5", "--execute", "--confirm", token(manifest, "resume", 5)]); eq(r.exitCode, 0, JSON.stringify(r.error)); eq((await readNode(CTRL)).phase, "v2_active", "resumed");
     return "STOP ⇒ recommendation; hold/resume explicit (rev 4→5→6)";
   });
 
@@ -335,7 +337,7 @@ async function main_() {
     const cap = await bringToCapture();
     await seedDb().ref(CTRL + "/conversionAttempted").set(true); await seedDb().ref(CTRL + "/policyRevision").set(3);
     const st = await cli("status"); eq(st.report.reconciliation.state, "A2_SOURCE_INTACT_AFTER_ATTEMPT", "A2"); eq(st.report.reconciliation.level, "OK", "level");
-    const m = await cli("migrate", ["--execute", "--confirm", token(manifest, "migrate", 3, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]); eq(m.exitCode, 13, "refused"); eq(m.error.error, "reconcile_required", "code");
+    const m = await cli("migrate", ["--expected-revision", "3", "--execute", "--confirm", token(manifest, "migrate", 3, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]); eq(m.exitCode, 13, "refused"); eq(m.error.error, "reconcile_required", "code");
     const expected = JSON.parse(readFileSync(join(cap.dir, "expected-v2.json"), "utf8")).node; await seedDb().ref(PATH).set(expected);
     const st2 = await cli("status"); eq(st2.report.reconciliation.state, "B_CONVERTED_HELD", "B");
     const v = await cli("verify", ["--phase", "post"]); eq(v.exitCode, 0, JSON.stringify(v.error) + JSON.stringify(v.report && v.report.findings)); expect(v.report.checkpointId, "checkpoint from a reconciled B state");
@@ -351,26 +353,47 @@ async function main_() {
     const r1 = await cli("plan"); eq(r1.exitCode, 14, "prod manifest under --env emulator"); eq(r1.error.error, "environment_mismatch", "code");
     const r2 = await cli("plan", [], { env: "production" }); eq(r2.exitCode, 14, "production requested with emulator host set"); eq(r2.error.error, "emulator_host_set_in_production", "code");
     manifestPath = save;
-    const r3 = await cli("quiesce", ["--execute"]); eq(r3.exitCode, 15, "no token"); eq(r3.error.error, "confirmation_missing", "code");
-    const r4 = await cli("quiesce", ["--execute", "--confirm", "0123456789abcdef"]); eq(r4.exitCode, 15, "wrong token");
-    const r5 = await cli("migrate", ["--execute", "--confirm", token(manifest, "migrate", 1, null)]); expect([10, 15].includes(r5.exitCode), "migrate refused: " + r5.exitCode);
+    const r0 = await cli("quiesce", ["--execute", "--confirm", token(manifest, "quiesce", 1)]); eq(r0.exitCode, 10, "no expected revision"); eq(r0.error.error, "expected_revision_required", "R1-F1");
+    const r0b = await cli("quiesce", ["--expected-revision", "1.0", "--execute", "--confirm", token(manifest, "quiesce", 1)]); eq(r0b.error.error, "expected_revision_invalid", "R1-F1 malformed");
+    const r0c = await cli("quiesce", ["--expected-revision", "2", "--execute", "--confirm", token(manifest, "quiesce", 1)]); eq(r0c.error.error, "stale_revision", "R1-F1 stale");
+    const r3 = await cli("quiesce", ["--expected-revision", "1", "--execute"]); eq(r3.exitCode, 15, "no token"); eq(r3.error.error, "confirmation_missing", "code");
+    const r4 = await cli("quiesce", ["--expected-revision", "1", "--execute", "--confirm", "0123456789abcdef"]); eq(r4.exitCode, 15, "wrong token");
+    const r5 = await cli("migrate", ["--expected-revision", "1", "--execute", "--confirm", token(manifest, "migrate", 1, null)]); expect([10, 15].includes(r5.exitCode), "migrate refused: " + r5.exitCode);
     eq(JSON.stringify(await readNode("/")), before, "zero writes");
     return "environment_mismatch, emulator_host_set_in_production, confirmation_missing/mismatch; zero writes";
   });
 
   await run("CT-E17", "cold-cache", "fresh Admin app per command (cold SDK cache): policy CAS probe and warm entries listener ⇒ conversion exactly once", async () => {
     const cap = await bringToCapture();
-    const m = await cli("migrate", ["--execute", "--confirm", token(manifest, "migrate", 2, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]);
+    const m = await cli("migrate", ["--expected-revision", "2", "--execute", "--confirm", token(manifest, "migrate", 2, cap.sourceDigest), "--ack", ack("migrate", cap.bundleId)]);
     eq(m.exitCode, 0, JSON.stringify(m.error)); eq(m.report.transactionStats.coreRuns, 1, "core once"); eq(m.report.transactionStats.nullRuns, 0, "warm listener ⇒ no null callback"); eq(m.report.transactionStats.drift, false, "no drift");
     eq((await readNode(CTRL)).policyRevision, 3, "one CAS marker");
     return `entries transaction runs=${m.report.transactionStats.runs}, coreRuns=1, nullRuns=0`;
+  });
+
+  await run("CT-E18", "drain-bind", "R1-F3: drain bound to state — entries change after drain ⇒ capture DRAIN_EVIDENCE_STALE; restored ⇒ accepted by digest; context change after capture ⇒ migrate refused before the CAS marker", async () => {
+    await reseed({ policy: POLICY() }); writeManifest();
+    const q = await cli("quiesce", ["--expected-revision", "1", "--execute", "--confirm", token(manifest, "quiesce", 1)]); eq(q.exitCode, 0, "quiesce");
+    const d = await cli("drain-check", ["--interval", "2", "--writer-bound", "0", "--attest", attestFile()]); eq(d.exitCode, 0, "drain"); eq(d.report.verdict, "DRAIN_EVIDENCE_COMPLETE", "verdict");
+    expect(d.report.bound && d.report.bound.accepted && d.report.bound.start && d.report.bound.mid && d.report.bound.end, "start/mid/end/accepted recorded"); eq(d.report.bound.policyRevision, 2, "policy bound"); eq(d.report.bound.accepted.entries, await digestOf(), "entries digest bound");
+    const stateA = await readNode(); const rows = ROWS(); rows[0].sales = "777"; await seedDb().ref(PATH).set(asLegacy(rows));
+    const cB = await cli("capture"); eq(cB.exitCode, 11, "stale capture " + JSON.stringify(cB.error)); eq(cB.error.error, "drain_evidence_stale", "typed"); expect(/entries/.test(cB.error.detail), "entries mismatch named");
+    await seedDb().ref(PATH).set(stateA);
+    const cE = await cli("capture"); eq(cE.exitCode, 0, "restored ⇒ accepted " + JSON.stringify(cE.error)); expect(readdirSync(cE.report.dir).includes("drain.json"), "drain bound into the bundle");
+    await seedDb().ref(`tenants/${TENANT}/biz:${BIZ}:fixed`).set({ _v: "[{\"name\":\"rent\",\"amount\":\"1\"}]" });
+    const before = JSON.stringify(await readNode(CTRL));
+    const m = await cli("migrate", ["--expected-revision", "2", "--execute", "--confirm", token(manifest, "migrate", 2, cE.report.sourceDigest), "--ack", ack("migrate", cE.report.bundleId)]);
+    eq(m.exitCode, 10, "migrate refused " + JSON.stringify(m.error)); eq(m.error.error, "drain_evidence_stale", "typed"); eq(JSON.stringify(await readNode(CTRL)), before, "no CAS marker"); eq((await readNode()).schemaVersion, undefined, "core never ran");
+    await seedDb().ref(`tenants/${TENANT}/biz:${BIZ}:fixed`).set({ _v: "[]" });
+    const ok = await cli("migrate", ["--expected-revision", "2", "--execute", "--confirm", token(manifest, "migrate", 2, cE.report.sourceDigest), "--ack", ack("migrate", cE.report.bundleId)]); eq(ok.exitCode, 0, "restored ⇒ migrate " + JSON.stringify(ok.error)); eq(ok.report.outcome.status, "MIGRATED_HELD", "held");
+    return "stale ⇒ 11 (capture) / 10 (migrate, zero writes); restored ⇒ accepted";
   });
 
   // ─── report ───────────────────────────────────────────────────────────────
   const w = (s, n) => String(s).padEnd(n).slice(0, n);
   console.log(""); console.log(`${w("case", 8)} ${w("area", 12)} ${w("status", 6)} ${w("ms", 6)} notes`); console.log("-".repeat(120));
   for (const r of results) console.log(`${w(r.id, 8)} ${w(r.area, 12)} ${w(r.status, 6)} ${w(r.ms, 6)} ${r.status === "PASS" ? r.notes : r.notes.split("\n")[0]}`);
-  const EXPECTED = 17;
+  const EXPECTED = 18;
   console.log("\n=== TOTALS ==="); console.log(`total=${results.length} passed=${results.length - failures} failed=${failures}`);
   console.log(`evidence dir: ${EV}`);
   if (results.length !== EXPECTED) { console.error(`\nINCOMPLETE MATRIX: expected ${EXPECTED}, ran ${results.length}`); process.exitCode = 3; return; }

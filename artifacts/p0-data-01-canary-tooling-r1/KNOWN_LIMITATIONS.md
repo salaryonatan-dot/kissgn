@@ -1,0 +1,9 @@
+# KNOWN LIMITATIONS (R1)
+
+1. **Expected revision is stated, not fetched** — by design an operator must re-run `plan` after any transition to learn the revision to restate; a stale statement is a refusal, never a substitution.
+2. **Evidence integrity is filesystem-metadata based** (lstat types, exact modes, containment, hashes, sizes); it does not detect a same-size, same-hash rewrite (impossible by construction of sha256) nor protect against an attacker with root on the operator machine. Modes are checked exactly (`0700`/`0600`), so a platform whose umask alters created modes fails closed (Windows skips mode checks; not a supported operator platform).
+3. **Drain binding covers the sampled paths** (entries, exceptions, context, control, derived docs of the drain day); derived docs are compared only when capture happens on the same `derivedDate`. Paths outside the approved drain design (e.g. checklists) are not part of the migration evidence boundary.
+4. **Calendar adjacency uses ISO business dates**; the cycle date is what `monitor --cycle` receives — the operator supplies the business date of the cycle, not a wall-clock instant. The 168 h gate still uses elapsed time since `liveWriteCleanupAt` (a duration, not a date).
+5. **macOS alias handling was proven by simulation on the Linux host** (a synthetic `var → private/var` alias used as `TMPDIR`) plus the default environment; the operator's Mac run in the ordinary default environment is the remaining first-hand confirmation and needs no `TMPDIR` override.
+6. **A drain "restored to the same digest" is accepted** — binding is by content digest, deliberately not by timestamp; a write-and-revert inside the drain interval remains covered only by the attestation and the in-transaction digest check (unchanged honesty statement).
+7. `probe-legacy-denial` now also requires `--expected-revision` although it performs no CAS (uniform write-command contract).

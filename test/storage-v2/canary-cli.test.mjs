@@ -83,33 +83,33 @@ test("plan + preflight on a clean legacy business: PASS report, Rules fingerprin
 
 test("write commands are dry-run by default; --execute without/with wrong token ⇒ 15; zero writes (CT-26)", async () => {
   const { db, run, m } = setup();
-  const d = await run("quiesce"); assert.equal(d.exitCode, 0); assert.equal(X.readReport(d.summary.report).executed, false);
+  const d = await run("quiesce", ["--expected-revision", "1"]); assert.equal(d.exitCode, 0, JSON.stringify(d.error)); assert.equal(X.readReport(d.summary.report).executed, false);
   assert.equal(X.readReport(d.summary.report).confirmationToken, tokenFor(m, "quiesce", 1));
-  const e = await run("quiesce", ["--execute"]); assert.equal(e.exitCode, 15); assert.equal(e.error.error, "confirmation_missing");
-  const w = await run("quiesce", ["--execute", "--confirm", "deadbeefdeadbeef"]); assert.equal(w.exitCode, 15);
-  const wrongCmd = await run("quiesce", ["--execute", "--confirm", tokenFor(m, "enroll", 1)]); assert.equal(wrongCmd.exitCode, 15);
+  const e = await run("quiesce", ["--expected-revision", "1", "--execute"]); assert.equal(e.exitCode, 15); assert.equal(e.error.error, "confirmation_missing");
+  const w = await run("quiesce", ["--expected-revision", "1", "--execute", "--confirm", "deadbeefdeadbeef"]); assert.equal(w.exitCode, 15);
+  const wrongCmd = await run("quiesce", ["--expected-revision", "1", "--execute", "--confirm", tokenFor(m, "enroll", 1)]); assert.equal(wrongCmd.exitCode, 15);
   assert.equal(db.writes.length, 0);
 });
 
 test("policy transitions: enroll refuses an existing record; quiesce/abort round trip with owned operation", async () => {
   const { db, run, m } = setup();
-  const en = await run("enroll", ["--execute", "--confirm", tokenFor(m, "enroll", 0)]); assert.equal(en.exitCode, 10); assert.equal(en.error.error, "policy_already_exists");
-  const q = await run("quiesce", ["--execute", "--confirm", tokenFor(m, "quiesce", 1)]); assert.equal(q.exitCode, 0, JSON.stringify(q.error));
+  const en = await run("enroll", ["--expected-revision", "0", "--execute", "--confirm", tokenFor(m, "enroll", 0)]); assert.equal(en.exitCode, 10); assert.equal(en.error.error, "policy_already_exists");
+  const q = await run("quiesce", ["--expected-revision", "1", "--execute", "--confirm", tokenFor(m, "quiesce", 1)]); assert.equal(q.exitCode, 0, JSON.stringify(q.error));
   assert.equal(X.controlOf(db).phase, "quiesced"); assert.equal(X.controlOf(db).policyRevision, 2); assert.deepEqual(X.controlOf(db).operation.id, "canary-op-1");
-  const stale = await run("quiesce", ["--execute", "--confirm", tokenFor(m, "quiesce", 1)]); assert.equal(stale.exitCode, 10); assert.equal(stale.error.error, "wrong_phase");
-  const ab = await run("abort", ["--execute", "--confirm", tokenFor(m, "abort", 2)]); assert.equal(ab.exitCode, 0, JSON.stringify(ab.error));
+  const stale = await run("quiesce", ["--expected-revision", "1", "--execute", "--confirm", tokenFor(m, "quiesce", 1)]); assert.equal(stale.exitCode, 10); assert.equal(stale.error.error, "wrong_phase");
+  const ab = await run("abort", ["--expected-revision", "2", "--execute", "--confirm", tokenFor(m, "abort", 2)]); assert.equal(ab.exitCode, 0, JSON.stringify(ab.error));
   assert.equal(X.controlOf(db).phase, "legacy"); assert.equal(X.controlOf(db).policyRevision, 3); assert.ok(X.controlOf(db).operation == null);
   const receipts = readFileSync(join(setupDirOf(q), "actions.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
   assert.ok(receipts.some((r) => r.stage === "quiesce" && r.result === "committed"));
   // absent record: enroll creates legacy at revision 1
   const fresh = setup({ seed: { control: null } });
-  const en2 = await fresh.run("enroll", ["--execute", "--confirm", tokenFor(fresh.m, "enroll", 0)]); assert.equal(en2.exitCode, 0, JSON.stringify(en2.error));
+  const en2 = await fresh.run("enroll", ["--expected-revision", "0", "--execute", "--confirm", tokenFor(fresh.m, "enroll", 0)]); assert.equal(en2.exitCode, 0, JSON.stringify(en2.error));
   assert.equal(X.controlOf(fresh.db).phase, "legacy"); assert.equal(X.controlOf(fresh.db).policyRevision, 1);
 });
 const setupDirOf = (r) => join(r.summary.report, "..", "..");
 
 async function quiesceAndCapture(s, extraCapture = []) {
-  const q = await s.run("quiesce", ["--execute", "--confirm", tokenFor(s.m, "quiesce", 1)]); assert.equal(q.exitCode, 0, JSON.stringify(q.error));
+  const q = await s.run("quiesce", ["--expected-revision", "1", "--execute", "--confirm", tokenFor(s.m, "quiesce", 1)]); assert.equal(q.exitCode, 0, JSON.stringify(q.error));
   const att = X.writeJsonFile(s.ev, "attestation.json", X.ATTESTATION());
   const d = await s.run("drain-check", ["--interval", "1", "--writer-bound", "0", "--attest", att]); assert.equal(d.exitCode, 0, JSON.stringify(d.error) + JSON.stringify(d.summary));
   assert.equal(X.readReport(d.summary.report).verdict, "DRAIN_EVIDENCE_COMPLETE");
@@ -118,7 +118,7 @@ async function quiesceAndCapture(s, extraCapture = []) {
 test("drain-check: unstable fingerprint ⇒ STOP (CT-12); missing attestation ⇒ not proven; floor honoured (CT-11)", async () => {
   const s = setup();
   const notQ = await s.run("drain-check", ["--interval", "1", "--writer-bound", "0"]); assert.equal(notQ.exitCode, 10); assert.equal(X.readReport(notQ.summary.report).findings[0].code, "not_quiesced");
-  await s.run("quiesce", ["--execute", "--confirm", tokenFor(s.m, "quiesce", 1)]);
+  await s.run("quiesce", ["--expected-revision", "1", "--execute", "--confirm", tokenFor(s.m, "quiesce", 1)]);
   const noAtt = await s.run("drain-check", ["--interval", "1", "--writer-bound", "0"]); assert.equal(noAtt.exitCode, 11); const nr = X.readReport(noAtt.summary.report);
   assert.equal(nr.verdict, "STABLE_INTERVAL"); assert.equal(nr.proven, false); assert.ok(nr.findings.some((f) => f.code === "attestation_missing"));
   const att = X.writeJsonFile(s.ev, "attestation.json", X.ATTESTATION());
@@ -151,16 +151,16 @@ test("capture: requires owned quiesced; produces a COMPLETE bundle with exact ra
 
 test("migrate: refused when not quiesced (CT-09), stale revision (CT-10), no evidence; dry-run reports the intent (CT-30 shape)", async () => {
   const s = setup();
-  const notQ = await s.run("migrate"); assert.equal(notQ.exitCode, 10); assert.equal(notQ.error.error, "evidence_required");
+  const notQ = await s.run("migrate", ["--expected-revision", "1"]); assert.equal(notQ.exitCode, 10); assert.equal(notQ.error.error, "evidence_required");
   const { capture } = await quiesceAndCapture(s); assert.ok(capture);
-  const dry = await s.run("migrate"); assert.equal(dry.exitCode, 0, JSON.stringify(dry.error));
+  const dry = await s.run("migrate", ["--expected-revision", "2"]); assert.equal(dry.exitCode, 0, JSON.stringify(dry.error));
   const rep = X.readReport(dry.summary.report); assert.equal(rep.executed, false); assert.equal(rep.wouldWrite.expectedSourceDigest, capture.sourceDigest);
   assert.equal(rep.confirmationToken, tokenFor(s.m, "migrate", 2, capture.sourceDigest));
   const stale = await s.run("migrate", ["--expected-revision", "1"]); assert.equal(stale.exitCode, 10); assert.equal(stale.error.error, "stale_revision");
   // abort back to legacy: migrate must refuse before any write
-  const ab = await s.run("abort", ["--execute", "--confirm", tokenFor(s.m, "abort", 2)]); assert.equal(ab.exitCode, 0);
+  const ab = await s.run("abort", ["--expected-revision", "2", "--execute", "--confirm", tokenFor(s.m, "abort", 2)]); assert.equal(ab.exitCode, 0);
   const before = s.db.writes.length;
-  const nq = await s.run("migrate", ["--execute", "--confirm", tokenFor(s.m, "migrate", 3, capture.sourceDigest), "--ack", ackFile(s.ev, "migrate", capture.bundleId)]);
+  const nq = await s.run("migrate", ["--expected-revision", "3", "--execute", "--confirm", tokenFor(s.m, "migrate", 3, capture.sourceDigest), "--ack", ackFile(s.ev, "migrate", capture.bundleId)]);
   assert.equal(nq.exitCode, 10); assert.equal(nq.error.error, "not_quiesced"); assert.equal(s.db.writes.length, before);
   assert.equal(C.digestV1(X.entriesOf(s.db)), capture.sourceDigest, "source intact");
 });
@@ -171,17 +171,17 @@ test("migrate: source drift after capture ⇒ abort before the core runs, node p
   // out-of-band Admin change (owner writes are denied under quiesced; this is the injected case)
   const rows = JSON.parse(X.entriesOf(s.db)._v); rows[0].sales = "101"; s.db.seed(`tenants/${X.T}/biz:${X.B}:entries`, { _v: JSON.stringify(rows) });
   const drifted = C.digestV1(X.entriesOf(s.db));
-  const r = await s.run("migrate", ["--execute", "--confirm", tokenFor(s.m, "migrate", 2, capture.sourceDigest), "--ack", ackFile(s.ev, "migrate", capture.bundleId)]);
-  assert.equal(r.exitCode, 10); assert.equal(r.error.error, "source_drift_before_transaction");
+  const r = await s.run("migrate", ["--expected-revision", "2", "--execute", "--confirm", tokenFor(s.m, "migrate", 2, capture.sourceDigest), "--ack", ackFile(s.ev, "migrate", capture.bundleId)]);
+  assert.equal(r.exitCode, 10); assert.equal(r.error.error, "drain_evidence_stale", "R1-F3: the drain-bound digest no longer matches — refused before the warm read");
   assert.equal(C.digestV1(X.entriesOf(s.db)), drifted, "node untouched"); assert.ok(!X.controlOf(s.db).conversionAttempted, "no CAS marker when the pre-check fails");
   // drift INSIDE the transaction window (after warm read): bound transaction aborts, core never called
   s.db.seed(`tenants/${X.T}/biz:${X.B}:entries`, JSON.parse(readFileSync(join(capture.dir, "entries.source.json"), "utf8")));
   s.db.hooks.beforeTransaction = async (path) => { if (path.endsWith(":entries")) { rows[0].sales = "102"; s.db.seed(`tenants/${X.T}/biz:${X.B}:entries`, { _v: JSON.stringify(rows) }); } };
-  const r2 = await s.run("migrate", ["--execute", "--confirm", tokenFor(s.m, "migrate", 2, capture.sourceDigest), "--ack", ackFile(s.ev, "migrate", capture.bundleId)]);
+  const r2 = await s.run("migrate", ["--expected-revision", "2", "--execute", "--confirm", tokenFor(s.m, "migrate", 2, capture.sourceDigest), "--ack", ackFile(s.ev, "migrate", capture.bundleId)]);
   assert.equal(r2.exitCode, 13, JSON.stringify(r2.error)); const rep = X.readReport(r2.summary.report);
   assert.equal(rep.outcome.status, "SOURCE_DRIFT"); assert.equal(rep.transactionStats.coreRuns, 0); assert.equal(rep.transactionStats.drift, true);
   assert.equal(X.entriesOf(s.db).schemaVersion, undefined, "still legacy"); assert.equal(X.controlOf(s.db).conversionAttempted, true); assert.equal(X.controlOf(s.db).phase, "quiesced");
-  const again = await s.run("migrate", ["--execute", "--confirm", tokenFor(s.m, "migrate", 3, capture.sourceDigest), "--ack", ackFile(s.ev, "migrate", capture.bundleId)]);
+  const again = await s.run("migrate", ["--expected-revision", "3", "--execute", "--confirm", tokenFor(s.m, "migrate", 3, capture.sourceDigest), "--ack", ackFile(s.ev, "migrate", capture.bundleId)]);
   assert.equal(again.exitCode, 13); assert.equal(again.error.error, "reconcile_required", "no blind retry after an attempt");
   // the node now matches neither the captured source nor the expected V2 node ⇒ HOLD, recommendation only
   const st = await s.run("status"); assert.equal(st.exitCode, 12); const sr = X.readReport(st.summary.report).reconciliation;
@@ -192,8 +192,8 @@ test("migrate happy path ⇒ MIGRATED_HELD, core exactly once, cold-cache first 
   const s = setup();
   const { capture } = await quiesceAndCapture(s); assert.ok(capture);
   s.db.hooks.coldCacheOnce = true;
-  const badAck = await s.run("migrate", ["--execute", "--confirm", tokenFor(s.m, "migrate", 2, capture.sourceDigest)]); assert.equal(badAck.exitCode, 15); assert.equal(badAck.error.error, "observer_ack_required");
-  const r = await s.run("migrate", ["--execute", "--confirm", tokenFor(s.m, "migrate", 2, capture.sourceDigest), "--ack", ackFile(s.ev, "migrate", capture.bundleId)]);
+  const badAck = await s.run("migrate", ["--expected-revision", "2", "--execute", "--confirm", tokenFor(s.m, "migrate", 2, capture.sourceDigest)]); assert.equal(badAck.exitCode, 15); assert.equal(badAck.error.error, "observer_ack_required");
+  const r = await s.run("migrate", ["--expected-revision", "2", "--execute", "--confirm", tokenFor(s.m, "migrate", 2, capture.sourceDigest), "--ack", ackFile(s.ev, "migrate", capture.bundleId)]);
   assert.equal(r.exitCode, 0, JSON.stringify(r.error)); const rep = X.readReport(r.summary.report);
   assert.equal(rep.outcome.status, "MIGRATED_HELD"); assert.equal(rep.transactionStats.coreRuns, 1); assert.equal(rep.coreResult.status, "committed");
   assert.equal(rep.afterDigest, capture.expectedV2Digest); assert.equal(X.controlOf(s.db).phase, "quiesced"); assert.equal(X.controlOf(s.db).conversionAttempted, true); assert.equal(X.controlOf(s.db).policyRevision, 3);
@@ -202,9 +202,9 @@ test("migrate happy path ⇒ MIGRATED_HELD, core exactly once, cold-cache first 
   assert.equal(vr1.classification.level, "OK"); assert.ok(vr1.checkpointId.startsWith("post-")); assert.ok(vr1.findings.some((f) => f.code === "no_v_fallback")); assert.ok(vr1.findings.some((f) => f.code === "reader_parity"));
   const v2 = await s.run("verify", ["--phase", "post"]); const vr2 = X.readReport(v2.summary.report);
   assert.deepEqual(vr2.findings, vr1.findings, "repeatable"); assert.equal(vr2.checkpointId, vr1.checkpointId);
-  const noCp = await s.run("activate", ["--execute", "--confirm", tokenFor(s.m, "activate", 3, C.digestV1(node))]); assert.equal(noCp.exitCode, 10); assert.equal(noCp.error.error, "checkpoint_required");
-  const noAck = await s.run("activate", ["--checkpoint", vr1.checkpointId, "--execute", "--confirm", tokenFor(s.m, "activate", 3, C.digestV1(node))]); assert.equal(noAck.exitCode, 15);
-  const act = await s.run("activate", ["--checkpoint", vr1.checkpointId, "--execute", "--confirm", tokenFor(s.m, "activate", 3, C.digestV1(node)), "--ack", ackFile(s.ev, "activate", vr1.checkpointId)]);
+  const noCp = await s.run("activate", ["--expected-revision", "3", "--execute", "--confirm", tokenFor(s.m, "activate", 3, C.digestV1(node))]); assert.equal(noCp.exitCode, 10); assert.equal(noCp.error.error, "checkpoint_required");
+  const noAck = await s.run("activate", ["--checkpoint", vr1.checkpointId, "--expected-revision", "3", "--execute", "--confirm", tokenFor(s.m, "activate", 3, C.digestV1(node))]); assert.equal(noAck.exitCode, 15);
+  const act = await s.run("activate", ["--checkpoint", vr1.checkpointId, "--expected-revision", "3", "--execute", "--confirm", tokenFor(s.m, "activate", 3, C.digestV1(node)), "--ack", ackFile(s.ev, "activate", vr1.checkpointId)]);
   assert.equal(act.exitCode, 0, JSON.stringify(act.error));
   const ctl = X.controlOf(s.db); assert.equal(ctl.phase, "v2_active"); assert.equal(ctl.policyRevision, 4); assert.equal(ctl.minStorageProtocol, 2); assert.equal(ctl.allowV2Initialization, false); assert.ok(ctl.operation == null);
   const va = await s.run("verify", ["--phase", "active"]); assert.equal(va.exitCode, 0, JSON.stringify(va.error));
@@ -212,26 +212,26 @@ test("migrate happy path ⇒ MIGRATED_HELD, core exactly once, cold-cache first 
   s.db.seed(`tenants/${X.T}/biz:${X.B}:entries`, { ...node, rows: { ...node.rows, junk: { id: "junk" } } });
   const vs = await s.run("verify", ["--phase", "active"]); assert.equal(vs.exitCode, 12); const vsr = X.readReport(vs.summary.report);
   assert.equal(vsr.recommendation, "RECOVERY_HOLD_RECOMMENDED"); assert.equal(vsr.automaticTransition, false); assert.equal(X.controlOf(s.db).phase, "v2_active", "never auto-held");
-  const hd = await s.run("hold"); assert.equal(hd.exitCode, 0); assert.equal(X.controlOf(s.db).phase, "v2_active", "dry-run hold does not transition");
-  const hx = await s.run("hold", ["--execute", "--confirm", tokenFor(s.m, "hold", 4), "--reason", "inc-1"]); assert.equal(hx.exitCode, 0, JSON.stringify(hx.error));
+  const hd = await s.run("hold", ["--expected-revision", "4"]); assert.equal(hd.exitCode, 0, JSON.stringify(hd.error)); assert.equal(X.controlOf(s.db).phase, "v2_active", "dry-run hold does not transition");
+  const hx = await s.run("hold", ["--expected-revision", "4", "--execute", "--confirm", tokenFor(s.m, "hold", 4), "--reason", "inc-1"]); assert.equal(hx.exitCode, 0, JSON.stringify(hx.error));
   assert.equal(X.controlOf(s.db).phase, "recovery_hold"); assert.equal(X.controlOf(s.db).operation.kind, "recovery");
-  const rs = await s.run("resume", ["--execute", "--confirm", tokenFor(s.m, "resume", 5)]); assert.equal(rs.exitCode, 0, JSON.stringify(rs.error)); assert.equal(X.controlOf(s.db).phase, "v2_active");
+  const rs = await s.run("resume", ["--expected-revision", "5", "--execute", "--confirm", tokenFor(s.m, "resume", 5)]); assert.equal(rs.exitCode, 0, JSON.stringify(rs.error)); assert.equal(X.controlOf(s.db).phase, "v2_active");
 });
 
 test("unknown outcome: transport throws after the CAS marker ⇒ status reconciles A2 (source intact) / B (V2 present) (CT-32)", async () => {
   const s = setup(); const { capture } = await quiesceAndCapture(s); assert.ok(capture);
   const hangup = () => Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
   s.db.hooks.throwAfterCommit = (path) => (path.startsWith("storage_v2_control/") ? hangup() : null);
-  const r = await s.run("migrate", ["--execute", "--confirm", tokenFor(s.m, "migrate", 2, capture.sourceDigest), "--ack", ackFile(s.ev, "migrate", capture.bundleId)]);
+  const r = await s.run("migrate", ["--expected-revision", "2", "--execute", "--confirm", tokenFor(s.m, "migrate", 2, capture.sourceDigest), "--ack", ackFile(s.ev, "migrate", capture.bundleId)]);
   assert.equal(r.exitCode, 13, JSON.stringify(r.error)); const rep = X.readReport(r.summary.report); assert.equal(rep.outcome.status, "UNKNOWN_OR_REFUSED");
   const st = await s.run("status"); const sr = X.readReport(st.summary.report); assert.equal(sr.reconciliation.state, "A2_SOURCE_INTACT_AFTER_ATTEMPT"); assert.equal(sr.reconciliation.level, "OK");
   assert.equal(X.controlOf(s.db).conversionAttempted, true); assert.equal(X.entriesOf(s.db).schemaVersion, undefined);
-  const again = await s.run("migrate", ["--execute", "--confirm", tokenFor(s.m, "migrate", 3, capture.sourceDigest), "--ack", ackFile(s.ev, "migrate", capture.bundleId)]);
+  const again = await s.run("migrate", ["--expected-revision", "3", "--execute", "--confirm", tokenFor(s.m, "migrate", 3, capture.sourceDigest), "--ack", ackFile(s.ev, "migrate", capture.bundleId)]);
   assert.equal(again.exitCode, 13); assert.equal(again.error.error, "reconcile_required");
   // the same failure AFTER the entries commit ⇒ B (converted, held)
   const s2 = setup(); const c2 = await quiesceAndCapture(s2); assert.ok(c2.capture);
   s2.db.hooks.throwAfterCommit = (path) => (path.endsWith(":entries") ? hangup() : null);
-  const r2 = await s2.run("migrate", ["--execute", "--confirm", tokenFor(s2.m, "migrate", 2, c2.capture.sourceDigest), "--ack", ackFile(s2.ev, "migrate", c2.capture.bundleId)]);
+  const r2 = await s2.run("migrate", ["--expected-revision", "2", "--execute", "--confirm", tokenFor(s2.m, "migrate", 2, c2.capture.sourceDigest), "--ack", ackFile(s2.ev, "migrate", c2.capture.bundleId)]);
   assert.equal(r2.exitCode, 13, JSON.stringify(r2.error)); assert.equal(X.readReport(r2.summary.report).outcome.status, "NOT_COMMITTED");
   const st2 = await s2.run("status"); const sr2 = X.readReport(st2.summary.report); assert.equal(sr2.reconciliation.state, "B_CONVERTED_HELD"); assert.equal(sr2.reconciliation.mode, "v2");
   assert.equal(X.entriesOf(s2.db).schemaVersion, 2, "the commit happened; the tool reports it instead of retrying");
@@ -239,10 +239,10 @@ test("unknown outcome: transport throws after the CAS marker ⇒ status reconcil
 
 test("live-check: create/edit/delete observed and reconciled; generation change ⇒ STOP; no clear-all action (CT-20/21)", async () => {
   const s = setup(); const { capture } = await quiesceAndCapture(s); assert.ok(capture);
-  await s.run("migrate", ["--execute", "--confirm", tokenFor(s.m, "migrate", 2, capture.sourceDigest), "--ack", ackFile(s.ev, "migrate", capture.bundleId)]);
+  await s.run("migrate", ["--expected-revision", "2", "--execute", "--confirm", tokenFor(s.m, "migrate", 2, capture.sourceDigest), "--ack", ackFile(s.ev, "migrate", capture.bundleId)]);
   const v = await s.run("verify", ["--phase", "post"]); const cp = X.readReport(v.summary.report).checkpointId;
   const node = X.entriesOf(s.db);
-  await s.run("activate", ["--checkpoint", cp, "--execute", "--confirm", tokenFor(s.m, "activate", 3, C.digestV1(node)), "--ack", ackFile(s.ev, "activate", cp)]);
+  await s.run("activate", ["--checkpoint", cp, "--expected-revision", "3", "--execute", "--confirm", tokenFor(s.m, "activate", 3, C.digestV1(node)), "--ack", ackFile(s.ev, "activate", cp)]);
   const H = C.helpersFrom((await import("../../tools/storage-v2/production-window.mjs")).loadProductionWindow());
   const key = `tenants/${X.T}/biz:${X.B}:entries`;
   const b = await s.run("live-check", ["--action", "create", "--step", "before"]); assert.equal(b.exitCode, 0, JSON.stringify(b.error));
@@ -281,10 +281,99 @@ test("monitor: cycle record appended, idempotent re-run, correction on change; w
 
 test("probe-legacy-denial (Option B): dry-run lists only the control same-value PUT and the authenticated read; no entries write path exists", async () => {
   const s = setup();
-  const d = await s.run("probe-legacy-denial"); assert.equal(d.exitCode, 0, JSON.stringify(d.error)); const r = X.readReport(d.summary.report);
+  const d = await s.run("probe-legacy-denial", ["--expected-revision", "1"]); assert.equal(d.exitCode, 0, JSON.stringify(d.error)); const r = X.readReport(d.summary.report);
   assert.equal(r.option, "B"); assert.equal(r.executed, false); assert.equal(r.wouldAttempt.length, 2); assert.ok(r.wouldAttempt.every((x) => !/entries[^,]*PUT|\/_v\b|"_v"/.test(x)), JSON.stringify(r.wouldAttempt));
   assert.ok(r.evidenceRefs.emulator.length >= 4);
   const src = readFileSync(new URL("../../tools/storage-v2/canary-transport.mjs", import.meta.url), "utf8");
   assert.ok(!/entries[^\n]*method: "PUT"|_v[^\n]*method: "PUT"/.test(src), "transport has no legacy-shape write probe");
   assert.equal(s.db.writes.length, 0);
 });
+
+// ── R1 FINDING 1: operator-supplied expected revision is mandatory for every write command ──
+test("R1-F1 expected revision: missing / malformed / stale ⇒ typed refusal with zero writes; exact ⇒ proceeds; token for N with N+1 ⇒ refused", async () => {
+  const cases = [
+    { cmd: "enroll", seed: { control: null }, observed: 0 },
+    { cmd: "quiesce", seed: {}, observed: 1 },
+    { cmd: "abort", seed: { control: X.QUIESCED() }, observed: 2 },
+    { cmd: "hold", seed: { entries: X.asV2(X.LEGACY_ROWS(), { keepV: true }), control: X.ACTIVE() }, observed: 4 },
+    { cmd: "resume", seed: { entries: X.asV2(X.LEGACY_ROWS(), { keepV: true }), control: X.POLICY({ phase: "recovery_hold", policyRevision: 5, minStorageProtocol: 2, operation: { id: "recovery-canary-op-1", kind: "recovery", owner: "alice", startedAt: 1 } }) }, observed: 5 },
+    { cmd: "probe-legacy-denial", seed: {}, observed: 1 },
+  ];
+  for (const c of cases) {
+    const s = setup({ seed: c.seed }); const before = s.db.writes.length; const tok = tokenFor(s.m, c.cmd, c.observed);
+    const a = await s.run(c.cmd, ["--execute", "--confirm", tok]); assert.equal(a.exitCode, 10, c.cmd + " A"); assert.equal(a.error.error, "expected_revision_required", c.cmd + " A");
+    const a2 = await s.run(c.cmd); assert.equal(a2.error.error, "expected_revision_required", c.cmd + " dry-run also requires it");
+    for (const bad of ["abc", "1.5", "-1", "", "0x1", "9007199254740992"]) { const b = await s.run(c.cmd, ["--expected-revision", bad, "--execute", "--confirm", tok]); assert.equal(b.exitCode, 10, c.cmd + " B " + bad); assert.equal(b.error.error, "expected_revision_invalid", c.cmd + " B " + bad); }
+    const st = await s.run(c.cmd, ["--expected-revision", String(c.observed + 1), "--execute", "--confirm", tok]); assert.equal(st.exitCode, 10, c.cmd + " C"); assert.equal(st.error.error, "stale_revision", c.cmd + " C");
+    if (c.observed > 0) { const st2 = await s.run(c.cmd, ["--expected-revision", String(c.observed - 1), "--execute", "--confirm", tok]); assert.equal(st2.exitCode, 10, c.cmd + " C-"); assert.equal(st2.error.error, "stale_revision", c.cmd + " C-"); }
+    // E: the tool DID read the current record (plan shows it) yet still refuses without the operator's statement
+    const p = await s.run("plan"); assert.equal(X.readReport(p.summary.report).tokensForRevision, c.observed, c.cmd + " E");
+    assert.equal(s.db.writes.length, before, c.cmd + " zero writes");
+    // D: exact revision passes the gate (dry-run proves the gate; executed paths are covered by the lifecycle tests)
+    const ok = await s.run(c.cmd, ["--expected-revision", String(c.observed)]); assert.equal(ok.exitCode, 0, c.cmd + " D " + JSON.stringify(ok.error)); assert.equal(X.readReport(ok.summary.report).executed, false);
+    // F: a token minted for N presented with --expected-revision N+1 ⇒ refused
+    const f = await s.run(c.cmd, ["--expected-revision", String(c.observed + 1), "--execute", "--confirm", tok]); assert.equal(f.exitCode, 10, c.cmd + " F"); assert.equal(f.error.error, "stale_revision");
+    assert.equal(s.db.writes.length, before, c.cmd + " zero writes after F");
+  }
+  // F′: the record moved to N+1 (a real transition) and the operator restates N+1 with the OLD token(N) ⇒ token mismatch, refused
+  const s = setup(); await s.run("quiesce", ["--expected-revision", "1", "--execute", "--confirm", tokenFor(s.m, "quiesce", 1)]);
+  const w = s.db.writes.length;
+  const f2 = await s.run("abort", ["--expected-revision", "2", "--execute", "--confirm", tokenFor(s.m, "abort", 1)]); assert.equal(f2.exitCode, 15); assert.equal(f2.error.error, "confirmation_mismatch"); assert.equal(s.db.writes.length, w);
+  // migrate and activate families
+  const m = setup(); const { capture } = await quiesceAndCapture(m); assert.ok(capture);
+  const mm = await m.run("migrate", ["--execute", "--confirm", tokenFor(m.m, "migrate", 2, capture.sourceDigest), "--ack", ackFile(m.ev, "migrate", capture.bundleId)]); assert.equal(mm.error.error, "expected_revision_required");
+  const mb = await m.run("migrate", ["--expected-revision", "two", "--execute", "--confirm", tokenFor(m.m, "migrate", 2, capture.sourceDigest), "--ack", ackFile(m.ev, "migrate", capture.bundleId)]); assert.equal(mb.error.error, "expected_revision_invalid");
+  const ms = await m.run("migrate", ["--expected-revision", "3", "--execute", "--confirm", tokenFor(m.m, "migrate", 2, capture.sourceDigest), "--ack", ackFile(m.ev, "migrate", capture.bundleId)]); assert.equal(ms.error.error, "stale_revision");
+  assert.equal(X.entriesOf(m.db).schemaVersion, undefined, "no conversion"); assert.ok(!X.controlOf(m.db).conversionAttempted, "no CAS marker");
+  const mok = await m.run("migrate", ["--expected-revision", "2", "--execute", "--confirm", tokenFor(m.m, "migrate", 2, capture.sourceDigest), "--ack", ackFile(m.ev, "migrate", capture.bundleId)]); assert.equal(mok.exitCode, 0, JSON.stringify(mok.error));
+  const v = await m.run("verify", ["--phase", "post"]); const cp = X.readReport(v.summary.report).checkpointId; const d = C.digestV1(X.entriesOf(m.db));
+  const am = await m.run("activate", ["--checkpoint", cp, "--execute", "--confirm", tokenFor(m.m, "activate", 3, d), "--ack", ackFile(m.ev, "activate", cp)]); assert.equal(am.error.error, "expected_revision_required");
+  const as = await m.run("activate", ["--checkpoint", cp, "--expected-revision", "2", "--execute", "--confirm", tokenFor(m.m, "activate", 3, d), "--ack", ackFile(m.ev, "activate", cp)]); assert.equal(as.error.error, "stale_revision");
+  assert.equal(X.controlOf(m.db).phase, "quiesced");
+  const aok = await m.run("activate", ["--checkpoint", cp, "--expected-revision", "3", "--execute", "--confirm", tokenFor(m.m, "activate", 3, d), "--ack", ackFile(m.ev, "activate", cp)]); assert.equal(aok.exitCode, 0, JSON.stringify(aok.error)); assert.equal(X.controlOf(m.db).phase, "v2_active");
+});
+
+// ── R1 FINDING 3: drain evidence is bound to the exact state it observed ──
+test("R1-F3 drain binding: capture after entries / policy / exceptions / context change ⇒ DRAIN_EVIDENCE_STALE; restored state ⇒ accepted by digest; migrate revalidates and never reaches the core on a mismatch", async () => {
+  const s = setup(); await s.run("quiesce", ["--expected-revision", "1", "--execute", "--confirm", tokenFor(s.m, "quiesce", 1)]);
+  const att = X.writeJsonFile(s.ev, "attestation.json", X.ATTESTATION());
+  const drain = async () => { const d = await s.run("drain-check", ["--interval", "1", "--writer-bound", "0", "--attest", att]); assert.equal(d.exitCode, 0, JSON.stringify(d.error)); return X.readReport(d.summary.report); };
+  const key = `tenants/${X.T}/biz:${X.B}:entries`;
+  const d1 = await drain();
+  assert.ok(d1.bound && d1.bound.accepted && d1.bound.start && d1.bound.mid && d1.bound.end, "start/mid/end + accepted digests recorded");
+  assert.equal(d1.bound.accepted.entries, C.digestV1(X.entriesOf(s.db))); assert.equal(d1.bound.policyRevision, 2); assert.equal(d1.bound.phase, "quiesced"); assert.equal(d1.bound.operation.id, "canary-op-1");
+  // B: entries change after the drain ⇒ capture refused, nothing captured
+  const stateA = X.entriesOf(s.db); const rows = JSON.parse(stateA._v); rows[0].sales = "999";
+  s.db.seed(key, { _v: JSON.stringify(rows) });
+  const cB = await s.run("capture"); assert.equal(cB.exitCode, 11); assert.equal(cB.error.error, "drain_evidence_stale"); assert.ok(/entries/.test(cB.error.detail));
+  assert.equal(E_listBundles(s), 0, "no bundle written");
+  // E: restore A ⇒ the bound evidence agrees again ⇒ accepted (digests, not timestamps, decide)
+  s.db.seed(key, stateA);
+  const cE = await s.run("capture"); assert.equal(cE.exitCode, 0, JSON.stringify(cE.error)); const capE = X.readReport(cE.summary.report);
+  const bundled = JSON.parse(readFileSync(join(capE.dir, "drain.json"), "utf8")); assert.equal(bundled.bound.accepted.entries, capE.sourceDigest); assert.equal(bundled.binding.status, "BOUND");
+  // C: policy revision change (same phase/owner) ⇒ stale
+  const s2 = setup(); await s2.run("quiesce", ["--expected-revision", "1", "--execute", "--confirm", tokenFor(s2.m, "quiesce", 1)]);
+  const att2 = X.writeJsonFile(s2.ev, "attestation.json", X.ATTESTATION());
+  const dr2 = await s2.run("drain-check", ["--interval", "1", "--writer-bound", "0", "--attest", att2]); assert.equal(dr2.exitCode, 0);
+  s2.db.seed(`storage_v2_control/${X.T}/${X.B}/policyRevision`, 3);
+  const cC = await s2.run("capture"); assert.equal(cC.exitCode, 11); assert.equal(cC.error.error, "drain_evidence_stale"); assert.ok(/policyRevision/.test(cC.error.detail) && /control/.test(cC.error.detail));
+  s2.db.seed(`storage_v2_control/${X.T}/${X.B}/policyRevision`, 2);
+  // D: exceptions change ⇒ stale; context (config) change ⇒ stale
+  s2.db.seed(`tenants/${X.T}/entry_exceptions/${X.B}/2026-09-03`, { state: { status: "active", reasonCode: "x", revision: 1 } });
+  const cD = await s2.run("capture"); assert.equal(cD.error.error, "drain_evidence_stale"); assert.ok(/exceptions/.test(cD.error.detail));
+  s2.db.seed(`tenants/${X.T}/entry_exceptions/${X.B}`, null);
+  s2.db.seed(`tenants/${X.T}/biz:${X.B}:fixed`, { _v: JSON.stringify([{ name: "rent", amount: "1" }]) });
+  const cD2 = await s2.run("capture"); assert.equal(cD2.error.error, "drain_evidence_stale"); assert.ok(/context/.test(cD2.error.detail));
+  // no drain at all ⇒ capture proceeds only as OPERATOR_ACTION_REQUIRED (unchanged behaviour), and migrate refuses without a bound drain
+  // G: bound evidence captured, then the state moves before migrate ⇒ migrate refuses BEFORE the CAS marker and the core (zero writes)
+  const s3 = setup(); const { capture: cap3 } = await quiesceAndCapture(s3); assert.ok(cap3);
+  s3.db.seed(`tenants/${X.T}/biz:${X.B}:fixed`, { _v: JSON.stringify([{ name: "rent", amount: "2" }]) });
+  const w3 = s3.db.writes.length;
+  const g = await s3.run("migrate", ["--expected-revision", "2", "--execute", "--confirm", tokenFor(s3.m, "migrate", 2, cap3.sourceDigest), "--ack", ackFile(s3.ev, "migrate", cap3.bundleId)]);
+  assert.equal(g.exitCode, 10); assert.equal(g.error.error, "drain_evidence_stale"); assert.equal(s3.db.writes.length, w3, "zero writes"); assert.ok(!X.controlOf(s3.db).conversionAttempted); assert.equal(X.entriesOf(s3.db).schemaVersion, undefined);
+  // F: restore ⇒ evidence digest == drain digest == current ⇒ migrate proceeds, plan records the drain-bound digest
+  s3.db.seed(`tenants/${X.T}/biz:${X.B}:fixed`, { _v: "[]" });
+  const dry = await s3.run("migrate", ["--expected-revision", "2"]); assert.equal(dry.exitCode, 0, JSON.stringify(dry.error)); const plan = X.readReport(dry.summary.report).wouldWrite; assert.equal(plan.drainBoundDigest, plan.expectedSourceDigest); assert.equal(plan.drainPolicyRevision, 2);
+  const f = await s3.run("migrate", ["--expected-revision", "2", "--execute", "--confirm", tokenFor(s3.m, "migrate", 2, cap3.sourceDigest), "--ack", ackFile(s3.ev, "migrate", cap3.bundleId)]); assert.equal(f.exitCode, 0, JSON.stringify(f.error)); assert.equal(X.readReport(f.summary.report).outcome.status, "MIGRATED_HELD");
+});
+const E_listBundles = (s) => readdirSync(join(s.ev, "canary-op-1")).filter((n) => !["reports", "ledger", "live", "actions.jsonl"].includes(n) && !n.startsWith("ack-") && !n.startsWith("attestation") && !n.startsWith("manifest")).length;
