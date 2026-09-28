@@ -1,0 +1,110 @@
+{
+  "generator": 1,
+  "typescript": "5.9.3",
+  "entry": "browser/marjinFinanceGlobal.js",
+  "sources": [
+    "src/browser/marjinFinanceGlobal.ts",
+    "src/finance/businessDate.ts",
+    "src/finance/cells.ts",
+    "src/finance/decimal.ts",
+    "src/finance/normalize.ts",
+    "src/finance/purchaseBasis.ts",
+    "src/finance/types.ts",
+    "src/forecast/revenueForecast.ts",
+    "src/metrics/adapters/configCompat.ts",
+    "src/metrics/adapters/legacyNumber.ts",
+    "src/metrics/costTimeline.ts",
+    "src/metrics/projected.ts",
+    "src/metrics/report.ts",
+    "src/policy/evaluate.ts",
+    "src/policy/intelligence.ts",
+    "src/policy/purchaseBasis.ts",
+    "src/policy/registry.ts",
+    "src/presenters/labels.ts",
+    "src/presenters/money.ts",
+    "src/presenters/percent.ts"
+  ],
+  "sourceDigest": "d88c86ee47f2c14057c87e027154ff335e6b2b2840aba2139180494e8c9f673d",
+  "files": [
+    {
+      "path": "browser/marjinFinanceGlobal.js",
+      "sha256": "9a9f9d80bead7674992c18a64bf3095d55689b6f0e161109e8d7959ae21a04b3"
+    },
+    {
+      "path": "finance/businessDate.js",
+      "sha256": "9a5207e0581b28371426deb9a38844f0a4091cec27174bfb965df8a083eabf9a"
+    },
+    {
+      "path": "finance/cells.js",
+      "sha256": "45f1ede4453c8d3c82f5fecd1510a11603f0eb8661421bbe1836729eff7e4b4f"
+    },
+    {
+      "path": "finance/decimal.js",
+      "sha256": "3053240b5c01892bf9fdd4aa3043b55e5878c033cb849fbfe53215e52c08a4f9"
+    },
+    {
+      "path": "finance/normalize.js",
+      "sha256": "c20ff8602819ff7c5b6f52ad394f820c614fd7e5772c003365447a03e379d465"
+    },
+    {
+      "path": "finance/purchaseBasis.js",
+      "sha256": "c4d00bff3a79f04ab1175855394b1c8c274273d23d0e7d9026b597896caaed84"
+    },
+    {
+      "path": "finance/types.js",
+      "sha256": "e3002ec4e2e608a8f09edeb0258a5aef343a98402e8f128d1c4aec17a48a1e84"
+    },
+    {
+      "path": "forecast/revenueForecast.js",
+      "sha256": "3a816db533af877e2a39439508445aadacafe890c847a60558b4f2c503d81a71"
+    },
+    {
+      "path": "metrics/adapters/configCompat.js",
+      "sha256": "e1c70bd892f1e93acca006fc37eef0c1381eca78df493cee32b1fade922ef504"
+    },
+    {
+      "path": "metrics/adapters/legacyNumber.js",
+      "sha256": "8b30396fa786da13ab366b49d684c215fd463062d85e76351796153a1501698a"
+    },
+    {
+      "path": "metrics/costTimeline.js",
+      "sha256": "f105f21f552eb9977def513e16f124ae6e6beaaf09db102161ccaff21b35c500"
+    },
+    {
+      "path": "metrics/projected.js",
+      "sha256": "68305d22e99e5999654f9513d05d33c042784dca884c6bffaa216234a1284097"
+    },
+    {
+      "path": "metrics/report.js",
+      "sha256": "17359480223d0f2b8ad38feefe98ac7a98d62bf011d38643ddb5443e79f1079e"
+    },
+    {
+      "path": "policy/evaluate.js",
+      "sha256": "82b7dc2ac6cf662ca5a4404146322d7e3a731d609747bf0552375ed5a990eb20"
+    },
+    {
+      "path": "policy/intelligence.js",
+      "sha256": "8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881"
+    },
+    {
+      "path": "policy/purchaseBasis.js",
+      "sha256": "bbc521dc93629c7fdfd4f9b418f0204d8beca20ff024d62968575948cae8c35a"
+    },
+    {
+      "path": "policy/registry.js",
+      "sha256": "6310ab24a2b1dffe2582fd829ea10bdf4b54afddc5345bea1e81a4c0be5f8b2a"
+    },
+    {
+      "path": "presenters/labels.js",
+      "sha256": "4050b734f39384e00e0c4ba5597914a8407a830ae9deef445b87b7b91bfab853"
+    },
+    {
+      "path": "presenters/money.js",
+      "sha256": "346230e7e1f4ecb0d299df06c6499dc9deb1e4a7813aeebb9ab1f35961094255"
+    },
+    {
+      "path": "presenters/percent.js",
+      "sha256": "297920c375f0d28dfea428abce8843c5c875c4d93f23195cc7b2fe64b8187865"
+    }
+  ]
+}

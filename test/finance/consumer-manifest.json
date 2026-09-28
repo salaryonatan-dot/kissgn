@@ -1,0 +1,756 @@
+{
+ "manifestVersion": 1,
+ "base": "f5d0a8edffc216f0b6ad342f8bd1bb0d630276ab",
+ "sources": [
+  "financial-core-r1-2/06",
+  "financial-core-r1-3/05",
+  "R1.4 slice A re-scan (S46, S47*, S48*)"
+ ],
+ "coreDirectories": [
+  "src/finance/",
+  "src/metrics/",
+  "src/policy/",
+  "src/presenters/",
+  "src/browser/"
+ ],
+ "entries": [
+  {
+   "id": "U01",
+   "file": "index.html",
+   "sites": ":1114-1126 grossToNetAmount/normalizeDailyEntryRevenueForVat",
+   "slice": "-",
+   "disposition": "RETAIN",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U02",
+   "file": "index.html",
+   "sites": ":7026-7031 entry preview netInc",
+   "slice": "C1",
+   "disposition": "MIGRATE",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U03",
+   "file": "index.html",
+   "sites": ":4339-4397 calcMetrics",
+   "slice": "C1",
+   "disposition": "RETIRE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "U04",
+   "file": "index.html",
+   "sites": ":6186-6206 dashboard KPI block",
+   "slice": "C1+E",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "U05",
+   "file": "index.html",
+   "sites": ":6462-6465 expense breakdown",
+   "slice": "C1",
+   "disposition": "MIGRATE",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U06",
+   "file": "index.html",
+   "sites": ":6510-6530 purchases KPI/gauge, fcColor :1091",
+   "slice": "C1+D",
+   "disposition": "MIGRATE/POLICY",
+   "presenceImpact": false,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "U07",
+   "file": "index.html",
+   "sites": ":4400-4414 buildChart",
+   "slice": "C1",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U08",
+   "file": "index.html",
+   "sites": ":7110-7160 history list/day card",
+   "slice": "C1",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U09",
+   "file": "index.html",
+   "sites": ":7257 duplicate-row panel",
+   "slice": "C1",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U10",
+   "file": "index.html",
+   "sites": ":8832-9015 PnLScreen",
+   "slice": "C1",
+   "disposition": "MIGRATE/POLICY",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "U11",
+   "file": "index.html",
+   "sites": ":10780-10996 ForecastScreen",
+   "slice": "E+C1",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "U12",
+   "file": "index.html",
+   "sites": ":11032-11113, :1055-1062 last-year import/comparison",
+   "slice": "C1",
+   "disposition": "RETAIN",
+   "presenceImpact": false,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "U13",
+   "file": "index.html",
+   "sites": ":6768-6776 weather impact",
+   "slice": "C1",
+   "disposition": "DERIVE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U14",
+   "file": "index.html",
+   "sites": ":6925-6934, :7793-7955 employee screens",
+   "slice": "C1(+F)",
+   "disposition": "MIGRATE",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U15",
+   "file": "index.html",
+   "sites": ":5705-5733 supplier missing-days",
+   "slice": "C1",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U16",
+   "file": "index.html",
+   "sites": ":6680-6700 unplanned supplier payments",
+   "slice": "C1",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U17",
+   "file": "index.html",
+   "sites": ":888-902 entriesToForecastDays (mirror)",
+   "slice": "E",
+   "disposition": "RETIRE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U18",
+   "file": "index.html",
+   "sites": ":865-1027 inline REV_FORECAST/v1 mirror",
+   "slice": "E",
+   "disposition": "RETIRE",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U19",
+   "file": "index.html",
+   "sites": ":5463-5473 __revenueMaterialChanged",
+   "slice": "C2",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U20",
+   "file": "index.html",
+   "sites": ":2844-2848 TARGETS, wizard :3907-3997, defaults :4698,:4873,:5940, cfgTarget :1090",
+   "slice": "D+C1",
+   "disposition": "POLICY",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U21",
+   "file": "index.html",
+   "sites": ":1085-1089 fmt/fmtPct",
+   "slice": "C1",
+   "disposition": "RETIRE",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U22",
+   "file": "index.html",
+   "sites": ":1095-1099 frozen dates",
+   "slice": "C1+WP-B.1",
+   "disposition": "RETIRE",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U23",
+   "file": "index.html",
+   "sites": ":10537 DailyInsightsScreen",
+   "slice": "D",
+   "disposition": "RETAIN",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U24",
+   "file": "index.html",
+   "sites": ":5765-5786 demo seeding",
+   "slice": "-",
+   "disposition": "RETAIN",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U25",
+   "file": "index.html",
+   "sites": ":7978+ PettyCashScreen",
+   "slice": "-",
+   "disposition": "RETAIN",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U26",
+   "file": "index.html",
+   "sites": ":5658 AI panel -> /api/agent/ask",
+   "slice": "D",
+   "disposition": "RETAIN",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "U27",
+   "file": "index.html",
+   "sites": ":6541-6600, :6668-6672 supplier month screen",
+   "slice": "C1",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "U28",
+   "file": "index.html",
+   "sites": ":7865 employees month labor %",
+   "slice": "C1",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S01",
+   "file": "src/repositories/analytics/dailyMetricsRepo.ts",
+   "sites": "getDailyMetrics",
+   "slice": "B1",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "S02",
+   "file": "src/repositories/analytics/dailyMetricsRepo.ts",
+   "sites": "getLatestDailyDate",
+   "slice": "B1",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S03",
+   "file": "src/repositories/analytics/laborRepo.ts",
+   "sites": "getLaborMetrics",
+   "slice": "B1",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S04",
+   "file": "src/repositories/analytics/purchasesRepo.ts",
+   "sites": "getPurchaseMetrics",
+   "slice": "B1",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "S05",
+   "file": "src/repositories/analytics/hourlyMetricsRepo.ts",
+   "sites": "dead (test importer only)",
+   "slice": "E",
+   "disposition": "RETIRE",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S06",
+   "file": "src/analytics/dailyBuilder.ts",
+   "sites": "buildAnalyticsForBiz/saveAnalyticsDoc",
+   "slice": "B1",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "S07a",
+   "file": "src/insights/buildInsights.ts",
+   "sites": "insights orchestration",
+   "slice": "D",
+   "disposition": "DERIVE/POLICY",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "S07b",
+   "file": "src/insights/rules.ts",
+   "sites": "THRESHOLDS, ratio rules",
+   "slice": "D",
+   "disposition": "DERIVE/POLICY",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "S07c",
+   "file": "src/insights/baselines.ts",
+   "sites": "same-weekday baselines",
+   "slice": "D",
+   "disposition": "DERIVE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S07d",
+   "file": "src/insights/types.ts",
+   "sites": "types",
+   "slice": "D",
+   "disposition": "MIGRATE (types)",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S08",
+   "file": "src/snapshot/snapshotBuilder.ts",
+   "sites": "buildSnapshotForBiz",
+   "slice": "B2",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "S09",
+   "file": "src/snapshot/snapshotEmail.ts",
+   "sites": "email presenter",
+   "slice": "B2",
+   "disposition": "MIGRATE",
+   "presenceImpact": false,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "S10",
+   "file": "src/alerts/checkers.ts",
+   "sites": "checkLaborPct/checkFoodCostPct/checkMinRevenue/checkWeakDay/checkPurchaseTrend/checkSupplierAnomaly/checkExpensiveEmployee",
+   "slice": "D",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "S13a",
+   "file": "src/alerts/types.ts",
+   "sites": "DEFAULT_THRESHOLDS",
+   "slice": "D",
+   "disposition": "POLICY",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S13b",
+   "file": "src/alerts/runner.ts",
+   "sites": "alerts orchestration",
+   "slice": "D",
+   "disposition": "MIGRATE",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S14",
+   "file": "src/services/analyticsService.ts",
+   "sites": "fetchPlannedData quality scores",
+   "slice": "D",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S15",
+   "file": "src/agent/analysis/analyzeDirectMetric.ts",
+   "sites": "totals, mean of daily ratios",
+   "slice": "D",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "S16",
+   "file": "src/agent/analysis/analyzeForecast.ts",
+   "sites": "linear projection",
+   "slice": "E",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S17",
+   "file": "src/agent/analysis/analyzeComparison.ts",
+   "sites": "half-split averages",
+   "slice": "D",
+   "disposition": "DERIVE/POLICY",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S18",
+   "file": "src/agent/analysis/analyzeTrend.ts",
+   "sites": "weekday averages",
+   "slice": "D",
+   "disposition": "DERIVE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S19",
+   "file": "src/agent/analysis/analyzeAnomaly.ts",
+   "sites": "z-scores, 32/35",
+   "slice": "D",
+   "disposition": "DERIVE/POLICY",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S20",
+   "file": "src/agent/baseline/selectBaseline.ts",
+   "sites": "baselines",
+   "slice": "D",
+   "disposition": "DERIVE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S21a",
+   "file": "src/agent/planner/buildMetricsPlan.ts",
+   "sites": "plan metric names",
+   "slice": "D",
+   "disposition": "MIGRATE (routing guard)",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S21b",
+   "file": "src/agent/orchestrator/runAgent.ts",
+   "sites": "orchestration",
+   "slice": "D",
+   "disposition": "MIGRATE (routing guard)",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S23",
+   "file": "src/agent/proactive/detectors/detectForecastRisk.ts",
+   "sites": "pace, mean ratios, 28/33",
+   "slice": "E+D",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "S24",
+   "file": "src/agent/proactive/detectors/detectLaborInefficiency.ts",
+   "sites": "trailing mean, 28",
+   "slice": "D",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S25",
+   "file": "src/agent/proactive/detectors/detectPurchasesWithoutRevenueSupport.ts",
+   "sites": "growth %",
+   "slice": "D",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "S26",
+   "file": "src/agent/proactive/detectors/detectDailyRevenueUnderperformance.ts",
+   "sites": "z-score",
+   "slice": "D",
+   "disposition": "DERIVE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S27",
+   "file": "src/agent/proactive/detectors/detectWeakDayPattern.ts",
+   "sites": "weekday means",
+   "slice": "D",
+   "disposition": "DERIVE/POLICY",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S29a",
+   "file": "src/agent/proactive/getTopActiveInsights.ts",
+   "sites": "deviationPct text",
+   "slice": "D",
+   "disposition": "MIGRATE (presentation)",
+   "presenceImpact": false,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "S29b",
+   "file": "src/agent/proactive/runProactiveJob.ts",
+   "sites": "orchestration/provenance",
+   "slice": "D",
+   "disposition": "MIGRATE (provenance)",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S30",
+   "file": "src/services/forecastService.ts",
+   "sites": "dead",
+   "slice": "E",
+   "disposition": "RETIRE",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S31",
+   "file": "src/forecast/revenueForecast.ts",
+   "sites": "REV_FORECAST/v1",
+   "slice": "E",
+   "disposition": "MIGRATE (projection owner)",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S32a",
+   "file": "src/agent/anomalies/detectAnomalies.ts",
+   "sites": "dead",
+   "slice": "D",
+   "disposition": "RETIRE",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S32b",
+   "file": "src/agent/anomalies/anomalyRules.ts",
+   "sites": "dead",
+   "slice": "D",
+   "disposition": "RETIRE",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S35",
+   "file": "lib/analytics/strictDailyMetrics.js",
+   "sites": "finite-metric validation",
+   "slice": "D",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S36",
+   "file": "lib/entryExceptions.js",
+   "sites": "exception ledger",
+   "slice": "B1",
+   "disposition": "RETAIN (input)",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S37",
+   "file": "lib/entryDelta.js",
+   "sites": "revenueChanged (tests only)",
+   "slice": "C2",
+   "disposition": "RETIRE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S38",
+   "file": "lib/whatsappMessages.js",
+   "sites": "quarantined 410 route",
+   "slice": "E",
+   "disposition": "RETIRE",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S39",
+   "file": "lib/analytics/builder.js",
+   "sites": "dead POS avg_check",
+   "slice": "E",
+   "disposition": "RETIRE",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S40a",
+   "file": "lib/analytics/sources.js",
+   "sites": "POS inactive",
+   "slice": "-",
+   "disposition": "RETAIN",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S40b",
+   "file": "src/pos/normalize.ts",
+   "sites": "POS inactive",
+   "slice": "-",
+   "disposition": "RETAIN",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S40c",
+   "file": "src/pos/types.ts",
+   "sites": "POS inactive",
+   "slice": "-",
+   "disposition": "RETAIN",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S40d",
+   "file": "src/pos/adapters/tabit.ts",
+   "sites": "POS inactive (comment keyword only)",
+   "slice": "-",
+   "disposition": "RETAIN",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S44a",
+   "file": "src/agent/types/analytics.ts",
+   "sites": "DailyMetric shape",
+   "slice": "B1",
+   "disposition": "MIGRATE (types)",
+   "presenceImpact": false,
+   "purchaseBasisImpact": true
+  },
+  {
+   "id": "S44b",
+   "file": "src/agent/types/agent.ts",
+   "sites": "types",
+   "slice": "D",
+   "disposition": "MIGRATE (types)",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S44c",
+   "file": "src/agent/types/shared.ts",
+   "sites": "types",
+   "slice": "D",
+   "disposition": "MIGRATE (types)",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S45",
+   "file": "lib/analytics/hourlySalesQuestion.js",
+   "sites": "classifier, no arithmetic",
+   "slice": "-",
+   "disposition": "RETAIN",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S46",
+   "file": "src/agent/proactive/suppressionRules.ts",
+   "sites": "Rule 8 closed-day suppression: currentValue === 0",
+   "slice": "D",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S47a",
+   "file": "src/agent/classifier/classifyIntent.ts",
+   "sites": "keyword classifier, no arithmetic",
+   "slice": "-",
+   "disposition": "RETAIN",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S47b",
+   "file": "src/agent/classifier/inferQuestionScope.ts",
+   "sites": "keyword classifier, no arithmetic",
+   "slice": "-",
+   "disposition": "RETAIN",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S47c",
+   "file": "src/agent/memory/memoryRules.ts",
+   "sites": "comment keyword only",
+   "slice": "-",
+   "disposition": "RETAIN",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S48a",
+   "file": "api/analytics/daily-builder.ts",
+   "sites": "endpoint wrapper; POS diagnose types",
+   "slice": "B1",
+   "disposition": "RETAIN (wrapper)",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "S48b",
+   "file": "api/daily-snapshot/run.ts",
+   "sites": "endpoint wrapper",
+   "slice": "B2",
+   "disposition": "RETAIN (wrapper)",
+   "presenceImpact": false,
+   "purchaseBasisImpact": false
+  }
+ ]
+}
