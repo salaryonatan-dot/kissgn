@@ -1,5 +1,7 @@
 # Owner Decision Trace (R1.4 BD-1 … BD-5 → implementation)
 
+> **Superseded in part by `artifacts/m1-financial-core-slice-a-remediation-r1/` (2026-09-29):** labor is the manually entered attendance-system employer cost (`MARJIN_LABOR/1`), gross `monthlySalary` is never labor cost, and profit/contribution/labor totals are typed results (TI-18). Statements below about `monthlyEmployerCost`, `salaryAccrued`, `fullyLoadedLabor*`, `laborCostBasis` or numeric profit with a `profit_components_incomplete` flag describe commit `a8fdf2c8` only.
+
 Source of decisions: `~/Documents/marjin-reviews/2026-09-28/financial-core-r1-4-owner-decisions/`.
 
 | Decision | Implemented in Slice A | Tests | Deferred |

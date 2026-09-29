@@ -1,13 +1,26 @@
 // Effective-dated cost timeline and calendar-day accrual (R1.2 doc 02, owner decision BD-2).
 //
-// Salaried amounts are FULL EMPLOYER COST as recorded by the business (labor invariant);
-// every amount is NET OF VAT (BD-1). Accrual is calendar-based: it never depends on entry
-// rows, duplicates, missing days or future rows. effectiveTo is always derived.
+// Every amount is NET OF VAT (BD-1). Salaried entries carry their meaning explicitly:
+// only `authoritative_employer_cost` entries are labor cost; a `gross_salary` entry is a
+// payroll datum kept for provenance and NEVER enters arithmetic (no uplift, no fallback).
+// Accrual is calendar-based: it never depends on entry rows, duplicates, missing days or
+// future rows. effectiveTo is always derived.
 import type { AmountString, Rat } from "../finance/decimal.js";
 import { parseAmountString, RAT_ZERO, ratAdd, ratDiv, ratFromInt, ratMul } from "../finance/decimal.js";
 import { daysInMonthOf, isBusinessDate } from "../finance/businessDate.js";
 import type { BusinessDate, Flag } from "../finance/types.js";
+import type { LaborIngestionMethod, LaborSourceSystem } from "../finance/labor.js";
 import { FinanceContractError } from "../finance/types.js";
+
+export type SalariedEntry =
+  | {
+      readonly employeeKey: string;
+      readonly kind: "authoritative_employer_cost";
+      readonly monthlyAmount: AmountString;
+      readonly sourceSystem: LaborSourceSystem;
+      readonly ingestionMethod: LaborIngestionMethod;
+    }
+  | { readonly employeeKey: string; readonly kind: "gross_salary"; readonly monthlyAmount: AmountString };
 
 export type CostVersionBasis = "recorded" | "attested_retroactive" | "current_applied_retrospectively";
 
@@ -16,7 +29,7 @@ export interface CostVersion {
   readonly effectiveFrom: BusinessDate; // inclusive
   readonly recordedAt: number; // ms epoch; orders corrections of the same effectiveFrom only
   readonly basis: CostVersionBasis;
-  readonly salaried: ReadonlyArray<{ readonly employeeKey: string; readonly monthlyEmployerCost: AmountString }>;
+  readonly salaried: ReadonlyArray<SalariedEntry>;
   readonly fixedItems: ReadonlyArray<{ readonly itemKey: string; readonly monthlyAmount: AmountString }>;
   readonly rent: { readonly mode: "none" } | { readonly mode: "fixed"; readonly monthlyAmount: AmountString } | { readonly mode: "pct"; readonly ratePct: AmountString };
   readonly royalty: { readonly mode: "none" } | { readonly mode: "pct"; readonly ratePct: AmountString };
@@ -26,7 +39,6 @@ export interface CostTimeline {
   readonly versions: readonly CostVersion[];
   readonly timelineSource: "persisted" | "compat_current_config";
   readonly vatBasis: "net_of_vat";
-  readonly laborCostBasis: "full_employer_cost_as_recorded";
   readonly flags?: readonly Flag[];
 }
 
@@ -96,7 +108,7 @@ export function accrueDay(version: CostVersion, date: BusinessDate, dayRevenue: 
   const dim = ratFromInt(daysInMonthOf(date));
   const perDay = (monthly: Rat) => ratDiv(monthly, dim);
   const revenue = dayRevenue === null ? RAT_ZERO : dayRevenue;
-  const salaried = perDay(sumAmounts(version.salaried.map((s) => s.monthlyEmployerCost)));
+  const salaried = perDay(sumAmounts(version.salaried.filter((s) => s.kind === "authoritative_employer_cost").map((s) => s.monthlyAmount)));
   const fixedRegular = perDay(sumAmounts(version.fixedItems.map((f) => f.monthlyAmount)));
   const rentFixed = version.rent.mode === "fixed" ? perDay(parseAmountString(version.rent.monthlyAmount)) : RAT_ZERO;
   const { rentPct, royaltyPct } = revenueLinkedCharges(version, revenue);
@@ -114,8 +126,11 @@ export interface WindowAccrual {
   readonly versionsApplied: readonly string[];
   readonly superseded: readonly string[];
   readonly uncoveredDates: readonly BusinessDate[];
-  /** number of distinct salaried employees across the versions applied in the window */
+  /** distinct employees with an authoritative salaried employer-cost entry in the window */
   readonly salariedEmployeesApplied: number;
+  /** recognised days whose version carries a gross-salary-only entry (no employer cost) */
+  readonly grossSalaryOnlyDates: readonly BusinessDate[];
+  readonly grossSalaryOnlyEmployees: readonly string[];
 }
 
 export function accrueWindow(timeline: CostTimeline, dates: readonly BusinessDate[], revenueByDate: ReadonlyMap<BusinessDate, Rat | null>): WindowAccrual {
@@ -124,6 +139,8 @@ export function accrueWindow(timeline: CostTimeline, dates: readonly BusinessDat
   const bases = new Set<CostVersionBasis>();
   const applied = new Set<string>();
   const salariedKeys = new Set<string>();
+  const grossKeys = new Set<string>();
+  const grossDates: BusinessDate[] = [];
   const uncovered: BusinessDate[] = [];
   for (const d of dates) {
     const v = versionForDay(resolved, d);
@@ -133,7 +150,15 @@ export function accrueWindow(timeline: CostTimeline, dates: readonly BusinessDat
     }
     bases.add(v.basis);
     applied.add(v.versionId);
-    for (const e of v.salaried) salariedKeys.add(e.employeeKey);
+    let grossDay = false;
+    for (const e of v.salaried) {
+      if (e.kind === "authoritative_employer_cost") salariedKeys.add(e.employeeKey);
+      else {
+        grossKeys.add(e.employeeKey);
+        grossDay = true;
+      }
+    }
+    if (grossDay) grossDates.push(d);
     const a = accrueDay(v, d, revenueByDate.has(d) ? (revenueByDate.get(d) as Rat | null) : null);
     salaried = ratAdd(salaried, a.salaried);
     fixedRegular = ratAdd(fixedRegular, a.fixedRegular);
@@ -149,6 +174,7 @@ export function accrueWindow(timeline: CostTimeline, dates: readonly BusinessDat
     superseded: resolved.superseded,
     uncoveredDates: uncovered,
     salariedEmployeesApplied: salariedKeys.size,
+    grossSalaryOnlyDates: grossDates,
+    grossSalaryOnlyEmployees: [...grossKeys].sort(),
   };
 }
-

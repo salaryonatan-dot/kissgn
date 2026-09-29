@@ -43,16 +43,28 @@
     "report.actual.revenue.value": "31000",
     "report.actual.purchases.value": "9300",
     "report.actual.directLabor.value": "6200",
-    "report.actual.salaryAccrued": "31000",
+    "report.actual.labor.salariedEmployerCost": null,
+    "report.actual.labor.grossSalaryDatumPresent": true,
     "report.actual.fixedAccrual.total": "6200",
-    "report.actual.operatingProfit": "-21700",
+    "report.actual.operatingProfit": {
+     "state": "complete",
+     "value": "9300",
+     "issues": []
+    },
+    "report.actual.labor.employerCost.value": "6200",
     "report.actual.purchasesPct.value": "30",
-    "report.actual.fullyLoadedLaborPct.value": "120",
+    "report.actual.labor.employerCostPct.value": "20",
     "report.coverage.revenue.presentDays": 31,
     "report.today": null,
     "report.window.recognizedDays": 31,
     "report.actual.revenue.complete": true
-   }
+   },
+   "expectFlags": [
+    {
+     "code": "gross_salary_not_labor_cost",
+     "key": "e1"
+    }
+   ]
   },
   {
    "id": "G-02",
@@ -79,25 +91,52 @@
      "sales": "500"
     }
    ],
-   "config": {
-    "employees": [
-     {
-      "id": "e1",
-      "type": "global",
-      "monthlySalary": "30000"
-     }
-    ]
-   },
-   "fixed": [
+   "timeline": [
     {
-     "id": "f1",
-     "amount": "3000"
+     "versionId": "auth",
+     "effectiveFrom": "0000-01-01",
+     "recordedAt": 1,
+     "basis": "recorded",
+     "salaried": [
+      {
+       "employeeKey": "e1",
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "30000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
+      }
+     ],
+     "fixedItems": [
+      {
+       "itemKey": "f1",
+       "monthlyAmount": "3000"
+      }
+     ],
+     "rent": {
+      "mode": "none"
+     },
+     "royalty": {
+      "mode": "none"
+     }
     }
    ],
+   "labor": {
+    "policyId": "fixture/excludes-salaried",
+    "meaning": "authoritative_employer_cost",
+    "sourceSystem": "attendance_workforce",
+    "ingestionMethod": "manual",
+    "scope": "excludes_salaried",
+    "fields": [
+     "payroll",
+     "hourly_payroll"
+    ]
+   },
    "expect": {
     "report.actual.revenue.value": "16500",
-    "report.actual.salaryAccrued": "17000",
+    "report.actual.labor.salariedEmployerCost": "17000",
     "report.actual.fixedAccrual.regular": "1700",
+    "report.actual.operatingProfit.state": "incomplete_components",
+    "report.actual.operatingProfit.value": null,
     "report.today.date": "2026-09-17",
     "report.today.state": "open",
     "report.today.dayPresence": "present",
@@ -119,28 +158,54 @@
     "month": "2026-09"
    },
    "rows": [],
-   "config": {
-    "employees": [
-     {
-      "id": "e1",
-      "type": "global",
-      "monthlySalary": "30000"
-     }
-    ]
-   },
-   "fixed": [
+   "timeline": [
     {
-     "id": "f1",
-     "amount": "3000"
+     "versionId": "auth",
+     "effectiveFrom": "0000-01-01",
+     "recordedAt": 1,
+     "basis": "recorded",
+     "salaried": [
+      {
+       "employeeKey": "e1",
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "30000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
+      }
+     ],
+     "fixedItems": [
+      {
+       "itemKey": "f1",
+       "monthlyAmount": "3000"
+      }
+     ],
+     "rent": {
+      "mode": "none"
+     },
+     "royalty": {
+      "mode": "none"
+     }
     }
    ],
+   "labor": {
+    "policyId": "fixture/excludes-salaried",
+    "meaning": "authoritative_employer_cost",
+    "sourceSystem": "attendance_workforce",
+    "ingestionMethod": "manual",
+    "scope": "excludes_salaried",
+    "fields": [
+     "payroll",
+     "hourly_payroll"
+    ]
+   },
    "expect": {
     "report.actual.revenue.value": null,
     "report.actual.revenue.presentDays": 0,
-    "report.actual.salaryAccrued": "1000",
+    "report.actual.labor.salariedEmployerCost": "1000",
     "report.actual.fixedAccrual.total": "100",
-    "report.actual.operatingProfit": null,
-    "report.actual.contributionBeforeFixed": null,
+    "report.actual.operatingProfit.state": "revenue_missing",
+    "report.actual.operatingProfit.value": null,
+    "report.actual.contributionBeforeFixed.state": "revenue_missing",
     "report.today.dayPresence": "missing",
     "report.actual.purchasesPct.state": "denominator_missing"
    }
@@ -173,19 +238,50 @@
      }
     }
    ],
-   "config": {
-    "employees": [
-     {
-      "id": "e1",
-      "type": "global",
-      "monthlySalary": "30000"
+   "timeline": [
+    {
+     "versionId": "auth",
+     "effectiveFrom": "0000-01-01",
+     "recordedAt": 1,
+     "basis": "recorded",
+     "salaried": [
+      {
+       "employeeKey": "e1",
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "30000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
+      }
+     ],
+     "fixedItems": [
+      {
+       "itemKey": "f1",
+       "monthlyAmount": "3000"
+      }
+     ],
+     "rent": {
+      "mode": "none"
+     },
+     "royalty": {
+      "mode": "none"
      }
+    }
+   ],
+   "labor": {
+    "policyId": "fixture/excludes-salaried",
+    "meaning": "authoritative_employer_cost",
+    "sourceSystem": "attendance_workforce",
+    "ingestionMethod": "manual",
+    "scope": "excludes_salaried",
+    "fields": [
+     "payroll",
+     "hourly_payroll"
     ]
    },
    "expect": {
     "report.actual.revenue.value": "9300",
     "report.actual.purchases.value": "100",
-    "report.actual.salaryAccrued": "10000",
+    "report.actual.labor.salariedEmployerCost": "10000",
     "report.today.dayPresence": "present"
    }
   },
@@ -384,16 +480,15 @@
      "2026-09-04",
      "2026-09-06"
     ],
-    "report.actual.purchasesPct.value": "0"
+    "report.actual.purchasesPct.value": "0",
+    "report.actual.operatingProfit.state": "incomplete_components",
+    "report.actual.operatingProfit.value": null
    },
    "expectFlags": [
     {
      "code": "ratio_numerator_incomplete",
      "date": "2026-09-06",
      "field": "purchases"
-    },
-    {
-     "code": "profit_components_incomplete"
     }
    ]
   },
@@ -735,8 +830,9 @@
     ]
    },
    "expect": {
-    "report.actual.operatingProfit": null,
-    "report.actual.contributionBeforeFixed": null,
+    "report.actual.operatingProfit.state": "revenue_missing",
+    "report.actual.operatingProfit.value": null,
+    "report.actual.contributionBeforeFixed.value": null,
     "report.actual.purchases.value": "100",
     "report.actual.purchasesPct.state": "denominator_missing"
    }
@@ -841,7 +937,8 @@
      "current_applied_retrospectively"
     ],
     "report.timelineSource": "compat_current_config",
-    "report.actual.salaryAccrued": "30000"
+    "report.actual.labor.salariedEmployerCost": null,
+    "report.actual.labor.grossSalaryDatumPresent": true
    }
   },
   {
@@ -862,7 +959,10 @@
      "salaried": [
       {
        "employeeKey": "e1",
-       "monthlyEmployerCost": "30000"
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "30000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
       }
      ],
      "fixedItems": [],
@@ -881,7 +981,10 @@
      "salaried": [
       {
        "employeeKey": "e1",
-       "monthlyEmployerCost": "45000"
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "45000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
       }
      ],
      "fixedItems": [],
@@ -893,8 +996,19 @@
      }
     }
    ],
+   "labor": {
+    "policyId": "fixture/excludes-salaried",
+    "meaning": "authoritative_employer_cost",
+    "sourceSystem": "attendance_workforce",
+    "ingestionMethod": "manual",
+    "scope": "excludes_salaried",
+    "fields": [
+     "payroll",
+     "hourly_payroll"
+    ]
+   },
    "expect": {
-    "report.actual.salaryAccrued": "38000",
+    "report.actual.labor.salariedEmployerCost": "38000",
     "report.costVersionsApplied": [
      "v1",
      "v2"
@@ -919,7 +1033,10 @@
      "salaried": [
       {
        "employeeKey": "e1",
-       "monthlyEmployerCost": "30000"
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "30000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
       }
      ],
      "fixedItems": [],
@@ -938,7 +1055,10 @@
      "salaried": [
       {
        "employeeKey": "e1",
-       "monthlyEmployerCost": "45000"
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "45000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
       }
      ],
      "fixedItems": [],
@@ -950,8 +1070,19 @@
      }
     }
    ],
+   "labor": {
+    "policyId": "fixture/excludes-salaried",
+    "meaning": "authoritative_employer_cost",
+    "sourceSystem": "attendance_workforce",
+    "ingestionMethod": "manual",
+    "scope": "excludes_salaried",
+    "fields": [
+     "payroll",
+     "hourly_payroll"
+    ]
+   },
    "expect": {
-    "report.actual.salaryAccrued": "45000",
+    "report.actual.labor.salariedEmployerCost": "45000",
     "report.costVersionsApplied": [
      "v2"
     ]
@@ -975,7 +1106,10 @@
      "salaried": [
       {
        "employeeKey": "e1",
-       "monthlyEmployerCost": "30000"
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "30000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
       }
      ],
      "fixedItems": [],
@@ -994,7 +1128,10 @@
      "salaried": [
       {
        "employeeKey": "e1",
-       "monthlyEmployerCost": "45000"
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "45000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
       }
      ],
      "fixedItems": [],
@@ -1006,8 +1143,19 @@
      }
     }
    ],
+   "labor": {
+    "policyId": "fixture/excludes-salaried",
+    "meaning": "authoritative_employer_cost",
+    "sourceSystem": "attendance_workforce",
+    "ingestionMethod": "manual",
+    "scope": "excludes_salaried",
+    "fields": [
+     "payroll",
+     "hourly_payroll"
+    ]
+   },
    "expect": {
-    "report.actual.salaryAccrued": "30500"
+    "report.actual.labor.salariedEmployerCost": "30500"
    }
   },
   {
@@ -1028,7 +1176,10 @@
      "salaried": [
       {
        "employeeKey": "e1",
-       "monthlyEmployerCost": "30000"
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "30000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
       }
      ],
      "fixedItems": [],
@@ -1047,11 +1198,17 @@
      "salaried": [
       {
        "employeeKey": "e1",
-       "monthlyEmployerCost": "30000"
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "30000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
       },
       {
        "employeeKey": "e2",
-       "monthlyEmployerCost": "15000"
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "15000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
       }
      ],
      "fixedItems": [],
@@ -1070,7 +1227,10 @@
      "salaried": [
       {
        "employeeKey": "e2",
-       "monthlyEmployerCost": "15000"
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "15000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
       }
      ],
      "fixedItems": [],
@@ -1082,8 +1242,19 @@
      }
     }
    ],
+   "labor": {
+    "policyId": "fixture/excludes-salaried",
+    "meaning": "authoritative_employer_cost",
+    "sourceSystem": "attendance_workforce",
+    "ingestionMethod": "manual",
+    "scope": "excludes_salaried",
+    "fields": [
+     "payroll",
+     "hourly_payroll"
+    ]
+   },
    "expect": {
-    "report.actual.salaryAccrued": "30000",
+    "report.actual.labor.salariedEmployerCost": "30000",
     "report.configurationBasis": [
      "recorded"
     ]
@@ -1107,7 +1278,10 @@
      "salaried": [
       {
        "employeeKey": "e1",
-       "monthlyEmployerCost": "30000"
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "30000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
       }
      ],
      "fixedItems": [],
@@ -1126,7 +1300,10 @@
      "salaried": [
       {
        "employeeKey": "e1",
-       "monthlyEmployerCost": "60000"
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "60000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
       }
      ],
      "fixedItems": [],
@@ -1138,8 +1315,19 @@
      }
     }
    ],
+   "labor": {
+    "policyId": "fixture/excludes-salaried",
+    "meaning": "authoritative_employer_cost",
+    "sourceSystem": "attendance_workforce",
+    "ingestionMethod": "manual",
+    "scope": "excludes_salaried",
+    "fields": [
+     "payroll",
+     "hourly_payroll"
+    ]
+   },
    "expect": {
-    "report.actual.salaryAccrued": "60000",
+    "report.actual.labor.salariedEmployerCost": "60000",
     "report.costVersionsApplied": [
      "vB"
     ]
@@ -1169,7 +1357,10 @@
      "salaried": [
       {
        "employeeKey": "e1",
-       "monthlyEmployerCost": "30000"
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "30000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
       }
      ],
      "fixedItems": [],
@@ -1188,7 +1379,10 @@
      "salaried": [
       {
        "employeeKey": "e1",
-       "monthlyEmployerCost": "90000"
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "90000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
       }
      ],
      "fixedItems": [],
@@ -1200,8 +1394,19 @@
      }
     }
    ],
+   "labor": {
+    "policyId": "fixture/excludes-salaried",
+    "meaning": "authoritative_employer_cost",
+    "sourceSystem": "attendance_workforce",
+    "ingestionMethod": "manual",
+    "scope": "excludes_salaried",
+    "fields": [
+     "payroll",
+     "hourly_payroll"
+    ]
+   },
    "expect": {
-    "report.actual.salaryAccrued": "10000",
+    "report.actual.labor.salariedEmployerCost": "10000",
     "report.costVersionsApplied": [
      "v1"
     ]
@@ -1222,19 +1427,28 @@
      "sales": "0",
      "supplier_payments": {
       "s1": "100"
-     }
+     },
+     "payroll": "0"
     },
     {
      "id": "b",
      "date": "2026-09-02",
-     "sales": "0"
+     "sales": "0",
+     "supplier_payments": {
+      "s1": "skip"
+     },
+     "payroll": "0"
     }
    ],
    "config": {},
    "expect": {
     "report.actual.revenue.value": "0",
     "report.actual.purchasesPct.state": "zero_denominator",
-    "report.actual.operatingProfit": "-100",
+    "report.actual.operatingProfit": {
+     "state": "complete",
+     "value": "-100",
+     "issues": []
+    },
     "dm.2026-09-01.foodCostPct": null
    }
   },
@@ -1988,12 +2202,38 @@
   },
   {
    "id": "G-25c",
-   "desc": "E7/E8 labor with salary accrual in a 31-day month",
+   "desc": "E7/E8 labor employer cost with authoritative salaried accrual in a 31-day month (complete window)",
    "asOf": "2026-10-10",
    "window": {
     "kind": "open_month",
     "month": "2026-10"
    },
+   "expand": [
+    {
+     "from": "2026-10-01",
+     "to": "2026-10-02",
+     "row": {
+      "sales": "0",
+      "supplier_payments": {
+       "s1": "skip"
+      },
+      "payroll": "0"
+     },
+     "prefix": "g"
+    },
+    {
+     "from": "2026-10-04",
+     "to": "2026-10-10",
+     "row": {
+      "sales": "0",
+      "supplier_payments": {
+       "s1": "skip"
+      },
+      "payroll": "0"
+     },
+     "prefix": "g"
+    }
+   ],
    "rows": [
     {
      "id": "a",
@@ -2001,23 +2241,61 @@
      "sales": "20000",
      "hourly_payroll": {
       "w1": "1234.5"
+     },
+     "supplier_payments": {
+      "s1": "skip"
      }
     }
    ],
-   "config": {
-    "employees": [
-     {
-      "id": "e1",
-      "type": "global",
-      "monthlySalary": "12000"
+   "timeline": [
+    {
+     "versionId": "auth",
+     "effectiveFrom": "0000-01-01",
+     "recordedAt": 1,
+     "basis": "recorded",
+     "salaried": [
+      {
+       "employeeKey": "e1",
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "12000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
+      }
+     ],
+     "fixedItems": [],
+     "rent": {
+      "mode": "none"
+     },
+     "royalty": {
+      "mode": "none"
      }
+    }
+   ],
+   "labor": {
+    "policyId": "fixture/excludes-salaried",
+    "meaning": "authoritative_employer_cost",
+    "sourceSystem": "attendance_workforce",
+    "ingestionMethod": "manual",
+    "scope": "excludes_salaried",
+    "fields": [
+     "payroll",
+     "hourly_payroll"
     ]
    },
    "expect": {
-    "report.actual.salaryAccrued": "120000/31",
-    "report.actual.fullyLoadedLabor": "316539/62",
-    "report.actual.fullyLoadedLaborPct.value": "316539/12400",
-    "report.actual.directLaborPct.value": "6.1725"
+    "report.actual.labor.salariedEmployerCost": "120000/31",
+    "report.actual.labor.employerCost": {
+     "state": "complete",
+     "value": "316539/62",
+     "issues": []
+    },
+    "report.actual.labor.employerCostPct.value": "316539/12400",
+    "report.actual.directLaborPct.value": "6.1725",
+    "report.actual.operatingProfit": {
+     "state": "complete",
+     "value": "923461/62",
+     "issues": []
+    }
    }
   },
   {
@@ -2184,18 +2462,44 @@
     "month": "2028-02"
    },
    "rows": [],
-   "config": {
-    "employees": [
-     {
-      "id": "e",
-      "type": "global",
-      "monthlySalary": "29000"
+   "timeline": [
+    {
+     "versionId": "a",
+     "effectiveFrom": "0000-01-01",
+     "recordedAt": 1,
+     "basis": "recorded",
+     "salaried": [
+      {
+       "employeeKey": "e",
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "29000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
+      }
+     ],
+     "fixedItems": [],
+     "rent": {
+      "mode": "none"
+     },
+     "royalty": {
+      "mode": "none"
      }
+    }
+   ],
+   "labor": {
+    "policyId": "fixture/excludes-salaried",
+    "meaning": "authoritative_employer_cost",
+    "sourceSystem": "attendance_workforce",
+    "ingestionMethod": "manual",
+    "scope": "excludes_salaried",
+    "fields": [
+     "payroll",
+     "hourly_payroll"
     ]
    },
    "expect": {
     "report.window.recognizedDays": 29,
-    "report.actual.salaryAccrued": "29000"
+    "report.actual.labor.salariedEmployerCost": "29000"
    }
   },
   {
@@ -2207,18 +2511,44 @@
     "month": "2027-02"
    },
    "rows": [],
-   "config": {
-    "employees": [
-     {
-      "id": "e",
-      "type": "global",
-      "monthlySalary": "28000"
+   "timeline": [
+    {
+     "versionId": "a",
+     "effectiveFrom": "0000-01-01",
+     "recordedAt": 1,
+     "basis": "recorded",
+     "salaried": [
+      {
+       "employeeKey": "e",
+       "kind": "authoritative_employer_cost",
+       "monthlyAmount": "28000",
+       "sourceSystem": "attendance_workforce",
+       "ingestionMethod": "manual"
+      }
+     ],
+     "fixedItems": [],
+     "rent": {
+      "mode": "none"
+     },
+     "royalty": {
+      "mode": "none"
      }
+    }
+   ],
+   "labor": {
+    "policyId": "fixture/excludes-salaried",
+    "meaning": "authoritative_employer_cost",
+    "sourceSystem": "attendance_workforce",
+    "ingestionMethod": "manual",
+    "scope": "excludes_salaried",
+    "fields": [
+     "payroll",
+     "hourly_payroll"
     ]
    },
    "expect": {
     "report.window.recognizedDays": 28,
-    "report.actual.salaryAccrued": "28000"
+    "report.actual.labor.salariedEmployerCost": "28000"
    }
   },
   {
@@ -2364,7 +2694,8 @@
     }
    ],
    "expect": {
-    "report.actual.salaryAccrued": "3000",
+    "report.actual.labor.salariedEmployerCost": null,
+    "report.actual.labor.grossSalaryDatumPresent": true,
     "report.actual.fixedAccrual.regular": "4000",
     "report.actual.fixedAccrual.rentFixed": "5000"
    },
@@ -2787,7 +3118,7 @@
   {
    "id": "G-X3",
    "desc": "no stored cost configuration: costs missing, not zero",
-   "asOf": "2026-09-02",
+   "asOf": "2026-09-01",
    "window": {
     "kind": "open_month",
     "month": "2026-09"
@@ -2805,28 +3136,37 @@
     }
    ],
    "expect": {
-    "report.actual.operatingProfit": null,
-    "report.actual.fullyLoadedLabor": null,
-    "report.actual.fullyLoadedLaborPct": {
-     "state": "numerator_missing"
+    "report.actual.operatingProfit.state": "incomplete_components",
+    "report.actual.operatingProfit.value": null,
+    "report.actual.operatingProfit.issues": [
+     {
+      "component": "cost_configuration",
+      "kind": "missing",
+      "reason": "cost_config_absent",
+      "dates": [
+       "2026-09-01"
+      ]
+     }
+    ],
+    "report.actual.contributionBeforeFixed": {
+     "state": "complete",
+     "value": "600",
+     "issues": []
     },
-    "report.actual.contributionBeforeFixed": "600",
+    "report.actual.labor.employerCost.value": "100",
+    "report.actual.labor.employerCostPct.value": "10",
     "report.costVersionsApplied": []
    },
    "expectFlags": [
     {
      "code": "cost_config_absent",
      "date": "2026-09-01"
-    },
-    {
-     "code": "cost_config_absent",
-     "date": "2026-09-02"
     }
    ]
   },
   {
    "id": "G-X4",
-   "desc": "no labor recorded and no salaried employee: labor % missing, never 0%",
+   "desc": "no labor recorded: employer cost missing, labor % and profit unavailable (never 0%)",
    "asOf": "2026-09-01",
    "window": {
     "kind": "open_month",
@@ -2842,20 +3182,29 @@
     }
    ],
    "expect": {
-    "report.actual.fullyLoadedLabor": null,
-    "report.actual.fullyLoadedLaborPct": {
-     "state": "numerator_missing"
+    "report.actual.labor.employerCost": {
+     "state": "incomplete_components",
+     "value": null,
+     "issues": [
+      {
+       "component": "labor_employer_cost",
+       "kind": "missing",
+       "reason": "not_recorded",
+       "dates": [
+        "2026-09-01"
+       ]
+      }
+     ]
+    },
+    "report.actual.labor.employerCostPct": {
+     "state": "incomplete_components"
     },
     "report.actual.directLaborPct": {
      "state": "numerator_missing"
     },
-    "report.actual.operatingProfit": "700"
-   },
-   "expectFlags": [
-    {
-     "code": "profit_components_incomplete"
-    }
-   ]
+    "report.actual.operatingProfit.state": "incomplete_components",
+    "report.actual.operatingProfit.value": null
+   }
   },
   {
    "id": "G-X5",
@@ -2884,6 +3233,611 @@
      "2026-09-01"
     ],
     "report.coverage.revenue.invalidDays": []
+   }
+  },
+  {
+   "id": "R1-A",
+   "desc": "revenue present, purchases missing, labor present => profit incomplete",
+   "asOf": "2026-09-01",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "config": {},
+   "rows": [
+    {
+     "id": "a",
+     "date": "2026-09-01",
+     "sales": "1000",
+     "payroll": "200"
+    }
+   ],
+   "expect": {
+    "report.actual.operatingProfit": {
+     "state": "incomplete_components",
+     "value": null,
+     "issues": [
+      {
+       "component": "purchases",
+       "kind": "missing",
+       "reason": "not_recorded",
+       "dates": [
+        "2026-09-01"
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "R1-B",
+   "desc": "purchases explicitly 0 with authoritative labor => profit complete",
+   "asOf": "2026-09-01",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "config": {},
+   "rows": [
+    {
+     "id": "a",
+     "date": "2026-09-01",
+     "sales": "1000",
+     "supplier_payments": {
+      "s1": "0"
+     },
+     "payroll": "200"
+    }
+   ],
+   "expect": {
+    "report.actual.operatingProfit": {
+     "state": "complete",
+     "value": "800",
+     "issues": []
+    },
+    "report.actual.contributionBeforeFixed.value": "800"
+   }
+  },
+  {
+   "id": "R1-C",
+   "desc": "labor invalid => profit invalid_components (no number)",
+   "asOf": "2026-09-01",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "config": {},
+   "rows": [
+    {
+     "id": "a",
+     "date": "2026-09-01",
+     "sales": "1000",
+     "supplier_payments": {
+      "s1": "300"
+     },
+     "payroll": "abc"
+    }
+   ],
+   "expect": {
+    "report.actual.operatingProfit": {
+     "state": "invalid_components",
+     "value": null,
+     "issues": [
+      {
+       "component": "labor_employer_cost",
+       "kind": "invalid",
+       "reason": "invalid_or_partial_value",
+       "dates": [
+        "2026-09-01"
+       ]
+      }
+     ]
+    },
+    "report.actual.labor.employerCost.state": "invalid_components",
+    "report.actual.labor.employerCostPct": {
+     "state": "invalid_components"
+    }
+   }
+  },
+  {
+   "id": "R1-C2",
+   "desc": "partially invalid purchases (Codex adversarial) => profit invalid_components",
+   "asOf": "2026-09-01",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "config": {},
+   "rows": [
+    {
+     "id": "a",
+     "date": "2026-09-01",
+     "sales": "1000",
+     "supplier_payments": {
+      "s1": "100",
+      "s2": "x"
+     },
+     "payroll": "200"
+    }
+   ],
+   "expect": {
+    "report.actual.operatingProfit.state": "invalid_components",
+    "report.actual.operatingProfit.value": null,
+    "report.actual.purchases.value": "100"
+   }
+  },
+  {
+   "id": "R1-D",
+   "desc": "revenue missing, costs present => revenue_missing",
+   "asOf": "2026-09-01",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "config": {},
+   "rows": [
+    {
+     "id": "a",
+     "date": "2026-09-01",
+     "supplier_payments": {
+      "s1": "300"
+     },
+     "payroll": "200"
+    }
+   ],
+   "expect": {
+    "report.actual.operatingProfit.state": "revenue_missing",
+    "report.actual.operatingProfit.value": null
+   }
+  },
+  {
+   "id": "R1-E",
+   "desc": "revenue explicitly 0, all costs complete => real numeric loss",
+   "asOf": "2026-09-01",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "config": {
+    "employees": []
+   },
+   "fixed": [
+    {
+     "id": "f",
+     "amount": "3000"
+    }
+   ],
+   "rows": [
+    {
+     "id": "a",
+     "date": "2026-09-01",
+     "sales": "0",
+     "supplier_payments": {
+      "s1": "50"
+     },
+     "payroll": "150"
+    }
+   ],
+   "expect": {
+    "report.actual.operatingProfit": {
+     "state": "complete",
+     "value": "-300",
+     "issues": []
+    }
+   }
+  },
+  {
+   "id": "R1-F",
+   "desc": "authoritative value not entered for the day; gross salary exists => labor missing, no gross fallback",
+   "asOf": "2026-09-01",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "config": {
+    "employees": [
+     {
+      "id": "e1",
+      "type": "global",
+      "monthlySalary": "30000"
+     }
+    ]
+   },
+   "rows": [
+    {
+     "id": "a",
+     "date": "2026-09-01",
+     "sales": "1000",
+     "supplier_payments": {
+      "s1": "300"
+     }
+    }
+   ],
+   "expect": {
+    "report.actual.labor.employerCost.state": "incomplete_components",
+    "report.actual.labor.employerCost.value": null,
+    "report.actual.labor.salariedEmployerCost": null,
+    "report.actual.labor.grossSalaryDatumPresent": true,
+    "report.actual.operatingProfit.state": "incomplete_components",
+    "report.actual.operatingProfit.value": null
+   },
+   "expectFlags": [
+    {
+     "code": "gross_salary_not_labor_cost",
+     "key": "e1"
+    }
+   ]
+  },
+  {
+   "id": "R1-G",
+   "desc": "authoritative employer cost entered (manual, attendance system) => labor complete with provenance",
+   "asOf": "2026-09-01",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "config": {
+    "employees": [
+     {
+      "id": "e1",
+      "type": "global",
+      "monthlySalary": "30000"
+     }
+    ]
+   },
+   "rows": [
+    {
+     "id": "a",
+     "date": "2026-09-01",
+     "sales": "1000",
+     "supplier_payments": {
+      "s1": "300"
+     },
+     "payroll": "250",
+     "hourly_payroll": {
+      "w1": "50"
+     }
+    }
+   ],
+   "expect": {
+    "report.actual.labor.employerCost": {
+     "state": "complete",
+     "value": "300",
+     "issues": []
+    },
+    "report.actual.labor.source.sourceSystem": "attendance_workforce",
+    "report.actual.labor.source.ingestionMethod": "manual",
+    "report.actual.labor.source.meaning": "authoritative_employer_cost",
+    "report.actual.labor.employerCostPct.value": "30",
+    "report.actual.operatingProfit": {
+     "state": "complete",
+     "value": "400",
+     "issues": []
+    },
+    "report.versions.labor": "MARJIN_LABOR/1"
+   }
+  },
+  {
+   "id": "R1-H",
+   "desc": "scope excludes_salaried + gross salary only => salaried employer cost missing, gross never makes labor complete",
+   "asOf": "2026-09-01",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "config": {
+    "employees": [
+     {
+      "id": "e1",
+      "type": "global",
+      "monthlySalary": "30000"
+     }
+    ]
+   },
+   "labor": {
+    "policyId": "fixture/excludes-salaried",
+    "meaning": "authoritative_employer_cost",
+    "sourceSystem": "attendance_workforce",
+    "ingestionMethod": "manual",
+    "scope": "excludes_salaried",
+    "fields": [
+     "payroll",
+     "hourly_payroll"
+    ]
+   },
+   "rows": [
+    {
+     "id": "a",
+     "date": "2026-09-01",
+     "sales": "1000",
+     "supplier_payments": {
+      "s1": "300"
+     },
+     "payroll": "200"
+    }
+   ],
+   "expect": {
+    "report.actual.labor.salariedEmployerCost": null,
+    "report.actual.labor.employerCost": {
+     "state": "incomplete_components",
+     "value": null,
+     "issues": [
+      {
+       "component": "salaried_employer_cost",
+       "kind": "missing",
+       "reason": "gross_salary_not_employer_cost",
+       "dates": [
+        "2026-09-01"
+       ]
+      }
+     ]
+    },
+    "report.actual.operatingProfit.state": "incomplete_components",
+    "report.actual.operatingProfit.value": null
+   }
+  },
+  {
+   "id": "R1-I",
+   "desc": "other_expense optional: absent is fine, invalid is an invalid component",
+   "asOf": "2026-09-02",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "config": {},
+   "rows": [
+    {
+     "id": "a",
+     "date": "2026-09-01",
+     "sales": "1000",
+     "supplier_payments": {
+      "s1": "300"
+     },
+     "payroll": "200"
+    },
+    {
+     "id": "b",
+     "date": "2026-09-02",
+     "sales": "1000",
+     "supplier_payments": {
+      "s1": "300"
+     },
+     "payroll": "200",
+     "other_expense": "1,2"
+    }
+   ],
+   "expect": {
+    "report.actual.operatingProfit.state": "invalid_components",
+    "report.actual.operatingProfit.issues": [
+     {
+      "component": "other_expense",
+      "kind": "invalid",
+      "reason": "invalid_or_partial_value",
+      "dates": [
+       "2026-09-02"
+      ]
+     }
+    ],
+    "report.actual.contributionBeforeFixed.state": "invalid_components"
+   }
+  },
+  {
+   "id": "R1-J",
+   "desc": "invalid fixed configuration => profit invalid_components",
+   "asOf": "2026-09-01",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "config": {},
+   "fixed": [
+    {
+     "id": "f",
+     "amount": "12,5"
+    }
+   ],
+   "rows": [
+    {
+     "id": "a",
+     "date": "2026-09-01",
+     "sales": "1000",
+     "supplier_payments": {
+      "s1": "300"
+     },
+     "payroll": "200"
+    }
+   ],
+   "expect": {
+    "report.actual.operatingProfit.state": "invalid_components",
+    "report.actual.contributionBeforeFixed": {
+     "state": "complete",
+     "value": "500",
+     "issues": []
+    }
+   }
+  },
+  {
+   "id": "R1-K",
+   "type": "error",
+   "desc": "labor source omitted => contract error",
+   "asOf": "2026-09-01",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "rows": [],
+   "labor": "__OMIT__",
+   "expectError": "labor_source_required"
+  },
+  {
+   "id": "R1-L",
+   "desc": "missing day inside the window makes profit incomplete (missing != zero)",
+   "asOf": "2026-09-02",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "config": {},
+   "rows": [
+    {
+     "id": "a",
+     "date": "2026-09-01",
+     "sales": "1000",
+     "supplier_payments": {
+      "s1": "300"
+     },
+     "payroll": "200"
+    }
+   ],
+   "expect": {
+    "report.actual.operatingProfit.state": "incomplete_components",
+    "report.actual.operatingProfit.value": null
+   }
+  },
+  {
+   "id": "R1-M",
+   "desc": "percentage rent configured without a rate: configuration missing, profit incomplete",
+   "asOf": "2026-09-01",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "config": {
+    "rentType": "pct"
+   },
+   "rows": [
+    {
+     "id": "a",
+     "date": "2026-09-01",
+     "sales": "1000",
+     "supplier_payments": {
+      "s1": "300"
+     },
+     "payroll": "200"
+    }
+   ],
+   "expect": {
+    "report.actual.operatingProfit": {
+     "state": "incomplete_components",
+     "value": null,
+     "issues": [
+      {
+       "component": "cost_configuration",
+       "kind": "missing",
+       "reason": "missing_rate:rentPct",
+       "dates": [
+        "2026-09-01"
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "R1-N",
+   "desc": "royalty enabled without a rate; enabled fixed item without amount: missing, not zero",
+   "asOf": "2026-09-01",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "config": {
+    "hasRoyalty": true
+   },
+   "fixed": [
+    {
+     "id": "f",
+     "amount": ""
+    }
+   ],
+   "rows": [
+    {
+     "id": "a",
+     "date": "2026-09-01",
+     "sales": "1000",
+     "supplier_payments": {
+      "s1": "300"
+     },
+     "payroll": "200"
+    }
+   ],
+   "expect": {
+    "report.actual.operatingProfit.state": "incomplete_components",
+    "report.actual.operatingProfit.value": null,
+    "report.actual.operatingProfit.issues": [
+     {
+      "component": "cost_configuration",
+      "kind": "missing",
+      "reason": "missing_fixed_amount:f,missing_rate:royaltyPct",
+      "dates": [
+       "2026-09-01"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": "R1-O",
+   "desc": "labor % needs a complete denominator: revenue missing on one day => not a value",
+   "asOf": "2026-09-02",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "config": {},
+   "rows": [
+    {
+     "id": "a",
+     "date": "2026-09-01",
+     "sales": "1000",
+     "supplier_payments": {
+      "s1": "300"
+     },
+     "payroll": "200"
+    },
+    {
+     "id": "b",
+     "date": "2026-09-02",
+     "supplier_payments": {
+      "s1": "300"
+     },
+     "payroll": "200"
+    }
+   ],
+   "expect": {
+    "report.actual.labor.employerCost": {
+     "state": "complete",
+     "value": "400",
+     "issues": []
+    },
+    "report.actual.labor.employerCostPct": {
+     "state": "incomplete_components"
+    }
+   }
+  },
+  {
+   "id": "R1-P",
+   "desc": "revenue invalid on every day => invalid_components (not revenue_missing)",
+   "asOf": "2026-09-01",
+   "window": {
+    "kind": "open_month",
+    "month": "2026-09"
+   },
+   "config": {},
+   "rows": [
+    {
+     "id": "a",
+     "date": "2026-09-01",
+     "sales": "12,5",
+     "supplier_payments": {
+      "s1": "300"
+     },
+     "payroll": "200"
+    }
+   ],
+   "expect": {
+    "report.actual.operatingProfit.state": "invalid_components",
+    "report.actual.operatingProfit.value": null
    }
   }
  ]

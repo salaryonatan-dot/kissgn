@@ -7,6 +7,7 @@
     "src/finance/businessDate.ts",
     "src/finance/cells.ts",
     "src/finance/decimal.ts",
+    "src/finance/labor.ts",
     "src/finance/normalize.ts",
     "src/finance/purchaseBasis.ts",
     "src/finance/types.ts",
@@ -18,17 +19,18 @@
     "src/metrics/report.ts",
     "src/policy/evaluate.ts",
     "src/policy/intelligence.ts",
+    "src/policy/laborSource.ts",
     "src/policy/purchaseBasis.ts",
     "src/policy/registry.ts",
     "src/presenters/labels.ts",
     "src/presenters/money.ts",
     "src/presenters/percent.ts"
   ],
-  "sourceDigest": "d88c86ee47f2c14057c87e027154ff335e6b2b2840aba2139180494e8c9f673d",
+  "sourceDigest": "b44f159728e1ce737554bf0ab8372f5580900bff73405bd311754e68578deb49",
   "files": [
     {
       "path": "browser/marjinFinanceGlobal.js",
-      "sha256": "9a9f9d80bead7674992c18a64bf3095d55689b6f0e161109e8d7959ae21a04b3"
+      "sha256": "d2b0c23b2248dd08f9238fb937160f823d9351d98696241032c94bc1928e8cf2"
     },
     {
       "path": "finance/businessDate.js",
@@ -41,6 +43,10 @@
     {
       "path": "finance/decimal.js",
       "sha256": "3053240b5c01892bf9fdd4aa3043b55e5878c033cb849fbfe53215e52c08a4f9"
+    },
+    {
+      "path": "finance/labor.js",
+      "sha256": "0fa71343b27ffb9bd36971b18b1938604ed04714a8e856f68849ba3fba98b568"
     },
     {
       "path": "finance/normalize.js",
@@ -60,31 +66,35 @@
     },
     {
       "path": "metrics/adapters/configCompat.js",
-      "sha256": "e1c70bd892f1e93acca006fc37eef0c1381eca78df493cee32b1fade922ef504"
+      "sha256": "f2692f957299e85c21d16848574214da6ac9ccb6a60be94d77293d73e98f6984"
     },
     {
       "path": "metrics/adapters/legacyNumber.js",
-      "sha256": "8b30396fa786da13ab366b49d684c215fd463062d85e76351796153a1501698a"
+      "sha256": "efa8883d7aa57e78a33a24c67b0b8a902a8a8f8776636f826abf6917f46f24eb"
     },
     {
       "path": "metrics/costTimeline.js",
-      "sha256": "f105f21f552eb9977def513e16f124ae6e6beaaf09db102161ccaff21b35c500"
+      "sha256": "dbfff7859ccf9c9769c413e685b7cc76ccc5aaa93ae41f6613214d1a052e08f0"
     },
     {
       "path": "metrics/projected.js",
-      "sha256": "68305d22e99e5999654f9513d05d33c042784dca884c6bffaa216234a1284097"
+      "sha256": "f0846f8e269cc1028e55ac76d83a5efabeaa56db25feef93fbdb7309fa7f7e28"
     },
     {
       "path": "metrics/report.js",
-      "sha256": "17359480223d0f2b8ad38feefe98ac7a98d62bf011d38643ddb5443e79f1079e"
+      "sha256": "4affe5f3534a219aaa3e91726e511c9c9cb407d02329adc3de3b3a5065665633"
     },
     {
       "path": "policy/evaluate.js",
-      "sha256": "82b7dc2ac6cf662ca5a4404146322d7e3a731d609747bf0552375ed5a990eb20"
+      "sha256": "caa7b41fb860e88190e183d47c0b231a3295213825493a05fd32f56a6068c2e9"
     },
     {
       "path": "policy/intelligence.js",
       "sha256": "8e609bb71c20b858c77f0e9f90bb1319db8477b13f9f965f1a1e18524bf50881"
+    },
+    {
+      "path": "policy/laborSource.js",
+      "sha256": "ad816ea69ea7274005cc9532761f3e60bdeefc96b9922c2540dfac28b3e733ff"
     },
     {
       "path": "policy/purchaseBasis.js",
@@ -96,11 +106,11 @@
     },
     {
       "path": "presenters/labels.js",
-      "sha256": "4050b734f39384e00e0c4ba5597914a8407a830ae9deef445b87b7b91bfab853"
+      "sha256": "bf40b81e2cbf13592b78f055f661f23ea02b5b75618c575fb4c77bc0cb1a9b7f"
     },
     {
       "path": "presenters/money.js",
-      "sha256": "346230e7e1f4ecb0d299df06c6499dc9deb1e4a7813aeebb9ab1f35961094255"
+      "sha256": "d508588bb2219e259355c4cb353ba03e1826574b7a97252749acb1cd3b4e5472"
     },
     {
       "path": "presenters/percent.js",

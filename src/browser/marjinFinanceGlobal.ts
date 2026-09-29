@@ -5,6 +5,7 @@ import * as cells from "../finance/cells.js";
 import * as businessDate from "../finance/businessDate.js";
 import * as normalize from "../finance/normalize.js";
 import * as purchaseBasis from "../finance/purchaseBasis.js";
+import * as labor from "../finance/labor.js";
 import * as costTimeline from "../metrics/costTimeline.js";
 import * as report from "../metrics/report.js";
 import * as projected from "../metrics/projected.js";
@@ -13,6 +14,7 @@ import * as configCompat from "../metrics/adapters/configCompat.js";
 import * as policyRegistry from "../policy/registry.js";
 import * as policyEvaluate from "../policy/evaluate.js";
 import * as productPurchaseBasis from "../policy/purchaseBasis.js";
+import * as productLaborSource from "../policy/laborSource.js";
 import * as money from "../presenters/money.js";
 import * as percent from "../presenters/percent.js";
 import * as labels from "../presenters/labels.js";
@@ -29,13 +31,14 @@ const api = Object.freeze({
     norm: normalize.NORMALIZATION_VERSION,
     dec: decimal.DECIMAL_CONTRACT_VERSION,
     pb: purchaseBasis.PURCHASE_BASIS_CONTRACT_VERSION,
+    labor: labor.LABOR_CONTRACT_VERSION,
     policy: policyRegistry.POLICY_VERSION,
     projection: projected.PROJECTION_FORMULA_VERSION,
     forecast: forecast.REV_FORECAST_FORMULA_ID,
   }),
-  finance: Object.freeze({ decimal, cells, businessDate, normalize, purchaseBasis }),
+  finance: Object.freeze({ decimal, cells, businessDate, normalize, purchaseBasis, labor }),
   metrics: Object.freeze({ costTimeline, report, projected, adapters: Object.freeze({ legacyNumber, configCompat }) }),
-  policy: Object.freeze({ registry: policyRegistry, evaluate: policyEvaluate, purchaseBasis: productPurchaseBasis }),
+  policy: Object.freeze({ registry: policyRegistry, evaluate: policyEvaluate, purchaseBasis: productPurchaseBasis, laborSource: productLaborSource }),
   presenters: Object.freeze({ money, percent, labels }),
   forecast,
 });

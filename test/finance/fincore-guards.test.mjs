@@ -111,7 +111,7 @@ test("G-S4 computePeriodReport has no caller that could omit the purchase basis 
   const files = [...walk("api"), ...walk("lib"), ...walk("src")].filter((f) => /\.(ts|js)$/.test(f) && f !== "src/metrics/report.ts" && f !== "src/browser/marjinFinanceGlobal.ts");
   for (const f of files) assert.doesNotMatch(readFileSync(join(REPO, f), "utf8"), /computePeriodReport\(/, f);
   const src = readFileSync(join(REPO, "src/metrics/report.ts"), "utf8");
-  assert.match(src, /purchaseBasis: unknown,\n\s*window: ReportWindow/, "purchaseBasis is a positional required parameter without default");
+  assert.match(src, /purchaseBasis: unknown,\n\s*laborSource: unknown,\n\s*window: ReportWindow/, "purchaseBasis and laborSource are positional required parameters without default");
 });
 
 test("G-A1 legacy DailyMetric adapter keeps the consumer shape and adds presence/basis", async () => {
@@ -122,7 +122,7 @@ test("G-A1 legacy DailyMetric adapter keeps the consumer shape and adds presence
   assert.ok(fields.length >= 6, "DailyMetric fields found");
   const n = F.finance.normalize.normalizeRows([{ id: "a", date: "2026-09-01", sales: "100" }], { asOfBusinessDate: "2026-09-01" });
   const [day] = F.finance.normalize.groupByDate(n.rows, { from: "2026-09-01", to: "2026-09-01" });
-  const dm = F.metrics.adapters.legacyNumber.toDailyMetric(day, F.finance.purchaseBasis.resolvePurchaseBasis([], F.policy.purchaseBasis.productPurchaseBasis()));
+  const dm = F.metrics.adapters.legacyNumber.toDailyMetric(day, F.finance.purchaseBasis.resolvePurchaseBasis([], F.policy.purchaseBasis.productPurchaseBasis()), F.policy.laborSource.productLaborSource());
   for (const k of fields) assert.ok(k in dm, "DailyMetric field " + k);
   assert.equal(dm.purchaseBasis, "net_of_vat");
   assert.equal(dm.purchaseBasisCompat, false);

@@ -1,5 +1,7 @@
 # M1 Financial Core — Slice A — Change Summary
 
+> **Superseded in part by `artifacts/m1-financial-core-slice-a-remediation-r1/` (2026-09-29):** labor is the manually entered attendance-system employer cost (`MARJIN_LABOR/1`), gross `monthlySalary` is never labor cost, and profit/contribution/labor totals are typed results (TI-18). Statements below about `monthlyEmployerCost`, `salaryAccrued`, `fullyLoadedLabor*`, `laborCostBasis` or numeric profit with a `profit_components_incomplete` flag describe commit `a8fdf2c8` only.
+
 Branch `claude/m1-financial-core-slice-a`, base `f5d0a8edffc216f0b6ad342f8bd1bb0d630276ab` (approved P0 tip).
 Planning: `financial-core-r1-2/`, `financial-core-r1-3/` (Codex-accepted) as amended by the owner decisions in `financial-core-r1-4-owner-decisions/`.
 

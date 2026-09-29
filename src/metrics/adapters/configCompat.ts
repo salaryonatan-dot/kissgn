@@ -2,6 +2,10 @@
 // fixed list, applied retrospectively and labelled `current_applied_retrospectively`.
 // Historic values were overwritten in place by the current product and cannot be
 // reconstructed; this adapter never pretends otherwise.
+// `employees[].monthlySalary` is the product's GROSS monthly salary ("משכורת חודשית ברוטו",
+// index.html f5d0a8ed:7953). It is carried as a `gross_salary` datum and is never labor
+// cost: the authoritative employer cost is the manually entered attendance figure on the
+// entry rows (src/policy/laborSource.ts).
 import { parseAmount } from "../../finance/cells.js";
 import { decIsZero, serializeDec } from "../../finance/decimal.js";
 import type { Flag } from "../../finance/types.js";
@@ -18,19 +22,19 @@ export function costTimelineFromCurrentConfig(configRaw: unknown, fixedRaw: unkn
   // No stored config at all ⇒ cost configuration is MISSING (not zero): an empty timeline,
   // so every recognised day raises `cost_config_absent` and profit is unavailable.
   const configPresent = typeof configRaw === "object" && configRaw !== null && !Array.isArray(configRaw);
-  if (!configPresent) return { versions: [], timelineSource: "compat_current_config", vatBasis: "net_of_vat", laborCostBasis: "full_employer_cost_as_recorded", flags: [] };
+  if (!configPresent) return { versions: [], timelineSource: "compat_current_config", vatBasis: "net_of_vat", flags: [] };
   const config = obj(configRaw);
   const flags: Flag[] = [];
   const noSkip = { allowSkip: false };
 
-  const salaried: Array<{ employeeKey: string; monthlyEmployerCost: string }> = [];
+  const salaried: Array<{ employeeKey: string; kind: "gross_salary"; monthlyAmount: string }> = [];
   const employees = Array.isArray(config.employees) ? config.employees : [];
   employees.forEach((e: unknown, idx: number) => {
     const emp = obj(e);
     if (emp.type !== "global") return;
     const key = emp.id === undefined || emp.id === null ? "idx:" + String(idx) : String(emp.id);
     const cell = parseAmount(emp.monthlySalary, noSkip);
-    if (cell.state === "present") salaried.push({ employeeKey: key, monthlyEmployerCost: serializeDec(cell.value) });
+    if (cell.state === "present") salaried.push({ employeeKey: key, kind: "gross_salary", monthlyAmount: serializeDec(cell.value) });
     else if (cell.state === "invalid") flags.push({ code: "invalid_salary", key, reason: cell.reason });
   });
 
@@ -46,6 +50,7 @@ export function costTimelineFromCurrentConfig(configRaw: unknown, fixedRaw: unkn
       fixedItems.push({ itemKey: key, monthlyAmount: serializeDec(cell.value) });
       if (key === "rent" && !decIsZero(cell.value)) rentItemRecorded = true;
     } else if (cell.state === "invalid") flags.push({ code: "invalid_fixed_amount", key, reason: cell.reason });
+    else flags.push({ code: "missing_fixed_amount", key }); // enabled item without an amount: missing, not zero
   });
 
   let rent: CostVersion["rent"] = { mode: "none" };
@@ -53,6 +58,7 @@ export function costTimelineFromCurrentConfig(configRaw: unknown, fixedRaw: unkn
     const c = parseAmount(config.rentPct, noSkip);
     if (c.state === "present") rent = { mode: "pct", ratePct: serializeDec(c.value) };
     else if (c.state === "invalid") flags.push({ code: "invalid_rate", field: "rentPct", reason: c.reason });
+    else flags.push({ code: "missing_rate", field: "rentPct" });
   } else {
     const c = parseAmount(config.rentFixed, noSkip);
     if (c.state === "present") {
@@ -66,6 +72,7 @@ export function costTimelineFromCurrentConfig(configRaw: unknown, fixedRaw: unkn
     const c = parseAmount(config.royaltyPct, noSkip);
     if (c.state === "present") royalty = { mode: "pct", ratePct: serializeDec(c.value) };
     else if (c.state === "invalid") flags.push({ code: "invalid_rate", field: "royaltyPct", reason: c.reason });
+    else flags.push({ code: "missing_rate", field: "royaltyPct" });
   }
 
   const version: CostVersion = {
@@ -78,5 +85,5 @@ export function costTimelineFromCurrentConfig(configRaw: unknown, fixedRaw: unkn
     rent,
     royalty,
   };
-  return { versions: [version], timelineSource: "compat_current_config", vatBasis: "net_of_vat", laborCostBasis: "full_employer_cost_as_recorded", flags };
+  return { versions: [version], timelineSource: "compat_current_config", vatBasis: "net_of_vat", flags };
 }

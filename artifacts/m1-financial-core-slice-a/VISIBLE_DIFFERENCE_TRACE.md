@@ -1,5 +1,7 @@
 # Visible-Difference Trace (VD-01 … VD-27)
 
+> **Superseded in part by `artifacts/m1-financial-core-slice-a-remediation-r1/` (2026-09-29):** labor is the manually entered attendance-system employer cost (`MARJIN_LABOR/1`), gross `monthlySalary` is never labor cost, and profit/contribution/labor totals are typed results (TI-18). Statements below about `monthlyEmployerCost`, `salaryAccrued`, `fullyLoadedLabor*`, `laborCostBasis` or numeric profit with a `profit_components_incomplete` flag describe commit `a8fdf2c8` only.
+
 Slice A has **no runtime consumer**, so no user-visible number changes in this commit. For each VD the table states the core contract that now exists (with the proving test) and the slice where the visible change will land.
 
 | VD | Status (BD-5) | Core contract in Slice A | Test | Visible change |

@@ -56,7 +56,7 @@ export function accrueDay(version, date, dayRevenue) {
     const dim = ratFromInt(daysInMonthOf(date));
     const perDay = (monthly) => ratDiv(monthly, dim);
     const revenue = dayRevenue === null ? RAT_ZERO : dayRevenue;
-    const salaried = perDay(sumAmounts(version.salaried.map((s) => s.monthlyEmployerCost)));
+    const salaried = perDay(sumAmounts(version.salaried.filter((s) => s.kind === "authoritative_employer_cost").map((s) => s.monthlyAmount)));
     const fixedRegular = perDay(sumAmounts(version.fixedItems.map((f) => f.monthlyAmount)));
     const rentFixed = version.rent.mode === "fixed" ? perDay(parseAmountString(version.rent.monthlyAmount)) : RAT_ZERO;
     const { rentPct, royaltyPct } = revenueLinkedCharges(version, revenue);
@@ -68,6 +68,8 @@ export function accrueWindow(timeline, dates, revenueByDate) {
     const bases = new Set();
     const applied = new Set();
     const salariedKeys = new Set();
+    const grossKeys = new Set();
+    const grossDates = [];
     const uncovered = [];
     for (const d of dates) {
         const v = versionForDay(resolved, d);
@@ -77,8 +79,17 @@ export function accrueWindow(timeline, dates, revenueByDate) {
         }
         bases.add(v.basis);
         applied.add(v.versionId);
-        for (const e of v.salaried)
-            salariedKeys.add(e.employeeKey);
+        let grossDay = false;
+        for (const e of v.salaried) {
+            if (e.kind === "authoritative_employer_cost")
+                salariedKeys.add(e.employeeKey);
+            else {
+                grossKeys.add(e.employeeKey);
+                grossDay = true;
+            }
+        }
+        if (grossDay)
+            grossDates.push(d);
         const a = accrueDay(v, d, revenueByDate.has(d) ? revenueByDate.get(d) : null);
         salaried = ratAdd(salaried, a.salaried);
         fixedRegular = ratAdd(fixedRegular, a.fixedRegular);
@@ -94,5 +105,7 @@ export function accrueWindow(timeline, dates, revenueByDate) {
         superseded: resolved.superseded,
         uncoveredDates: uncovered,
         salariedEmployeesApplied: salariedKeys.size,
+        grossSalaryOnlyDates: grossDates,
+        grossSalaryOnlyEmployees: [...grossKeys].sort(),
     };
 }

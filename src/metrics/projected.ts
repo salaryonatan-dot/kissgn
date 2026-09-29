@@ -3,7 +3,7 @@
 // Projected revenue is owned by the forecast engine (REV_FORECAST/*); this adapter only
 // applies the Actual cost ratios and the full-month cost accrual to it.
 import type { AmountString, Rat } from "../finance/decimal.js";
-import { decFromNumber, parseAmountString, ratAdd, ratFromDec, ratFromInt, ratMul, serializeRat } from "../finance/decimal.js";
+import { RAT_ZERO, decFromNumber, parseAmountString, ratAdd, ratFromDec, ratFromInt, ratMul, serializeRat } from "../finance/decimal.js";
 import { datesInRange, monthBounds } from "../finance/businessDate.js";
 import type { CostTimeline } from "./costTimeline.js";
 import { accrueWindow, resolveTimeline, revenueLinkedCharges, versionForDay } from "./costTimeline.js";
@@ -28,7 +28,8 @@ export interface ProjectedFinancials {
   readonly purchases: AmountString | null;
   readonly directLabor: AmountString | null;
   readonly otherExpense: AmountString | null;
-  readonly salaried: AmountString;
+  /** Authoritative salaried employer cost for the full month; null when the labor scope makes it not applicable (all_staff). */
+  readonly salaried: AmountString | null;
   readonly fixed: AmountString;
   readonly operatingProfit: AmountString | null;
   readonly warnings: readonly string[];
@@ -45,7 +46,8 @@ export function applyProjection(actual: FinancialReport, forecast: ForecastReven
   const { first, last } = monthBounds(forecast.month);
   const monthDates = datesInRange(first, last);
   const accrual = accrueWindow(timeline, monthDates, new Map());
-  const salaried = accrual.salaried;
+  const salariedApplies = actual.actual.labor.source.scope === "excludes_salaried";
+  const salaried = salariedApplies ? accrual.salaried : RAT_ZERO;
   let fixed = ratAdd(accrual.fixedRegular, accrual.rentFixed);
   if (accrual.uncoveredDates.length) warnings.push("cost_config_absent");
 
@@ -55,7 +57,7 @@ export function applyProjection(actual: FinancialReport, forecast: ForecastReven
       kind: "projected",
       formulaIds: { projection: PROJECTION_FORMULA_VERSION, forecast: forecast.formulaId, actualReport: actual.versions.fin },
       month: forecast.month, revenue: null, purchases: null, directLabor: null, otherExpense: null,
-      salaried: serializeRat(salaried), fixed: serializeRat(fixed), operatingProfit: null, warnings,
+      salaried: salariedApplies ? serializeRat(salaried) : null, fixed: serializeRat(fixed), operatingProfit: null, warnings,
     };
   }
   const revenue = toRat(forecast.projectedRevenue);
@@ -66,14 +68,19 @@ export function applyProjection(actual: FinancialReport, forecast: ForecastReven
     const r = ratioOfTotals(amt(num), actualRevenue, ratFromInt(1));
     return r.state === "value" ? parseAmountString(r.value) : null;
   };
-  const pRatio = share(actual.actual.purchases.value);
-  const lRatio = share(actual.actual.directLabor.value);
-  const oRatio = actual.actual.otherExpense.value === null ? null : share(actual.actual.otherExpense.value);
-  if (pRatio === null) warnings.push("purchases_ratio_unavailable");
-  if (lRatio === null) warnings.push("labor_ratio_unavailable");
+  // Ratios are taken only from a COMPLETE Actual (TI-18); an incomplete Actual gives no
+  // projected cost or profit rather than extrapolating a partial subtotal.
+  const actualComplete = actual.actual.operatingProfit.state === "complete";
+  if (!actualComplete) warnings.push("actual_components_incomplete");
+  const pRatio = actualComplete ? share(actual.actual.purchases.value) : null;
+  const lRatio = actualComplete ? share(actual.actual.labor.enteredEmployerCost.value) : null;
+  const oRatio = actualComplete ? (actual.actual.otherExpense.value === null ? RAT_ZERO : share(actual.actual.otherExpense.value)) : null;
+  if (actualComplete && pRatio === null) warnings.push("purchases_ratio_unavailable");
+  if (actualComplete && lRatio === null) warnings.push("labor_ratio_unavailable");
   const purchases = pRatio === null ? null : ratMul(pRatio, revenue);
   const labor = lRatio === null ? null : ratMul(lRatio, revenue);
   const other = oRatio === null ? null : ratMul(oRatio, revenue);
+  if (salariedApplies && accrual.grossSalaryOnlyDates.length >= 1) warnings.push("salaried_employer_cost_missing");
 
   const v = versionForDay(resolveTimeline(timeline), last);
   if (v && (v.rent.mode === "pct" || v.royalty.mode === "pct")) {
@@ -81,7 +88,8 @@ export function applyProjection(actual: FinancialReport, forecast: ForecastReven
     const charges = revenueLinkedCharges(v, revenue);
     fixed = ratAdd(fixed, ratAdd(charges.rentPct, charges.royaltyPct));
   }
-  const profit = purchases === null || labor === null || accrual.uncoveredDates.length >= 1
+  const salariedMissing = salariedApplies && accrual.grossSalaryOnlyDates.length >= 1;
+  const profit = purchases === null || labor === null || other === null || accrual.uncoveredDates.length >= 1 || salariedMissing
     ? null
     : operatingProfitOf(contributionOf(revenue, purchases, labor, other), salaried, fixed);
   return {
@@ -92,10 +100,9 @@ export function applyProjection(actual: FinancialReport, forecast: ForecastReven
     purchases: purchases === null ? null : serializeRat(purchases),
     directLabor: labor === null ? null : serializeRat(labor),
     otherExpense: other === null ? null : serializeRat(other),
-    salaried: serializeRat(salaried),
+    salaried: salariedApplies ? serializeRat(salaried) : null,
     fixed: serializeRat(fixed),
     operatingProfit: profit === null ? null : serializeRat(profit),
     warnings,
   };
 }
-

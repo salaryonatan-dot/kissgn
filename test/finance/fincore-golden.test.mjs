@@ -21,7 +21,7 @@ function expandRows(c, F) {
 }
 
 function timelineOf(c, F) {
-  if (c.timeline) return { versions: c.timeline, timelineSource: "persisted", vatBasis: "net_of_vat", laborCostBasis: "full_employer_cost_as_recorded" };
+  if (c.timeline) return { versions: c.timeline, timelineSource: "persisted", vatBasis: "net_of_vat" };
   return F.metrics.adapters.configCompat.costTimelineFromCurrentConfig("config" in c ? c.config : {}, c.fixed || []);
 }
 
@@ -35,10 +35,12 @@ function run(c, F) {
   const basis = c.basis === undefined ? F.policy.purchaseBasis.productPurchaseBasis() : c.basis;
   const window = { ...c.window, asOfBusinessDate: c.asOf };
   const tl = timelineOf(c, F);
-  const report = c.basis === "__OMIT__"
-    ? F.metrics.report.computePeriodReport(days, tl, undefined, window)
-    : F.metrics.report.computePeriodReport(days, tl, basis, window, { quarantine: n.quarantine, flags: n.flags });
-  return { n, days, report, basis };
+  const labor = c.labor === undefined ? F.policy.laborSource.productLaborSource() : c.labor;
+  let report;
+  if (c.basis === "__OMIT__") report = F.metrics.report.computePeriodReport(days, tl, undefined, labor, window);
+  else if (c.labor === "__OMIT__") report = F.metrics.report.computePeriodReport(days, tl, basis, window);
+  else report = F.metrics.report.computePeriodReport(days, tl, basis, labor, window, { quarantine: n.quarantine, flags: n.flags });
+  return { n, days, report, basis, labor };
 }
 
 function get(obj, path) {
@@ -52,7 +54,7 @@ function get(obj, path) {
 
 function resolve(key, ctx, F) {
   const [kind, ...rest] = key.split(".");
-  const { report, days, n, basis } = ctx;
+  const { report, days, n, basis, labor } = ctx;
   const plain = (v) => JSON.parse(F.metrics.report.serializeReport(v));
   if (kind === "report") return get(plain(report), rest);
   if (kind === "q") return get(plain(n.quarantine), rest);
@@ -65,7 +67,7 @@ function resolve(key, ctx, F) {
   }
   if (kind === "dm") {
     const pb = F.finance.purchaseBasis.resolvePurchaseBasis(day.purchases.presence === "present" ? [day.date] : [], basis);
-    return get(plain(F.metrics.adapters.legacyNumber.toDailyMetric(day, pb)), rest.slice(1));
+    return get(plain(F.metrics.adapters.legacyNumber.toDailyMetric(day, pb, labor)), rest.slice(1));
   }
   if (kind === "fd") return F.metrics.adapters.legacyNumber.toForecastDay(day);
   throw new Error("unknown expectation kind " + kind);

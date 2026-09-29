@@ -1,5 +1,6 @@
 import { decIsNegative, decIsZero, decToString, parseAmountString, ratFromDec, roundHalfAwayFromZero } from "../../finance/decimal.js";
 import { ratioOfTotals } from "../report.js";
+import { validateLaborSource } from "../../finance/labor.js";
 export function amountToNumber(a) {
     if (a === null)
         return null;
@@ -11,7 +12,8 @@ export function amountToNumber(a) {
  * express absence, so an absent metric is written as 0 FOR OLD READERS ONLY; the
  * `presence` block is authoritative. Ratios are null when not a value (never 0).
  */
-export function toDailyMetric(day, basis) {
+export function toDailyMetric(day, basis, laborSource) {
+    const labor = validateLaborSource(laborSource);
     const val = (m) => (m.presence === "present" ? m.value : null);
     const rev = val(day.revenue);
     const lab = val(day.directLabor);
@@ -34,6 +36,9 @@ export function toDailyMetric(day, basis) {
         presence: day.presence,
         purchaseBasis: basis.kind,
         purchaseBasisCompat: false,
+        laborMeaning: labor.meaning,
+        laborSourceSystem: labor.sourceSystem,
+        laborIngestionMethod: labor.ingestionMethod,
     };
 }
 /**

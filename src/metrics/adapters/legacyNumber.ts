@@ -7,6 +7,8 @@ import { decIsNegative, decIsZero, decToString, parseAmountString, ratFromDec, r
 import { ratioOfTotals } from "../report.js";
 import type { CanonicalDay, DayPresence } from "../../finance/types.js";
 import type { PurchaseBasisResolution } from "../../finance/purchaseBasis.js";
+import type { LaborSourceInput } from "../../finance/labor.js";
+import { validateLaborSource } from "../../finance/labor.js";
 
 export function amountToNumber(a: AmountString | null): number | null {
   if (a === null) return null;
@@ -26,6 +28,10 @@ export interface LegacyDailyMetric {
   presence: DayPresence;
   purchaseBasis: "net_of_vat" | "unresolved";
   purchaseBasisCompat: false;
+  /** laborCost is the entered authoritative employer cost (MARJIN_LABOR/1) — never gross salary. */
+  laborMeaning: "authoritative_employer_cost";
+  laborSourceSystem: LaborSourceInput["sourceSystem"];
+  laborIngestionMethod: LaborSourceInput["ingestionMethod"];
 }
 
 /**
@@ -33,7 +39,8 @@ export interface LegacyDailyMetric {
  * express absence, so an absent metric is written as 0 FOR OLD READERS ONLY; the
  * `presence` block is authoritative. Ratios are null when not a value (never 0).
  */
-export function toDailyMetric(day: CanonicalDay, basis: PurchaseBasisResolution): LegacyDailyMetric {
+export function toDailyMetric(day: CanonicalDay, basis: PurchaseBasisResolution, laborSource: LaborSourceInput): LegacyDailyMetric {
+  const labor = validateLaborSource(laborSource);
   const val = (m: { presence: string; value: Dec | null }): Dec | null => (m.presence === "present" ? m.value : null);
   const rev = val(day.revenue);
   const lab = val(day.directLabor);
@@ -55,6 +62,9 @@ export function toDailyMetric(day: CanonicalDay, basis: PurchaseBasisResolution)
     presence: day.presence,
     purchaseBasis: basis.kind,
     purchaseBasisCompat: false,
+    laborMeaning: labor.meaning,
+    laborSourceSystem: labor.sourceSystem,
+    laborIngestionMethod: labor.ingestionMethod,
   };
 }
 

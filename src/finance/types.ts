@@ -53,11 +53,13 @@ export type FlagCode =
   | "invalid_salary"
   | "invalid_fixed_amount"
   | "invalid_rate"
+  | "missing_rate"
+  | "missing_fixed_amount"
   | "cost_config_absent"
   | "superseded_versions"
   | "rent_fixed_and_rent_item_both"
   | "ratio_numerator_incomplete"
-  | "profit_components_incomplete"
+  | "gross_salary_not_labor_cost"
   | "today_open";
 
 export interface Flag {

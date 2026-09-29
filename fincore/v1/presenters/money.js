@@ -17,3 +17,7 @@ export function formatShekel(amount) {
     const neg = text.startsWith("-");
     return "₪" + (neg ? "-" : "") + group(neg ? text.slice(1) : text);
 }
+/** Typed totals (TI-18): only a complete result is formatted as money; anything else is "—". */
+export function formatTypedAmount(result) {
+    return result.state === "complete" && result.value !== null ? formatShekel(result.value) : NOT_AVAILABLE;
+}

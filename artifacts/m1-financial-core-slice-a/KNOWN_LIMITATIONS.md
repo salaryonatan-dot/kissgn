@@ -1,5 +1,7 @@
 # Known Limitations (Slice A)
 
+> **Superseded in part by `artifacts/m1-financial-core-slice-a-remediation-r1/` (2026-09-29):** labor is the manually entered attendance-system employer cost (`MARJIN_LABOR/1`), gross `monthlySalary` is never labor cost, and profit/contribution/labor totals are typed results (TI-18). Statements below about `monthlyEmployerCost`, `salaryAccrued`, `fullyLoadedLabor*`, `laborCostBasis` or numeric profit with a `profit_components_incomplete` flag describe commit `a8fdf2c8` only.
+
 - **L-1 Legacy numeric shape cannot express absence.** `toDailyMetric` writes an absent amount as `0` for old readers only; `presence` is authoritative and ratios are `null`. Consumers migrate to presence in B1/D.
 - **L-2 Compatibility rent semantics preserved, not changed.** Today's product counts `config.rentFixed` and a regular fixed item keyed `rent` separately; the compatibility adapter reproduces that and raises `rent_fixed_and_rent_item_both` when both are non-zero. Changing it would be an unregistered visible difference.
 - **L-3 BD-3 reading.** Recognised accrual days for an open month include the current business date (today is live/open). If the CTO reads BD-3 as "overhead through yesterday", only `recognizedDates` in `src/metrics/report.ts` changes.
