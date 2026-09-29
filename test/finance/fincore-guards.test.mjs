@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import { REPO, loadCompiled } from "../support/fincore-load.mjs";
 import { closureSources, generate } from "../../tools/finance-core/gen-browser.mjs";
-import { importerVerdict, loadConsumerFiles, repoKindOf, validateConsumerFiles } from "../support/core-consumer-allowlist.mjs";
+import { importerVerdict, loadConsumerFiles, repoKindOf, validateConsumerFiles } from "../support/b1-fixtures.mjs";
 
 const CORE_DIRS = ["src/finance", "src/metrics", "src/policy", "src/presenters", "src/browser"];
 

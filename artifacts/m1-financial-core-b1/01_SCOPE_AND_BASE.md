@@ -3,8 +3,8 @@
 ## Worktree / branch / base
 | Item | Value |
 |---|---|
-| Mac worktree | `/Users/yonatan/Documents/marjin/kissgn-m1-financial-core-b1` |
-| Branch | `claude/m1-financial-core-b1` |
+| Mac worktree | `/Users/yonatan/Documents/marjin/kissgn-m1-financial-core-b1` (B1 `658cd05`, kept unchanged); R1: `/Users/yonatan/Documents/marjin/kissgn-m1-financial-core-b1-r1` |
+| Branch | `claude/m1-financial-core-b1` (B1); R1: `claude/m1-financial-core-b1-r1` (one commit on top of `658cd05`) |
 | BASE | `213fb350019c3e212156eb032e34f4da8c179d6f` (EV-1 collector commit = the accepted bundle's `repo SHA`) |
 | Base check (a) | Slice A `0bcd1753` is an ancestor of BASE — OK |
 | Base check (b) | `git diff --name-only 0bcd1753 BASE -- index.html api lib src fincore` is empty — OK (the runtime/core tree is Slice A) |
@@ -29,14 +29,14 @@
 - No additional Production fact is inferred. Configuration states (global employees, fixed list, rent/royalty) are **not** sized by EV-1 (it reads entries, registry and tenant keys only) — their B1 behaviour is contract-tested, prevalence unknown.
 
 ## Scope delivered
-Runtime CREATE 3 · runtime MODIFY 9 · generated 3 · test/guard CREATE 10 · test/guard MODIFY 11 · artifacts 11 = **47 files** (packet: 45 + the AMEND-02 validator module + the VERIFY file `entry-exception-parity`).
+Runtime CREATE 3 · runtime MODIFY 9 · generated 3 · test/guard CREATE 9 · test/guard MODIFY 10 + 1 VERIFY · artifacts 11 = **46 files** = the 45 manifest files (doc 05, exact) + the VERIFY file `entry-exception-parity` (red-first; registered in 04). R1 removed the unmanifested helper `test/support/core-consumer-allowlist.mjs` that B1 `658cd05` had added (47 files); its validator now lives in D1 `test/support/b1-fixtures.mjs`.
 
 | Class | Files |
 |---|---|
 | Runtime CREATE | `src/policy/productFinance.ts`, `src/finance-server/canonicalInputs.ts`, `src/finance-server/canonicalMetrics.ts` |
 | Runtime MODIFY | `src/repositories/analytics/{dailyMetricsRepo,laborRepo,purchasesRepo}.ts`, `src/analytics/dailyBuilder.ts`, `src/services/analyticsService.ts`, `src/insights/{baselines,rules,types}.ts`, `src/browser/marjinFinanceGlobal.ts` |
 | Generated (`node tools/finance-core/gen-browser.mjs`, never hand-edited) | `fincore/v1/MANIFEST.json`, `fincore/v1/browser/marjinFinanceGlobal.js`, `fincore/v1/policy/productFinance.js` |
-| Test CREATE | `test/support/b1-fixtures.mjs`, `test/support/core-consumer-allowlist.mjs`, `test/finance/core-consumers/b1.json`, `test/finance/b1-{canonical-server-api,repositories,daily-builder,downstream-compat,guards,product-finance,purchase-aggregation}.test.mjs` |
+| Test CREATE | `test/support/b1-fixtures.mjs` (incl. the AMEND-02 validator), `test/finance/core-consumers/b1.json`, `test/finance/b1-{canonical-server-api,repositories,daily-builder,downstream-compat,guards,product-finance,purchase-aggregation}.test.mjs` |
 | Test MODIFY | `test/support/server-reader-authorized-delta.mjs`, `test/finance/{s0-guard-server-reader-mutations,fincore-guards}.test.mjs`, `test/finance/consumer-manifest.json`, `test/analytics/entries-reader-{dailybuilder,repos,d1-downstream,decimal-aggregation}.test.mjs`, `test/emulator/server-readers-matrix.mjs`, `test/insights/false-insights-p0.test.mjs`, VERIFY `test/analytics/entry-exception-parity.test.mjs` |
 | RETAIN (byte-identical to BASE, checked) | `index.html`, `api/**`, `lib/**`, `tools/**`, `src/{snapshot,agent,alerts,forecast,utils,firebase,pos,finance,metrics,presenters}/**`, `src/policy/{evaluate,intelligence,laborSource,purchaseBasis,registry}.ts`, `database.rules.json`, `vercel.json`, `package*.json`, `tsconfig*.json` |
 

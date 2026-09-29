@@ -14,6 +14,6 @@ export async function getLaborMetrics(
   bizId: string,
   _branchId?: string
 ): Promise<CanonicalLaborMetric[]> {
-  const inputs = await loadCanonicalInputs(getDb(), tenantId, bizId, { site: "laborRepo.getLaborMetrics", need: { config: true, fixed: false } });
+  const inputs = await loadCanonicalInputs(getDb(), tenantId, bizId, { site: "laborRepo.getLaborMetrics", need: { config: true, fixed: false, exceptions: false } });
   return canonicalLaborRecords(inputs, { from: startDate, to: endDate });
 }

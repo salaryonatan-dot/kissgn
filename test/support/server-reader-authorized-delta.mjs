@@ -69,12 +69,18 @@ const SHA1_RE = /^[0-9a-f]{40}$/;
  * server API (src/finance-server/*). Previous pins (P0-DATA-01 R2): dailyBuilder a327186c,
  * dailyMetricsRepo 301f9599, laborRepo 33a646e9, purchasesRepo 6a3f9be2. The snapshot pin
  * is unchanged (B2 owns snapshotBuilder).
+ *
+ * B1 R1 re-pin (Codex review of 658cd05, FC-04): the contract's loader signature is
+ * `need:{config, fixed, exceptions}` (all required); each of the four callers now states
+ * `exceptions:false` explicitly (dailyBuilder also gains a two-line comment). No other byte
+ * of these files changed. Previous pins (B1 658cd05): dailyBuilder ecaa5333,
+ * dailyMetricsRepo b04e0193, laborRepo 78f35d55, purchasesRepo d5f0a1ee.
  */
 export const SERVER_READER_APPROVED_BLOBS = Object.freeze({
-  "src/analytics/dailyBuilder.ts": "ecaa53337fd2ba60fc8abd8a0cae708a87ba8cdc",
-  "src/repositories/analytics/dailyMetricsRepo.ts": "b04e0193196f50057cb1214f05c0cb47078af0ee",
-  "src/repositories/analytics/laborRepo.ts": "78f35d558a40a23719124b22c9ad26561fab8da0",
-  "src/repositories/analytics/purchasesRepo.ts": "d5f0a1eeeac9c0999a71cf91cdb6647c11ac572b",
+  "src/analytics/dailyBuilder.ts": "6b70d03c245d163264f1bad2cefa71c0d85ff761",
+  "src/repositories/analytics/dailyMetricsRepo.ts": "4a5cb8f8ee234520f0db1f8c2c4b7b5f7f8e978a",
+  "src/repositories/analytics/laborRepo.ts": "14eff463d08c612b6e5c7e5de355b0b95d67bcd9",
+  "src/repositories/analytics/purchasesRepo.ts": "7916308f20e0a3f8a639c6fad5c63ecda7f3cde4",
   "src/snapshot/snapshotBuilder.ts": "e36df4d83d945d16e158dacc82b12ce2500f9956",
 });
 export const SERVER_READER_AUTHORIZED_FILES = Object.freeze(Object.keys(SERVER_READER_APPROVED_BLOBS));

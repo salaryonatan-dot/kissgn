@@ -12,7 +12,7 @@ import {
   SERVER_READER_APPROVED_BLOBS, SERVER_READER_AUTHORIZED_FILES, SERVER_READER_BASE, collectServerReaderScopeInputs, serverReaderScopeVerdict,
 } from "../support/server-reader-authorized-delta.mjs";
 import { authorizedVersionFenceRulesDelta } from "../support/rules-authorized-delta.mjs";
-import { importerVerdict, loadConsumerFiles, repoKindOf, validateConsumerFiles, importsCore, importsServerApi } from "../support/core-consumer-allowlist.mjs";
+import { importerVerdict, loadConsumerFiles, repoKindOf, validateConsumerFiles, importsCore, importsServerApi } from "../support/b1-fixtures.mjs";
 
 const B1_BASE = "213fb350019c3e212156eb032e34f4da8c179d6f";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -152,6 +152,13 @@ test("G2-04 a duplicate entry fails (within one file and across slice files)", (
   const b2 = { name: "b2.json", json: { slice: "B2", serverApiConsumers: ["src/analytics/dailyBuilder.ts"] } };
   assert.ok(errorsOf([valid(), b2]).some((e) => /duplicate serverApiConsumers entry src\/analytics\/dailyBuilder\.ts/.test(e)));
   assert.deepEqual(errorsOf([valid(), { name: "b2.json", json: { slice: "B2", serverApiConsumers: ["src/snapshot/snapshotBuilder.ts"] } }]), [], "disjoint slice files are fine");
+  // B1 R1 (Codex FC-02 / AR-10): ONE owner per path — the same path under a different category
+  // is a collision too, within one file and across slice files
+  const cross = valid(); cross.json.serverApiConsumers.push("src/finance-server/canonicalInputs.ts");
+  assert.ok(errorsOf([cross]).some((e) => /duplicate serverApiConsumers entry src\/finance-server\/canonicalInputs\.ts \(also in b1\.json:consumers\)/.test(e)), JSON.stringify(errorsOf([cross])));
+  const crossSlice = { name: "c1.json", json: { slice: "C1", consumers: ["src/analytics/dailyBuilder.ts"] } };
+  assert.ok(errorsOf([valid(), crossSlice]).some((e) => /duplicate consumers entry src\/analytics\/dailyBuilder\.ts \(also in b1\.json:serverApiConsumers\)/.test(e)), JSON.stringify(errorsOf([valid(), crossSlice])));
+  assert.equal(validateConsumerFiles([valid(), crossSlice], kindOf).ok, false);
 });
 
 test("G2-05 an unlisted importer fails (core and server API, static / dynamic / re-export imports)", () => {

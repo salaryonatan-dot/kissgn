@@ -6,8 +6,8 @@
  "consumers":["src/finance-server/canonicalInputs.ts","src/finance-server/canonicalMetrics.ts"],
  "serverApiConsumers":["src/repositories/analytics/dailyMetricsRepo.ts","src/repositories/analytics/laborRepo.ts","src/repositories/analytics/purchasesRepo.ts","src/analytics/dailyBuilder.ts","src/services/analyticsService.ts"]}
 ```
-- `fincore-guards` G-B2 reads the UNION of `test/finance/core-consumers/*.json` through `test/support/core-consumer-allowlist.mjs` (pure validator + importer verdict). Later slices add `b2.json` / `c1.json` / `f1.json`; the guard is never edited again.
-- Validation: file name = `<slice>.json`, slice ∈ {B1, B2, C1, C2, F1, F2, D, E, P1, P2}; exact existing file paths (no glob, no directory, no `..`, no `./`); no duplicates within or across files; no unknown key; `index.html` only for a slice ≥ C1. Importer detection covers static, re-export, side-effect and dynamic imports plus `fincore` / `MarjinFinance` references.
+- `fincore-guards` G-B2 reads the UNION of `test/finance/core-consumers/*.json` through the pure validator + importer verdict exported by `test/support/b1-fixtures.mjs` (R1: moved there from the unmanifested `core-consumer-allowlist.mjs`). Later slices add `b2.json` / `c1.json` / `f1.json`; the guard is never edited again.
+- Validation: file name = `<slice>.json`, slice ∈ {B1, B2, C1, C2, F1, F2, D, E, P1, P2}; exact existing file paths (no glob, no directory, no `..`, no `./`); no duplicate PATH anywhere — within a file, across its categories, or across slice files (R1: one owner per path; G2-04); no unknown key; `index.html` only for a slice ≥ C1. Importer detection covers static, re-export, side-effect and dynamic imports plus `fincore` / `MarjinFinance` references.
 - Mutation proofs G2-01…06 (`b1-guards`). GUARD-02 asserts the exact importer sets equal `b1.json`.
 
 ## Who calls what
@@ -34,8 +34,8 @@ No other runtime file imports the core or the server API (GUARD-02). `computePer
 ## Downstream (unchanged by B1, ready)
 | Slice | Uses | Edits B1 files? |
 |---|---|---|
-| B2 | `canonicalMonthReport`, `canonicalMonthProjection`, `loadCanonicalInputs(need.fixed)` | no; adds `b2.json`, edits `src/snapshot/*` (re-pins its own blob) |
-| C1 | `MarjinFinance.product.*` from `fincore/v1`, `decodeEnvelope`; **must mirror DD-18 (map-field array readback) in its browser loader** | no core edit; adds `c1.json` |
+| B2 | `canonicalMonthReport`, `canonicalMonthProjection`, `loadCanonicalInputs(need.fixed, need.exceptions)` | no; adds `b2.json`, edits `src/snapshot/*` (re-pins its own blob) |
+| C1 | `MarjinFinance.product.*` from `fincore/v1`, `decodeEnvelope`, `decodeExceptionLedger`; passes raw stored rows (R1: the map-field readback rule is inside the core — nothing to mirror) | no core edit; adds `c1.json` |
 | F1 | extends `ProductInputs.costVersions` / `productTimeline`, adds one loader read | yes, by design (serial after B1) |
 | P1/P2 | `ProductInputs.purchaseContributions` / `supplierCredits` | P1 modifies `productFinance.ts` |
 | D | `CanonicalDailyMetric` (superset of `DailyMetric`; `laborPct`/`foodCostPct` may be `null`; `partial` flags) | owns `src/agent/types/analytics.ts` |

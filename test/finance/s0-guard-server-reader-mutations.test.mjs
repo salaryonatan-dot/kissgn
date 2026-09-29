@@ -128,7 +128,7 @@ test("D. an extra harmless-looking statement → approved_content_mismatch (comm
 test("E. financial formula changed → approved_content_mismatch", () => {
   mustFail(mutate(DB, (t) => t.replace("    revenue,\n    fin,", "    revenue: { ...revenue, total: (revenue.total ?? 0) / 1.18 },\n    fin,"), "VAT division"), "approved_content_mismatch", "VAT division inserted");
   mustFail(mutate(DB, (t) => t.replace("  const hadEntry = revenue.had_entry;", "  const hadEntry = (revenue.total ?? 0) > 0;"), "presence rule"), "approved_content_mismatch", "presence rule changed");
-  mustFail(mutate(DM, (t) => t.replace('{ site: "dailyMetricsRepo.getDailyMetrics", need: { config: true, fixed: false } }', '{ site: "dailyMetricsRepo.getDailyMetrics", need: { config: false, fixed: false } }'), "global labor source dropped"), "approved_content_mismatch", "config read dropped (global employer cost unknown)");
+  mustFail(mutate(DM, (t) => t.replace('{ site: "dailyMetricsRepo.getDailyMetrics", need: { config: true, fixed: false, exceptions: false } }', '{ site: "dailyMetricsRepo.getDailyMetrics", need: { config: false, fixed: false, exceptions: false } }'), "global labor source dropped"), "approved_content_mismatch", "config read dropped (global employer cost unknown)");
   mustFail(mutate(SB, (t) => { const l = line(t, "totalSales +="); return t.replace(l, l.replace(";", " * 1.18;")); }, "snapshot gross-up"), "approved_content_mismatch", "snapshot sales grossed up");
 });
 
@@ -151,8 +151,15 @@ test("F. part of the reader change reverted (tokens still present elsewhere) →
     const pv = mustFail(withText(f, prev.stdout), "approved_content_mismatch", f + " pre-B1 bytes");
     assert.equal(pv.detail.file, f); assert.notEqual(pv.detail.actual, SERVER_READER_APPROVED_BLOBS[f]);
   }
+  // B1 R1 re-pin: the B1 (658cd05) bytes of the four reader files — before the explicit
+  // `need.exceptions:false` — are no longer the approved version either
+  for (const f of [DB, DM, "src/repositories/analytics/laborRepo.ts", PR]) {
+    const b1 = gitIn(ROOT, ["show", `658cd05bdae7d236ece221203c0700523e188c9e:${f}`]); assert.equal(b1.status, 0, b1.stderr);
+    const bv = mustFail(withText(f, b1.stdout), "approved_content_mismatch", f + " B1 658cd05 bytes");
+    assert.equal(bv.detail.file, f); assert.notEqual(bv.detail.actual, SERVER_READER_APPROVED_BLOBS[f]);
+  }
   // and the snapshot pin is byte-identical to its c46c2727 and pre-B1 versions (B1 does not touch it)
-  for (const rev of ["c46c27278966e517a02a91e7adc0911084012b20", B1_BASE]) {
+  for (const rev of ["c46c27278966e517a02a91e7adc0911084012b20", B1_BASE, "658cd05bdae7d236ece221203c0700523e188c9e"]) {
     const at = gitIn(ROOT, ["rev-parse", `${rev}:${SB}`]); assert.equal(at.status, 0);
     assert.equal(at.stdout.trim(), SERVER_READER_APPROVED_BLOBS[SB], SB + ": pin unchanged at " + rev.slice(0, 8));
   }

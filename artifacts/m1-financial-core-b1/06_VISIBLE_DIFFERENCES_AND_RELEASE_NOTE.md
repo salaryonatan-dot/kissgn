@@ -20,7 +20,7 @@ B1 changes **server** outputs only: the AI agent's daily / labor / purchase seri
 | VD-04 | a duplicate business date is ONE aggregated day (dailyBuilder no longer refuses it) | **0** duplicate dates observed |
 | VD-03 / VD-30 | future rows quarantined; the current day is never Actual (non-Actual context doc, empty insights) | **0** future rows; the current day depends on the run date |
 | DD-15 | purchase records are one per (date, source) aggregate | 478 supplier-map rows |
-| DD-18 | RTDB numeric-key map readback accepted as the map (no V2 regression) | **0** Storage V2 businesses today |
+| DD-18 | RTDB numeric-key map readback accepted as the map (no V2 regression); R1: applied inside the shared core, so server and browser read the same raw rows the same way | **0** Storage V2 businesses today |
 
 ## Release note (for the owner / Codex; no Production values)
 1. **Explicit zeros are real.** A day recorded as 0 (including supplier `0` or `skip`) is an entered day with a real zero; it is never treated as missing, and a missing value is never shown as 0.

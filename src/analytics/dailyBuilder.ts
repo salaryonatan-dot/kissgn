@@ -385,8 +385,10 @@ export async function buildAnalyticsForBiz(
   // business date carried by several rows is one canonical day (every row contributes; no
   // winner row, VD-04). A duplicate row id throws a typed FinanceContractError. Both
   // propagate: buildAnalyticsForAll records the business failure and continues.
+  // `need.exceptions:false`: this builder reads the ONE date's structured envelope itself
+  // (below) because the doc also carries that envelope's reason/note metadata.
   const [inputs, businessSnap, exceptionSnap] = await Promise.all([
-    loadCanonicalInputs(db, tenantId, bizId, { site: "dailyBuilder", nowMs: opts?.nowMs, need: { config: true, fixed: false } }),
+    loadCanonicalInputs(db, tenantId, bizId, { site: "dailyBuilder", nowMs: opts?.nowMs, need: { config: true, fixed: false, exceptions: false } }),
     db.ref(`tenants/${tenantId}/app/business`).once("value"),
     db.ref(`tenants/${tenantId}/entry_exceptions/${bizId}/${date}`).once("value"),
   ]);

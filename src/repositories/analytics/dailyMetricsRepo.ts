@@ -19,11 +19,11 @@ export async function getDailyMetrics(
   bizId: string,
   _branchId?: string
 ): Promise<CanonicalDailyMetric[]> {
-  const inputs = await loadCanonicalInputs(getDb(), tenantId, bizId, { site: "dailyMetricsRepo.getDailyMetrics", need: { config: true, fixed: false } });
+  const inputs = await loadCanonicalInputs(getDb(), tenantId, bizId, { site: "dailyMetricsRepo.getDailyMetrics", need: { config: true, fixed: false, exceptions: false } });
   return canonicalDailySeries(inputs, { from: startDate, to: endDate }).days;
 }
 
 export async function getLatestDailyDate(tenantId: string, bizId: string): Promise<string | null> {
-  const inputs = await loadCanonicalInputs(getDb(), tenantId, bizId, { site: "dailyMetricsRepo.getLatestDailyDate", need: { config: false, fixed: false } });
+  const inputs = await loadCanonicalInputs(getDb(), tenantId, bizId, { site: "dailyMetricsRepo.getLatestDailyDate", need: { config: false, fixed: false, exceptions: false } });
   return canonicalLatestCompletedPresentDate(inputs);
 }

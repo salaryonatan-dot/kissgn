@@ -25,11 +25,15 @@ import { computePeriodReport, NO_DECLARED_CLOSURES } from "../metrics/report.js"
 import type { FinancialReport } from "../metrics/report.js";
 import { applyProjection } from "../metrics/projected.js";
 import type { ProjectedFinancials } from "../metrics/projected.js";
-import { computeRevenueForecast } from "../forecast/revenueForecast.js";
+import { computeRevenueForecast, REV_FORECAST_FORMULA_ID } from "../forecast/revenueForecast.js";
+import type { AmountString } from "../finance/decimal.js";
+import { decFromNumber, serializeDec } from "../finance/decimal.js";
 import { productPurchaseBasis } from "./purchaseBasis.js";
 import { productLaborSource } from "./laborSource.js";
 
 export const PRODUCT_FINANCE_VERSION = "MARJIN_PRODUCT/1";
+/** The one forecast formula the month projection is bound to (re-exported for the server wrappers). */
+export { REV_FORECAST_FORMULA_ID };
 
 /** Reserved flag key for an unreadable fixed-cost node (AMEND-03). Emitted ONLY for that state. */
 export const FIXED_LIST_UNREADABLE_KEY = "__fixed_list_unreadable__";
@@ -73,7 +77,7 @@ export function decodeEnvelope(raw: unknown, expect: "object" | "array"): Envelo
 
 /** THE input bundle. Later slices add optional fields; call sites never change. */
 export interface ProductInputs {
-  /** Stored entry rows exactly as returned by the shared entries reader (legacy `_v` array or V2 rows). */
+  /** Stored entry rows exactly as returned by the shared entries reader (legacy `_v` array or V2 rows), unmodified; the product composition applies the shared storage decoding (mapFieldReadback). */
   readonly rows: readonly unknown[];
   readonly config: EnvelopeState<Record<string, unknown>>;
   readonly fixed: EnvelopeState<unknown[]>;
@@ -116,7 +120,63 @@ export type ProductDayRecord =
 
 export interface ProductProjection {
   readonly projection: ProjectedFinancials | null;
-  readonly forecast: { readonly formulaId: string; readonly projectedRevenue: number | null; readonly warnings: readonly string[] };
+  /** Exact contract shape (06 §1): literal formula id; projected revenue as an exact decimal string. */
+  readonly forecast: { readonly formulaId: typeof REV_FORECAST_FORMULA_ID; readonly projectedRevenue: AmountString | null; readonly warnings: readonly string[] };
+}
+
+// ── Storage decoding shared by server and browser (one meaning for one raw input) ──
+/** The two keyed-map fields of an entry row (the client's MarjinStorageV2.MAP_FIELDS). */
+export const ENTRY_MAP_FIELDS: readonly string[] = Object.freeze(["supplier_payments", "hourly_payroll"]);
+
+/**
+ * RTDB numeric-key readback (approved client contract R2-B3, index.html canonicalMapField):
+ * RTDB returns a map whose keys are dense integers ("0", "1", …) as an ARRAY. For the two map
+ * fields ONLY, an array is the same value as the map {index: element}; a null element is an
+ * absent key. Every other field is untouched; stored rows are never mutated (a changed row is a
+ * shallow copy). Applied inside the product composition, so the server and the browser give the
+ * SAME result for the SAME raw rows.
+ */
+export function mapFieldReadback(rows: readonly unknown[]): unknown[] {
+  return rows.map((row) => {
+    if (!isPlainObject(row)) return row;
+    let out: Record<string, unknown> | null = null;
+    for (const field of ENTRY_MAP_FIELDS) {
+      const v = row[field];
+      if (!Array.isArray(v)) continue;
+      const map: Record<string, unknown> = {};
+      v.forEach((x, i) => { if (x !== null && x !== undefined) map[String(i)] = x; });
+      if (out === null) out = { ...row };
+      out[field] = map;
+    }
+    return out === null ? row : out;
+  });
+}
+
+export type ExceptionLedgerState =
+  | { readonly state: "present"; readonly value: Readonly<Record<BusinessDate, boolean>> }
+  | { readonly state: "absent" }
+  | { readonly state: "unreadable"; readonly reason: "ledger_shape" };
+
+/**
+ * Structured exception ledger (`tenants/{t}/entry_exceptions/{bizId}` = {[date]: {state, operations}})
+ * → `exceptionsByDate`. Same meaning as the parity-tested resolver (lib/entryExceptions.js
+ * resolveEffectiveException): a date whose envelope carries a truthy `state` is structured and
+ * is an exception iff `state.status === "active"`; a date without a state falls back to the
+ * rows' embedded flag (it is omitted here). Invalid date keys are ignored. A non-object ledger is
+ * unreadable (never defaulted to "no exceptions").
+ */
+export function decodeExceptionLedger(raw: unknown): ExceptionLedgerState {
+  if (raw === null || raw === undefined) return { state: "absent" };
+  if (!isPlainObject(raw)) return { state: "unreadable", reason: "ledger_shape" };
+  const value: Record<BusinessDate, boolean> = {};
+  for (const key of Object.keys(raw).sort()) {
+    if (!isBusinessDate(key)) continue;
+    const env = raw[key];
+    const st = isPlainObject(env) ? env.state : undefined;
+    if (!st) continue;
+    value[key] = isPlainObject(st) && st.status === "active";
+  }
+  return { state: "present", value };
 }
 
 function requireInputs(inputs: ProductInputs): void {
@@ -132,7 +192,7 @@ function requireRange(range: ProductRange): void {
 
 function normalized(inputs: ProductInputs): NormalizeResult {
   requireInputs(inputs);
-  return normalizeRows(inputs.rows, { asOfBusinessDate: inputs.asOfBusinessDate });
+  return normalizeRows(mapFieldReadback(inputs.rows), { asOfBusinessDate: inputs.asOfBusinessDate });
 }
 
 /**
@@ -235,12 +295,21 @@ export function productMonthProjection(
     tenantId: opts.tenantId || "", bizId: opts.bizId || "", targetMonth: report.window.month,
     today: inputs.asOfBusinessDate, nowMs: opts.nowMs, history,
   });
-  const projectedRevenue = forecast.monthEndForecastRevenue;
+  if (forecast.formulaId !== REV_FORECAST_FORMULA_ID) throw new FinanceContractError("forecast_formula_mismatch", forecast.formulaId);
   const warnings: string[] = [...forecast.warnings];
-  if (projectedRevenue === null) {
+  if (forecast.monthEndForecastRevenue === null) {
     warnings.push("insufficient_history");
-    return { projection: null, forecast: { formulaId: forecast.formulaId, projectedRevenue: null, warnings } };
+    return { projection: null, forecast: { formulaId: REV_FORECAST_FORMULA_ID, projectedRevenue: null, warnings } };
   }
-  const projection = applyProjection(report, { formulaId: forecast.formulaId, month: report.window.month, projectedRevenue }, productTimeline(inputs));
-  return { projection, forecast: { formulaId: forecast.formulaId, projectedRevenue, warnings } };
+  // The engine's number is converted ONCE to the exact decimal of its canonical round-trip
+  // string (no binary arithmetic); the projection and the output use that exact string.
+  let projectedRevenue: AmountString;
+  try {
+    projectedRevenue = serializeDec(decFromNumber(forecast.monthEndForecastRevenue));
+  } catch (_) {
+    warnings.push("forecast_revenue_not_exact");
+    return { projection: null, forecast: { formulaId: REV_FORECAST_FORMULA_ID, projectedRevenue: null, warnings } };
+  }
+  const projection = applyProjection(report, { formulaId: REV_FORECAST_FORMULA_ID, month: report.window.month, projectedRevenue }, productTimeline(inputs));
+  return { projection, forecast: { formulaId: REV_FORECAST_FORMULA_ID, projectedRevenue, warnings } };
 }

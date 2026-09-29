@@ -164,7 +164,11 @@ test("PRJ-01 productMonthProjection ≡ the direct composition toForecastDay →
   assert.ok(fc.monthEndForecastRevenue !== null, "fixture has enough history");
   const expected = F.metrics.projected.applyProjection(report, { formulaId: fc.formulaId, month: "2026-09", projectedRevenue: fc.monthEndForecastRevenue }, SERVER.productTimeline(inp));
   assert.equal(serializeReport(got.projection), serializeReport(expected));
-  assert.deepEqual(got.forecast, { formulaId: "REV_FORECAST/v1", projectedRevenue: fc.monthEndForecastRevenue, warnings: fc.warnings });
+  // B1 R1 (Codex FC-04): exact contract shape — literal formula id, projected revenue as the
+  // exact decimal STRING of the engine's value (no binary number crosses the product boundary)
+  assert.deepEqual(got.forecast, { formulaId: "REV_FORECAST/v1", projectedRevenue: String(fc.monthEndForecastRevenue), warnings: fc.warnings });
+  assert.equal(typeof got.forecast.projectedRevenue, "string"); assert.match(got.forecast.projectedRevenue, /^-?\d+(\.\d+)?$/);
+  assert.equal(got.projection.revenue, got.forecast.projectedRevenue, "the projection uses the same exact string");
 });
 
 test("PRJ-02 insufficient history ⇒ projection null + warning insufficient_history (never a fabricated month-end)", () => {
@@ -208,4 +212,56 @@ test("PRJ-05 browser parity: productMonthProjection server ≡ browser ≡ commi
     const out = ENGINES.map(([, P]) => { const rep = P.productMonthReport(inp, { kind: "open_month", month: "2026-09" }); const r = P.productMonthProjection(inp, rep, { nowMs: NOW_MS }); return serializeReport(r); });
     assert.equal(new Set(out).size, 1);
   }
+});
+
+// ══ B1 R1 (Codex re-review of 658cd05) ══════════════════════════════════════════
+test("B1R1-02 raw-storage parity: the SAME raw RTDB rows (numeric-key maps read back as arrays) give byte-identical results on the server path and in the generated browser product", async () => {
+  const { makeDb, installDb } = await import("../support/server-reader-harness.mjs");
+  const { seedRaw, T, B } = await import("../support/b1-fixtures.mjs");
+  const { readEntriesNode } = await import("../../lib/analytics/entriesReader.js");
+  const CI = await compileServer().import("src/finance-server/canonicalInputs.js");
+  const keyed = [entry(uid(1), "2026-09-10", { sales: "100", supplier_payments: { 0: "10", 1: "20" }, payroll: "5", hourly_payroll: { 0: "7" } }), entry(uid(2), "2026-09-11", { sales: "50", supplier_payments: { 1: "4" } })];
+  // the RTDB readback form of those rows (what a converted V2 business really returns)
+  const readback = keyed.map((r) => ({ ...r, supplier_payments: Object.keys(r.supplier_payments).reduce((a, k) => { a[Number(k)] = r.supplier_payments[k]; return a; }, []).map((x) => (x === undefined ? null : x)), ...(r.hourly_payroll ? { hourly_payroll: ["7"] } : {}) }));
+  const node = { schemaVersion: 2, generation: 1, rows: Object.fromEntries(readback.map((r) => [r.id, { ...r, _gen: 1 }])) };
+  const db = installDb(seedRaw(makeDb(), { entries: node }));
+  const server = await CI.loadCanonicalInputs(db, T, B, { site: "t", nowMs: NOW_MS, need: { config: true, fixed: true, exceptions: false } });
+  assert.ok(Array.isArray(server.rows.find((r) => r.id === uid(1)).supplier_payments), "raw rows reach the core unmodified");
+  const browserRows = readEntriesNode(node).rows; // the raw rows a browser reader hands the product
+  const bIn = { rows: browserRows, config: server.config, fixed: server.fixed, asOfBusinessDate: server.asOfBusinessDate };
+  const legacyIn = { ...bIn, rows: keyed };
+  const range = { from: "2026-09-01", to: "2026-09-28" };
+  const view = (P, i) => stableJson({ m: P.productDailyMetrics(i, range), d: P.productDays(i, range), r: P.productDayRecord(i, "2026-09-10"), rep: serializeReport(P.productMonthReport(i, { kind: "open_month", month: "2026-09" })) });
+  const s = view(SERVER, server);
+  for (const [name, P] of [["browser", BROWSER.product], ["committed", COMMITTED.product]]) assert.equal(view(P, bIn), s, name + " ≡ server for the same raw rows");
+  assert.equal(view(SERVER, legacyIn), s, "the keyed-map (legacy `_v`) form means the same");
+  const day = SERVER.productDays(server, range).days.find((x) => x.date === "2026-09-10");
+  assert.deepEqual(day.purchases.bySource, { "supplier:0": "10", "supplier:1": "20" }); assert.equal(day.purchases.presence, "present"); assert.equal(day.purchases.partial, false);
+  assert.ok(!day.flags.some((f) => f.code === "invalid_map_shape"));
+  for (const P of [SERVER, BROWSER.product, COMMITTED.product]) assert.deepEqual([...P.ENTRY_MAP_FIELDS], ["supplier_payments", "hourly_payroll"]);
+  const stored = [{ id: "x", date: "2026-09-10", supplier_payments: [null, "4"], notes: ["a"] }];
+  const before = JSON.stringify(stored); SERVER.mapFieldReadback(stored); assert.equal(JSON.stringify(stored), before, "never mutates the stored rows");
+});
+
+test("AT-16 February 2028 (leap): global 29,000 and fixed 2,900 allocate 1,000 and 100 per calendar day; the month totals are exactly 29,000 and 2,900 (server ≡ browser)", () => {
+  const rows = Array.from({ length: 29 }, (_, i) => entry(uid(700 + i), `2028-02-${String(i + 1).padStart(2, "0")}`, { sales: "5000", supplier_payments: { s1: "1000" }, payroll: "500" }));
+  const cfg = { config: configWithGlobal("29000"), fixed: fixedItems("2900") };
+  for (const [name, P] of ENGINES) {
+    const closed = P.productMonthReport(inputs(rows, { ...cfg, asOf: "2028-03-05" }), { kind: "closed_month", month: "2028-02" });
+    assert.equal(closed.actual.labor.globalEmployerCost.value, "29000", name); assert.equal(closed.actual.fixedAccrual.regular, "2900", name); assert.equal(closed.actual.fixedAccrual.total, "2900", name);
+    assert.equal(closed.window.recognizedDays, 29, name + ": 29 calendar days");
+    // 10 completed days (asOf 2028-02-11) ⇒ 10 × 1,000 and 10 × 100 — a calendar-day divisor, not 28/30/operating days
+    const open10 = P.productMonthReport(inputs(rows, { ...cfg, asOf: "2028-02-11" }), { kind: "open_month", month: "2028-02" });
+    assert.equal(open10.actual.labor.globalEmployerCost.value, "10000", name); assert.equal(open10.actual.fixedAccrual.regular, "1000", name);
+    // 28 completed days (asOf 2028-02-29) ⇒ 28,000 and 2,800; the 29th day completes the month
+    const open28 = P.productMonthReport(inputs(rows, { ...cfg, asOf: "2028-02-29" }), { kind: "open_month", month: "2028-02" });
+    assert.equal(open28.actual.labor.globalEmployerCost.value, "28000", name); assert.equal(open28.actual.fixedAccrual.regular, "2800", name);
+    // a sparse month (missing entry days) allocates the same calendar-day amounts
+    const sparse = P.productMonthReport(inputs(rows.filter((_, i) => i % 5 === 0), { ...cfg, asOf: "2028-03-05" }), { kind: "closed_month", month: "2028-02" });
+    assert.equal(sparse.actual.labor.globalEmployerCost.value, "29000", name); assert.equal(sparse.actual.fixedAccrual.regular, "2900", name);
+    const [m] = P.productDailyMetrics(inputs(rows, { ...cfg, asOf: "2028-03-05" }), { from: "2028-02-29", to: "2028-02-29" });
+    assert.equal(m.globalLaborCost, 1000, name + ": 1,000 on 29 Feb"); assert.equal(m.laborCost, 1500, name);
+  }
+  const s = serializeReport(SERVER.productMonthReport(inputs(rows, { ...cfg, asOf: "2028-03-05" }), { kind: "closed_month", month: "2028-02" }));
+  assert.equal(serializeReport(BROWSER.product.productMonthReport(inputs(rows, { ...cfg, asOf: "2028-03-05" }), { kind: "closed_month", month: "2028-02" })), s);
 });

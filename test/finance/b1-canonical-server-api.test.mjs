@@ -31,9 +31,10 @@ const augRows = (f) => Array.from({ length: 31 }, (_, i) => entry(uid(200 + i), 
 const month = (rows, sel, opts) => CM.canonicalMonthReport(si(rows, opts), sel).report;
 
 test("API-01 provenance: every output carries ServerProvenance; ids are the core constants", () => {
-  const i = si(sepRows(), { config: configWithGlobal("3000") });
+  const i = si(sepRows(), { config: configWithGlobal("3000"), exceptionsState: "absent" });
   const s = CM.canonicalDailySeries(i, SEP);
   const p = s.provenance;
+  assert.equal(p.exceptionsState, "absent");
   assert.deepEqual(
     { api: p.api, product: p.product, fin: p.fin, norm: p.norm, dec: p.dec, labor: p.labor, pb: p.pb, pbPolicy: p.pbPolicy, laborSource: p.laborSource, windowRule: p.windowRule, asOf: p.asOfBusinessDate, cal: p.operatingCalendar },
     { api: CI.CANONICAL_SERVER_API_VERSION, product: PF.PRODUCT_FINANCE_VERSION, fin: REP.FINANCIAL_FORMULA_VERSION, norm: NORM.NORMALIZATION_VERSION, dec: DEC.DECIMAL_CONTRACT_VERSION, labor: LAB.LABOR_CONTRACT_VERSION, pb: PBC.PURCHASE_BASIS_CONTRACT_VERSION, pbPolicy: "PB_NET/BD-1", laborSource: "LABOR_SRC/shiftorganizer-hourly-manual/2026-09-29", windowRule: "completed_days_through_d_minus_1", asOf: AS_OF, cal: "none_declared" });
@@ -86,10 +87,25 @@ test("API-03 loader I/O: entries read once; config/fixed only when asked; a reje
   // RTDB numeric-key readback of the two map fields (client contract R2-B3) — non-mutating
   const stored = [{ id: uid(5), date: "2026-09-02", supplier_payments: [null, "4", "6"], hourly_payroll: ["1"], notes: ["a", "b"] }, "garbage"];
   const before = JSON.stringify(stored);
-  const out = CI.mapFieldReadback(stored);
+  // B1 R1 (Codex FC-05/AR-05): the readback is part of the SHARED product composition now
+  // (src/policy/productFinance.ts); the loader passes rows UNMODIFIED
+  const out = PF.mapFieldReadback(stored);
   assert.deepEqual(out[0].supplier_payments, { 1: "4", 2: "6" }); assert.deepEqual(out[0].hourly_payroll, { 0: "1" }); assert.deepEqual(out[0].notes, ["a", "b"], "other arrays untouched");
   assert.equal(out[1], "garbage"); assert.equal(JSON.stringify(stored), before, "stored rows never mutated");
-  assert.deepEqual([...CI.ENTRY_MAP_FIELDS], ["supplier_payments", "hourly_payroll"]);
+  assert.deepEqual([...PF.ENTRY_MAP_FIELDS], ["supplier_payments", "hourly_payroll"]);
+  const rawNode = { schemaVersion: 2, generation: 1, rows: { [uid(5)]: { ...stored[0], _gen: 1 } } };
+  const loaded = await CI.loadCanonicalInputs(seedRaw(makeDb(), { entries: rawNode }), T, B, { site: "t", nowMs: NOW_MS, need: { config: false, fixed: false, exceptions: false } });
+  assert.ok(Array.isArray(loaded.rows[0].supplier_payments), "the loader hands the core the raw rows");
+  // need.exceptions: the structured ledger is read only when asked and decoded by the shared core decoder
+  const ledgerDb = seedRaw(makeDb(), { entries: asLegacy([entry(uid(1), "2026-09-01", { sales: "1" })]) });
+  ledgerDb.seed(`tenants/${T}/entry_exceptions/${B}`, { "2026-09-02": { state: { status: "active" } }, "2026-09-03": { state: { status: "cleared" } } });
+  for (const exceptions of [false, true]) {
+    const rec = recordingDb(ledgerDb);
+    const li = await CI.loadCanonicalInputs(rec, T, B, { site: "t", nowMs: NOW_MS, need: { config: false, fixed: false, exceptions } });
+    assert.equal(rec.reads.some((p) => p === `tenants/${T}/entry_exceptions/${B}`), exceptions);
+    assert.equal(li.exceptionsState, exceptions ? "present" : "not_loaded");
+    assert.deepEqual(li.exceptionsByDate, exceptions ? { "2026-09-02": true, "2026-09-03": false } : undefined);
+  }
 });
 
 test("API-04 partial month D-1: asOf 2026-09-29 ⇒ effective range ends 2026-09-28; the 09-29 row never appears", () => {
@@ -341,4 +357,77 @@ test("API-28 invalid range ⇒ FinanceContractError through the repository; from
   await assert.rejects(() => DM.getDailyMetrics(T, "2026-13-01", "2026-09-30", B), (e) => CM.isCanonicalFinanceError(e));
   await assert.rejects(() => DM.getDailyMetrics(T, "2026-09-01", "", B), (e) => CM.isCanonicalFinanceError(e));
   assert.deepEqual(CM.canonicalDailySeries(si([entry(uid(1), "2026-09-10", { sales: "1" })]), { from: "2026-09-20", to: "2026-09-10" }).days, []);
+});
+
+// ══ B1 R1 (Codex re-review of 658cd05) ══════════════════════════════════════════
+test("B1R1-01 need.exceptions: the structured ledger decodes with the parity-tested resolver's meaning; the month projection requires it and excludes exception days from forecast history", async () => {
+  const { resolveEffectiveException } = await import("../../lib/entryExceptions.js");
+  // decoder ≡ lib/entryExceptions.js resolveEffectiveException (structured origin only) for every envelope shape
+  const envs = { "2026-09-01": { state: { status: "active", reasonCode: "closure" } }, "2026-09-02": { state: { status: "cleared" } }, "2026-09-03": { state: {} }, "2026-09-04": {}, "2026-09-05": null, "2026-09-06": "str", "2026-09-07": { state: "x" }, "not-a-date": { state: { status: "active" } } };
+  const d = PF.decodeExceptionLedger(envs);
+  assert.equal(d.state, "present");
+  for (const [date, env] of Object.entries(envs)) {
+    if (date === "not-a-date") { assert.ok(!(date in d.value)); continue; }
+    const r = resolveEffectiveException(env, null);
+    assert.equal(date in d.value, r.origin === "structured", date);
+    if (r.origin === "structured") assert.equal(d.value[date], r.isException, date);
+  }
+  assert.deepEqual(PF.decodeExceptionLedger(null), { state: "absent" });
+  for (const bad of ["x", 5, [1], true]) assert.deepEqual(PF.decodeExceptionLedger(bad), { state: "unreadable", reason: "ledger_shape" });
+  // loader: unreadable ledger is an input issue, never "no exceptions"
+  const badDb = seedRaw(makeDb(), { entries: asLegacy([entry(uid(1), "2026-09-01", { sales: "1" })]) });
+  badDb.seed(`tenants/${T}/entry_exceptions/${B}`, "corrupt");
+  const bi = await CI.loadCanonicalInputs(badDb, T, B, { site: "t", nowMs: NOW_MS, need: { config: true, fixed: true, exceptions: true } });
+  assert.equal(bi.exceptionsState, "unreadable"); assert.ok(bi.inputIssues.includes("exceptions_unreadable")); assert.ok(!("exceptionsByDate" in bi));
+  // month projection: requires the ledger; unreadable ⇒ no projection; present ⇒ exception days leave forecast history
+  const hist = [];
+  for (let k = 0; k < 90; k++) { const date = daysBefore("2026-09-28", k); hist.push(entry(uid(40000 + k), date, { sales: date === "2026-09-22" ? "90000" : "1000", supplier_payments: { s1: "300" }, payroll: "100" })); }
+  const opts = { config: configWithGlobal("3000"), fixed: fixedItems("3100") };
+  const base = si(hist, opts);
+  const rep = CM.canonicalMonthReport(base, { kind: "open_month", month: "2026-09" }).report;
+  assert.throws(() => CM.canonicalMonthProjection(base, rep, { nowMs: NOW_MS }), (e) => e.name === "FinanceContractError" && /exceptions_required/.test(e.message));
+  const unreadable = CM.canonicalMonthProjection(si(hist, { ...opts, exceptionsState: "unreadable" }), rep, { nowMs: NOW_MS });
+  assert.deepEqual([unreadable.projection, unreadable.forecast.projectedRevenue, unreadable.forecast.warnings], [null, null, ["exception_ledger_unreadable"]]);
+  const without = CM.canonicalMonthProjection(si(hist, { ...opts, exceptionsState: "absent" }), rep, { nowMs: NOW_MS });
+  const withExc = CM.canonicalMonthProjection(si(hist, { ...opts, exceptionsByDate: { "2026-09-22": true } }), CM.canonicalMonthReport(si(hist, { ...opts, exceptionsByDate: { "2026-09-22": true } }), { kind: "open_month", month: "2026-09" }).report, { nowMs: NOW_MS });
+  assert.equal(typeof without.forecast.projectedRevenue, "string"); assert.equal(typeof withExc.forecast.projectedRevenue, "string");
+  assert.notEqual(withExc.forecast.projectedRevenue, without.forecast.projectedRevenue, "the structured exception day is excluded from the forecast baseline");
+  assert.equal(withExc.provenance.exceptionsState, "present");
+  const direct = PF.productMonthProjection({ ...si(hist, opts), exceptionsByDate: { "2026-09-22": true } }, CM.canonicalMonthReport(si(hist, { ...opts, exceptionsByDate: { "2026-09-22": true } }), { kind: "open_month", month: "2026-09" }).report, { nowMs: NOW_MS, tenantId: T, bizId: B });
+  assert.deepEqual(withExc.forecast, direct.forecast);
+});
+
+test("AT-18 a future `costVersions`-shaped field (and any unknown field) on the inputs changes nothing and needs no call-site rewrite", async (t) => {
+  const rows = sepRows();
+  const opts = { config: configWithGlobal("3000"), fixed: fixedItems("3100") };
+  const plainIn = si(rows, opts);
+  const future = { ...si(rows, opts), costVersions: [{ versionId: "f1:2026-09", effectiveFrom: "2026-09-01", basis: "effective_dated", globalEmployees: [{ employeeKey: "g9", kind: "authoritative_employer_cost", monthlyAmount: "999999" }], fixedItems: [{ itemKey: "x", monthlyAmount: "888888" }] }], someFutureField: { any: "thing" } };
+  const outs = (i) => stableJson({
+    series: CM.canonicalDailySeries(i, SEP), report: REP.serializeReport(CM.canonicalMonthReport(i, { kind: "open_month", month: "2026-09" }).report),
+    day: CM.canonicalDayRecord(i, "2026-09-10"), labor: CM.canonicalLaborRecords(i, SEP), purchases: CM.canonicalPurchaseRecords(i, SEP, {}),
+    daily: PF.productDailyMetrics(i, SEP), timeline: PF.productTimeline(i),
+  });
+  assert.equal(outs(future), outs(plainIn), "B1 results are byte-identical with the future field present");
+  const r = CM.canonicalMonthReport(future, { kind: "open_month", month: "2026-09" }).report;
+  assert.deepEqual([r.timelineSource, [...r.configurationBasis]], ["compat_current_config", ["current_applied_retrospectively"]], "B1 keeps the current-config timeline (no F1 activation)");
+  assert.equal(r.actual.labor.globalEmployerCost.value, "2800");
+  // compile-time probe: an F1-style extension of ProductInputs type-checks against the UNCHANGED signatures
+  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { spawnSync } = await import("node:child_process");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { ROOT } = await import("../support/server-reader-harness.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "b1-at18-"));
+  const probe = join(dir, "probe.ts");
+  writeFileSync(probe, `import { productDailyMetrics, productMonthReport, productMonthProjection, productTimeline, type ProductInputs } from ${JSON.stringify(join(ROOT, "src/policy/productFinance.js"))};
+interface F1Inputs extends ProductInputs { readonly costVersions?: ReadonlyArray<{ readonly versionId: string; readonly effectiveFrom: string }>; }
+export function f1CallSites(i: F1Inputs, nowMs: number): unknown[] {
+  const report = productMonthReport(i, { kind: "open_month", month: "2026-09" });
+  return [productDailyMetrics(i, { from: "2026-09-01", to: "2026-09-30" }), productTimeline(i), report, productMonthProjection(i, report, { nowMs })];
+}
+`);
+  const tsc = join(ROOT, "node_modules", "typescript", "bin", "tsc");
+  const res = spawnSync("node", [tsc, "--noEmit", "--strict", "--skipLibCheck", "--target", "es2022", "--module", "esnext", "--moduleResolution", "bundler", probe], { encoding: "utf8" });
+  t.diagnostic("AT-18 tsc probe exit " + res.status);
+  assert.equal(res.status, 0, "an F1-extended bundle compiles against the B1 call signatures:\n" + res.stdout + res.stderr);
 });

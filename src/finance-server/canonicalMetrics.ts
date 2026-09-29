@@ -4,6 +4,7 @@
 // threshold or business rule: it selects fields, attaches provenance and encodes the
 // persisted analytics doc. No I/O, no clock, no binary math.
 import type { BusinessDate, CanonicalDay, MetricValue } from "../finance/types.js";
+import { FinanceContractError } from "../finance/types.js";
 import { isBusinessDate } from "../finance/businessDate.js";
 import { DECIMAL_CONTRACT_VERSION, decIsNegative, decIsZero, serializeDec } from "../finance/decimal.js";
 import { NORMALIZATION_VERSION, latestPresentDate } from "../finance/normalize.js";
@@ -15,7 +16,7 @@ import type { FinancialReport } from "../metrics/report.js";
 import { PB_NET_POLICY_ID } from "../policy/purchaseBasis.js";
 import { productLaborSource } from "../policy/laborSource.js";
 import {
-  PRODUCT_FINANCE_VERSION, productDailyMetrics, productDayRecord, productDays, productMonthProjection, productMonthReport, productTimeline,
+  PRODUCT_FINANCE_VERSION, REV_FORECAST_FORMULA_ID, productDailyMetrics, productDayRecord, productDays, productMonthProjection, productMonthReport, productTimeline,
 } from "../policy/productFinance.js";
 import type { ProductDailyMetric, ProductProjection, ProductRange } from "../policy/productFinance.js";
 import { CANONICAL_SERVER_API_VERSION } from "./canonicalInputs.js";
@@ -37,6 +38,7 @@ export interface ServerProvenance {
   readonly configurationBasis: readonly string[];
   readonly configState: InputState;
   readonly fixedState: InputState;
+  readonly exceptionsState: ServerInputs["exceptionsState"];
   readonly operatingCalendar: "none_declared";
 }
 
@@ -59,6 +61,7 @@ export function provenanceOf(inputs: ServerInputs): ServerProvenance {
     configurationBasis: Object.freeze(basis),
     configState: inputs.configState,
     fixedState: inputs.fixedState,
+    exceptionsState: inputs.exceptionsState,
     operatingCalendar: "none_declared" as const,
   });
 }
@@ -289,9 +292,19 @@ export function canonicalMonthReport(inputs: ServerInputs, sel: { readonly kind:
   return { provenance: provenanceOf(inputs), report: productMonthReport(inputs, sel), inputIssues: inputs.inputIssues };
 }
 
-/** Server month projection (AMEND-04; B2's first runtime consumer). */
+/**
+ * Server month projection (AMEND-04; B2's first runtime consumer). The forecast history must
+ * know the structured exception days, so the inputs must be loaded with `need.exceptions`
+ * (a programming error otherwise); an unreadable ledger yields no projection (never a forecast
+ * that silently treats exception days as ordinary history).
+ */
 export function canonicalMonthProjection(inputs: ServerInputs, report: FinancialReport, opts: { readonly nowMs: number }): ProductProjection & { provenance: ServerProvenance } {
-  return { ...productMonthProjection(inputs, report, { nowMs: opts.nowMs, tenantId: inputs.tenantId, bizId: inputs.bizId }), provenance: provenanceOf(inputs) };
+  if (inputs.exceptionsState === "not_loaded") throw new FinanceContractError("exceptions_required", "canonicalMonthProjection");
+  const provenance = provenanceOf(inputs);
+  if (inputs.exceptionsState === "unreadable") {
+    return { projection: null, forecast: { formulaId: REV_FORECAST_FORMULA_ID, projectedRevenue: null, warnings: ["exception_ledger_unreadable"] }, provenance };
+  }
+  return { ...productMonthProjection(inputs, report, { nowMs: opts.nowMs, tenantId: inputs.tenantId, bizId: inputs.bizId }), provenance };
 }
 
 /** A Financial Core contract error (e.g. duplicate_row_id) — never a soft source failure. */

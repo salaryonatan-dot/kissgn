@@ -34,6 +34,6 @@ export async function getPurchaseMetrics(
   // Financial Core B1: one record per (present completed date, purchase source) — the
   // aggregate of ALL contributions of that date and source (several per supplier per day are
   // summed; explicit 0 / "skip" kept as 0; negatives (refunds) kept; legacy `food_cost` named).
-  const inputs = await loadCanonicalInputs(getDb(), tenantId, bizId, { site: "purchasesRepo.getPurchaseMetrics", need: { config: false, fixed: false } });
+  const inputs = await loadCanonicalInputs(getDb(), tenantId, bizId, { site: "purchasesRepo.getPurchaseMetrics", need: { config: false, fixed: false, exceptions: false } });
   return canonicalPurchaseRecords(inputs, { from: startDate, to: endDate }, nameMap);
 }

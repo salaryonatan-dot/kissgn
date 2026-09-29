@@ -6,10 +6,13 @@ import { costTimelineFromCurrentConfig } from "../metrics/adapters/configCompat.
 import { toDailyMetric, toForecastDay } from "../metrics/adapters/legacyNumber.js";
 import { computePeriodReport, NO_DECLARED_CLOSURES } from "../metrics/report.js";
 import { applyProjection } from "../metrics/projected.js";
-import { computeRevenueForecast } from "../forecast/revenueForecast.js";
+import { computeRevenueForecast, REV_FORECAST_FORMULA_ID } from "../forecast/revenueForecast.js";
+import { decFromNumber, serializeDec } from "../finance/decimal.js";
 import { productPurchaseBasis } from "./purchaseBasis.js";
 import { productLaborSource } from "./laborSource.js";
 export const PRODUCT_FINANCE_VERSION = "MARJIN_PRODUCT/1";
+/** The one forecast formula the month projection is bound to (re-exported for the server wrappers). */
+export { REV_FORECAST_FORMULA_ID };
 /** Reserved flag key for an unreadable fixed-cost node (AMEND-03). Emitted ONLY for that state. */
 export const FIXED_LIST_UNREADABLE_KEY = "__fixed_list_unreadable__";
 function isPlainObject(v) {
@@ -39,6 +42,61 @@ export function decodeEnvelope(raw, expect) {
         return Array.isArray(parsed) ? { state: "present", value: parsed } : { state: "unreadable", reason: "envelope_shape" };
     return isPlainObject(parsed) ? { state: "present", value: parsed } : { state: "unreadable", reason: "envelope_shape" };
 }
+// ── Storage decoding shared by server and browser (one meaning for one raw input) ──
+/** The two keyed-map fields of an entry row (the client's MarjinStorageV2.MAP_FIELDS). */
+export const ENTRY_MAP_FIELDS = Object.freeze(["supplier_payments", "hourly_payroll"]);
+/**
+ * RTDB numeric-key readback (approved client contract R2-B3, index.html canonicalMapField):
+ * RTDB returns a map whose keys are dense integers ("0", "1", …) as an ARRAY. For the two map
+ * fields ONLY, an array is the same value as the map {index: element}; a null element is an
+ * absent key. Every other field is untouched; stored rows are never mutated (a changed row is a
+ * shallow copy). Applied inside the product composition, so the server and the browser give the
+ * SAME result for the SAME raw rows.
+ */
+export function mapFieldReadback(rows) {
+    return rows.map((row) => {
+        if (!isPlainObject(row))
+            return row;
+        let out = null;
+        for (const field of ENTRY_MAP_FIELDS) {
+            const v = row[field];
+            if (!Array.isArray(v))
+                continue;
+            const map = {};
+            v.forEach((x, i) => { if (x !== null && x !== undefined)
+                map[String(i)] = x; });
+            if (out === null)
+                out = { ...row };
+            out[field] = map;
+        }
+        return out === null ? row : out;
+    });
+}
+/**
+ * Structured exception ledger (`tenants/{t}/entry_exceptions/{bizId}` = {[date]: {state, operations}})
+ * → `exceptionsByDate`. Same meaning as the parity-tested resolver (lib/entryExceptions.js
+ * resolveEffectiveException): a date whose envelope carries a truthy `state` is structured and
+ * is an exception iff `state.status === "active"`; a date without a state falls back to the
+ * rows' embedded flag (it is omitted here). Invalid date keys are ignored. A non-object ledger is
+ * unreadable (never defaulted to "no exceptions").
+ */
+export function decodeExceptionLedger(raw) {
+    if (raw === null || raw === undefined)
+        return { state: "absent" };
+    if (!isPlainObject(raw))
+        return { state: "unreadable", reason: "ledger_shape" };
+    const value = {};
+    for (const key of Object.keys(raw).sort()) {
+        if (!isBusinessDate(key))
+            continue;
+        const env = raw[key];
+        const st = isPlainObject(env) ? env.state : undefined;
+        if (!st)
+            continue;
+        value[key] = isPlainObject(st) && st.status === "active";
+    }
+    return { state: "present", value };
+}
 function requireInputs(inputs) {
     if (!inputs || typeof inputs !== "object")
         throw new FinanceContractError("inputs_required");
@@ -55,7 +113,7 @@ function requireRange(range) {
 }
 function normalized(inputs) {
     requireInputs(inputs);
-    return normalizeRows(inputs.rows, { asOfBusinessDate: inputs.asOfBusinessDate });
+    return normalizeRows(mapFieldReadback(inputs.rows), { asOfBusinessDate: inputs.asOfBusinessDate });
 }
 /**
  * Cost timeline under the current compatibility model (Slice A configCompat; F1 replaces it
@@ -153,12 +211,23 @@ export function productMonthProjection(inputs, report, opts) {
         tenantId: opts.tenantId || "", bizId: opts.bizId || "", targetMonth: report.window.month,
         today: inputs.asOfBusinessDate, nowMs: opts.nowMs, history,
     });
-    const projectedRevenue = forecast.monthEndForecastRevenue;
+    if (forecast.formulaId !== REV_FORECAST_FORMULA_ID)
+        throw new FinanceContractError("forecast_formula_mismatch", forecast.formulaId);
     const warnings = [...forecast.warnings];
-    if (projectedRevenue === null) {
+    if (forecast.monthEndForecastRevenue === null) {
         warnings.push("insufficient_history");
-        return { projection: null, forecast: { formulaId: forecast.formulaId, projectedRevenue: null, warnings } };
+        return { projection: null, forecast: { formulaId: REV_FORECAST_FORMULA_ID, projectedRevenue: null, warnings } };
     }
-    const projection = applyProjection(report, { formulaId: forecast.formulaId, month: report.window.month, projectedRevenue }, productTimeline(inputs));
-    return { projection, forecast: { formulaId: forecast.formulaId, projectedRevenue, warnings } };
+    // The engine's number is converted ONCE to the exact decimal of its canonical round-trip
+    // string (no binary arithmetic); the projection and the output use that exact string.
+    let projectedRevenue;
+    try {
+        projectedRevenue = serializeDec(decFromNumber(forecast.monthEndForecastRevenue));
+    }
+    catch (_) {
+        warnings.push("forecast_revenue_not_exact");
+        return { projection: null, forecast: { formulaId: REV_FORECAST_FORMULA_ID, projectedRevenue: null, warnings } };
+    }
+    const projection = applyProjection(report, { formulaId: REV_FORECAST_FORMULA_ID, month: report.window.month, projectedRevenue }, productTimeline(inputs));
+    return { projection, forecast: { formulaId: REV_FORECAST_FORMULA_ID, projectedRevenue, warnings } };
 }
