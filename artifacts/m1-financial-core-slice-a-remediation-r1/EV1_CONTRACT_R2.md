@@ -1,5 +1,7 @@
 # EV-1 Contract R2 (pre-B1, READ-ONLY; NOT EXECUTED)
 
+> **SUPERSEDED BY EV1/3 (2026-09-29):** counted labor is `payroll` only; the legacy `hourly_payroll` map is censused separately (`legacyHourlyPayroll`, summary `businessesWithLegacyHourlyPayroll`, `totalLegacyHourlyPayrollRows`, `totalHourlyPayrollAndPayrollRows`); `vd23.hourlyOnlyRows` and `labor.invalidHourlyMapShapeRows` removed; `presence.legacyHourlyOnlyRows` added. Still NOT executed; 0 Production reads. Kept for audit.
+
 Supersedes `financial-core-b1-readiness/02_EV1_EVIDENCE_CONTRACT.md` field list. Classifier: `tools/finance-core/ev1-classifier.mjs` (`EV1/2`), pure, no I/O; tests: `test/finance/ev1-classifier.test.mjs` (part of the full suite). **0 Production reads.**
 
 ## Fail-closed input

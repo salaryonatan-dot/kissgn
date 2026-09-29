@@ -26,7 +26,7 @@
     "src/presenters/money.ts",
     "src/presenters/percent.ts"
   ],
-  "sourceDigest": "b44f159728e1ce737554bf0ab8372f5580900bff73405bd311754e68578deb49",
+  "sourceDigest": "10c6adcf0a61eb6b2ae04a44c9ae7ed86f3783dc2da5ea4ddea751fc4f05e298",
   "files": [
     {
       "path": "browser/marjinFinanceGlobal.js",
@@ -46,11 +46,11 @@
     },
     {
       "path": "finance/labor.js",
-      "sha256": "0fa71343b27ffb9bd36971b18b1938604ed04714a8e856f68849ba3fba98b568"
+      "sha256": "f2cf950078fb56f9e3d674ac33bcb4898064bb49ba4ff26a0ce7e9159e0482f8"
     },
     {
       "path": "finance/normalize.js",
-      "sha256": "c20ff8602819ff7c5b6f52ad394f820c614fd7e5772c003365447a03e379d465"
+      "sha256": "a9e04c1a2c3fdd3e78f5c5a32e95ef48c86f02566ae14c46f96361987aa06bd7"
     },
     {
       "path": "finance/purchaseBasis.js",
@@ -66,23 +66,23 @@
     },
     {
       "path": "metrics/adapters/configCompat.js",
-      "sha256": "f2692f957299e85c21d16848574214da6ac9ccb6a60be94d77293d73e98f6984"
+      "sha256": "ac9a7174fd3dc21de85c54ab50d965990ff73a1a96ceaf4bd0eb58dd44b36933"
     },
     {
       "path": "metrics/adapters/legacyNumber.js",
-      "sha256": "efa8883d7aa57e78a33a24c67b0b8a902a8a8f8776636f826abf6917f46f24eb"
+      "sha256": "f6ff7fdbdfeb25ff16414fae42ad8c141750aa676b6ee60a397547f36db396a0"
     },
     {
       "path": "metrics/costTimeline.js",
-      "sha256": "dbfff7859ccf9c9769c413e685b7cc76ccc5aaa93ae41f6613214d1a052e08f0"
+      "sha256": "a271dba8bea1752b7eb70703b2adc2a962df5cd49d7271bb3f377aca67f137cd"
     },
     {
       "path": "metrics/projected.js",
-      "sha256": "f0846f8e269cc1028e55ac76d83a5efabeaa56db25feef93fbdb7309fa7f7e28"
+      "sha256": "c75a4752e90183a4d9de2c010014d9e93143f304a088b466ae3762d10b25f2bb"
     },
     {
       "path": "metrics/report.js",
-      "sha256": "4affe5f3534a219aaa3e91726e511c9c9cb407d02329adc3de3b3a5065665633"
+      "sha256": "21013617ee513b2cccbe0dc060be3b91831f7abb74ba038e43667c8e86697ba4"
     },
     {
       "path": "policy/evaluate.js",
@@ -94,7 +94,7 @@
     },
     {
       "path": "policy/laborSource.js",
-      "sha256": "ad816ea69ea7274005cc9532761f3e60bdeefc96b9922c2540dfac28b3e733ff"
+      "sha256": "06ee523fad84d2f203e0b78152035fa1ad331ab09556f50148d4dc03c2fad13d"
     },
     {
       "path": "policy/purchaseBasis.js",
@@ -106,7 +106,7 @@
     },
     {
       "path": "presenters/labels.js",
-      "sha256": "bf40b81e2cbf13592b78f055f661f23ea02b5b75618c575fb4c77bc0cb1a9b7f"
+      "sha256": "d788c1ceed0f6138a1ba9d8957a86d7b0f99c42ecf8709dd6049e3dca8dc1c66"
     },
     {
       "path": "presenters/money.js",

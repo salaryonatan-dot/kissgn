@@ -1,5 +1,7 @@
 # Labor Provenance Contract — MARJIN_LABOR/1
 
+> **SUPERSEDED (2026-09-29, final owner contract):** MARJIN_LABOR/1 is replaced by MARJIN_LABOR/2. The global monthly amount IS full employer cost (no gross concept); labor = hourly ShiftOrganizer cost on `payroll` + global calendar-day allocation; `hourly_payroll` is legacy and never counted; scope `all_staff`/`excludes_salaried` removed. See `artifacts/m1-financial-core-final-labor-contract/LABOR_FIXED_COST_CALCULATION_CONTRACT.md`. Kept for audit.
+
 | Item | Contract |
 |---|---|
 | **Current business truth source** | external attendance/workforce system |

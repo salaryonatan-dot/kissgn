@@ -1,5 +1,7 @@
 # Incomplete-Profit Contract — TI-18
 
+> **AMENDED (2026-09-29, final owner contract):** TI-18 still holds. The Actual window is now month start … last completed day (D-1), the current day is outside Actual, closed (declared) days are distinct from missing days, and purchases % / fixed accrual are typed too; components renamed (`hourly_employer_cost`, `global_employer_cost`, `operating_calendar`); new state `empty_window`. See `artifacts/m1-financial-core-final-labor-contract/`. Kept for audit.
+
 A total that depends on several components is a **typed result**; a number exists only when every required component is complete.
 
 ```ts

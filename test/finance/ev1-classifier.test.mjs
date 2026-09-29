@@ -65,7 +65,8 @@ const FIXTURE = [
   { id: U(11), date: "2028-03-10", sales: 0.30000000000000004 },                                                      // malformed financial (invalid only)
   { id: U(12), date: "2028-03-10", supplier_payments: [5], payroll: "0" },                                            // malformed map shape + labor zero
   { id: U(13), date: "2028-03-10", sales: "0", payroll: "0" },                                                        // zero-only, revenue zero
-  { id: U(14), date: "2028-03-10", hourly_payroll: { w1: "50" } },                                                    // hourly-only
+  { id: U(14), date: "2028-03-10", hourly_payroll: { w1: "50" } },                                                    // legacy hourly_payroll only (not labor)
+  { id: U(18), date: "2028-03-10", sales: "10", payroll: "5", hourly_payroll: { w1: "7", w2: "x" } },                 // payroll + legacy hourly_payroll (double-count risk), one invalid legacy cell
   { id: U(15), date: "2028-03-10", other_income: "20" },                                                              // other-income-only
   { id: U(16), date: "2028-03-10", other_expense: "15" },                                                             // other-expense-only
   { id: U(17), date: "2028-03-10", supplier_payments: { s1: "100" }, food_cost: "zz" },                               // supplier + invalid legacy
@@ -82,13 +83,13 @@ const FIXTURE = [
   "garbage",                                                                                                          // malformed row
 ];
 
-test("EV1 R2 census over the adversarial fixture", () => {
+test("EV1 R3 census over the adversarial fixture", () => {
   const r = classifyBusiness(FIXTURE, AS_OF);
-  assert.equal(r.classifier, "EV1/2");
-  assert.equal(r.rowsTotal, 28);
+  assert.equal(r.classifier, "EV1/3");
+  assert.equal(r.rowsTotal, 29);
   assert.equal(r.malformedRows, 1);
-  assert.deepEqual(r.identity, { validIds: 25, missingIds: 1, malformedIds: 1, duplicateIdRows: 2, duplicateIdValues: 1, duplicateIds: [U(20)] });
-  assert.deepEqual(r.dates, { validDateRows: 23, badShapeDateRows: 1, impossibleDateRows: 3, futureRows: 1, actualWindowRows: 22, duplicateDateDates: 4 });
+  assert.deepEqual(r.identity, { validIds: 26, missingIds: 1, malformedIds: 1, duplicateIdRows: 2, duplicateIdValues: 1, duplicateIds: [U(20)] });
+  assert.deepEqual(r.dates, { validDateRows: 24, badShapeDateRows: 1, impossibleDateRows: 3, futureRows: 1, actualWindowRows: 23, duplicateDateDates: 4 });
   assert.deepEqual(r.supplier, {
     rowsWithSupplierRecorded: 6, rowsWithExplicitZeroCell: 1, rowsWithSkipCell: 1, rowsWithNegativeCell: 1, rowsWithInvalidCell: 1,
     rowsWithOffsettingNonzeroCells: 1, invalidMapShapeRows: 1,
@@ -96,22 +97,28 @@ test("EV1 R2 census over the adversarial fixture", () => {
   });
   assert.deepEqual(r.legacyFood, { presentPositiveRows: 3, presentNegativeRows: 0, presentZeroRows: 1, invalidRows: 2, legacyOnlyRows: 1 });
   assert.deepEqual(r.vd16, { supplierRecordedAndLegacyFoodRecorded: 3, ofWhichSelectionChanges: 2, supplierRecordedAndLegacyFoodInvalid: 1, rowIds: [U(2), U(3), U(4)] });
-  assert.deepEqual(r.labor, { rowsWithLaborPresent: 4, rowsWithLaborZero: 2, rowsWithLaborInvalid: 0, invalidHourlyMapShapeRows: 0 });
-  assert.deepEqual(r.presence, { noFinancialValueRows: 3, notesOnlyRows: 1, emptyRows: 1, invalidOnlyRows: 1, rowsWithInvalidFinancialCell: 5 });
-  assert.deepEqual(r.vd23, {
-    rowsZeroOnlyPresent: 4, rowsNotEnteredTodayButPresentNow: 5, // zero-only: U2,U3 (supplier wins), U12, U13; not-entered-today: U12–U16
-    revenueZeroRows: 1, laborOnlyRows: 2, hourlyOnlyRows: 1, otherIncomeOnlyRows: 1, otherExpenseOnlyRows: 1, purchasesOnlyRows: 4,
+  // counted labor = payroll only (MARJIN_LABOR/2): U1, U12, U13, U18
+  assert.deepEqual(r.labor, { rowsWithLaborPresent: 4, rowsWithLaborZero: 2, rowsWithLaborInvalid: 0 });
+  // legacy hourly_payroll: U14 (only), U18 (with payroll; one invalid legacy cell)
+  assert.deepEqual(r.legacyHourlyPayroll, {
+    rowsWithHourlyPayrollRecorded: 2, rowsWithHourlyPayrollAndPayroll: 1, rowsHourlyPayrollOnly: 1, rowsWithInvalidHourlyPayroll: 1,
+    cells: { zero: 0, positive: 2, negative: 0, invalid: 1 },
   });
-  assert.deepEqual(r.invalidCellsByReason, { ambiguous_comma: 1, bad_grammar: 2, out_of_range: 1, invalid_map_shape: 1 });
-  assert.deepEqual(r.invalidCellsByField, { food_cost: 2, sales: 1, supplier_payments: 2 });
+  assert.deepEqual(r.presence, { noFinancialValueRows: 4, legacyHourlyOnlyRows: 1, notesOnlyRows: 1, emptyRows: 1, invalidOnlyRows: 1, rowsWithInvalidFinancialCell: 5 }); // U18's invalid legacy hourly_payroll cell is not a financial invalid
+  assert.deepEqual(r.vd23, {
+    rowsZeroOnlyPresent: 4, rowsNotEnteredTodayButPresentNow: 4, // zero-only: U2,U3 (supplier wins), U12, U13; not-entered-today: U12, U13, U15, U16
+    revenueZeroRows: 1, laborOnlyRows: 1, otherIncomeOnlyRows: 1, otherExpenseOnlyRows: 1, purchasesOnlyRows: 4,
+  });
+  assert.deepEqual(r.invalidCellsByReason, { ambiguous_comma: 1, bad_grammar: 3, out_of_range: 1, invalid_map_shape: 1 });
+  assert.deepEqual(r.invalidCellsByField, { food_cost: 2, hourly_payroll: 1, sales: 1, supplier_payments: 2 });
 });
 
-test("EV1 R2 duplicate census includes non-string ids", () => {
+test("EV1 R3 duplicate census includes non-string ids", () => {
   const r = classifyBusiness([{ id: 7, date: "2028-03-01" }, { id: 7, date: "2028-03-02" }, { id: "7", date: "2028-03-03" }, { id: U(1), date: "2028-03-01" }, { id: U(1), date: "2028-03-02" }], AS_OF);
   assert.deepEqual(r.identity, { validIds: 2, missingIds: 0, malformedIds: 3, duplicateIdRows: 4, duplicateIdValues: 2, duplicateIds: [U(1)] });
 });
 
-test("EV1 R2 output is safe: counts and canonical row UUIDs only", () => {
+test("EV1 R3 output is safe: counts and canonical row UUIDs only", () => {
   const r = classifyBusiness(FIXTURE, AS_OF);
   const text = JSON.stringify(r);
   for (const leak of ["closed for inspection", "not-a-uuid", "12,5", "0.30000000000000004", "03/01/2028", "2028-03", "2027-02-29", "1000", "300", "garbage", "zz"]) {
@@ -121,7 +128,7 @@ test("EV1 R2 output is safe: counts and canonical row UUIDs only", () => {
   assert.ok(ids.every((x) => idState(x) === "valid"));
 });
 
-test("EV1 R2 fails closed on non-evidence input", () => {
+test("EV1 R3 fails closed on non-evidence input", () => {
   const code = (fn) => { try { fn(); } catch (e) { return e instanceof Ev1InputError ? e.code : "other"; } return null; };
   assert.equal(code(() => classifyBusiness(null, AS_OF)), "rows_not_array");
   assert.equal(code(() => classifyBusiness({ _v: "[]" }, AS_OF)), "rows_not_array");
@@ -135,11 +142,14 @@ test("EV1 R2 fails closed on non-evidence input", () => {
   assert.equal(ok.businessesWithDuplicateIds, 1);
   assert.equal(ok.businessesWithImpossibleDates, 1);
   assert.equal(ok.totalSelectionChanges, 2);
+  assert.equal(ok.businessesWithLegacyHourlyPayroll, 1);
+  assert.equal(ok.totalLegacyHourlyPayrollRows, 2);
+  assert.equal(ok.totalHourlyPayrollAndPayrollRows, 1);
 });
 
 const cores = await bothCores();
 for (const [label, F] of cores) {
-  test(`EV1 R2 cross-check with the Financial Core [${label}]`, () => {
+  test(`EV1 R3 cross-check with the Financial Core [${label}]`, () => {
     // duplicate id: the core rejects the dataset; EV-1 must report it
     assert.throws(() => F.finance.normalize.normalizeRows([{ id: U(20), date: "2028-03-01" }, { id: U(20), date: "2028-03-02" }], { asOfBusinessDate: AS_OF }), (e) => e.code === "duplicate_row_id");
     // everything else: same VD-16 rows, same quarantine classes
@@ -148,6 +158,8 @@ for (const [label, F] of cores) {
     const ev = classifyBusiness(noDup, AS_OF);
     const coreVd16 = n.rows.flatMap((x) => x.flags).filter((f) => f.code === "supplier_and_legacy_food_both").map((f) => f.rowId).sort();
     assert.deepEqual(coreVd16, ev.vd16.rowIds, "same VD-16 collision rows");
+    const coreLegacy = n.rows.flatMap((x) => x.flags).filter((f) => f.code === "legacy_hourly_payroll_not_counted").length;
+    assert.equal(coreLegacy, ev.legacyHourlyPayroll.rowsWithHourlyPayrollRecorded, "same legacy hourly_payroll rows (never counted by the core)");
     assert.equal(n.quarantine.futureRows.length, ev.dates.futureRows);
     const coreInvalidDates = n.flags.filter((f) => f.code === "invalid_date_row").length;
     assert.equal(coreInvalidDates, ev.dates.impossibleDateRows + ev.dates.badShapeDateRows, "core quarantines exactly the dates EV-1 rejects");

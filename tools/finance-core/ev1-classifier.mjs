@@ -1,4 +1,4 @@
-// EV-1 classifier R2 — PURE, fixture-tested (no I/O, no network, no credentials).
+// EV-1 classifier R3 — PURE, fixture-tested (no I/O, no network, no credentials).
 //
 // Input: the decoded logical rows of ONE business (as returned by the shared entries reader)
 // and the evaluation Israel business date. Output: counts and safe technical identifiers only
@@ -9,10 +9,15 @@
 // presence rules and the MARJIN_DEC/1 grammar from the contract text so that EV-1 evidence
 // can cross-check the core instead of repeating it.
 //
+// R3 (final owner contract 2026-09-29, MARJIN_LABOR/2): counted labor is `payroll` only (the
+// hourly employees' authoritative employer cost). The legacy `hourly_payroll` map is never a
+// labor source; it is censused separately (legacyHourlyPayroll) to size its data footprint
+// and the rows where it coexists with `payroll` (the double-count risk in current consumers).
+//
 // Counter semantics: unless a field says "exclusive", counters OVERLAP (one row can be counted
 // in several classes). Exclusive groups and their precedence are documented next to them.
 
-export const EV1_CLASSIFIER_VERSION = "EV1/2";
+export const EV1_CLASSIFIER_VERSION = "EV1/3";
 
 export class Ev1InputError extends Error {
   constructor(code, detail) {
@@ -123,9 +128,19 @@ function emptyResult() {
     },
     legacyFood: { presentPositiveRows: 0, presentNegativeRows: 0, presentZeroRows: 0, invalidRows: 0, legacyOnlyRows: 0 },
     vd16: { supplierRecordedAndLegacyFoodRecorded: 0, ofWhichSelectionChanges: 0, supplierRecordedAndLegacyFoodInvalid: 0, rowIds: [] },
-    labor: { rowsWithLaborPresent: 0, rowsWithLaborZero: 0, rowsWithLaborInvalid: 0, invalidHourlyMapShapeRows: 0 },
+    // counted labor: `payroll` only (MARJIN_LABOR/2)
+    labor: { rowsWithLaborPresent: 0, rowsWithLaborZero: 0, rowsWithLaborInvalid: 0 },
+    // legacy `hourly_payroll` (never counted by the Financial Core; still summed by current consumers)
+    legacyHourlyPayroll: {
+      rowsWithHourlyPayrollRecorded: 0, // ≥1 present cell
+      rowsWithHourlyPayrollAndPayroll: 0, // present hourly_payroll AND present payroll (current-consumer double-count risk)
+      rowsHourlyPayrollOnly: 0, // present hourly_payroll and no counted financial value
+      rowsWithInvalidHourlyPayroll: 0, // invalid cell or invalid map shape
+      cells: { zero: 0, positive: 0, negative: 0, invalid: 0 },
+    },
     presence: {
       noFinancialValueRows: 0, // no financial cell present (absent and/or invalid)
+      legacyHourlyOnlyRows: 0, // subset of noFinancialValueRows: no invalid cell, ≥1 present legacy hourly_payroll cell
       notesOnlyRows: 0, // subset of noFinancialValueRows with ≥1 non-empty text annotation and no invalid cell
       emptyRows: 0, // subset of noFinancialValueRows: no text annotation, no invalid cell
       invalidOnlyRows: 0, // subset of noFinancialValueRows: ≥1 invalid cell
@@ -135,7 +150,7 @@ function emptyResult() {
       rowsZeroOnlyPresent: 0, rowsNotEnteredTodayButPresentNow: 0,
       // "only" drivers are exclusive with each other by definition (the row's present financial
       // groups are exactly that group); revenueZeroRows overlaps them.
-      revenueZeroRows: 0, laborOnlyRows: 0, hourlyOnlyRows: 0, otherIncomeOnlyRows: 0, otherExpenseOnlyRows: 0, purchasesOnlyRows: 0,
+      revenueZeroRows: 0, laborOnlyRows: 0, otherIncomeOnlyRows: 0, otherExpenseOnlyRows: 0, purchasesOnlyRows: 0,
     },
     invalidCellsByReason: {},
     invalidCellsByField: {},
@@ -178,8 +193,10 @@ export function classifyBusiness(rows, asOfBusinessDate, opts = {}) {
     if (row.includeVat === true) out.includeVatTrueRows += 1;
 
     let rowInvalid = false;
-    const noteInvalid = (field, c) => {
-      if (c.state === "invalid") { bump(out.invalidCellsByReason, c.reason); bump(out.invalidCellsByField, field); rowInvalid = true; }
+    // `financial` = false for the legacy hourly_payroll map: its invalid cells are censused by
+    // field/reason but never make the row an invalid FINANCIAL row (the core does not count it).
+    const noteInvalid = (field, c, financial = true) => {
+      if (c.state === "invalid") { bump(out.invalidCellsByReason, c.reason); bump(out.invalidCellsByField, field); if (financial) rowInvalid = true; }
     };
     const simple = (field) => { const c = cellState(row[field], false); noteInvalid(field, c); return c; };
     const rev = ["sales", "deliveries", "other_income"].map((f) => [f, simple(f)]);
@@ -187,18 +204,17 @@ export function classifyBusiness(rows, asOfBusinessDate, opts = {}) {
     const otherExp = simple("other_expense");
     const food = simple("food_cost");
 
-    const readMap = (field, allowSkip) => {
+    const readMap = (field, allowSkip, financial = true) => {
       const m = row[field];
       if (m === undefined || m === null || m === "") return { cells: [], shapeInvalid: false };
-      if (!isObj(m)) { rowInvalid = true; bump(out.invalidCellsByField, field); bump(out.invalidCellsByReason, "invalid_map_shape"); return { cells: [], shapeInvalid: true }; }
+      if (!isObj(m)) { if (financial) rowInvalid = true; bump(out.invalidCellsByField, field); bump(out.invalidCellsByReason, "invalid_map_shape"); return { cells: [], shapeInvalid: true }; }
       const cells = Object.values(m).map((v) => cellState(v, allowSkip));
-      for (const c of cells) noteInvalid(field, c);
+      for (const c of cells) noteInvalid(field, c, financial);
       return { cells, shapeInvalid: false };
     };
     const sup = readMap("supplier_payments", true);
-    const hourly = readMap("hourly_payroll", false);
+    const hourly = readMap("hourly_payroll", false, false);
     if (sup.shapeInvalid) out.supplier.invalidMapShapeRows += 1;
-    if (hourly.shapeInvalid) out.labor.invalidHourlyMapShapeRows += 1;
 
     // supplier census
     for (const c of sup.cells) if (c.state in out.supplier.cells) out.supplier.cells[c.state] += 1;
@@ -227,11 +243,18 @@ export function classifyBusiness(rows, asOfBusinessDate, opts = {}) {
     }
     if (supRecorded && food.state === "invalid") out.vd16.supplierRecordedAndLegacyFoodInvalid += 1;
 
-    // labor census (entered authoritative employer cost fields)
-    const laborCells = [payroll, ...hourly.cells];
-    if (laborCells.some(isPresent)) out.labor.rowsWithLaborPresent += 1;
-    if (laborCells.some(isPresent) && laborCells.filter(isPresent).every((c) => c.state === "zero")) out.labor.rowsWithLaborZero += 1;
-    if (laborCells.some((c) => c.state === "invalid") || hourly.shapeInvalid) out.labor.rowsWithLaborInvalid += 1;
+    // labor census: counted labor = `payroll` only (MARJIN_LABOR/2)
+    const laborCells = [payroll];
+    if (isPresent(payroll)) out.labor.rowsWithLaborPresent += 1;
+    if (payroll.state === "zero") out.labor.rowsWithLaborZero += 1;
+    if (payroll.state === "invalid") out.labor.rowsWithLaborInvalid += 1;
+
+    // legacy hourly_payroll census (never counted)
+    const hourlyPresent = hourly.cells.some(isPresent);
+    for (const c of hourly.cells) if (c.state in out.legacyHourlyPayroll.cells) out.legacyHourlyPayroll.cells[c.state] += 1;
+    if (hourlyPresent) out.legacyHourlyPayroll.rowsWithHourlyPayrollRecorded += 1;
+    if (hourlyPresent && isPresent(payroll)) out.legacyHourlyPayroll.rowsWithHourlyPayrollAndPayroll += 1;
+    if (hourly.shapeInvalid || hourly.cells.some((c) => c.state === "invalid")) out.legacyHourlyPayroll.rowsWithInvalidHourlyPayroll += 1;
 
     // presence / VD-23
     const groups = {
@@ -246,7 +269,9 @@ export function classifyBusiness(rows, asOfBusinessDate, opts = {}) {
     if (allPresent.length === 0) {
       out.presence.noFinancialValueRows += 1;
       const hasText = TEXT_FIELDS.some((f) => typeof row[f] === "string" && row[f].trim() !== "");
+      if (hourlyPresent) out.legacyHourlyPayroll.rowsHourlyPayrollOnly += 1;
       if (rowInvalid) out.presence.invalidOnlyRows += 1;
+      else if (hourlyPresent) out.presence.legacyHourlyOnlyRows += 1;
       else if (hasText) out.presence.notesOnlyRows += 1;
       else out.presence.emptyRows += 1;
     } else {
@@ -254,10 +279,7 @@ export function classifyBusiness(rows, asOfBusinessDate, opts = {}) {
       const revPresent = groups.revenue;
       if (revPresent.length >= 1 && revPresent.every((c) => c.state === "zero")) out.vd23.revenueZeroRows += 1;
       const only = (g) => presentGroups.length === 1 && presentGroups[0] === g;
-      if (only("labor")) {
-        out.vd23.laborOnlyRows += 1;
-        if (!isPresent(payroll)) out.vd23.hourlyOnlyRows += 1;
-      }
+      if (only("labor")) out.vd23.laborOnlyRows += 1;
       if (only("otherExpense")) out.vd23.otherExpenseOnlyRows += 1;
       if (only("purchases")) out.vd23.purchasesOnlyRows += 1;
       if (only("revenue") && rev.every(([f, c]) => f === "other_income" || !isPresent(c))) out.vd23.otherIncomeOnlyRows += 1;
@@ -308,5 +330,8 @@ export function summarize(perBusiness, readFailures) {
     businessesWithInvalidCells: count((r) => r.presence.rowsWithInvalidFinancialCell >= 1),
     businessesWithImpossibleDates: count((r) => r.dates.impossibleDateRows + r.dates.badShapeDateRows >= 1),
     businessesWithLegacyOnlyFoodRows: count((r) => r.legacyFood.legacyOnlyRows >= 1),
+    businessesWithLegacyHourlyPayroll: count((r) => r.legacyHourlyPayroll.rowsWithHourlyPayrollRecorded >= 1),
+    totalLegacyHourlyPayrollRows: sum((r) => r.legacyHourlyPayroll.rowsWithHourlyPayrollRecorded),
+    totalHourlyPayrollAndPayrollRows: sum((r) => r.legacyHourlyPayroll.rowsWithHourlyPayrollAndPayroll),
   };
 }

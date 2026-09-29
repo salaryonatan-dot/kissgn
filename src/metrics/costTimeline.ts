@@ -1,26 +1,27 @@
 // Effective-dated cost timeline and calendar-day accrual (R1.2 doc 02, owner decision BD-2).
 //
-// Every amount is NET OF VAT (BD-1). Salaried entries carry their meaning explicitly:
-// only `authoritative_employer_cost` entries are labor cost; a `gross_salary` entry is a
-// payroll datum kept for provenance and NEVER enters arithmetic (no uplift, no fallback).
-// Accrual is calendar-based: it never depends on entry rows, duplicates, missing days or
-// future rows. effectiveTo is always derived.
+// Every amount is NET OF VAT (BD-1). MARJIN_LABOR/2: a global employee's monthly amount IS
+// full employer cost (no gross/net concept, no multiplier). Global employer cost and fixed
+// costs accrue by CALENDAR DAY (monthly / calendar days of the month) on every recognised
+// date — closed days included, never conditioned on revenue or on operating-day counts.
+// Only percentage rent/royalty depend on the day's recorded revenue.
+// Accrual never depends on entry rows, duplicates, missing days or future rows.
+// effectiveTo is always derived.
 import type { AmountString, Rat } from "../finance/decimal.js";
-import { parseAmountString, RAT_ZERO, ratAdd, ratDiv, ratFromInt, ratMul } from "../finance/decimal.js";
+import { isCanonicalAmountString, parseAmountString, RAT_ZERO, ratAdd, ratDiv, ratFromInt, ratIsNegative, ratMul } from "../finance/decimal.js";
 import { daysInMonthOf, isBusinessDate } from "../finance/businessDate.js";
 import type { BusinessDate, Flag } from "../finance/types.js";
-import type { LaborIngestionMethod, LaborSourceSystem } from "../finance/labor.js";
+import type { GlobalCostSourceSystem, LaborIngestionMethod } from "../finance/labor.js";
 import { FinanceContractError } from "../finance/types.js";
 
-export type SalariedEntry =
-  | {
-      readonly employeeKey: string;
-      readonly kind: "authoritative_employer_cost";
-      readonly monthlyAmount: AmountString;
-      readonly sourceSystem: LaborSourceSystem;
-      readonly ingestionMethod: LaborIngestionMethod;
-    }
-  | { readonly employeeKey: string; readonly kind: "gross_salary"; readonly monthlyAmount: AmountString };
+/** A global/full-time employee's monthly FULL EMPLOYER COST. */
+export interface GlobalEmployeeEntry {
+  readonly employeeKey: string;
+  readonly kind: "authoritative_employer_cost";
+  readonly monthlyAmount: AmountString;
+  readonly sourceSystem: GlobalCostSourceSystem;
+  readonly ingestionMethod: LaborIngestionMethod;
+}
 
 export type CostVersionBasis = "recorded" | "attested_retroactive" | "current_applied_retrospectively";
 
@@ -29,7 +30,7 @@ export interface CostVersion {
   readonly effectiveFrom: BusinessDate; // inclusive
   readonly recordedAt: number; // ms epoch; orders corrections of the same effectiveFrom only
   readonly basis: CostVersionBasis;
-  readonly salaried: ReadonlyArray<SalariedEntry>;
+  readonly globalEmployees: ReadonlyArray<GlobalEmployeeEntry>;
   readonly fixedItems: ReadonlyArray<{ readonly itemKey: string; readonly monthlyAmount: AmountString }>;
   readonly rent: { readonly mode: "none" } | { readonly mode: "fixed"; readonly monthlyAmount: AmountString } | { readonly mode: "pct"; readonly ratePct: AmountString };
   readonly royalty: { readonly mode: "none" } | { readonly mode: "pct"; readonly ratePct: AmountString };
@@ -59,6 +60,13 @@ export function resolveTimeline(timeline: CostTimeline): ResolvedTimeline {
   const superseded: string[] = [];
   for (const v of timeline.versions) {
     if (!isBusinessDate(v.effectiveFrom)) throw new FinanceContractError("invalid_effective_from", v.effectiveFrom);
+    if (!Array.isArray(v.globalEmployees)) throw new FinanceContractError("global_employees_required", v.versionId);
+    for (const e of v.globalEmployees) {
+      if (!e || e.kind !== "authoritative_employer_cost") throw new FinanceContractError("global_cost_not_employer_cost", { versionId: v.versionId, employeeKey: e && e.employeeKey });
+      if (typeof e.monthlyAmount !== "string" || !isCanonicalAmountString(e.monthlyAmount) || ratIsNegative(parseAmountString(e.monthlyAmount))) {
+        throw new FinanceContractError("invalid_global_amount", { versionId: v.versionId, employeeKey: e.employeeKey });
+      }
+    }
     const prev = byFrom.get(v.effectiveFrom);
     if (!prev) byFrom.set(v.effectiveFrom, v);
     else if (cmpVersion(v, prev) > 0) {
@@ -77,7 +85,7 @@ export function versionForDay(resolved: ResolvedTimeline, date: BusinessDate): C
 }
 
 export interface DayAccrual {
-  readonly salaried: Rat;
+  readonly global: Rat;
   readonly fixedRegular: Rat;
   readonly rentFixed: Rat;
   readonly rentPct: Rat;
@@ -101,22 +109,23 @@ export function revenueLinkedCharges(version: CostVersion, revenue: Rat): { rent
 
 /**
  * One calendar day's recognised cost under the version in force that day. Monthly amounts
- * accrue as monthly / daysInMonth(day). Percentage rent/royalty apply to the day's
- * recorded revenue (null ⇒ no recorded revenue ⇒ nothing to apply the rate to).
+ * (global employer cost, fixed items, fixed rent) accrue as monthly / daysInMonth(day) on
+ * EVERY calendar day. Percentage rent/royalty apply to the day's recorded revenue (null ⇒
+ * no recorded revenue ⇒ nothing to apply the rate to).
  */
 export function accrueDay(version: CostVersion, date: BusinessDate, dayRevenue: Rat | null): DayAccrual {
   const dim = ratFromInt(daysInMonthOf(date));
   const perDay = (monthly: Rat) => ratDiv(monthly, dim);
   const revenue = dayRevenue === null ? RAT_ZERO : dayRevenue;
-  const salaried = perDay(sumAmounts(version.salaried.filter((s) => s.kind === "authoritative_employer_cost").map((s) => s.monthlyAmount)));
+  const global = perDay(sumAmounts(version.globalEmployees.map((e) => e.monthlyAmount)));
   const fixedRegular = perDay(sumAmounts(version.fixedItems.map((f) => f.monthlyAmount)));
   const rentFixed = version.rent.mode === "fixed" ? perDay(parseAmountString(version.rent.monthlyAmount)) : RAT_ZERO;
   const { rentPct, royaltyPct } = revenueLinkedCharges(version, revenue);
-  return { salaried, fixedRegular, rentFixed, rentPct, royaltyPct };
+  return { global, fixedRegular, rentFixed, rentPct, royaltyPct };
 }
 
 export interface WindowAccrual {
-  readonly salaried: Rat;
+  readonly global: Rat;
   readonly fixedRegular: Rat;
   readonly rentFixed: Rat;
   readonly rentPct: Rat;
@@ -126,21 +135,19 @@ export interface WindowAccrual {
   readonly versionsApplied: readonly string[];
   readonly superseded: readonly string[];
   readonly uncoveredDates: readonly BusinessDate[];
-  /** distinct employees with an authoritative salaried employer-cost entry in the window */
-  readonly salariedEmployeesApplied: number;
-  /** recognised days whose version carries a gross-salary-only entry (no employer cost) */
-  readonly grossSalaryOnlyDates: readonly BusinessDate[];
-  readonly grossSalaryOnlyEmployees: readonly string[];
+  /** distinct global employees with an employer-cost entry in the window */
+  readonly globalEmployeesApplied: number;
+  /** true when a percentage rent or royalty was in force on at least one recognised date */
+  readonly revenueLinked: boolean;
 }
 
 export function accrueWindow(timeline: CostTimeline, dates: readonly BusinessDate[], revenueByDate: ReadonlyMap<BusinessDate, Rat | null>): WindowAccrual {
   const resolved = resolveTimeline(timeline);
-  let salaried = RAT_ZERO, fixedRegular = RAT_ZERO, rentFixed = RAT_ZERO, rentPct = RAT_ZERO, royaltyPct = RAT_ZERO;
+  let global = RAT_ZERO, fixedRegular = RAT_ZERO, rentFixed = RAT_ZERO, rentPct = RAT_ZERO, royaltyPct = RAT_ZERO;
   const bases = new Set<CostVersionBasis>();
   const applied = new Set<string>();
-  const salariedKeys = new Set<string>();
-  const grossKeys = new Set<string>();
-  const grossDates: BusinessDate[] = [];
+  const globalKeys = new Set<string>();
+  let revenueLinked = false;
   const uncovered: BusinessDate[] = [];
   for (const d of dates) {
     const v = versionForDay(resolved, d);
@@ -150,31 +157,23 @@ export function accrueWindow(timeline: CostTimeline, dates: readonly BusinessDat
     }
     bases.add(v.basis);
     applied.add(v.versionId);
-    let grossDay = false;
-    for (const e of v.salaried) {
-      if (e.kind === "authoritative_employer_cost") salariedKeys.add(e.employeeKey);
-      else {
-        grossKeys.add(e.employeeKey);
-        grossDay = true;
-      }
-    }
-    if (grossDay) grossDates.push(d);
+    for (const e of v.globalEmployees) globalKeys.add(e.employeeKey);
+    if (v.rent.mode === "pct" || v.royalty.mode === "pct") revenueLinked = true;
     const a = accrueDay(v, d, revenueByDate.has(d) ? (revenueByDate.get(d) as Rat | null) : null);
-    salaried = ratAdd(salaried, a.salaried);
+    global = ratAdd(global, a.global);
     fixedRegular = ratAdd(fixedRegular, a.fixedRegular);
     rentFixed = ratAdd(rentFixed, a.rentFixed);
     rentPct = ratAdd(rentPct, a.rentPct);
     royaltyPct = ratAdd(royaltyPct, a.royaltyPct);
   }
-  const total = [salaried, fixedRegular, rentFixed, rentPct, royaltyPct].reduce(ratAdd, RAT_ZERO);
+  const total = [global, fixedRegular, rentFixed, rentPct, royaltyPct].reduce(ratAdd, RAT_ZERO);
   return {
-    salaried, fixedRegular, rentFixed, rentPct, royaltyPct, total,
+    global, fixedRegular, rentFixed, rentPct, royaltyPct, total,
     configurationBasis: [...bases].sort(),
     versionsApplied: [...applied].sort(),
     superseded: resolved.superseded,
     uncoveredDates: uncovered,
-    salariedEmployeesApplied: salariedKeys.size,
-    grossSalaryOnlyDates: grossDates,
-    grossSalaryOnlyEmployees: [...grossKeys].sort(),
+    globalEmployeesApplied: globalKeys.size,
+    revenueLinked,
   };
 }

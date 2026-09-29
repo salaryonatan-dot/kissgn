@@ -1,4 +1,4 @@
-import { parseAmountString, RAT_ZERO, ratAdd, ratDiv, ratFromInt, ratMul } from "../finance/decimal.js";
+import { isCanonicalAmountString, parseAmountString, RAT_ZERO, ratAdd, ratDiv, ratFromInt, ratIsNegative, ratMul } from "../finance/decimal.js";
 import { daysInMonthOf, isBusinessDate } from "../finance/businessDate.js";
 import { FinanceContractError } from "../finance/types.js";
 function cmpVersion(a, b) {
@@ -14,6 +14,15 @@ export function resolveTimeline(timeline) {
     for (const v of timeline.versions) {
         if (!isBusinessDate(v.effectiveFrom))
             throw new FinanceContractError("invalid_effective_from", v.effectiveFrom);
+        if (!Array.isArray(v.globalEmployees))
+            throw new FinanceContractError("global_employees_required", v.versionId);
+        for (const e of v.globalEmployees) {
+            if (!e || e.kind !== "authoritative_employer_cost")
+                throw new FinanceContractError("global_cost_not_employer_cost", { versionId: v.versionId, employeeKey: e && e.employeeKey });
+            if (typeof e.monthlyAmount !== "string" || !isCanonicalAmountString(e.monthlyAmount) || ratIsNegative(parseAmountString(e.monthlyAmount))) {
+                throw new FinanceContractError("invalid_global_amount", { versionId: v.versionId, employeeKey: e.employeeKey });
+            }
+        }
         const prev = byFrom.get(v.effectiveFrom);
         if (!prev)
             byFrom.set(v.effectiveFrom, v);
@@ -49,27 +58,27 @@ export function revenueLinkedCharges(version, revenue) {
 }
 /**
  * One calendar day's recognised cost under the version in force that day. Monthly amounts
- * accrue as monthly / daysInMonth(day). Percentage rent/royalty apply to the day's
- * recorded revenue (null ⇒ no recorded revenue ⇒ nothing to apply the rate to).
+ * (global employer cost, fixed items, fixed rent) accrue as monthly / daysInMonth(day) on
+ * EVERY calendar day. Percentage rent/royalty apply to the day's recorded revenue (null ⇒
+ * no recorded revenue ⇒ nothing to apply the rate to).
  */
 export function accrueDay(version, date, dayRevenue) {
     const dim = ratFromInt(daysInMonthOf(date));
     const perDay = (monthly) => ratDiv(monthly, dim);
     const revenue = dayRevenue === null ? RAT_ZERO : dayRevenue;
-    const salaried = perDay(sumAmounts(version.salaried.filter((s) => s.kind === "authoritative_employer_cost").map((s) => s.monthlyAmount)));
+    const global = perDay(sumAmounts(version.globalEmployees.map((e) => e.monthlyAmount)));
     const fixedRegular = perDay(sumAmounts(version.fixedItems.map((f) => f.monthlyAmount)));
     const rentFixed = version.rent.mode === "fixed" ? perDay(parseAmountString(version.rent.monthlyAmount)) : RAT_ZERO;
     const { rentPct, royaltyPct } = revenueLinkedCharges(version, revenue);
-    return { salaried, fixedRegular, rentFixed, rentPct, royaltyPct };
+    return { global, fixedRegular, rentFixed, rentPct, royaltyPct };
 }
 export function accrueWindow(timeline, dates, revenueByDate) {
     const resolved = resolveTimeline(timeline);
-    let salaried = RAT_ZERO, fixedRegular = RAT_ZERO, rentFixed = RAT_ZERO, rentPct = RAT_ZERO, royaltyPct = RAT_ZERO;
+    let global = RAT_ZERO, fixedRegular = RAT_ZERO, rentFixed = RAT_ZERO, rentPct = RAT_ZERO, royaltyPct = RAT_ZERO;
     const bases = new Set();
     const applied = new Set();
-    const salariedKeys = new Set();
-    const grossKeys = new Set();
-    const grossDates = [];
+    const globalKeys = new Set();
+    let revenueLinked = false;
     const uncovered = [];
     for (const d of dates) {
         const v = versionForDay(resolved, d);
@@ -79,33 +88,25 @@ export function accrueWindow(timeline, dates, revenueByDate) {
         }
         bases.add(v.basis);
         applied.add(v.versionId);
-        let grossDay = false;
-        for (const e of v.salaried) {
-            if (e.kind === "authoritative_employer_cost")
-                salariedKeys.add(e.employeeKey);
-            else {
-                grossKeys.add(e.employeeKey);
-                grossDay = true;
-            }
-        }
-        if (grossDay)
-            grossDates.push(d);
+        for (const e of v.globalEmployees)
+            globalKeys.add(e.employeeKey);
+        if (v.rent.mode === "pct" || v.royalty.mode === "pct")
+            revenueLinked = true;
         const a = accrueDay(v, d, revenueByDate.has(d) ? revenueByDate.get(d) : null);
-        salaried = ratAdd(salaried, a.salaried);
+        global = ratAdd(global, a.global);
         fixedRegular = ratAdd(fixedRegular, a.fixedRegular);
         rentFixed = ratAdd(rentFixed, a.rentFixed);
         rentPct = ratAdd(rentPct, a.rentPct);
         royaltyPct = ratAdd(royaltyPct, a.royaltyPct);
     }
-    const total = [salaried, fixedRegular, rentFixed, rentPct, royaltyPct].reduce(ratAdd, RAT_ZERO);
+    const total = [global, fixedRegular, rentFixed, rentPct, royaltyPct].reduce(ratAdd, RAT_ZERO);
     return {
-        salaried, fixedRegular, rentFixed, rentPct, royaltyPct, total,
+        global, fixedRegular, rentFixed, rentPct, royaltyPct, total,
         configurationBasis: [...bases].sort(),
         versionsApplied: [...applied].sort(),
         superseded: resolved.superseded,
         uncoveredDates: uncovered,
-        salariedEmployeesApplied: salariedKeys.size,
-        grossSalaryOnlyDates: grossDates,
-        grossSalaryOnlyEmployees: [...grossKeys].sort(),
+        globalEmployeesApplied: globalKeys.size,
+        revenueLinked,
     };
 }

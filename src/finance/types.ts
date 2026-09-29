@@ -50,7 +50,9 @@ export type FlagCode =
   | "future_row_quarantined"
   | "invalid_date_row"
   | "malformed_row"
-  | "invalid_salary"
+  | "invalid_global_amount"
+  | "missing_global_amount"
+  | "employee_amount_not_global"
   | "invalid_fixed_amount"
   | "invalid_rate"
   | "missing_rate"
@@ -59,8 +61,8 @@ export type FlagCode =
   | "superseded_versions"
   | "rent_fixed_and_rent_item_both"
   | "ratio_numerator_incomplete"
-  | "gross_salary_not_labor_cost"
-  | "today_open";
+  | "legacy_hourly_payroll_not_counted"
+  | "closed_day_has_recorded_values";
 
 export interface Flag {
   readonly code: FlagCode;
@@ -79,14 +81,16 @@ export interface NormalizedRow {
   readonly metrics: {
     readonly revenue: MetricValue;
     readonly purchases: MetricValue;
-    readonly directLabor: MetricValue;
+    /** Hourly employees' authoritative employer cost (`payroll`) — MARJIN_LABOR/2. */
+    readonly hourlyLabor: MetricValue;
     readonly otherExpense: MetricValue;
   };
   readonly revenueParts: { readonly sales: MetricValue; readonly deliveries: MetricValue; readonly otherIncome: MetricValue };
   readonly purchaseSource: "supplier" | "legacy_food_cost" | "none";
   /** Only the selected purchase representation contributes (R1.3 doc 01 §1.4). */
   readonly purchaseContributions: ReadonlyArray<{ readonly source: PurchaseSourceKey; readonly value: Dec }>;
-  readonly hourly: ReadonlyArray<{ readonly employee: EmployeeKey; readonly value: Dec }>;
+  /** LEGACY `hourly_payroll` map: recorded for provenance only, NEVER counted as labor (MARJIN_LABOR/2). */
+  readonly legacyHourlyPayroll: { readonly recorded: boolean; readonly entries: ReadonlyArray<{ readonly employee: EmployeeKey; readonly value: Dec }> };
   readonly isException: boolean;
   readonly annotations: { readonly notes: string[]; readonly weather: string[]; readonly exceptionReason: string[]; readonly exceptionNote: string[]; readonly securityEvent: boolean };
   readonly flags: readonly Flag[];
@@ -101,7 +105,7 @@ export interface DayPresence {
   readonly day: "present" | "missing";
   readonly revenue: Presence;
   readonly purchases: Presence;
-  readonly directLabor: Presence;
+  readonly hourlyLabor: Presence;
   readonly otherExpense: Presence;
 }
 
@@ -112,7 +116,9 @@ export interface CanonicalDay {
   readonly presence: DayPresence;
   readonly revenue: MetricValue & { readonly parts: { readonly sales: MetricValue; readonly deliveries: MetricValue; readonly otherIncome: MetricValue } };
   readonly purchases: MetricValue & { readonly bySource: Readonly<Record<PurchaseSourceKey, AmountString>> };
-  readonly directLabor: MetricValue & { readonly hourlyByEmployee: Readonly<Record<EmployeeKey, AmountString>> };
+  readonly hourlyLabor: MetricValue;
+  /** LEGACY `hourly_payroll` values on this date: never counted (counted is always false). */
+  readonly legacyHourlyPayroll: { readonly counted: false; readonly rows: readonly RowId[]; readonly byEmployee: Readonly<Record<EmployeeKey, AmountString>> };
   readonly otherExpense: MetricValue;
   readonly exception: { readonly isException: boolean; readonly source: "ledger" | "rows" | "none" };
   readonly annotations: { readonly notes: ReadonlyArray<{ rowId: RowId; value: string }>; readonly securityEventRows: readonly RowId[] };

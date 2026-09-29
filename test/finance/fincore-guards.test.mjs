@@ -122,12 +122,13 @@ test("G-A1 legacy DailyMetric adapter keeps the consumer shape and adds presence
   assert.ok(fields.length >= 6, "DailyMetric fields found");
   const n = F.finance.normalize.normalizeRows([{ id: "a", date: "2026-09-01", sales: "100" }], { asOfBusinessDate: "2026-09-01" });
   const [day] = F.finance.normalize.groupByDate(n.rows, { from: "2026-09-01", to: "2026-09-01" });
-  const dm = F.metrics.adapters.legacyNumber.toDailyMetric(day, F.finance.purchaseBasis.resolvePurchaseBasis([], F.policy.purchaseBasis.productPurchaseBasis()), F.policy.laborSource.productLaborSource());
+  const dm = F.metrics.adapters.legacyNumber.toDailyMetric(day, F.finance.purchaseBasis.resolvePurchaseBasis([], F.policy.purchaseBasis.productPurchaseBasis()), F.policy.laborSource.productLaborSource(), F.metrics.adapters.configCompat.costTimelineFromCurrentConfig({}, []), { asOfBusinessDate: "2026-09-02" });
   for (const k of fields) assert.ok(k in dm, "DailyMetric field " + k);
   assert.equal(dm.purchaseBasis, "net_of_vat");
   assert.equal(dm.purchaseBasisCompat, false);
   assert.equal(dm.foodCostPct, null, "absent purchases ⇒ null ratio, not 0");
-  assert.deepEqual(dm.presence, { day: "present", revenue: "present", purchases: "absent", directLabor: "absent", otherExpense: "absent" });
+  assert.deepEqual(dm.presence, { day: "present", revenue: "present", purchases: "absent", hourlyLabor: "absent", otherExpense: "absent" });
+  assert.deepEqual([dm.laborCost, dm.laborCostComplete, dm.hourlyLaborCost, dm.globalLaborCost], [0, false, 0, 0], "hourly absent ⇒ daily labor not complete (0 only for old readers)");
 });
 
 test("G-M1 consumer manifest covers every runtime file with financial terms (file level)", () => {

@@ -752,5 +752,95 @@
    "presenceImpact": false,
    "purchaseBasisImpact": false
   }
- ]
+ ],
+ "laborContractMigration": {
+  "contract": "MARJIN_LABOR/2 (final owner contract 2026-09-29)",
+  "note": "Consumer sites whose current labor/fixed arithmetic differs from the frozen contract. Recorded for B1/C1 consumer migration; NOT changed by the Financial Core commit.",
+  "sites": [
+   {
+    "id": "H1",
+    "file": "index.html",
+    "sites": ":4350-4359 calcMetrics",
+    "current": "payroll + Σhourly_payroll",
+    "required": "hourly = payroll only; hourly_payroll never counted"
+   },
+   {
+    "id": "H2",
+    "file": "index.html",
+    "sites": ":4409 buildChart",
+    "current": "payroll + Σhourly_payroll",
+    "required": "payroll only"
+   },
+   {
+    "id": "H3",
+    "file": "index.html",
+    "sites": ":7140-7141 history DayCard",
+    "current": "payroll + hourlyPay in expenses",
+    "required": "payroll only"
+   },
+   {
+    "id": "H4",
+    "file": "index.html",
+    "sites": ":10804 DOW labor average",
+    "current": "payroll + Σhourly_payroll",
+    "required": "payroll only"
+   },
+   {
+    "id": "H5",
+    "file": "src/repositories/analytics/dailyMetricsRepo.ts",
+    "sites": ":47 rowComponents",
+    "current": "laborCost = payroll + sumObj(hourly_payroll); no global",
+    "required": "daily labor = payroll + global calendar-day allocation (toDailyMetric)"
+   },
+   {
+    "id": "H6",
+    "file": "src/repositories/analytics/laborRepo.ts",
+    "sites": ":33-38",
+    "current": "totalCost = payroll + hourly; employeeCount from hourly keys",
+    "required": "payroll only (+ global allocation where labor cost is meant)"
+   },
+   {
+    "id": "H7",
+    "file": "src/analytics/dailyBuilder.ts",
+    "sites": ":472-478",
+    "current": "total_payroll = payroll + hourly_payroll",
+    "required": "payroll only (+ global allocation)"
+   },
+   {
+    "id": "H8",
+    "file": "src/snapshot/snapshotBuilder.ts",
+    "sites": ":211-237",
+    "current": "totalPayroll += hourly; global prorated by monthEntries.length/daysInMonth",
+    "required": "payroll only; global monthly/calendar days through the last completed day"
+   },
+   {
+    "id": "P1",
+    "file": "index.html",
+    "sites": ":4364-4371 calcMetrics",
+    "current": "global prorated by entries.length/DAYS_IN_MONTH (entry-count conditioned, includes today's row)",
+    "required": "monthly/calendar days over completed days (D-1)"
+   },
+   {
+    "id": "P2",
+    "file": "index.html",
+    "sites": ":6925-6926 entry-form globalDaily",
+    "current": "Σ round(monthly/DAYS_IN_MONTH), no type filter",
+    "required": "global employees only, exact monthly/calendar days"
+   },
+   {
+    "id": "L1",
+    "file": "index.html",
+    "sites": ":7953 Employees screen label",
+    "current": "\"משכורת חודשית ברוטו\"",
+    "required": "label as full monthly employer cost (owner contract)"
+   },
+   {
+    "id": "W1",
+    "file": "index.html",
+    "sites": ":3978-3994 SetupWizard cfg + :5918-5925 onComplete",
+    "current": "whole config written without employees key (candidate deletion path of the global list)",
+    "required": "preserve employees; effective-dated persistence (Slice F)"
+   }
+  ]
+ }
 }

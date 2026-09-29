@@ -1,12 +1,20 @@
-import { DECIMAL_CONTRACT_VERSION, RAT_ZERO, parseAmountString, decAdd, ratAdd, ratDiv, ratFromDec, ratFromInt, ratIsNegative, ratIsZero, ratMul, ratSub, serializeDec, serializeRat, } from "../finance/decimal.js";
-import { BUSINESS_TIMEZONE, isBusinessDate, monthBounds, datesInRange } from "../finance/businessDate.js";
+import { DECIMAL_CONTRACT_VERSION, RAT_ZERO, parseAmountString, decAdd, decIsZero, ratAdd, ratDiv, ratFromDec, ratFromInt, ratIsNegative, ratIsZero, ratMul, ratSub, serializeDec, serializeRat, } from "../finance/decimal.js";
+import { BUSINESS_TIMEZONE, addDays, isBusinessDate, monthBounds, datesInRange } from "../finance/businessDate.js";
 import { NORMALIZATION_VERSION, sortFlags } from "../finance/normalize.js";
 import { PURCHASE_BASIS_CONTRACT_VERSION, resolvePurchaseBasis, validatePurchaseBasisInput } from "../finance/purchaseBasis.js";
-import { LABOR_CONTRACT_VERSION, validateLaborSource } from "../finance/labor.js";
+import { FIXED_COST_ALLOCATION, GLOBAL_COST_ALLOCATION, LABOR_CONTRACT_VERSION, validateLaborSource } from "../finance/labor.js";
 import { FinanceContractError } from "../finance/types.js";
 import { accrueWindow } from "./costTimeline.js";
-export const FINANCIAL_FORMULA_VERSION = "MARJIN_FIN/1";
-function recognizedDates(window) {
+export const FINANCIAL_FORMULA_VERSION = "MARJIN_FIN/2";
+/** Manual-operation Actual window rule. A future live/same-day model is deferred and would be a new rule. */
+export const ACTUAL_WINDOW_RULE = "completed_days_through_d_minus_1";
+export const NO_DECLARED_CLOSURES = Object.freeze({ source: "none_declared", closedDates: Object.freeze([]) });
+/**
+ * Recognised Actual dates. open_month: month start through asOf − 1 (the last completed
+ * business day); the as-of (current) day is never recognised. closed_month: the whole month
+ * (asOf must be after the month, so its last day is completed).
+ */
+export function actualWindowDates(window) {
     if (!window || (window.kind !== "open_month" && window.kind !== "closed_month"))
         throw new FinanceContractError("invalid_window_kind");
     if (!isBusinessDate(window.asOfBusinessDate))
@@ -14,22 +22,47 @@ function recognizedDates(window) {
     const { first, last } = monthBounds(window.month);
     const asOf = window.asOfBusinessDate;
     if (asOf < first)
-        return { dates: [], state: "future_period" };
+        return { dates: [], state: "future_period", completedThrough: null, currentDay: null };
     if (window.kind === "open_month") {
         if (asOf > last)
             throw new FinanceContractError("open_month_already_closed", { month: window.month, asOf });
-        return { dates: datesInRange(first, asOf), state: "actual" };
+        const lastCompleted = addDays(asOf, -1);
+        if (lastCompleted < first)
+            return { dates: [], state: "no_completed_days", completedThrough: null, currentDay: asOf };
+        return { dates: datesInRange(first, lastCompleted), state: "actual", completedThrough: lastCompleted, currentDay: asOf };
     }
     if (asOf <= last)
         throw new FinanceContractError("closed_month_not_closed", { month: window.month, asOf });
-    return { dates: datesInRange(first, last), state: "actual" };
+    return { dates: datesInRange(first, last), state: "actual", completedThrough: last, currentDay: null };
 }
-function coverageOf(days, pick, partialOf) {
+function validateCalendar(c) {
+    if (c === undefined)
+        return NO_DECLARED_CLOSURES;
+    const o = c;
+    if (!o || typeof o !== "object" || typeof o.source !== "string" || o.source === "" || !Array.isArray(o.closedDates)) {
+        throw new FinanceContractError("invalid_operating_calendar");
+    }
+    const seen = new Set();
+    for (const d of o.closedDates) {
+        if (!isBusinessDate(d) || seen.has(d))
+            throw new FinanceContractError("invalid_operating_calendar", d);
+        seen.add(d);
+    }
+    return c;
+}
+function coverageOf(days, closed, pick, partialOf) {
     const missing = [];
     const invalid = [];
     const partial = [];
+    const closedDays = [];
     let present = 0;
+    let expected = 0;
     for (const d of days) {
+        if (closed.has(d.date)) {
+            closedDays.push(d.date);
+            continue;
+        }
+        expected += 1;
         const p = pick(d);
         if (p === "present") {
             present += 1;
@@ -41,24 +74,31 @@ function coverageOf(days, pick, partialOf) {
         else
             missing.push(d.date);
     }
-    return { expectedDays: days.length, presentDays: present, missingDays: missing, invalidDays: invalid, partialDays: partial };
+    return { expectedDays: expected, presentDays: present, missingDays: missing, invalidDays: invalid, partialDays: partial, closedDays };
 }
-function totalOf(days, pick) {
+function totalOf(days, closed, pick) {
     let sum = null;
     let present = 0;
+    let operatingPresent = 0;
+    let operating = 0;
     let partial = false;
     for (const d of days) {
         const m = pick(d);
+        if (!closed.has(d.date))
+            operating += 1;
         if (m.presence === "present" && m.value !== null) {
             present += 1;
+            if (!closed.has(d.date))
+                operatingPresent += 1;
             if (m.partial)
                 partial = true;
             sum = sum === null ? m.value : decAdd(sum, m.value);
         }
     }
     return {
-        total: { value: sum === null ? null : serializeDec(sum), presentDays: present, complete: present === days.length && !partial },
+        total: { value: sum === null ? null : serializeDec(sum), presentDays: present, complete: operatingPresent === operating && !partial },
         rat: sum === null ? null : ratFromDec(sum),
+        operatingPresent,
     };
 }
 const HUNDRED = ratFromInt(100);
@@ -74,23 +114,23 @@ export function ratioOfTotals(num, den, scale = HUNDRED) {
         return { state: "negative_denominator" };
     return { state: "value", value: serializeRat(ratMul(ratDiv(num, den), scale)) };
 }
-/** Revenue minus variable costs. Only called when every operand is complete (TI-18). */
-export function contributionOf(revenue, purchases, laborEntered, otherExpense) {
-    return ratSub(ratSub(ratSub(revenue, purchases), laborEntered), otherExpense);
+/** Revenue minus variable costs (purchases, hourly employer cost, other expense). Only called when every operand is complete (TI-18). */
+export function contributionOf(revenue, purchases, hourlyLabor, otherExpense) {
+    return ratSub(ratSub(ratSub(revenue, purchases), hourlyLabor), otherExpense);
 }
-/** Contribution minus salaried employer cost and fixed/rent/royalty charges. */
-export function operatingProfitOf(contribution, salaried, fixedTotal) {
-    return ratSub(ratSub(contribution, salaried), fixedTotal);
+/** Contribution minus the global employer-cost allocation and fixed/rent/royalty charges. */
+export function operatingProfitOf(contribution, globalLabor, fixedTotal) {
+    return ratSub(ratSub(contribution, globalLabor), fixedTotal);
 }
-/** Issues of one day-level metric over the recognised days (missing, invalid, partial). */
-function metricIssues(days, component, pick, required) {
+/** Issues of one day-level metric: invalid/partial on any recognised day; missing only on operating (non-closed) days. */
+function metricIssues(days, closed, component, pick, required) {
     const missing = [];
     const invalid = [];
     for (const d of days) {
         const m = pick(d);
         if (m.presence === "invalid" || (m.presence === "present" && m.partial))
             invalid.push(d.date);
-        else if (m.presence === "absent" && required)
+        else if (m.presence === "absent" && required && !closed.has(d.date))
             missing.push(d.date);
     }
     const out = [];
@@ -100,44 +140,46 @@ function metricIssues(days, component, pick, required) {
         out.push({ component, kind: "missing", reason: "not_recorded", dates: missing });
     return out;
 }
-/** The value is computed ONLY when no required component has an issue (TI-18). */
-function typedAmount(compute, issues, revenueRecorded) {
+/** The value is computed ONLY when the window has days and no required component has an issue (TI-18). */
+function typedAmount(compute, issues, revenueKnown, empty) {
+    if (empty)
+        return { state: "empty_window", value: null, issues: [] };
     if (issues.some((i) => i.kind === "invalid"))
         return { state: "invalid_components", value: null, issues };
-    if (!revenueRecorded)
+    if (!revenueKnown)
         return { state: "revenue_missing", value: null, issues };
     if (issues.length >= 1)
         return { state: "incomplete_components", value: null, issues };
     return { state: "complete", value: serializeRat(compute()), issues: [] };
 }
-/** A required component inside a complete result is always recorded; anything else is a contract bug. */
-function required(r, component) {
-    if (r === null)
-        throw new FinanceContractError("required_component_absent", component);
-    return r;
-}
 const CONFIG_INVALID_CODES = ["invalid_fixed_amount", "invalid_rate"];
 const CONFIG_MISSING_CODES = ["missing_fixed_amount", "missing_rate"];
+/** Average per recorded OPERATING day (declared closed days are not in the denominator). */
 function perPresentDay(total, presentDays) {
     if (total === null || presentDays < 1)
         return { state: "denominator_missing" };
     return { state: "value", value: serializeRat(ratDiv(total, ratFromInt(presentDays))) };
 }
-/**
- * Compute the Actual report for one month window. `purchaseBasis` is REQUIRED (TI-16):
- * a purchase KPI is never produced without a stated basis.
- */
+function flagIssue(flags, codes, component, kind, dates) {
+    const hit = flags.filter((f) => codes.includes(f.code));
+    if (hit.length < 1 || dates.length < 1)
+        return [];
+    return [{ component, kind, reason: hit.map((f) => f.code + ":" + (f.key || f.field || "")).sort().join(","), dates }];
+}
+const nonZero = (m) => m.presence === "present" && m.value !== null && !decIsZero(m.value);
 /**
  * Compute the Actual report for one month window. `purchaseBasis` (TI-16) and `laborSource`
- * (MARJIN_LABOR/1) are REQUIRED: no purchase KPI without a stated basis and no labor cost
- * without a stated authoritative employer-cost source.
+ * (MARJIN_LABOR/2) are REQUIRED: no purchase KPI without a stated basis and no labor cost
+ * without the stated authoritative hourly employer-cost source.
  */
 export function computePeriodReport(days, timeline, purchaseBasis, laborSource, window, context = {}) {
     if (arguments.length < 5)
         throw new FinanceContractError("labor_source_required");
     validatePurchaseBasisInput(purchaseBasis);
     const labor = validateLaborSource(laborSource);
-    const { dates, state } = recognizedDates(window);
+    const calendar = validateCalendar(context.operatingCalendar);
+    const win = actualWindowDates(window);
+    const dates = win.dates;
     const byDate = new Map();
     for (const d of days) {
         if (byDate.has(d.date))
@@ -147,11 +189,18 @@ export function computePeriodReport(days, timeline, purchaseBasis, laborSource, 
     const missingObjects = dates.filter((d) => !byDate.has(d));
     if (missingObjects.length)
         throw new FinanceContractError("window_days_incomplete", missingObjects);
+    // Only recognised (completed) dates enter Actual; a supplied current-day or later object is ignored.
     const inWindow = dates.map((d) => byDate.get(d));
-    const revenue = totalOf(inWindow, (d) => d.revenue);
-    const purchases = totalOf(inWindow, (d) => d.purchases);
-    const entered = totalOf(inWindow, (d) => d.directLabor);
-    const other = totalOf(inWindow, (d) => d.otherExpense);
+    const windowSet = new Set(dates);
+    const closed = new Set(calendar.closedDates.filter((d) => windowSet.has(d)));
+    const closedInWindow = dates.filter((d) => closed.has(d));
+    const operatingCount = dates.length - closedInWindow.length;
+    const empty = dates.length < 1;
+    const noOperatingDays = operatingCount < 1;
+    const revenue = totalOf(inWindow, closed, (d) => d.revenue);
+    const purchases = totalOf(inWindow, closed, (d) => d.purchases);
+    const hourly = totalOf(inWindow, closed, (d) => d.hourlyLabor);
+    const other = totalOf(inWindow, closed, (d) => d.otherExpense);
     const bySource = new Map();
     for (const d of inWindow)
         for (const [k, v] of Object.entries(d.purchases.bySource)) {
@@ -163,129 +212,151 @@ export function computePeriodReport(days, timeline, purchaseBasis, laborSource, 
     const revenueByDate = new Map();
     for (const d of inWindow)
         revenueByDate.set(d.date, d.revenue.presence === "present" && d.revenue.value !== null ? ratFromDec(d.revenue.value) : null);
+    // Calendar-day accrual over EVERY recognised date (closed days included).
     const accrual = accrueWindow(timeline, dates, revenueByDate);
+    const timelineFlags = timeline.flags || [];
     const flags = [];
     for (const d of inWindow)
         flags.push(...d.flags);
     if (context.flags)
         flags.push(...context.flags);
-    if (timeline.flags)
-        flags.push(...timeline.flags);
+    flags.push(...timelineFlags);
     for (const d of accrual.uncoveredDates)
         flags.push({ code: "cost_config_absent", date: d });
     for (const v of accrual.superseded)
         flags.push({ code: "superseded_versions", key: v });
-    for (const k of accrual.grossSalaryOnlyEmployees)
-        flags.push({ code: "gross_salary_not_labor_cost", key: k });
     const revenuePresentDates = inWindow.filter((d) => d.revenue.presence === "present");
     for (const d of revenuePresentDates) {
         if (d.purchases.presence !== "present")
             flags.push({ code: "ratio_numerator_incomplete", date: d.date, field: "purchases" });
-        if (d.directLabor.presence !== "present")
-            flags.push({ code: "ratio_numerator_incomplete", date: d.date, field: "directLabor" });
+        if (d.hourlyLabor.presence !== "present")
+            flags.push({ code: "ratio_numerator_incomplete", date: d.date, field: "hourlyLabor" });
     }
-    let purchasesPct;
-    if (basis.kind === "unresolved")
-        purchasesPct = { state: "purchase_basis_unresolved" };
-    else {
-        const r = ratioOfTotals(purchases.rat, revenue.rat);
-        purchasesPct = r.state === "value" ? { state: "value", value: r.value, basisKind: "net_of_vat", comparability: "same_basis_as_revenue" } : r;
-    }
-    // ── Completeness (TI-18). Required on every recognised day: revenue, purchases and the
-    // entered authoritative employer cost (an explicit 0 / "skip" is a complete fact).
-    // other_expense is an optional category (absence = none recorded) but an invalid value
-    // is an invalid component. Configuration must cover every day and carry no invalid
-    // fixed/rate value. Salaried employer cost is required only for scope "excludes_salaried".
-    const revenueIssues = metricIssues(inWindow, "revenue", (d) => d.revenue, true);
-    const purchaseIssues = metricIssues(inWindow, "purchases", (d) => d.purchases, true);
-    const laborIssues = metricIssues(inWindow, "labor_employer_cost", (d) => d.directLabor, true);
-    const otherIssues = metricIssues(inWindow, "other_expense", (d) => d.otherExpense, false);
+    // ── Completeness (TI-18). Required on every OPERATING recognised day: revenue, purchases
+    // and the hourly employer cost (an explicit 0 / "skip" is a complete fact). Declared closed
+    // days require none of them, but recorded non-zero revenue or hourly labor on a closed day
+    // contradicts the declaration (invalid). other_expense is optional (absence = none
+    // recorded); an invalid value is an invalid component on any day. Global employer cost and
+    // fixed configuration must cover every recognised day and carry no missing/invalid value.
+    const revenueIssues = metricIssues(inWindow, closed, "revenue", (d) => d.revenue, true);
+    const purchaseIssues = metricIssues(inWindow, closed, "purchases", (d) => d.purchases, true);
+    const hourlyIssues = metricIssues(inWindow, closed, "hourly_employer_cost", (d) => d.hourlyLabor, true);
+    const otherIssues = metricIssues(inWindow, closed, "other_expense", (d) => d.otherExpense, false);
+    const contradicted = inWindow.filter((d) => closed.has(d.date) && (nonZero(d.revenue) || nonZero(d.hourlyLabor))).map((d) => d.date);
+    for (const d of contradicted)
+        flags.push({ code: "closed_day_has_recorded_values", date: d });
+    const calendarIssues = contradicted.length >= 1
+        ? [{ component: "operating_calendar", kind: "invalid", reason: "closed_day_has_recorded_values", dates: contradicted }]
+        : [];
+    const globalIssues = [];
+    if (accrual.uncoveredDates.length >= 1)
+        globalIssues.push({ component: "global_employer_cost", kind: "missing", reason: "cost_config_absent", dates: accrual.uncoveredDates });
+    globalIssues.push(...flagIssue(timelineFlags, ["invalid_global_amount"], "global_employer_cost", "invalid", dates));
+    globalIssues.push(...flagIssue(timelineFlags, ["missing_global_amount"], "global_employer_cost", "missing", dates));
     const configIssues = [];
     if (accrual.uncoveredDates.length >= 1)
         configIssues.push({ component: "cost_configuration", kind: "missing", reason: "cost_config_absent", dates: accrual.uncoveredDates });
-    const invalidConfig = (timeline.flags || []).filter((f) => CONFIG_INVALID_CODES.includes(f.code));
-    if (invalidConfig.length >= 1)
-        configIssues.push({ component: "cost_configuration", kind: "invalid", reason: invalidConfig.map((f) => f.code + ":" + (f.key || f.field || "")).sort().join(","), dates: dates });
-    const missingConfig = (timeline.flags || []).filter((f) => CONFIG_MISSING_CODES.includes(f.code));
-    if (missingConfig.length >= 1)
-        configIssues.push({ component: "cost_configuration", kind: "missing", reason: missingConfig.map((f) => f.code + ":" + (f.key || f.field || "")).sort().join(","), dates: dates });
-    const salariedIssues = [];
-    const salariedApplies = labor.scope === "excludes_salaried";
-    if (salariedApplies && accrual.grossSalaryOnlyDates.length >= 1) {
-        salariedIssues.push({ component: "salaried_employer_cost", kind: "missing", reason: "gross_salary_not_employer_cost", dates: accrual.grossSalaryOnlyDates });
+    configIssues.push(...flagIssue(timelineFlags, CONFIG_INVALID_CODES, "cost_configuration", "invalid", dates));
+    configIssues.push(...flagIssue(timelineFlags, CONFIG_MISSING_CODES, "cost_configuration", "missing", dates));
+    // Purchases % (food cost %) is an Actual KPI: a value only over complete revenue and purchases (TI-18).
+    const purchasePctIssues = [...revenueIssues, ...purchaseIssues, ...calendarIssues];
+    let purchasesPct;
+    if (basis.kind === "unresolved")
+        purchasesPct = { state: "purchase_basis_unresolved" };
+    else if (empty)
+        purchasesPct = { state: "empty_window" };
+    else if (purchasePctIssues.length >= 1)
+        purchasesPct = { state: purchasePctIssues.some((i) => i.kind === "invalid") ? "invalid_components" : "incomplete_components" };
+    else {
+        const r = ratioOfTotals(noOperatingDays && purchases.rat === null ? RAT_ZERO : purchases.rat, noOperatingDays && revenue.rat === null ? RAT_ZERO : revenue.rat);
+        purchasesPct = r.state === "value" ? { state: "value", value: r.value, basisKind: "net_of_vat", comparability: "same_basis_as_revenue" } : r;
     }
-    if (salariedApplies && (timeline.flags || []).some((f) => f.code === "invalid_salary")) {
-        salariedIssues.push({ component: "salaried_employer_cost", kind: "invalid", reason: "invalid_salary", dates: dates });
-    }
-    const revenueRecorded = revenue.total.presentDays >= 1;
+    // A recorded total, or a known zero when the window has no operating day (all days closed).
+    const known = (r, component) => {
+        if (r !== null)
+            return r;
+        if (noOperatingDays)
+            return RAT_ZERO;
+        throw new FinanceContractError("required_component_absent", component);
+    };
+    const revenueKnown = revenue.total.presentDays >= 1 || noOperatingDays;
     const fixedTotal = ratAdd(ratAdd(accrual.fixedRegular, accrual.rentFixed), ratAdd(accrual.rentPct, accrual.royaltyPct));
-    const salariedCost = salariedApplies ? accrual.salaried : RAT_ZERO;
-    // other_expense is the only optional category: with no recorded value it contributes nothing
-    // by contract (its invalid values are issues above). Every other operand is required.
+    // Percentage rent/royalty are computed on recorded revenue: incomplete revenue makes them incomplete.
+    const fixedIssues = [...configIssues, ...(accrual.revenueLinked ? revenueIssues : [])];
+    const fixedTyped = typedAmount(() => fixedTotal, fixedIssues, true, empty);
+    const fixedOut = (r) => (fixedTyped.state === "complete" ? serializeRat(r) : null);
+    // other_expense is the only optional category: with no recorded value it contributes nothing.
     const otherRecorded = other.rat === null ? RAT_ZERO : other.rat;
-    const days0 = inWindow.length >= 1;
-    const laborCompleteIssues = [...laborIssues, ...salariedIssues];
-    const employerCost = days0
-        ? typedAmount(() => ratAdd(required(entered.rat, "labor_employer_cost"), salariedCost), laborCompleteIssues, true)
-        : { state: "incomplete_components", value: null, issues: [] };
+    const globalEmployerCost = typedAmount(() => accrual.global, globalIssues, true, empty);
+    const laborIssues = [...hourlyIssues, ...globalIssues, ...calendarIssues];
+    const employerCost = typedAmount(() => ratAdd(known(hourly.rat, "hourly_employer_cost"), accrual.global), laborIssues, true, empty);
     // The labor % needs a complete numerator AND a complete denominator (TI-18).
-    const pctIssues = [...laborCompleteIssues, ...revenueIssues];
-    const employerCostPct = employerCost.state === "complete" && pctIssues.length < 1
-        ? ratioOfTotals(parseAmountString(employerCost.value), revenue.rat)
-        : { state: pctIssues.some((i) => i.kind === "invalid") ? "invalid_components" : "incomplete_components" };
-    const contributionIssues = [...revenueIssues, ...purchaseIssues, ...laborIssues, ...otherIssues];
-    const contribution = () => contributionOf(required(revenue.rat, "revenue"), required(purchases.rat, "purchases"), required(entered.rat, "labor_employer_cost"), otherRecorded);
-    const contributionBeforeFixed = typedAmount(contribution, contributionIssues, revenueRecorded);
-    const profitIssues = [...contributionIssues, ...salariedIssues, ...configIssues];
-    const operatingProfit = typedAmount(() => operatingProfitOf(contribution(), salariedCost, fixedTotal), profitIssues, revenueRecorded);
-    const today = window.kind === "open_month" && state === "actual"
-        ? { date: window.asOfBusinessDate, state: "open", dayPresence: byDate.get(window.asOfBusinessDate).presence.day }
-        : null;
-    if (today)
-        flags.push({ code: "today_open", date: today.date });
+    const pctIssues = [...laborIssues, ...revenueIssues];
+    let employerCostPct;
+    if (empty)
+        employerCostPct = { state: "empty_window" };
+    else if (employerCost.state === "complete" && pctIssues.length < 1)
+        employerCostPct = ratioOfTotals(parseAmountString(employerCost.value), known(revenue.rat, "revenue"));
+    else
+        employerCostPct = { state: pctIssues.some((i) => i.kind === "invalid") ? "invalid_components" : "incomplete_components" };
+    const contributionIssues = [...revenueIssues, ...purchaseIssues, ...hourlyIssues, ...otherIssues, ...calendarIssues];
+    const contribution = () => contributionOf(known(revenue.rat, "revenue"), known(purchases.rat, "purchases"), known(hourly.rat, "hourly_employer_cost"), otherRecorded);
+    const contributionBeforeFixed = typedAmount(contribution, contributionIssues, revenueKnown, empty);
+    const profitIssues = [...contributionIssues, ...globalIssues, ...configIssues];
+    // (percentage-rent revenue issues are already contribution issues)
+    const operatingProfit = typedAmount(() => operatingProfitOf(contribution(), accrual.global, fixedTotal), profitIssues, revenueKnown, empty);
+    const partialAny = (d) => d.revenue.partial || d.purchases.partial || d.hourlyLabor.partial || d.otherExpense.partial;
     return {
         versions: { fin: FINANCIAL_FORMULA_VERSION, norm: NORMALIZATION_VERSION, dec: DECIMAL_CONTRACT_VERSION, pb: PURCHASE_BASIS_CONTRACT_VERSION, labor: LABOR_CONTRACT_VERSION },
-        window: { kind: window.kind, month: window.month, asOfBusinessDate: window.asOfBusinessDate, state, from: dates[0] || null, to: dates[dates.length - 1] || null, recognizedDays: dates.length },
+        window: {
+            kind: window.kind, month: window.month, asOfBusinessDate: window.asOfBusinessDate, rule: ACTUAL_WINDOW_RULE, state: win.state,
+            from: dates[0] || null, to: dates[dates.length - 1] || null, completedThrough: win.completedThrough, recognizedDays: dates.length,
+            currentDay: win.currentDay === null ? null : { date: win.currentDay, inActual: false },
+        },
+        operatingCalendar: { source: calendar.source, closedDates: closedInWindow, operatingDays: operatingCount },
         timezone: BUSINESS_TIMEZONE,
         vatBasis: "net_of_vat",
         configurationBasis: accrual.configurationBasis,
         costVersionsApplied: accrual.versionsApplied,
         timelineSource: timeline.timelineSource,
-        today,
         coverage: {
-            day: coverageOf(inWindow, (d) => d.presence.day, (d) => d.revenue.partial || d.purchases.partial || d.directLabor.partial || d.otherExpense.partial),
-            revenue: coverageOf(inWindow, (d) => d.presence.revenue, (d) => d.revenue.partial),
-            purchases: coverageOf(inWindow, (d) => d.presence.purchases, (d) => d.purchases.partial),
-            directLabor: coverageOf(inWindow, (d) => d.presence.directLabor, (d) => d.directLabor.partial),
-            otherExpense: coverageOf(inWindow, (d) => d.presence.otherExpense, (d) => d.otherExpense.partial),
+            day: coverageOf(inWindow, closed, (d) => d.presence.day, partialAny),
+            revenue: coverageOf(inWindow, closed, (d) => d.presence.revenue, (d) => d.revenue.partial),
+            purchases: coverageOf(inWindow, closed, (d) => d.presence.purchases, (d) => d.purchases.partial),
+            hourlyLabor: coverageOf(inWindow, closed, (d) => d.presence.hourlyLabor, (d) => d.hourlyLabor.partial),
+            otherExpense: coverageOf(inWindow, closed, (d) => d.presence.otherExpense, (d) => d.otherExpense.partial),
         },
         actual: {
             revenue: revenue.total,
             purchases: { ...purchases.total, bySource: Object.fromEntries([...bySource.keys()].sort().map((k) => [k, serializeRat(bySource.get(k))])), basis },
-            directLabor: entered.total,
+            hourlyLabor: hourly.total,
             otherExpense: other.total,
             labor: {
                 contract: LABOR_CONTRACT_VERSION,
                 source: labor,
-                enteredEmployerCost: entered.total,
-                salariedEmployerCost: salariedApplies && salariedIssues.length < 1 ? serializeRat(accrual.salaried) : null,
-                grossSalaryDatumPresent: accrual.grossSalaryOnlyEmployees.length >= 1,
+                hourlyEmployerCost: hourly.total,
+                globalEmployerCost,
+                globalAllocation: GLOBAL_COST_ALLOCATION,
+                globalEmployeesApplied: accrual.globalEmployeesApplied,
                 employerCost,
                 employerCostPct,
+                legacyHourlyPayroll: { counted: false, dates: inWindow.filter((d) => d.legacyHourlyPayroll.rows.length >= 1).map((d) => d.date) },
             },
             fixedAccrual: {
-                regular: serializeRat(accrual.fixedRegular),
-                rentFixed: serializeRat(accrual.rentFixed),
-                rentPct: serializeRat(accrual.rentPct),
-                royaltyPct: serializeRat(accrual.royaltyPct),
-                total: serializeRat(fixedTotal),
+                allocation: FIXED_COST_ALLOCATION,
+                state: fixedTyped.state,
+                issues: fixedTyped.issues,
+                regular: fixedOut(accrual.fixedRegular),
+                rentFixed: fixedOut(accrual.rentFixed),
+                rentPct: fixedOut(accrual.rentPct),
+                royaltyPct: fixedOut(accrual.royaltyPct),
+                total: fixedOut(fixedTotal),
             },
             purchasesPct,
-            directLaborPct: ratioOfTotals(entered.rat, revenue.rat),
             averages: {
-                revenuePerPresentDay: perPresentDay(revenue.rat, revenue.total.presentDays),
-                purchasesPerPresentDay: perPresentDay(purchases.rat, purchases.total.presentDays),
-                directLaborPerPresentDay: perPresentDay(entered.rat, entered.total.presentDays),
+                revenuePerPresentDay: perPresentDay(revenue.rat, revenue.operatingPresent),
+                purchasesPerPresentDay: perPresentDay(purchases.rat, purchases.operatingPresent),
+                hourlyLaborPerPresentDay: perPresentDay(hourly.rat, hourly.operatingPresent),
             },
             contributionBeforeFixed,
             operatingProfit,

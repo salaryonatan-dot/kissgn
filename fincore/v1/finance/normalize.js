@@ -2,7 +2,7 @@ import { decAdd, decIsNegative, serializeDec } from "./decimal.js";
 import { parseAmount } from "./cells.js";
 import { datesInRange, isBusinessDate } from "./businessDate.js";
 import { FinanceContractError } from "./types.js";
-export const NORMALIZATION_VERSION = "MARJIN_NORM/2";
+export const NORMALIZATION_VERSION = "MARJIN_NORM/3";
 export const LEGACY_FOOD_SOURCE = "legacy_food_cost";
 // ── deterministic identity for id-less legacy rows ────────────────────────────
 function canonicalJson(v) {
@@ -176,14 +176,18 @@ function normalizeOne(raw, rowId, date) {
         purchases = foldCells([food.cell, ...supplierCells, ...supplierShape]);
         purchaseSource = "none";
     }
-    // Direct labor = recorded full employer cost (payroll + hourly entries). No payroll formula.
-    const hourlyShape = hourly.shapeInvalid ? [INVALID_SHAPE] : [];
-    const directLabor = foldCells([payroll.cell, ...hourly.entries.map((e) => e.cell), ...hourlyShape]);
+    // Hourly labor = the authoritative hourly employees' employer cost entered on `payroll`
+    // (MARJIN_LABOR/2). No payroll formula. The LEGACY `hourly_payroll` map has no current
+    // owner-recognised meaning: it is kept for provenance, flagged, and NEVER added to labor.
+    const hourlyLabor = foldCells([payroll.cell]);
     const hourlyValues = hourly.entries
         .filter((e) => e.cell.state === "present")
         .map((e) => ({ employee: e.key, value: e.cell.value }));
+    const legacyHourlyRecorded = hourly.shapeInvalid || hourly.entries.some((e) => e.cell.state !== "absent");
+    if (legacyHourlyRecorded)
+        flags.push({ code: "legacy_hourly_payroll_not_counted", rowId, field: "hourly_payroll" });
     const other = foldCells([otherExpense.cell]);
-    for (const [name, m] of [["revenue", revenue], ["purchases", purchases], ["directLabor", directLabor], ["otherExpense", other]]) {
+    for (const [name, m] of [["revenue", revenue], ["purchases", purchases], ["hourlyLabor", hourlyLabor], ["otherExpense", other]]) {
         if (m.partial)
             flags.push({ code: "metric_partial_invalid", rowId, field: name });
     }
@@ -192,11 +196,11 @@ function normalizeOne(raw, rowId, date) {
     return {
         id: rowId,
         date,
-        metrics: { revenue, purchases, directLabor, otherExpense: other },
+        metrics: { revenue, purchases, hourlyLabor, otherExpense: other },
         revenueParts: { sales: foldCells([sales.cell]), deliveries: foldCells([deliveries.cell]), otherIncome: foldCells([otherIncome.cell]) },
         purchaseSource,
         purchaseContributions: contributions,
-        hourly: hourlyValues,
+        legacyHourlyPayroll: { recorded: legacyHourlyRecorded, entries: hourlyValues },
         isException: raw.is_exception === true,
         annotations: {
             notes: textValues(raw.notes),
@@ -259,9 +263,9 @@ export function groupByDate(rows, opts) {
         const list = (byDate.get(date) || []).slice().sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
         const revenue = foldMetrics(list.map((r) => r.metrics.revenue));
         const purchases = foldMetrics(list.map((r) => r.metrics.purchases));
-        const directLabor = foldMetrics(list.map((r) => r.metrics.directLabor));
+        const hourlyLabor = foldMetrics(list.map((r) => r.metrics.hourlyLabor));
         const otherExpense = foldMetrics(list.map((r) => r.metrics.otherExpense));
-        const presentAny = [revenue, purchases, directLabor, otherExpense].some((m) => m.presence === "present");
+        const presentAny = [revenue, purchases, hourlyLabor, otherExpense].some((m) => m.presence === "present");
         const flags = [];
         for (const r of list)
             flags.push(...r.flags);
@@ -296,7 +300,7 @@ export function groupByDate(rows, opts) {
                 day: presentAny ? "present" : "missing",
                 revenue: presenceOf(revenue),
                 purchases: presenceOf(purchases),
-                directLabor: presenceOf(directLabor),
+                hourlyLabor: presenceOf(hourlyLabor),
                 otherExpense: presenceOf(otherExpense),
             },
             revenue: {
@@ -308,7 +312,12 @@ export function groupByDate(rows, opts) {
                 },
             },
             purchases: { ...purchases, bySource: sumByKey(list.flatMap((r) => r.purchaseContributions.map((c) => ({ key: c.source, value: c.value })))) },
-            directLabor: { ...directLabor, hourlyByEmployee: sumByKey(list.flatMap((r) => r.hourly.map((h) => ({ key: h.employee, value: h.value })))) },
+            hourlyLabor,
+            legacyHourlyPayroll: {
+                counted: false,
+                rows: list.filter((r) => r.legacyHourlyPayroll.recorded).map((r) => r.id),
+                byEmployee: sumByKey(list.flatMap((r) => r.legacyHourlyPayroll.entries.map((h) => ({ key: h.employee, value: h.value })))),
+            },
             otherExpense,
             exception,
             annotations: { notes, securityEventRows: list.filter((r) => r.annotations.securityEvent).map((r) => r.id) },
@@ -327,7 +336,7 @@ export function dayToJson(day) {
         ...day,
         revenue: { ...mv(day.revenue), parts: { sales: mv(day.revenue.parts.sales), deliveries: mv(day.revenue.parts.deliveries), otherIncome: mv(day.revenue.parts.otherIncome) } },
         purchases: { ...mv(day.purchases), bySource: day.purchases.bySource },
-        directLabor: { ...mv(day.directLabor), hourlyByEmployee: day.directLabor.hourlyByEmployee },
+        hourlyLabor: mv(day.hourlyLabor),
         otherExpense: mv(day.otherExpense),
     };
 }

@@ -1,5 +1,6 @@
 // Financial Core Slice A — hand-authored golden cases (R1.2 G-01…G-32, R1.3 G-07a…n,
-// G-18 revised, G-40…G-51 revised by owner decision BD-1). Expected values in
+// G-18 revised, G-40…G-51 revised by owner decision BD-1, O-01…O-16 final owner contract
+// 2026-09-29: labor/fixed calendar allocation, closed vs missing days, Actual through D-1). Expected values in
 // test/finance/golden/financial-core-goldens.json are written by hand and are never
 // produced by calling the core. Every case runs against BOTH the freshly compiled source
 // and the committed browser artifact fincore/v1, with exact string equality.
@@ -39,8 +40,12 @@ function run(c, F) {
   let report;
   if (c.basis === "__OMIT__") report = F.metrics.report.computePeriodReport(days, tl, undefined, labor, window);
   else if (c.labor === "__OMIT__") report = F.metrics.report.computePeriodReport(days, tl, basis, window);
-  else report = F.metrics.report.computePeriodReport(days, tl, basis, labor, window, { quarantine: n.quarantine, flags: n.flags });
-  return { n, days, report, basis, labor };
+  else {
+    const ctx = { quarantine: n.quarantine, flags: n.flags };
+    if (c.closedDates) ctx.operatingCalendar = { source: "fixture", closedDates: c.closedDates };
+    report = F.metrics.report.computePeriodReport(days, tl, basis, labor, window, ctx);
+  }
+  return { n, days, report, basis, labor, tl, c };
 }
 
 function get(obj, path) {
@@ -54,7 +59,7 @@ function get(obj, path) {
 
 function resolve(key, ctx, F) {
   const [kind, ...rest] = key.split(".");
-  const { report, days, n, basis, labor } = ctx;
+  const { report, days, n, basis, labor, tl, c } = ctx;
   const plain = (v) => JSON.parse(F.metrics.report.serializeReport(v));
   if (kind === "report") return get(plain(report), rest);
   if (kind === "q") return get(plain(n.quarantine), rest);
@@ -67,7 +72,7 @@ function resolve(key, ctx, F) {
   }
   if (kind === "dm") {
     const pb = F.finance.purchaseBasis.resolvePurchaseBasis(day.purchases.presence === "present" ? [day.date] : [], basis);
-    return get(plain(F.metrics.adapters.legacyNumber.toDailyMetric(day, pb, labor)), rest.slice(1));
+    return get(plain(F.metrics.adapters.legacyNumber.toDailyMetric(day, pb, labor, tl, { asOfBusinessDate: c.asOf, operatingCalendar: c.closedDates ? { source: "fixture", closedDates: c.closedDates } : undefined })), rest.slice(1));
   }
   if (kind === "fd") return F.metrics.adapters.legacyNumber.toForecastDay(day);
   throw new Error("unknown expectation kind " + kind);

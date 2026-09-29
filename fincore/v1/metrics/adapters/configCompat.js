@@ -2,12 +2,17 @@
 // fixed list, applied retrospectively and labelled `current_applied_retrospectively`.
 // Historic values were overwritten in place by the current product and cannot be
 // reconstructed; this adapter never pretends otherwise.
-// `employees[].monthlySalary` is the product's GROSS monthly salary ("משכורת חודשית ברוטו",
-// index.html f5d0a8ed:7953). It is carried as a `gross_salary` datum and is never labor
-// cost: the authoritative employer cost is the manually entered attendance figure on the
-// entry rows (src/policy/laborSource.ts).
+// Global employees (FINAL owner contract 2026-09-29, MARJIN_LABOR/2): for `employees[]`
+// entries with `type === "global"`, `monthlySalary` is the employee's monthly FULL EMPLOYER
+// COST as entered in Marjin — not gross, not net, no multiplier. It is carried as an
+// `authoritative_employer_cost` global entry and allocated by calendar day. The Employees
+// screen still labels the input "משכורת חודשית ברוטו" (index.html f5d0a8ed:7953); the owner
+// contract overrides that label, and the label correction is a consumer (Slice C1) item.
+// A listed global employee without an amount is MISSING (never zero); an unparsable amount
+// is INVALID. The list is a single undated current-state list (biz:{id}:config.employees):
+// there is no per-month history, so it is applied retrospectively and labelled so.
 import { parseAmount } from "../../finance/cells.js";
-import { decIsZero, serializeDec } from "../../finance/decimal.js";
+import { decIsNegative, decIsZero, serializeDec } from "../../finance/decimal.js";
 export const COMPAT_VERSION_ID = "compat:current-config";
 export const COMPAT_EFFECTIVE_FROM = "0000-01-01";
 function obj(v) {
@@ -22,18 +27,27 @@ export function costTimelineFromCurrentConfig(configRaw, fixedRaw) {
     const config = obj(configRaw);
     const flags = [];
     const noSkip = { allowSkip: false };
-    const salaried = [];
+    const globalEmployees = [];
     const employees = Array.isArray(config.employees) ? config.employees : [];
     employees.forEach((e, idx) => {
         const emp = obj(e);
-        if (emp.type !== "global")
-            return;
         const key = emp.id === undefined || emp.id === null ? "idx:" + String(idx) : String(emp.id);
         const cell = parseAmount(emp.monthlySalary, noSkip);
-        if (cell.state === "present")
-            salaried.push({ employeeKey: key, kind: "gross_salary", monthlyAmount: serializeDec(cell.value) });
+        if (emp.type !== "global") {
+            // Not a global employee: its amount is never labor cost here (meaning unknown) — reported, not counted.
+            if (cell.state !== "absent")
+                flags.push({ code: "employee_amount_not_global", key });
+            return;
+        }
+        if (cell.state === "present" && decIsNegative(cell.value))
+            flags.push({ code: "invalid_global_amount", key, reason: "negative_amount" });
+        else if (cell.state === "present") {
+            globalEmployees.push({ employeeKey: key, kind: "authoritative_employer_cost", monthlyAmount: serializeDec(cell.value), sourceSystem: "marjin_employee_config", ingestionMethod: "manual" });
+        }
         else if (cell.state === "invalid")
-            flags.push({ code: "invalid_salary", key, reason: cell.reason });
+            flags.push({ code: "invalid_global_amount", key, reason: cell.reason });
+        else
+            flags.push({ code: "missing_global_amount", key });
     });
     const fixedItems = [];
     let rentItemRecorded = false;
@@ -89,7 +103,7 @@ export function costTimelineFromCurrentConfig(configRaw, fixedRaw) {
         effectiveFrom: COMPAT_EFFECTIVE_FROM,
         recordedAt: 0,
         basis: "current_applied_retrospectively",
-        salaried: salaried.sort((a, b) => (a.employeeKey < b.employeeKey ? -1 : a.employeeKey > b.employeeKey ? 1 : 0)),
+        globalEmployees: globalEmployees.sort((a, b) => (a.employeeKey < b.employeeKey ? -1 : a.employeeKey > b.employeeKey ? 1 : 0)),
         fixedItems: fixedItems.sort((a, b) => (a.itemKey < b.itemKey ? -1 : a.itemKey > b.itemKey ? 1 : 0)),
         rent,
         royalty,

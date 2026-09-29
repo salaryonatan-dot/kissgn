@@ -1,5 +1,6 @@
 // Financial Core Slice A — contract, property and boundary tests (R1.2 doc 09 G-P1…G-P6,
-// G-30, G-31, G-33, G-35, G-36; R1.3 G-07f, G-48, G-50; R1.4 owner-decision contracts).
+// G-30, G-31, G-33, G-35, G-36; R1.3 G-07f, G-48, G-50; R1.4 owner-decision contracts;
+// FINAL owner contract 2026-09-29: labor/fixed calendar allocation, Actual through D-1).
 // Runs against the freshly compiled source AND the committed artifact.
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -86,7 +87,7 @@ for (const [label, F] of cores) {
       { id: UUID(3), date: "2026-09-03", sales: "0.55", supplier_payments: { s1: "0.25" }, payroll: "20" },
     ];
     const a = reportOf(F, one).report.actual, b = reportOf(F, split).report.actual;
-    for (const k of ["revenue", "purchases", "directLabor"]) assert.equal(a[k].value, b[k].value, k);
+    for (const k of ["revenue", "purchases", "hourlyLabor"]) assert.equal(a[k].value, b[k].value, k);
     assert.deepEqual(a.operatingProfit, b.operatingProfit);
   });
 
@@ -115,8 +116,8 @@ for (const [label, F] of cores) {
   test(`G-P4 [${label}] accrual is additive over sub-windows`, () => {
     const T = F.metrics.costTimeline, D = F.finance.decimal, B = F.finance.businessDate;
     const tl = { vatBasis: "net_of_vat", timelineSource: "persisted", versions: [
-      { versionId: "a", effectiveFrom: "2026-09-01", recordedAt: 1, basis: "recorded", salaried: [{ employeeKey: "e", kind: "authoritative_employer_cost", monthlyAmount: "31000", sourceSystem: "attendance_workforce", ingestionMethod: "manual" }], fixedItems: [{ itemKey: "f", monthlyAmount: "777.77" }], rent: { mode: "fixed", monthlyAmount: "9999" }, royalty: { mode: "none" } },
-      { versionId: "b", effectiveFrom: "2026-09-13", recordedAt: 2, basis: "recorded", salaried: [{ employeeKey: "e", kind: "authoritative_employer_cost", monthlyAmount: "45123.5", sourceSystem: "attendance_workforce", ingestionMethod: "manual" }], fixedItems: [], rent: { mode: "none" }, royalty: { mode: "none" } },
+      { versionId: "a", effectiveFrom: "2026-09-01", recordedAt: 1, basis: "recorded", globalEmployees: [{ employeeKey: "e", kind: "authoritative_employer_cost", monthlyAmount: "31000", sourceSystem: "marjin_employee_config", ingestionMethod: "manual" }], fixedItems: [{ itemKey: "f", monthlyAmount: "777.77" }], rent: { mode: "fixed", monthlyAmount: "9999" }, royalty: { mode: "none" } },
+      { versionId: "b", effectiveFrom: "2026-09-13", recordedAt: 2, basis: "recorded", globalEmployees: [{ employeeKey: "e", kind: "authoritative_employer_cost", monthlyAmount: "45123.5", sourceSystem: "marjin_employee_config", ingestionMethod: "manual" }], fixedItems: [], rent: { mode: "none" }, royalty: { mode: "none" } },
     ] };
     const all = B.datesInRange("2026-09-01", "2026-09-30");
     const whole = T.accrueWindow(tl, all, new Map());
@@ -145,7 +146,7 @@ for (const [label, F] of cores) {
   test(`G-P6 [${label}] goal comparisons are exact at the boundary (no pre-rounding)`, () => {
     const mk = (purch) => {
       const rows = [{ id: UUID(1), date: "2026-09-01", sales: "100000", supplier_payments: { s1: purch } }];
-      return reportOf(F, rows, "2026-09-01").report;
+      return reportOf(F, rows, "2026-09-02").report;
     };
     const policy = F.policy.registry.resolvePolicy({ targets: { foodCostPct: "33" } });
     const state = (p) => F.policy.evaluate.evaluatePolicy(mk(p), policy).comparisons[0].state;
@@ -177,8 +178,8 @@ for (const [label, F] of cores) {
       [UUID(2)]: { id: UUID(2), date: "2026-09-02", sales: 1500.5, supplier_payments: { s1: 300 }, _gen: 3 },
       [UUID(1)]: { id: UUID(1), date: "2026-09-01", sales: 0, payroll: 0, supplier_payments: { s1: 0 }, _gen: 3 },
     } };
-    const a = reportOf(F, requireEntriesRows({ _v: JSON.stringify(legacyRows) }), "2026-09-02");
-    const b = reportOf(F, requireEntriesRows(v2Rows), "2026-09-02");
+    const a = reportOf(F, requireEntriesRows({ _v: JSON.stringify(legacyRows) }), "2026-09-03");
+    const b = reportOf(F, requireEntriesRows(v2Rows), "2026-09-03");
     assert.equal(a.text, b.text);
     assert.equal(a.report.coverage.revenue.presentDays, 2);
   });
@@ -237,15 +238,17 @@ for (const [label, F] of cores) {
 
   test(`BD-3 [${label}] projection is a separate object and never changes Actual`, () => {
     const rows = [{ id: UUID(1), date: "2026-09-01", sales: "1000", supplier_payments: { s1: "300" }, payroll: "200" }];
-    const { report, text } = reportOf(F, rows, "2026-09-01");
+    const { report, text } = reportOf(F, rows, "2026-09-02");
+    assert.equal(report.actual.operatingProfit.state, "complete");
     const tl = F.metrics.adapters.configCompat.costTimelineFromCurrentConfig({ employees: [{ id: "e", type: "global", monthlySalary: "30000" }] }, []);
     const p = F.metrics.projected.applyProjection(report, { formulaId: "REV_FORECAST/v1", month: "2026-09", projectedRevenue: 30000 }, tl);
     assert.equal(p.kind, "projected");
     assert.equal(p.revenue, "30000");
     assert.equal(p.purchases, "9000");
-    assert.equal(p.directLabor, "6000");
-    assert.equal(p.salaried, null, "gross salary is never projected as labor (scope all_staff)");
-    assert.equal(p.operatingProfit, "15000");
+    assert.equal(p.hourlyLabor, "6000");
+    assert.equal(p.globalEmployerCost, "30000", "full calendar month of global employer cost");
+    assert.deepEqual(p.afterActual, { from: "2026-09-02", to: "2026-09-30", days: 29, globalEmployerCost: "29000", fixedRegularAndRent: "0" });
+    assert.equal(p.operatingProfit, "-15000", "30000 - 9000 - 6000 - 30000");
     assert.equal(F.metrics.report.serializeReport(report), text, "Actual untouched");
     assert.equal(report.actual.revenue.value, "1000");
     assert.ok(!("projected" in report) && !("forecast" in report.actual));
@@ -254,10 +257,10 @@ for (const [label, F] of cores) {
 
   test(`self-review [${label}] projection subtracts other expense and reuses the report formulas`, () => {
     const rows = [{ id: UUID(1), date: "2026-09-01", sales: "1000", supplier_payments: { s1: "300" }, payroll: "200", other_expense: "400" }];
-    const n = F.finance.normalize.normalizeRows(rows, { asOfBusinessDate: "2026-09-01" });
-    const days = F.finance.normalize.groupByDate(n.rows, { from: "2026-09-01", to: "2026-09-01" });
+    const n = F.finance.normalize.normalizeRows(rows, { asOfBusinessDate: "2026-09-02" });
+    const days = F.finance.normalize.groupByDate(n.rows, { from: "2026-09-01", to: "2026-09-02" });
     const tl = F.metrics.adapters.configCompat.costTimelineFromCurrentConfig({}, []);
-    const report = F.metrics.report.computePeriodReport(days, tl, F.policy.purchaseBasis.productPurchaseBasis(), LABOR(F), { kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-01" });
+    const report = F.metrics.report.computePeriodReport(days, tl, F.policy.purchaseBasis.productPurchaseBasis(), LABOR(F), { kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-02" });
     assert.deepEqual(report.actual.operatingProfit, { state: "complete", value: "100", issues: [] });
     const p = F.metrics.projected.applyProjection(report, { formulaId: "REV_FORECAST/v1", month: "2026-09", projectedRevenue: "30000" }, tl);
     assert.equal(p.otherExpense, "12000");
@@ -266,16 +269,16 @@ for (const [label, F] of cores) {
 
   test(`TI-18 [${label}] an incomplete Actual projects no cost and no profit`, () => {
     const rows = [{ id: UUID(1), date: "2026-09-01", sales: "1000", payroll: "200" }]; // purchases not recorded
-    const n = F.finance.normalize.normalizeRows(rows, { asOfBusinessDate: "2026-09-01" });
-    const days = F.finance.normalize.groupByDate(n.rows, { from: "2026-09-01", to: "2026-09-01" });
+    const n = F.finance.normalize.normalizeRows(rows, { asOfBusinessDate: "2026-09-02" });
+    const days = F.finance.normalize.groupByDate(n.rows, { from: "2026-09-01", to: "2026-09-02" });
     const tl = F.metrics.adapters.configCompat.costTimelineFromCurrentConfig({}, []);
-    const report = F.metrics.report.computePeriodReport(days, tl, F.policy.purchaseBasis.productPurchaseBasis(), LABOR(F), { kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-01" });
+    const report = F.metrics.report.computePeriodReport(days, tl, F.policy.purchaseBasis.productPurchaseBasis(), LABOR(F), { kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-02" });
     assert.equal(report.actual.operatingProfit.state, "incomplete_components");
     assert.equal(report.actual.operatingProfit.value, null);
     const p = F.metrics.projected.applyProjection(report, { formulaId: "REV_FORECAST/v1", month: "2026-09", projectedRevenue: "30000" }, tl);
     assert.equal(p.operatingProfit, null);
     assert.equal(p.purchases, null);
-    assert.equal(p.directLabor, null);
+    assert.equal(p.hourlyLabor, null);
     assert.ok(p.warnings.includes("actual_components_incomplete"));
     assert.equal(F.presenters.money.formatTypedAmount(report.actual.operatingProfit), "—");
     assert.equal(F.presenters.money.formatTypedAmount({ state: "complete", value: "-100.5" }), "₪-101");
@@ -284,11 +287,11 @@ for (const [label, F] of cores) {
   });
 
   test(`self-review [${label}] duplicate day objects are a contract error; missing-labor goal is not evaluable`, () => {
-    const n = F.finance.normalize.normalizeRows([{ id: UUID(1), date: "2026-09-01", sales: "1000", food_cost: "300" }], { asOfBusinessDate: "2026-09-01" });
-    const days = F.finance.normalize.groupByDate(n.rows, { from: "2026-09-01", to: "2026-09-01" });
+    const n = F.finance.normalize.normalizeRows([{ id: UUID(1), date: "2026-09-01", sales: "1000", food_cost: "300" }], { asOfBusinessDate: "2026-09-02" });
+    const days = F.finance.normalize.groupByDate(n.rows, { from: "2026-09-01", to: "2026-09-02" });
     const tl = F.metrics.adapters.configCompat.costTimelineFromCurrentConfig({}, []);
     const pb = F.policy.purchaseBasis.productPurchaseBasis();
-    const w = { kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-01" };
+    const w = { kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-02" };
     assert.throws(() => F.metrics.report.computePeriodReport([...days, ...days], tl, pb, LABOR(F), w), (e) => e.code === "duplicate_day");
     const ev = F.policy.evaluate.evaluatePolicy(F.metrics.report.computePeriodReport(days, tl, pb, LABOR(F), w), F.policy.registry.resolvePolicy({}));
     assert.equal(ev.comparisons.find((c) => c.metric === "laborEmployerCostPct").state, "not_evaluable");
@@ -299,44 +302,118 @@ for (const [label, F] of cores) {
       { id: UUID(1), date: "2026-09-01", sales: "1000", supplier_payments: { s1: "300" }, payroll: "200" },
       { id: UUID(2), date: "2026-09-02", sales: "1000", payroll: "200" }, // purchases missing on 09-02
     ];
-    const n = F.finance.normalize.normalizeRows(rows, { asOfBusinessDate: "2026-09-02" });
-    const days = F.finance.normalize.groupByDate(n.rows, { from: "2026-09-01", to: "2026-09-02" });
+    const n = F.finance.normalize.normalizeRows(rows, { asOfBusinessDate: "2026-09-03" });
+    const days = F.finance.normalize.groupByDate(n.rows, { from: "2026-09-01", to: "2026-09-03" });
     const tl = F.metrics.adapters.configCompat.costTimelineFromCurrentConfig({}, []);
-    const r = F.metrics.report.computePeriodReport(days, tl, F.policy.purchaseBasis.productPurchaseBasis(), LABOR(F), { kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-02" });
+    const r = F.metrics.report.computePeriodReport(days, tl, F.policy.purchaseBasis.productPurchaseBasis(), LABOR(F), { kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-03" });
     const ev = F.policy.evaluate.evaluatePolicy(r, F.policy.registry.resolvePolicy({}));
     assert.equal(ev.comparisons.find((c) => c.metric === "purchasesPct").state, "not_evaluable", "purchases incomplete ⇒ no goal verdict");
     assert.equal(ev.comparisons.find((c) => c.metric === "laborEmployerCostPct").state, "at_or_below_goal", "labor and revenue complete ⇒ evaluated (20% vs 27)");
   });
 
-  test(`labor contract [${label}] entered attendance employer cost is the labor truth; provenance kept; source may change without changing meaning`, () => {
+  test(`labor contract [${label}] MARJIN_LABOR/2: hourly (ShiftOrganizer, manual) + global calendar allocation; provenance kept; transport may change without changing meaning`, () => {
     const rows = [{ id: UUID(1), date: "2026-09-01", sales: "1000", supplier_payments: { s1: "0" }, payroll: "123.45", hourly_payroll: { w1: "10" } }];
-    const n = F.finance.normalize.normalizeRows(rows, { asOfBusinessDate: "2026-09-01" });
-    const days = F.finance.normalize.groupByDate(n.rows, { from: "2026-09-01", to: "2026-09-01" });
+    const n = F.finance.normalize.normalizeRows(rows, { asOfBusinessDate: "2026-09-02" });
+    const days = F.finance.normalize.groupByDate(n.rows, { from: "2026-09-01", to: "2026-09-02" });
     const tl = F.metrics.adapters.configCompat.costTimelineFromCurrentConfig({ employees: [{ id: "g", type: "global", monthlySalary: "30000" }] }, []);
     const pb = F.policy.purchaseBasis.productPurchaseBasis();
-    const w = { kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-01" };
+    const w = { kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-02" };
     const manual = F.metrics.report.computePeriodReport(days, tl, pb, LABOR(F), w);
+    const src = manual.actual.labor.source;
     assert.deepEqual(
-      { meaning: manual.actual.labor.source.meaning, sourceSystem: manual.actual.labor.source.sourceSystem, ingestionMethod: manual.actual.labor.source.ingestionMethod, scope: manual.actual.labor.source.scope },
-      { meaning: "authoritative_employer_cost", sourceSystem: "attendance_workforce", ingestionMethod: "manual", scope: "all_staff" });
-    assert.deepEqual(manual.actual.labor.employerCost, { state: "complete", value: "133.45", issues: [] }, "no gross salary added, no uplift");
-    assert.equal(manual.actual.labor.salariedEmployerCost, null);
-    assert.equal(manual.actual.labor.grossSalaryDatumPresent, true);
-    assert.ok(manual.flags.some((f) => f.code === "gross_salary_not_labor_cost" && f.key === "g"));
-    assert.deepEqual(manual.actual.operatingProfit, { state: "complete", value: "866.55", issues: [] });
+      { meaning: src.meaning, sourceSystem: src.sourceSystem, sourceProduct: src.sourceProduct, ingestionMethod: src.ingestionMethod, coverage: src.coverage, fields: [...src.fields] },
+      { meaning: "authoritative_employer_cost", sourceSystem: "attendance_workforce", sourceProduct: "ShiftOrganizer", ingestionMethod: "manual", coverage: "hourly_employees_only", fields: ["payroll"] });
+    assert.deepEqual(manual.actual.labor.globalEmployerCost, { state: "complete", value: "1000", issues: [] }, "30000 / 30 calendar days, no multiplier");
+    assert.deepEqual(manual.actual.labor.employerCost, { state: "complete", value: "1123.45", issues: [] }, "hourly 123.45 + global 1000; hourly_payroll 10 not counted");
+    assert.deepEqual(manual.actual.labor.legacyHourlyPayroll, { counted: false, dates: ["2026-09-01"] });
+    assert.ok(manual.flags.some((f) => f.code === "legacy_hourly_payroll_not_counted" && f.rowId === UUID(1)));
+    assert.deepEqual(manual.actual.operatingProfit, { state: "complete", value: "-123.45", issues: [] });
     const future = { ...LABOR(F), policyId: "LABOR_SRC/marjin-workforce", sourceSystem: "marjin_workforce", ingestionMethod: "integration" };
     const integrated = F.metrics.report.computePeriodReport(days, tl, pb, future, w);
     assert.equal(integrated.actual.labor.employerCost.value, manual.actual.labor.employerCost.value, "same meaning whatever the transport");
     assert.equal(integrated.actual.operatingProfit.value, manual.actual.operatingProfit.value);
     const code = (fn) => { try { fn(); } catch (e) { return e.code; } return null; };
-    assert.equal(code(() => F.metrics.report.computePeriodReport(days, tl, pb, { ...LABOR(F), meaning: "gross_salary" }, w)), "labor_source_not_employer_cost");
-    assert.equal(code(() => F.metrics.report.computePeriodReport(days, tl, pb, { ...LABOR(F), meaning: "net_salary" }, w)), "labor_source_not_employer_cost");
-    assert.equal(code(() => F.metrics.report.computePeriodReport(days, tl, pb, { ...LABOR(F), ingestionMethod: "estimate" }, w)), "labor_source_malformed");
-    assert.equal(code(() => F.metrics.report.computePeriodReport(days, tl, pb, null, w)), "labor_source_required");
-    assert.equal(code(() => F.metrics.report.computePeriodReport(days, tl, pb, { ...LABOR(F), fields: ["monthlySalary"] }, w)), "labor_source_malformed", "gross salary field cannot be declared as labor");
-    assert.equal(code(() => F.metrics.report.computePeriodReport(days, tl, pb, { ...LABOR(F), fields: [] }, w)), "labor_source_malformed");
-    const dm = F.metrics.adapters.legacyNumber.toDailyMetric(days[0], F.finance.purchaseBasis.resolvePurchaseBasis([], pb), LABOR(F));
-    assert.deepEqual([dm.laborCost, dm.laborMeaning, dm.laborSourceSystem, dm.laborIngestionMethod], [133.45, "authoritative_employer_cost", "attendance_workforce", "manual"]);
+    const bad = (labor) => code(() => F.metrics.report.computePeriodReport(days, tl, pb, labor, w));
+    assert.equal(bad({ ...LABOR(F), meaning: "gross_salary" }), "labor_source_not_employer_cost");
+    assert.equal(bad({ ...LABOR(F), meaning: "net_salary" }), "labor_source_not_employer_cost");
+    assert.equal(bad({ ...LABOR(F), ingestionMethod: "estimate" }), "labor_source_malformed");
+    assert.equal(bad(null), "labor_source_required");
+    assert.equal(bad({ ...LABOR(F), fields: ["monthlySalary"] }), "labor_source_malformed", "a salary field cannot be declared as hourly labor");
+    assert.equal(bad({ ...LABOR(F), fields: [] }), "labor_source_malformed");
+    assert.equal(bad({ ...LABOR(F), fields: ["payroll", "hourly_payroll"] }), "legacy_labor_field_not_countable", "hourly_payroll can never be declared");
+    assert.equal(bad({ ...LABOR(F), fields: ["hourly_payroll"] }), "legacy_labor_field_not_countable");
+    assert.equal(bad({ ...LABOR(F), coverage: "all_staff" }), "labor_source_malformed", "hourly figure never covers global employees (no overlap)");
+    assert.equal(bad({ ...LABOR(F), sourceProduct: "" }), "labor_source_malformed");
+    const DAY_CTX = { asOfBusinessDate: "2026-09-02" };
+    const dm = F.metrics.adapters.legacyNumber.toDailyMetric(days[0], F.finance.purchaseBasis.resolvePurchaseBasis([], pb), LABOR(F), tl, DAY_CTX);
+    assert.deepEqual([dm.laborCost, dm.hourlyLaborCost, dm.globalLaborCost, dm.laborCostComplete, dm.laborMeaning, dm.laborSourceSystem, dm.laborIngestionMethod],
+      [1123.45, 123.45, 1000, true, "authoritative_employer_cost", "attendance_workforce", "manual"]);
+    const dmNoCfg = F.metrics.adapters.legacyNumber.toDailyMetric(days[0], F.finance.purchaseBasis.resolvePurchaseBasis([], pb), LABOR(F), { versions: [], timelineSource: "compat_current_config", vatBasis: "net_of_vat" }, DAY_CTX);
+    assert.deepEqual([dmNoCfg.laborCost, dmNoCfg.laborCostComplete, dmNoCfg.globalLaborCost, dmNoCfg.laborPct], [0, false, null, null], "unknown global cost: daily labor not complete, never hourly-only");
+    assert.equal(code(() => F.metrics.adapters.legacyNumber.toDailyMetric(days[1], F.finance.purchaseBasis.resolvePurchaseBasis([], pb), LABOR(F), tl, DAY_CTX)), "day_outside_actual", "the current day is never a completed daily metric");
+    assert.equal(code(() => F.metrics.adapters.legacyNumber.toDailyMetric(days[0], F.finance.purchaseBasis.resolvePurchaseBasis([], pb), LABOR(F), tl)), "invalid_as_of");
+  });
+
+  test(`owner contract test 7 [${label}] projection may include Sep 29-30 costs while Actual (Sep 1-28) is unchanged`, () => {
+    const rows = [];
+    for (let d = 1; d <= 28; d += 1) rows.push({ id: UUID(d), date: `2026-09-${String(d).padStart(2, "0")}`, sales: "1000", supplier_payments: { s1: "300" }, payroll: "200" });
+    const today = { id: UUID(99), date: "2026-09-29", sales: "77777", supplier_payments: { s1: "5" }, payroll: "55555", other_expense: "1" };
+    const tl = F.metrics.adapters.configCompat.costTimelineFromCurrentConfig({ employees: [{ id: "e1", type: "global", monthlySalary: "30000" }] }, [{ id: "f1", amount: "3000" }]);
+    const pb = F.policy.purchaseBasis.productPurchaseBasis();
+    const w = { kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-29" };
+    const build = (rs, to) => {
+      const n = F.finance.normalize.normalizeRows(rs, { asOfBusinessDate: "2026-09-29" });
+      return F.metrics.report.computePeriodReport(F.finance.normalize.groupByDate(n.rows, { from: "2026-09-01", to }), tl, pb, LABOR(F), w, { quarantine: n.quarantine, flags: n.flags });
+    };
+    const withToday = build([...rows, today], "2026-09-29");
+    const withoutToday = build(rows, "2026-09-29");
+    const noTodayObject = build(rows, "2026-09-28");
+    const text = F.metrics.report.serializeReport(withToday);
+    assert.equal(F.metrics.report.serializeReport(withoutToday), text, "tests 6/11: current-day data never changes Actual");
+    assert.equal(F.metrics.report.serializeReport(noTodayObject), text, "the current-day object is not even required");
+    assert.equal(withToday.actual.labor.globalEmployerCost.value, "28000");
+    assert.equal(withToday.actual.fixedAccrual.regular, "2800");
+    assert.deepEqual(withToday.actual.operatingProfit, { state: "complete", value: "-16800", issues: [] });
+    const p = F.metrics.projected.applyProjection(withToday, { formulaId: "REV_FORECAST/v1", month: "2026-09", projectedRevenue: "30000" }, tl);
+    assert.deepEqual(p.afterActual, { from: "2026-09-29", to: "2026-09-30", days: 2, globalEmployerCost: "2000", fixedRegularAndRent: "200" });
+    assert.equal(p.globalEmployerCost, "30000");
+    assert.equal(p.fixed, "3000");
+    assert.equal(p.operatingProfit, "-18000", "30000 - 9000 - 6000 - 30000 - 3000");
+    assert.equal(F.metrics.report.serializeReport(withToday), text, "projection leaves Actual unchanged");
+  });
+
+  test(`owner contract [${label}] projection never shows a false 0 for unknown fixed or global cost`, () => {
+    const rows = [{ id: UUID(1), date: "2026-09-01", sales: "1000", supplier_payments: { s1: "300" }, payroll: "200" }];
+    const n = F.finance.normalize.normalizeRows(rows, { asOfBusinessDate: "2026-09-02" });
+    const days = F.finance.normalize.groupByDate(n.rows, { from: "2026-09-01", to: "2026-09-02" });
+    const pb = F.policy.purchaseBasis.productPurchaseBasis();
+    const w = { kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-02" };
+    const badFixed = F.metrics.adapters.configCompat.costTimelineFromCurrentConfig({ employees: [] }, [{ id: "f", amount: "abc" }]);
+    const r1 = F.metrics.report.computePeriodReport(days, badFixed, pb, LABOR(F), w);
+    const p1 = F.metrics.projected.applyProjection(r1, { formulaId: "REV_FORECAST/v1", month: "2026-09", projectedRevenue: "30000" }, badFixed);
+    assert.deepEqual([p1.fixed, p1.afterActual.fixedRegularAndRent, p1.operatingProfit], [null, null, null]);
+    assert.ok(p1.warnings.includes("fixed_cost_unavailable"));
+    const badGlobal = F.metrics.adapters.configCompat.costTimelineFromCurrentConfig({ employees: [{ id: "g", type: "global", monthlySalary: "" }] }, []);
+    const r2 = F.metrics.report.computePeriodReport(days, badGlobal, pb, LABOR(F), w);
+    const p2 = F.metrics.projected.applyProjection(r2, { formulaId: "REV_FORECAST/v1", month: "2026-09", projectedRevenue: "30000" }, badGlobal);
+    assert.deepEqual([p2.globalEmployerCost, p2.afterActual.globalEmployerCost, p2.operatingProfit], [null, null, null]);
+    assert.ok(p2.warnings.includes("global_employer_cost_unavailable"));
+  });
+
+  test(`owner contract test 4 [${label}] property: declared closed days never change monthly global or fixed totals`, () => {
+    const r = prng(429);
+    const tl = F.metrics.adapters.configCompat.costTimelineFromCurrentConfig({ employees: [{ id: "e1", type: "global", monthlySalary: "30000" }, { id: "e2", type: "global", monthlySalary: "12345.67" }] }, [{ id: "f1", amount: "3000" }, { id: "f2", amount: "999.99" }]);
+    const pb = F.policy.purchaseBasis.productPurchaseBasis();
+    const days = F.finance.normalize.groupByDate([], { from: "2026-09-01", to: "2026-09-30" });
+    const all = F.finance.businessDate.datesInRange("2026-09-01", "2026-09-30");
+    for (let t = 0; t < 60; t += 1) {
+      const closedDates = all.filter(() => r() < 0.3);
+      const rep = F.metrics.report.computePeriodReport(days, tl, pb, LABOR(F), { kind: "closed_month", month: "2026-09", asOfBusinessDate: "2026-10-01" }, { operatingCalendar: { source: "prop", closedDates } });
+      assert.equal(rep.actual.labor.globalEmployerCost.value, "42345.67");
+      assert.equal(rep.actual.fixedAccrual.regular, "3999.99");
+      assert.equal(rep.operatingCalendar.operatingDays, 30 - closedDates.length);
+      assert.deepEqual(rep.coverage.revenue.missingDays, all.filter((d) => !closedDates.includes(d)), "undeclared empty days are missing, never inferred closed");
+    }
   });
 
   test(`window contract [${label}] closed/open month misuse is a contract error`, () => {
@@ -347,6 +424,13 @@ for (const [label, F] of cores) {
     assert.equal(code(() => F.metrics.report.computePeriodReport(days, tl, pb, LABOR(F), { kind: "closed_month", month: "2026-09", asOfBusinessDate: "2026-09-15" })), "closed_month_not_closed");
     assert.equal(code(() => F.metrics.report.computePeriodReport(days, tl, pb, LABOR(F), { kind: "open_month", month: "2026-08", asOfBusinessDate: "2026-09-15" })), "open_month_already_closed");
     assert.equal(code(() => F.metrics.report.computePeriodReport(days.slice(0, 3), tl, pb, LABOR(F), { kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-15" })), "window_days_incomplete");
+    // D-1: the as-of day is never recognised; days.slice(0, 14) (Sep 1-14) is enough on Sep 15.
+    const r15 = F.metrics.report.computePeriodReport(days.slice(0, 14), tl, pb, LABOR(F), { kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-15" });
+    assert.deepEqual([r15.window.from, r15.window.to, r15.window.recognizedDays, r15.window.rule], ["2026-09-01", "2026-09-14", 14, "completed_days_through_d_minus_1"]);
+    assert.equal(F.metrics.report.actualWindowDates({ kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-30" }).completedThrough, "2026-09-29");
+    assert.equal(F.metrics.report.actualWindowDates({ kind: "closed_month", month: "2026-09", asOfBusinessDate: "2026-10-01" }).completedThrough, "2026-09-30");
+    assert.equal(code(() => F.metrics.report.computePeriodReport(days, tl, pb, LABOR(F), { kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-15" }, { operatingCalendar: { source: "x", closedDates: ["2026-09-02", "2026-09-02"] } })), "invalid_operating_calendar");
+    assert.equal(code(() => F.metrics.report.computePeriodReport(days, tl, pb, LABOR(F), { kind: "open_month", month: "2026-09", asOfBusinessDate: "2026-09-15" }, { operatingCalendar: { closedDates: [] } })), "invalid_operating_calendar");
   });
 
   test(`decimal [${label}] exact arithmetic and half-away-from-zero rounding`, () => {
