@@ -62,13 +62,19 @@ const SHA1_RE = /^[0-9a-f]{40}$/;
 
 /**
  * Exactly the files the CTO authorized for the server-reader slice, each pinned to the
- * blob of its REVIEWED bytes (R1 candidate). Nothing under a directory.
+ * blob of its REVIEWED bytes. Nothing under a directory.
+ *
+ * Financial Core B1 re-pin (canonical server metrics): dailyBuilder, dailyMetricsRepo,
+ * laborRepo and purchasesRepo now serve their financial values through the canonical
+ * server API (src/finance-server/*). Previous pins (P0-DATA-01 R2): dailyBuilder a327186c,
+ * dailyMetricsRepo 301f9599, laborRepo 33a646e9, purchasesRepo 6a3f9be2. The snapshot pin
+ * is unchanged (B2 owns snapshotBuilder).
  */
 export const SERVER_READER_APPROVED_BLOBS = Object.freeze({
-  "src/analytics/dailyBuilder.ts": "a327186c90e957a44aeeb40a023734e2f0c027c1",
-  "src/repositories/analytics/dailyMetricsRepo.ts": "301f95993258f75051e4a4ee91ca22a1e8839207",
-  "src/repositories/analytics/laborRepo.ts": "33a646e92523f758d70b1707652cf39fc36c4605",
-  "src/repositories/analytics/purchasesRepo.ts": "6a3f9be2a5c4ceec7d5339cbda50d61fd28513af",
+  "src/analytics/dailyBuilder.ts": "ecaa53337fd2ba60fc8abd8a0cae708a87ba8cdc",
+  "src/repositories/analytics/dailyMetricsRepo.ts": "b04e0193196f50057cb1214f05c0cb47078af0ee",
+  "src/repositories/analytics/laborRepo.ts": "78f35d558a40a23719124b22c9ad26561fab8da0",
+  "src/repositories/analytics/purchasesRepo.ts": "d5f0a1eeeac9c0999a71cf91cdb6647c11ac572b",
   "src/snapshot/snapshotBuilder.ts": "e36df4d83d945d16e158dacc82b12ce2500f9956",
 });
 export const SERVER_READER_AUTHORIZED_FILES = Object.freeze(Object.keys(SERVER_READER_APPROVED_BLOBS));

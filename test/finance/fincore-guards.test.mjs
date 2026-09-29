@@ -2,6 +2,9 @@
 // runtime consumers, G-S1 exactness/no-VAT scan, G-S2 import graph, G-S3 presence from
 // state only, G-S4 required purchase basis, G-A1 legacy adapter shape, G-M1 consumer
 // manifest coverage (file-level, enforcing; line-level stays report-only until Slice E).
+// Financial Core B1: G-B2 is data-driven (AMEND-02: the union of test/finance/core-consumers/*.json);
+// G-S2 gains exactly one edge (productFinance → revenueForecast, AMEND-04); G-S4 allows one
+// runtime caller (src/policy/productFinance.ts, AMEND-01) with the product basis/source bound.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -9,6 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import { REPO, loadCompiled } from "../support/fincore-load.mjs";
 import { closureSources, generate } from "../../tools/finance-core/gen-browser.mjs";
+import { importerVerdict, loadConsumerFiles, repoKindOf, validateConsumerFiles } from "../support/core-consumer-allowlist.mjs";
 
 const CORE_DIRS = ["src/finance", "src/metrics", "src/policy", "src/presenters", "src/browser"];
 
@@ -58,14 +62,14 @@ test("G-B1b the browser closure is exactly the core directories plus the forecas
   for (const f of coreFiles) assert.ok(closure.includes(f), "core file not reachable from the browser entry: " + f);
 });
 
-test("G-B2 Slice A has zero runtime consumers (index.html, api, lib and non-core src do not load the core)", () => {
-  assert.doesNotMatch(readFileSync(join(REPO, "index.html"), "utf8"), /fincore|MarjinFinance/);
-  const others = [...walk("api"), ...walk("lib"), ...walk("src")].filter((f) => /\.(ts|js)$/.test(f) && !CORE_DIRS.some((d) => f.startsWith(d + "/")));
-  for (const f of others) {
-    const src = readFileSync(join(REPO, f), "utf8");
-    assert.doesNotMatch(src, /from\s+["'][^"']*\/(finance|metrics|policy|presenters|browser)\/[^"']*["']/, f + " imports the Financial Core (consumer slices only)");
-    assert.doesNotMatch(src, /fincore/, f);
-  }
+test("G-B2 core consumers are exactly the per-slice allowlists (AMEND-02: union of test/finance/core-consumers/*.json)", () => {
+  const v = validateConsumerFiles(loadConsumerFiles(REPO), repoKindOf(REPO));
+  assert.deepEqual(v.errors, [], "core-consumer allowlist files are valid");
+  const sources = {};
+  for (const f of ["index.html", ...walk("api"), ...walk("lib"), ...walk("src")].filter((x) => /\.(ts|js|html)$/.test(x))) sources[f] = readFileSync(join(REPO, f), "utf8");
+  const verdict = importerVerdict(sources, v);
+  assert.deepEqual(verdict.unlistedCore, [], "files loading the Financial Core must be listed as `consumers` of a slice");
+  assert.deepEqual(verdict.unlistedServer, [], "files importing src/finance-server must be listed as `serverApiConsumers` of a slice");
 });
 
 test("G-S1 core arithmetic is exact: no binary math, clock reads or VAT constants", () => {
@@ -82,6 +86,7 @@ test("G-S2 import graph respects the layering (finance ← metrics ← policy/pr
     "src/finance": ["src/finance"],
     "src/metrics": ["src/finance", "src/metrics"],
     "src/policy": ["src/finance", "src/metrics", "src/policy"],
+    // AMEND-04: exactly one cross-layer edge (the engine is already in the browser closure)
     "src/presenters": ["src/finance", "src/presenters"],
     "src/browser": ["src/finance", "src/metrics", "src/policy", "src/presenters", "src/forecast"],
   };
@@ -92,7 +97,8 @@ test("G-S2 import graph respects the layering (finance ← metrics ← policy/pr
       const spec = m[1];
       assert.ok(spec.startsWith("."), `${f} imports a bare/node module ${spec}`);
       const target = join(dirname(f), spec).split(sep).join("/");
-      assert.ok(allowed[layer].some((d) => target.startsWith(d + "/")), `${f} → ${target} breaks layering`);
+      const edge = f === "src/policy/productFinance.ts" && target === "src/forecast/revenueForecast.js";
+      assert.ok(edge || allowed[layer].some((d) => target.startsWith(d + "/")), `${f} → ${target} breaks layering`);
     }
   }
   for (const f of walk("tools/storage-v2")) assert.doesNotMatch(readFileSync(join(REPO, f), "utf8"), /src\/(finance|metrics)|fincore/, "verification oracle must stay independent: " + f);
@@ -107,9 +113,23 @@ test("G-S3 presence is derived from input state only (no magnitude tests in norm
   }
 });
 
-test("G-S4 computePeriodReport has no caller that could omit the purchase basis (Slice A: no callers)", () => {
-  const files = [...walk("api"), ...walk("lib"), ...walk("src")].filter((f) => /\.(ts|js)$/.test(f) && f !== "src/metrics/report.ts" && f !== "src/browser/marjinFinanceGlobal.ts");
-  for (const f of files) assert.doesNotMatch(readFileSync(join(REPO, f), "utf8"), /computePeriodReport\(/, f);
+test("G-S4 computePeriodReport / toDailyMetric have ONE runtime caller (src/policy/productFinance.ts) with the product basis and labor source bound", () => {
+  const CALLER = "src/policy/productFinance.ts";
+  const defs = { computePeriodReport: "src/metrics/report.ts", toDailyMetric: "src/metrics/adapters/legacyNumber.ts" };
+  const files = [...walk("api"), ...walk("lib"), ...walk("src")].filter((f) => /\.(ts|js)$/.test(f) && f !== CALLER && f !== "src/browser/marjinFinanceGlobal.ts");
+  for (const [fn, def] of Object.entries(defs)) {
+    const re = new RegExp(fn + "\\(");
+    for (const f of files) if (f !== def) assert.doesNotMatch(stripComments(readFileSync(join(REPO, f), "utf8")), re, f + " calls " + fn);
+  }
+  const caller = stripComments(readFileSync(join(REPO, CALLER), "utf8"));
+  const reportCalls = [...caller.matchAll(/computePeriodReport\(([^;]*)/g)];
+  assert.equal(reportCalls.length, 1, "exactly one computePeriodReport call");
+  assert.match(reportCalls[0][1], /^days, productTimeline\(inputs\), productPurchaseBasis\(\), productLaborSource\(\),/, "basis and labor source are the bound product policies");
+  const dailyCalls = [...caller.matchAll(/toDailyMetric\(([^;]*)/g)];
+  assert.equal(dailyCalls.length, 1, "exactly one toDailyMetric call");
+  assert.match(dailyCalls[0][1], /^day, basis, productLaborSource\(\), timeline,/);
+  assert.match(caller, /const basis = resolvePurchaseBasis\([^;]*productPurchaseBasis\(\)\);/, "the daily basis resolves from the bound product policy");
+  assert.match(caller, /operatingCalendar: NO_DECLARED_CLOSURES/, "no closure is inferred");
   const src = readFileSync(join(REPO, "src/metrics/report.ts"), "utf8");
   assert.match(src, /purchaseBasis: unknown,\n\s*laborSource: unknown,\n\s*window: ReportWindow/, "purchaseBasis and laborSource are positional required parameters without default");
 });

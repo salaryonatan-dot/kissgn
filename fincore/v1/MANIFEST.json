@@ -20,17 +20,18 @@
     "src/policy/evaluate.ts",
     "src/policy/intelligence.ts",
     "src/policy/laborSource.ts",
+    "src/policy/productFinance.ts",
     "src/policy/purchaseBasis.ts",
     "src/policy/registry.ts",
     "src/presenters/labels.ts",
     "src/presenters/money.ts",
     "src/presenters/percent.ts"
   ],
-  "sourceDigest": "10c6adcf0a61eb6b2ae04a44c9ae7ed86f3783dc2da5ea4ddea751fc4f05e298",
+  "sourceDigest": "72450833eeec2e2f9e20e7655c14ffc2bccacc35d930dc24372b45d5bef81558",
   "files": [
     {
       "path": "browser/marjinFinanceGlobal.js",
-      "sha256": "d2b0c23b2248dd08f9238fb937160f823d9351d98696241032c94bc1928e8cf2"
+      "sha256": "7adab524bba9e57ade1697cbdab361937760962f03c4da86aa45968ba8d44e68"
     },
     {
       "path": "finance/businessDate.js",
@@ -95,6 +96,10 @@
     {
       "path": "policy/laborSource.js",
       "sha256": "06ee523fad84d2f203e0b78152035fa1ad331ab09556f50148d4dc03c2fad13d"
+    },
+    {
+      "path": "policy/productFinance.js",
+      "sha256": "d89d3281e8db994a9e5a850d666b82c7361edddf2b3ff8487d32e50dcfe5ea40"
     },
     {
       "path": "policy/purchaseBasis.js",

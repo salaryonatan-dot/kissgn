@@ -1,0 +1,14 @@
+{
+  "slice": "B1",
+  "consumers": [
+    "src/finance-server/canonicalInputs.ts",
+    "src/finance-server/canonicalMetrics.ts"
+  ],
+  "serverApiConsumers": [
+    "src/repositories/analytics/dailyMetricsRepo.ts",
+    "src/repositories/analytics/laborRepo.ts",
+    "src/repositories/analytics/purchasesRepo.ts",
+    "src/analytics/dailyBuilder.ts",
+    "src/services/analyticsService.ts"
+  ]
+}

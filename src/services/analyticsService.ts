@@ -6,6 +6,7 @@ import { getProductMetrics, getTopProducts } from "../repositories/analytics/pro
 import { getPurchaseMetrics } from "../repositories/analytics/purchasesRepo.js";
 import { isWithinDays } from "../utils/guards.js";
 import { isEntriesReadError } from "../../lib/analytics/entriesReader.js";
+import { isCanonicalFinanceError } from "../finance-server/canonicalMetrics.js";
 import { logger } from "../utils/logging.js";
 import { withTimeout, TIMEOUT_CRITICAL_MS, TIMEOUT_SECONDARY_MS } from "../utils/async.js";
 
@@ -42,7 +43,7 @@ export async function fetchPlannedData(
     // soft "source failed" — it must reach the per-business boundary (proactive job
     // catch / agent request failure) so nothing derived is persisted for this
     // business from corrupt or ambiguous entries. Other errors keep the soft-fail.
-    if (isEntriesReadError(err)) throw err;
+    if (isEntriesReadError(err) || isCanonicalFinanceError(err)) throw err;
     fetchStatus["daily"] = "failed";
   }
 
@@ -68,7 +69,7 @@ export async function fetchPlannedData(
       fetchStatus["labor"] = "ok";
     } catch (err) {
       logger.error("Failed to fetch labor metrics:", err);
-      if (isEntriesReadError(err)) throw err;
+      if (isEntriesReadError(err) || isCanonicalFinanceError(err)) throw err;
       fetchStatus["labor"] = "failed";
     }
   } else {
@@ -109,7 +110,7 @@ export async function fetchPlannedData(
       fetchStatus["purchases"] = "ok";
     } catch (err) {
       logger.error("Failed to fetch purchase metrics:", err);
-      if (isEntriesReadError(err)) throw err;
+      if (isEntriesReadError(err) || isCanonicalFinanceError(err)) throw err;
       fetchStatus["purchases"] = "failed";
     }
   } else {
@@ -131,7 +132,7 @@ export async function fetchPlannedData(
       freshnessScore = 0.75;
     }
   } catch (err) {
-    if (isEntriesReadError(err)) throw err;   // corrupt storage is never "default freshness"
+    if (isEntriesReadError(err) || isCanonicalFinanceError(err)) throw err;   // corrupt storage is never "default freshness"
     // keep default
   }
 

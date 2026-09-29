@@ -19,6 +19,8 @@ import * as money from "../presenters/money.js";
 import * as percent from "../presenters/percent.js";
 import * as labels from "../presenters/labels.js";
 import * as forecast from "../forecast/revenueForecast.js";
+// Slice B1 (AMEND-01): the product composition shared by server and browser.
+import * as product from "../policy/productFinance.js";
 const api = Object.freeze({
     versions: Object.freeze({
         fin: report.FINANCIAL_FORMULA_VERSION,
@@ -29,12 +31,14 @@ const api = Object.freeze({
         policy: policyRegistry.POLICY_VERSION,
         projection: projected.PROJECTION_FORMULA_VERSION,
         forecast: forecast.REV_FORECAST_FORMULA_ID,
+        product: product.PRODUCT_FINANCE_VERSION,
     }),
     finance: Object.freeze({ decimal, cells, businessDate, normalize, purchaseBasis, labor }),
     metrics: Object.freeze({ costTimeline, report, projected, adapters: Object.freeze({ legacyNumber, configCompat }) }),
     policy: Object.freeze({ registry: policyRegistry, evaluate: policyEvaluate, purchaseBasis: productPurchaseBasis, laborSource: productLaborSource }),
     presenters: Object.freeze({ money, percent, labels }),
     forecast,
+    product,
 });
 globalThis.MarjinFinance = api;
 export default api;

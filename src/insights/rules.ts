@@ -272,9 +272,12 @@ export function ruleWarDayImpact(t: AnalyticsDailyInput, history: AnalyticsDaily
 // ── 7. labor_risk (payroll / revenue) ────────────────────────────────────────
 export function ruleLaborRisk(t: AnalyticsDailyInput, history: AnalyticsDailyInput[], now: number): Insight | null {
   if (!t.revenue?.had_entry || !(t.revenue.total > 0)) return null;
+  // B1: an absent labor component (incomplete) never yields a labor ratio.
+  const payroll = t.revenue.payroll;
+  if (typeof payroll !== "number" || !Number.isFinite(payroll)) return null;
   const b = trailingRatioAvg(history, (d) => d.revenue.payroll, 30);
   if (b.n < THRESHOLDS.MIN_CONTEXT_SAMPLES || b.avg === null) return null;
-  const cur = t.revenue.payroll / t.revenue.total;
+  const cur = payroll / t.revenue.total;
   const gap = cur - b.avg;
   if (gap < THRESHOLDS.RATIO_GAP_WARN) return null;
   const severity: InsightSeverity = gap >= THRESHOLDS.RATIO_GAP_CRIT ? "critical" : "warning";

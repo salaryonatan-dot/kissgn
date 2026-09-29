@@ -18,6 +18,13 @@
 //        typed error and no stale analytics / email; a bad business never stops a
 //        healthy sibling.
 //
+// Financial Core B1: every financial value is served by the canonical server API
+// (src/finance-server/*). Changed expectations are annotated with their VD: labor =
+// `payroll` + the global employees' calendar-day allocation, `hourly_payroll` never counted
+// (VD-31); a duplicate business date is ONE aggregated canonical day (VD-04); the current
+// day and future dates are never Actual (VD-03/30); an unavailable fact is omitted, never a
+// plausible 0. SR-13 covers the B1 matrix on legacy and V2.
+//
 // Deliberately NOT named *.test.mjs — it must never be swept up by the emulator-free
 // repository glob. Host run: see test/emulator/README.md.
 
@@ -111,6 +118,8 @@ const monthRows = (n = 6, seed = "m") => Array.from({ length: n }, (_, i) => row
 const CONFIG = { region_ids: [], subregion_ids: [], rentType: "pct", rentPct: 8, hasRoyalty: true, royaltyPct: 4, targetSales: 500000, targetFoodCost: 30, targetLabor: 25, employees: [{ type: "global", monthlySalary: 9000 }] };
 const FIXED = [{ amount: 1000 }, { amount: 500, disabled: true }, { amount: 700, rentPct: 1 }];
 const SUPPLIERS = [{ id: "s1", name: "ספק אחד" }, { id: 7, name: "seven" }];
+/** B1: the CONFIG global employee (9000 / month, full employer cost) allocated per calendar day of an August date. */
+const GLOBAL_AUG_DAY = 290.3225806452; // 9000 / 31, one legacy conversion at 10 dp
 
 /** Fresh root per case: businesses = { bizId: entriesNode|null } (null ⇒ absent node). */
 async function reseed(businesses, extra = {}) {
@@ -166,7 +175,8 @@ async function main() {
     await reseed({ bizA: asLegacy([...FIXTURES.F4_variety, ...FIXTURES.F7_exceptions.map((r) => ({ ...r, id: uuid("x" + r.id), date: r.date.replace("2026-08", "2026-07") })), ...monthRows(6)]) });
     eq(readEntriesNode(await readNode("bizA")).mode, "legacy", "mode");
     const doc = await DBLD.buildAnalyticsForBiz(T, "bizA", "2026-08-01");
-    eq(doc.revenue.sales, 1000, "sales"); eq(doc.revenue.food_cost, 1234, "supplier sum → food_cost"); eq(doc.revenue.payroll, 400, "hourly payroll");
+    eq(doc.revenue.sales, 1000, "sales"); eq(doc.revenue.food_cost, 1234, "supplier sum → food_cost");
+    eq(doc.revenue.payroll, GLOBAL_AUG_DAY, "B1 VD-31: payroll 0 + global day allocation; hourly_payroll 400 not counted");
     const ex = await listEx("bizA", "2026-07-01", "2026-07-31");
     expect(Object.keys(ex).length >= 1, "embedded exceptions surfaced via fallback");
     const r = await repoAll("bizA"); expect(r.daily.length > 0 && r.labor.length > 0 && r.purchases.length > 0, "repos non-empty");
@@ -199,7 +209,7 @@ async function main() {
     const node = await readNode("bizA");
     expect(!("_v" in node), "no `_v` stored"); eq(node.generation, 3, "generation");
     const doc = await DBLD.buildAnalyticsForBiz(T, "bizA", "2026-08-01");
-    eq(doc.revenue.sales, 5000, "sales"); eq(doc.revenue.food_cost, 1200, "food"); eq(doc.revenue.payroll, 400, "payroll");
+    eq(doc.revenue.sales, 5000, "sales"); eq(doc.revenue.food_cost, 1200, "food"); eq(doc.revenue.payroll, GLOBAL_AUG_DAY, "B1 VD-31: payroll 0 + global; hourly_payroll not counted");
     const ex = await listEx("bizA", "2026-07-01", "2026-07-31"); expect(Object.keys(ex).length >= 1, "exceptions via rows");
     const r = await repoAll("bizA"); expect(r.daily.length === rows.length, "every row is a daily record");
     const s = await SB.buildSnapshotForBiz(T, "bizA"); expect(s && s.bizId === "bizA", "snapshot");
@@ -247,37 +257,37 @@ async function main() {
     const date = "2026-08-10";
     await reseed({ h1: asLegacy([row("h1", date, { sales: "10" }), ...monthRows(2, "h1m")]), amb: asV2(FIXTURES.F3_dup), bad: malformedNodes().gen_mismatch, h2: asV2([row("h2", date, { sales: "20" }), ...monthRows(2, "h2m")]) });
     const { docs, failures: f } = await DBLD.buildAnalyticsForAll(date);
-    deq(docs.map((d) => d.bizId).sort(), ["h1", "h2"], "docs");
-    deq(f.map((x) => x.bizId).sort(), ["amb", "bad"], "failures");
-    expect(/duplicate_business_date/.test(f.find((x) => x.bizId === "amb").error), "amb typed");
+    // B1 VD-04: the duplicate-date business is ONE aggregated canonical day — it builds
+    deq(docs.map((d) => d.bizId).sort(), ["amb", "h1", "h2"], "docs");
+    deq(f.map((x) => x.bizId).sort(), ["bad"], "failures");
     expect(/malformed_v2/.test(f.find((x) => x.bizId === "bad").error), "bad typed");
     expect(await readPath(analyticsPath("h1", date)) && await readPath(analyticsPath("h2", date)), "healthy analytics persisted");
-    eq(await readPath(analyticsPath("amb", date)), null, "no analytics for ambiguous"); eq(await readPath(analyticsPath("bad", date)), null, "no analytics for malformed");
-    eq(await readPath(insightsPath("amb", date)), null, "no insights for ambiguous"); eq(await readPath(insightsPath("bad", date)), null, "no insights for malformed");
+    eq((await readPath(analyticsPath("amb", date))).revenue.sales, 600, "duplicate date aggregated (100 + 500)");
+    eq(await readPath(analyticsPath("bad", date)), null, "no analytics for malformed"); eq(await readPath(insightsPath("bad", date)), null, "no insights for malformed");
     const snaps = await SB.buildSnapshotForAll();
     deq(snaps.map((s) => s.bizId).sort(), ["amb", "h1", "h2"], "snapshot: aggregator keeps the duplicate-date business (both rows counted), skips only the malformed one");
-    return "2 docs / 2 typed failures; snapshots for 3 of 4";
+    return "3 docs (duplicate date aggregated) / 1 typed failure; snapshots for 3 of 4";
   });
 
   // ══ 7. DUPLICATE-DATE AMBIGUITY (D1) ═════════════════════════════════════════
-  await run("SR-07", "duplicate-date", "D1 in both physical forms: typed refusal for the date, other dates fine, aggregators count both, exceptions fallback → legacy_ambiguous, nothing deleted/merged", async () => {
+  await run("SR-07", "duplicate-date", "D1 → B1 (VD-04) in both physical forms: ONE aggregated day in the doc and every repository, other dates fine, exceptions fallback → legacy_ambiguous, nothing deleted/merged", async () => {
     for (const [form, node] of [["legacy", asLegacy(FIXTURES.F3_dup)], ["v2", asV2(FIXTURES.F3_dup, { keepV: true })]]) {
       await reseed({ bizA: node });
       const before = plain(await readNode("bizA"));
-      const e = await rejects(() => DBLD.buildAnalyticsForBiz(T, "bizA", "2026-08-10"), (x) => isEntriesAmbiguityError(x) && x.status === "duplicate_business_date" && x.count === 2, form + " dailyBuilder");
-      deq(e.ids, [uuid("f3a"), uuid("f3b")].sort(), form + " ids named");
-      eq(await readPath(analyticsPath("bizA", "2026-08-10")), null, form + ": nothing persisted");
+      const agg = await DBLD.buildAnalyticsForBiz(T, "bizA", "2026-08-10");
+      eq(agg.revenue.sales, 600, form + " dailyBuilder: both rows summed (no winner)"); eq(agg.revenue.food_cost, 60, form + " purchases summed");
+      eq(agg.revenue.payroll, GLOBAL_AUG_DAY, form + " VD-31: hourly_payroll 1 + 5 not counted"); eq(agg.fin.rowCount, 2, form + " rowCount");
       const ok = await DBLD.buildAnalyticsForBiz(T, "bizA", "2026-08-11"); eq(ok.revenue.sales, 700, form + " unique date builds");
       const r = await repoAll("bizA");
-      deq(r.daily.filter((d) => d.date === "2026-08-10").map((d) => [d.revenue, d.laborCost, d.foodCost]), [[600, 6, 60]], form + " daily metric: ONE record per date, both rows summed (R1)");
-      eq(r.labor.filter((d) => d.date === "2026-08-10").length, 2, form + " labor keeps both rows");
+      deq(r.daily.filter((d) => d.date === "2026-08-10").map((d) => [d.revenue, d.laborCost, d.foodCost]), [[600, GLOBAL_AUG_DAY, 60]], form + " daily metric: ONE record per date, both rows summed; VD-31 labor");
+      eq(r.labor.filter((d) => d.date === "2026-08-10").length, 1, form + " B1: one labor record per canonical day");
       const ex = await listEx("bizA", "2026-08-10", "2026-08-10");
       const rec = ex["2026-08-10"];
       expect(rec && rec.origin === "legacy_ambiguous" && rec.source === "legacy_ambiguous" && rec.duplicateCount === 2, form + " exceptions fallback is explicit ambiguity, not a winner");
       deq(plain(await readNode("bizA")), before, form + ": node untouched (no auto delete/merge)");
       const dup = duplicateDates(readEntriesNode(await readNode("bizA")).rows); deq(dup, [{ date: "2026-08-10", ids: [uuid("f3a"), uuid("f3b")].sort() }], form + " duplicateDates");
     }
-    return "both forms: typed refusal, sibling date ok, both rows aggregated, legacy_ambiguous, node untouched";
+    return "both forms: one aggregated day (VD-04), sibling date ok, legacy_ambiguous exceptions, node untouched";
   });
 
   // ══ 11. D1 DOWNSTREAM (R1 / Codex SR-F1) — actual proactive flow, order/UUID independent ══
@@ -395,13 +405,50 @@ async function main() {
     return "rows 999 / deleted absent / stale `_v` exception unseen";
   });
 
+  // ══ 13. FINANCIAL CORE B1 — canonical server metrics on legacy and V2 (T-B1-13) ══
+  await run("SR-13", "b1-canonical", "legacy and V2 through the real Admin SDK: explicit-zero presence, duplicate date, future / current day outside Actual, hourly_payroll never counted, unavailable facts omitted", async () => {
+    const isr = (ms) => new Date(new Date(ms).toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
+    const asOfD = isr(Date.now()); const asOf = `${asOfD.getFullYear()}-${String(asOfD.getMonth() + 1).padStart(2, "0")}-${String(asOfD.getDate()).padStart(2, "0")}`;
+    const back = (n) => { const [y, m, d] = asOf.split("-").map(Number); return new Date(Date.UTC(y, m - 1, d) - n * 86400000).toISOString().slice(0, 10); };
+    const rows = [
+      row("b13z", back(3), { sales: "0", deliveries: "0", other_income: "0", food_cost: "0", payroll: "0", other_expense: "0" }),                // explicit zero day
+      row("b13a", back(2), { sales: "100", supplier_payments: { s1: "40" }, payroll: "10" }), row("b13b", back(2), { sales: "200", supplier_payments: { s1: "60" }, payroll: "20", hourly_payroll: { e1: 99 } }), // duplicate date
+      { id: uuid("b13p"), date: back(1), sales: "300" },                                                                                          // no purchases / no payroll fact
+      row("b13c", asOf, { sales: "999" }), row("b13f", back(-3), { sales: "999" }),                                                               // current day, future
+    ];
+    const out = {};
+    for (const [form, node] of [["legacy", asLegacy(rows)], ["v2", asV2(rows)]]) {
+      await reseed({ bizA: node });
+      const zero = await DBLD.buildAnalyticsForBiz(T, "bizA", back(3));
+      eq(zero.revenue.had_entry, true, form + " explicit zero is an entered day"); eq(zero.revenue.has_sales, false, form + " has_sales"); eq(zero.revenue.total, 0, form + " total 0");
+      const dup = await DBLD.buildAnalyticsForBiz(T, "bizA", back(2));
+      eq(dup.revenue.sales, 300, form + " duplicate date summed"); eq(dup.revenue.food_cost, 100, form + " purchases summed"); eq(dup.fin.legacyHourlyPayroll.recorded, true, form + " hourly recorded");
+      expect(dup.fin.flagCodes.includes("legacy_hourly_payroll_not_counted"), form + " hourly flagged");
+      const miss = await DBLD.buildAnalyticsForBiz(T, "bizA", back(1));
+      expect(!("food_cost" in miss.revenue) && !("payroll" in miss.revenue), form + " unavailable facts omitted (never 0)"); eq(miss.revenue.total, 300, form + " revenue present");
+      const cur = await DBLD.buildAnalyticsForBiz(T, "bizA", asOf); eq(cur.fin.inActual, false, form + " current day outside Actual"); expect(!("total" in cur.revenue), form + " no Actual field on the current day");
+      const fut = await DBLD.buildAnalyticsForBiz(T, "bizA", back(-3)); eq(fut.fin.outsideActualReason, "future_date", form + " future");
+      await DBLD.saveAnalyticsDoc(miss);
+      const stored = await readPath(analyticsPath("bizA", back(1)));
+      expect(stored && !("food_cost" in stored.revenue) && stored.fin && !("bySource" in stored.fin.purchases), form + " RTDB-safe persisted doc (omitted keys; no empty array)");
+      const sortKeys = (v) => (Array.isArray(v) ? v.map(sortKeys) : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys(v[k])])) : v);
+      deq(sortKeys({ revenue: stored.revenue, fin: stored.fin }), sortKeys(plain({ revenue: miss.revenue, fin: miss.fin })), form + " the B1 financial blocks read back identical (RTDB-safe encoding; RTDB orders keys)");
+      const r = await repoAll("bizA");
+      deq(r.daily.map((d) => d.date), [back(3), back(2), back(1)], form + " series: present completed days only");
+      eq(r.latest, back(1), form + " latest completed date");
+      out[form] = { zero: stripDoc(zero), dup: stripDoc(dup), miss: stripDoc(miss), repos: r };
+    }
+    deq(out.v2, out.legacy, "legacy ≡ V2");
+    return `asOf ${asOf}: zero/dup/omitted/current/future correct in both forms; legacy ≡ V2`;
+  });
+
   // ─── report ───────────────────────────────────────────────────────────────
   const w = (s, n) => String(s).padEnd(n).slice(0, n);
   console.log("");
   console.log(`${w("case", 8)} ${w("area", 16)} ${w("status", 6)} ${w("ms", 6)} notes`);
   console.log("-".repeat(120));
   for (const r of results) console.log(`${w(r.id, 8)} ${w(r.area, 16)} ${w(r.status, 6)} ${w(r.ms, 6)} ${r.status === "PASS" ? r.notes : r.notes.split("\n")[0]}`);
-  const EXPECTED = 12;
+  const EXPECTED = 13;
   console.log("\n=== TOTALS ===");
   console.log(`total=${results.length} passed=${results.length - failures} failed=${failures}`);
   if (results.length !== EXPECTED) { console.error(`\nINCOMPLETE MATRIX: expected ${EXPECTED}, ran ${results.length}`); process.exitCode = 3; return; }

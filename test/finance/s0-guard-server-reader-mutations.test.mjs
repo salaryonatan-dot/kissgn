@@ -65,85 +65,96 @@ test("I. positive control: the exact approved tree passes; five plain files; pin
   }
 });
 
+// Financial Core B1: the mutation needles are anchored to the B1 bytes of the pinned files
+// (the four reader files now serve financial values through src/finance-server/*); every
+// mutation class A–F is kept.
+const PR = "src/repositories/analytics/purchasesRepo.ts";
+const B1_BASE = "213fb350019c3e212156eb032e34f4da8c179d6f";
+
 test("A. approved declaration relocated after its first use (Codex SR-F2) → approved_content_mismatch, and the mutant really throws ReferenceError", async () => {
   const actual = src(DB);
-  const decl = line(actual, "const todayEntry = (requireRowForDate(");
-  const use = "  const sales = num(todayEntry?.sales);";
-  assert.ok(actual.includes(use), "first financial use present");
+  const decl = line(actual, "const record = canonicalDayRecord(");
+  const use = line(actual, "const { revenue, fin } = toAnalyticsFinancials(record);");
   const mutated = actual.replace(decl + "\n", "").replace(use, use + "\n" + decl);
   const v = mustFail(withText(DB, mutated), "approved_content_mismatch", "relocated declaration");
   assert.equal(v.detail.file, DB); assert.equal(v.detail.expected, SERVER_READER_APPROVED_BLOBS[DB]); assert.notEqual(v.detail.actual, v.detail.expected);
   // the same +/- lines in the same order — the R0 normalized-delta model could not see this; identity does
-  const same = (t) => t.split("\n").filter((l) => l.includes("requireRowForDate(") || l.includes("requireEntriesRows(")).join("|");
+  const same = (t) => t.split("\n").filter((l) => l.includes("canonicalDayRecord(") || l.includes("loadCanonicalInputs(")).join("|");
   assert.equal(same(mutated), same(actual), "token-level content is unchanged");
   // prove the semantic damage: compile the mutant and run it against a healthy business
   const ts = (await import(pathToFileURL(join(ROOT, "node_modules", "typescript", "lib", "typescript.js")).href)).default;
   const H = await import("../support/server-reader-harness.mjs");
   H.offlineFetch(); const srv = H.compileServer();
   const db = H.installDb(H.makeDb()); H.seedBusiness(db, { entries: { _v: JSON.stringify([{ id: "11111111-1111-4111-8111-111111111111", date: "2026-09-23", sales: 100 }]) } });
-  const ok = await (await srv.import("src/analytics/dailyBuilder.js")).buildAnalyticsForBiz(H.T, H.B, "2026-09-23"); assert.equal(ok.revenue.sales, 100, "approved file works");
+  const NOW = Date.UTC(2026, 8, 29, 9);
+  const ok = await (await srv.import("src/analytics/dailyBuilder.js")).buildAnalyticsForBiz(H.T, H.B, "2026-09-23", { nowMs: NOW }); assert.equal(ok.revenue.sales, 100, "approved file works");
   const dest = join(srv.dir, "src", "analytics", "dailyBuilder.__relocated__.js");
   writeFileSync(dest, ts.transpileModule(mutated, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText);
-  await assert.rejects(() => import(pathToFileURL(dest).href).then((m) => m.buildAnalyticsForBiz(H.T, H.B, "2026-09-23")), (e) => e.name === "ReferenceError", "the relocated mutant fails at runtime");
+  await assert.rejects(() => import(pathToFileURL(dest).href).then((m) => m.buildAnalyticsForBiz(H.T, H.B, "2026-09-23", { nowMs: NOW })), (e) => e.name === "ReferenceError", "the relocated mutant fails at runtime");
 });
 
 test("B. helper / function block moved elsewhere → approved_content_mismatch", () => {
-  // move the whole `rowComponents` helper below `aggregateByDate`
-  mustFail(mutate(DM, (t) => {
-    const start = t.indexOf("// Per-row additive components"), end = t.indexOf("// One DailyMetric per business date");
+  // move the whole `parseLegacyListEnvelope` helper below `getPurchaseMetrics`
+  mustFail(mutate(PR, (t) => {
+    const start = t.indexOf("// The SUPPLIERS list is a legacy"), end = t.indexOf("export async function getPurchaseMetrics(");
     assert.ok(start > 0 && end > start); const block = t.slice(start, end);
-    const rest = t.slice(0, start) + t.slice(end);
-    const anchor = "export async function getDailyMetrics("; return rest.replace(anchor, block + anchor);
+    return t.slice(0, start) + t.slice(end) + "\n" + block;
   }, "helper block moved"), "approved_content_mismatch", "helper block moved");
-  // move `num` after its callers in snapshotBuilder-like fashion: swap two top-level helpers in dailyMetricsRepo
+  // swap the two exported functions of dailyMetricsRepo
   mustFail(mutate(DM, (t) => {
-    const a = t.indexOf("function num("), b = t.indexOf("function sumObj("), c = t.indexOf("// Per-row additive components");
-    assert.ok(a > 0 && b > a && c > b); return t.slice(0, a) + t.slice(b, c) + t.slice(a, b) + t.slice(c);
-  }, "helpers swapped"), "approved_content_mismatch", "helpers swapped");
+    const a = t.indexOf("export async function getDailyMetrics("), b = t.indexOf("export async function getLatestDailyDate(");
+    assert.ok(a > 0 && b > a); return t.slice(0, a) + t.slice(b).trimEnd() + "\n\n" + t.slice(a, b).trimEnd() + "\n";
+  }, "functions swapped"), "approved_content_mismatch", "functions swapped");
 });
 
 test("C. same tokens, reordered statements → approved_content_mismatch", () => {
-  mustFail(mutate(DM, (t) => {
-    const l1 = "      acc.revenue.push(c.revenue);", l2 = "      acc.laborCost.push(c.laborCost);";
-    assert.ok(t.includes(l1 + "\n" + l2)); return t.replace(l1 + "\n" + l2, l2 + "\n" + l1);
-  }, "two accumulator statements swapped"), "approved_content_mismatch", "statements reordered");
   mustFail(mutate(DB, (t) => {
-    const l1 = line(t, 'const readerCtx = { tenantId, bizId, site: "dailyBuilder" };'), l2 = line(t, "const rows = requireEntriesRows(entriesSnap.val(), readerCtx)");
+    const l1 = line(t, "const exceptionRows = dateRows.filter("), l2 = line(t, "const explicitNonException = dateRows.some(");
     assert.ok(t.includes(l1 + "\n" + l2)); return t.replace(l1 + "\n" + l2, l2 + "\n" + l1);
-  }, "readerCtx/rows swapped (use before declaration)"), "approved_content_mismatch", "declaration order swapped");
+  }, "two independent statements swapped"), "approved_content_mismatch", "statements reordered");
+  mustFail(mutate(DB, (t) => {
+    const l1 = line(t, "const dateRows = (inputs.rows as EntryExceptionFields[])"), l2 = line(t, "const exceptionRows = dateRows.filter(");
+    assert.ok(t.includes(l1 + "\n" + l2)); return t.replace(l1 + "\n" + l2, l2 + "\n" + l1);
+  }, "dateRows/exceptionRows swapped (use before declaration)"), "approved_content_mismatch", "declaration order swapped");
 });
 
 test("D. an extra harmless-looking statement → approved_content_mismatch (comments and whitespace included)", () => {
-  mustFail(mutate(DB, (t) => t.replace("  const readerCtx = { tenantId, bizId, site: \"dailyBuilder\" };", "  const readerCtx = { tenantId, bizId, site: \"dailyBuilder\" };\n  void 0;"), "void statement"), "approved_content_mismatch", "extra statement");
+  mustFail(mutate(DB, (t) => t.replace(line(t, "const record = canonicalDayRecord("), line(t, "const record = canonicalDayRecord(") + "\n  void 0;"), "void statement"), "approved_content_mismatch", "extra statement");
   mustFail(mutate(SB, (t) => t + "\nexport const __probe = 1;\n", "extra export"), "approved_content_mismatch", "extra export");
-  mustFail(mutate(DM, (t) => t.replace("function num(", "// harmless comment\nfunction num("), "comment"), "approved_content_mismatch", "comment added");
-  mustFail(mutate(DM, (t) => t.replace("function num(v: unknown): number {", "function num(v: unknown): number  {"), "whitespace"), "approved_content_mismatch", "whitespace-only change (strict policy)");
+  mustFail(mutate(DM, (t) => t.replace("export async function getLatestDailyDate(", "// harmless comment\nexport async function getLatestDailyDate("), "comment"), "approved_content_mismatch", "comment added");
+  mustFail(mutate(DM, (t) => t.replace("export async function getLatestDailyDate(tenantId: string, bizId: string)", "export async function getLatestDailyDate(tenantId: string,  bizId: string)"), "whitespace"), "approved_content_mismatch", "whitespace-only change (strict policy)");
 });
 
 test("E. financial formula changed → approved_content_mismatch", () => {
-  mustFail(mutate(DM, (t) => t.replace("const revenue = num(e.sales) + num(e.deliveries) + num(e.other_income);", "const revenue = (num(e.sales) + num(e.deliveries) + num(e.other_income)) / 1.18;"), "VAT division"), "approved_content_mismatch", "VAT division inserted");
-  mustFail(mutate(DM, (t) => t.replace("laborPct: revenue > 0 ? (laborCost / revenue) * 100 : 0,", "laborPct: revenue > 0 ? (laborCost / revenue) * 100 : 100,"), "ratio default"), "approved_content_mismatch", "ratio default changed");
-  mustFail(mutate(DM, (t) => t.replace("return Number(total.toString() + \"e-\" + String(scale));", "return Number(total) / 10 ** scale;"), "final conversion weakened"), "approved_content_mismatch", "Number(C)/10**S substituted");
+  mustFail(mutate(DB, (t) => t.replace("    revenue,\n    fin,", "    revenue: { ...revenue, total: (revenue.total ?? 0) / 1.18 },\n    fin,"), "VAT division"), "approved_content_mismatch", "VAT division inserted");
+  mustFail(mutate(DB, (t) => t.replace("  const hadEntry = revenue.had_entry;", "  const hadEntry = (revenue.total ?? 0) > 0;"), "presence rule"), "approved_content_mismatch", "presence rule changed");
+  mustFail(mutate(DM, (t) => t.replace('{ site: "dailyMetricsRepo.getDailyMetrics", need: { config: true, fixed: false } }', '{ site: "dailyMetricsRepo.getDailyMetrics", need: { config: false, fixed: false } }'), "global labor source dropped"), "approved_content_mismatch", "config read dropped (global employer cost unknown)");
   mustFail(mutate(SB, (t) => { const l = line(t, "totalSales +="); return t.replace(l, l.replace(";", " * 1.18;")); }, "snapshot gross-up"), "approved_content_mismatch", "snapshot sales grossed up");
 });
 
 test("F. part of the reader change reverted (tokens still present elsewhere) → approved_content_mismatch", () => {
-  mustFail(mutate(DB, (t) => t.replace(line(t, "const todayEntry = (requireRowForDate("), "  const todayEntry = rows.find((e) => e.date === date);"), "D1 line reverted, import kept"), "approved_content_mismatch", "todayEntry reverted");
-  mustFail(mutate(DM, (t) => t.replace("  return aggregateByDate(\n", "  return rows.map((e) => ({ date: e.date, ...rowComponents(e), laborPct: 0, foodCostPct: 0, transactionCount: 0, avgTicket: 0 })).sort((a, b) => a.date.localeCompare(b.date)); //\n  return aggregateByDate(\n"), "aggregation bypassed"), "approved_content_mismatch", "aggregation bypassed");
-  mustFail(mutate(DM, (t) => t.replace("      const revenue = decimalSum(parts.revenue);", "      const revenue = parts.revenue.reduce((a, b) => a + b, 0);"), "binary accumulation restored"), "approved_content_mismatch", "exact accumulator bypassed");
+  mustFail(mutate(DB, (t) => t.replace(line(t, "const legacyEntry: EntryExceptionFields | undefined ="), "  const legacyEntry: EntryExceptionFields | undefined = dateRows[0];"), "winner row restored, import kept"), "approved_content_mismatch", "legacy winner row restored");
+  mustFail(mutate(DM, (t) => t.replace("  return canonicalDailySeries(inputs, { from: startDate, to: endDate }).days;", "  return canonicalDailySeries(inputs, { from: startDate, to: endDate }).days.filter((d) => d.revenue > 0);"), "presence bypassed"), "approved_content_mismatch", "explicit-zero days dropped");
+  mustFail(mutate("src/repositories/analytics/laborRepo.ts", (t) => t.replace("return canonicalLaborRecords(inputs, { from: startDate, to: endDate });", "return canonicalLaborRecords(inputs, { from: startDate, to: endDate }).map((r) => ({ ...r, totalCost: r.hourlyEmployerCost ?? 0 }));"), "global allocation dropped"), "approved_content_mismatch", "labor contract bypassed");
   // a full revert of one file to the approved core is also a mismatch (and would be flagged as pin ≠ base anyway)
   const base = gitIn(ROOT, ["show", `${SERVER_READER_BASE}:${DM}`]); assert.equal(base.status, 0);
   const v = mustFail(withText(DM, base.stdout), "approved_content_mismatch", "full revert to core");
   assert.equal(v.detail.actual, REAL.baseBlobs[DM]);
-  // R2 re-pin: the PREVIOUSLY reviewed bytes of dailyMetricsRepo (R1 candidate c46c2727, binary
-  // accumulation) are no longer the approved version — reverting to them is denied
+  // the R1 (c46c2727) bytes of dailyMetricsRepo remain denied
   const r1 = gitIn(ROOT, ["show", `c46c27278966e517a02a91e7adc0911084012b20:${DM}`]); assert.equal(r1.status, 0, r1.stderr);
   const r1v = mustFail(withText(DM, r1.stdout), "approved_content_mismatch", "R1 (c46c2727) dailyMetricsRepo bytes");
   assert.equal(r1v.detail.actual, blobSha(r1.stdout)); assert.notEqual(r1v.detail.actual, r1v.detail.expected);
-  // and the other four pins are byte-identical to their c46c2727 versions (R2 touched one file only)
-  for (const f of [DB, "src/repositories/analytics/laborRepo.ts", "src/repositories/analytics/purchasesRepo.ts", SB]) {
-    const at = gitIn(ROOT, ["rev-parse", `c46c27278966e517a02a91e7adc0911084012b20:${f}`]); assert.equal(at.status, 0);
-    assert.equal(at.stdout.trim(), SERVER_READER_APPROVED_BLOBS[f], f + ": pin unchanged since R1");
+  // B1 re-pin: the PREVIOUSLY approved (P0-DATA-01 R2, at the B1 base) bytes of the four reader
+  // files are no longer the approved version — reverting any one of them to those bytes is denied
+  for (const f of [DB, DM, "src/repositories/analytics/laborRepo.ts", PR]) {
+    const prev = gitIn(ROOT, ["show", `${B1_BASE}:${f}`]); assert.equal(prev.status, 0, prev.stderr);
+    const pv = mustFail(withText(f, prev.stdout), "approved_content_mismatch", f + " pre-B1 bytes");
+    assert.equal(pv.detail.file, f); assert.notEqual(pv.detail.actual, SERVER_READER_APPROVED_BLOBS[f]);
+  }
+  // and the snapshot pin is byte-identical to its c46c2727 and pre-B1 versions (B1 does not touch it)
+  for (const rev of ["c46c27278966e517a02a91e7adc0911084012b20", B1_BASE]) {
+    const at = gitIn(ROOT, ["rev-parse", `${rev}:${SB}`]); assert.equal(at.status, 0);
+    assert.equal(at.stdout.trim(), SERVER_READER_APPROVED_BLOBS[SB], SB + ": pin unchanged at " + rev.slice(0, 8));
   }
   // and a file missing from the tree
   const gone = clone(REAL); gone.blobs[DB] = null; mustFail(gone, "approved_content_mismatch", "file absent");

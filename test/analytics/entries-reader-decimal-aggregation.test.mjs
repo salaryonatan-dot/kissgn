@@ -11,6 +11,13 @@
 //     (getDailyMetrics → fetchPlannedData → runForBiz → detector → persisted insight → digest);
 //   • NEGATIVE CONTROL: the parent (c46c2727) repository, compiled from git, produces
 //     600.5999999999999 for some permutations and flips the detector.
+//
+// Financial Core B1: the repository now serves the canonical core (MARJIN_DEC/1). The
+// order-independence proofs are unchanged; expectations that encoded the retired per-row
+// binary coercion are replaced by the contract (each annotated): exact within-row decimals
+// (VD-19), strictly grouped thousands accepted (VD-10), out-of-contract cells INVALID — the
+// metric is `partial`, never silently complete, and the legacy number carries the valid
+// cells only (VD-20), ratios null on a non-positive revenue (VD-08).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
@@ -54,7 +61,8 @@ function representations(values, field = "sales", extraRows = []) {
   }
   return reps;
 }
-async function assertInvariant(values, expected, { field = "sales", pick = "revenue", extraRows = [], label = "" } = {}) {
+async function assertInvariant(values, expected, { field = "sales", pick = "revenue", extraRows = [], label = "", partial = false } = {}) {
+  const partialKey = { revenue: "revenue", foodCost: "purchases", laborCost: "hourlyLabor" }[pick];
   const reps = representations(values, field, extraRows);
   assert.ok(reps.length >= (values.length === 3 ? 108 : 6), "representation count " + reps.length);
   for (const [name, node] of reps) {
@@ -64,6 +72,7 @@ async function assertInvariant(values, expected, { field = "sales", pick = "reve
     if (Number.isNaN(expected)) assert.ok(Number.isNaN(rec[pick]), `${label} ${name}: expected NaN, got ${rec[pick]}`);
     else assert.ok(Object.is(rec[pick], expected), `${label} ${name}: expected ${String(expected)} (Object.is), got ${String(rec[pick])}`);
     assert.equal(daily.filter((d) => d.date === D).length, 1, name + ": one record per date");
+    assert.equal(rec.partial[partialKey], partial, `${label} ${name}: partial (VD-20) must be ${partial}`);
   }
   return reps.length;
 }
@@ -88,17 +97,18 @@ test("adversarial numeric contract (each list = separate same-date rows; exact N
     [[1.2, 0.003, 0.00004], Number("1.20304"), "mixed scales, no cents truncation"],
     [[-1.25, 2.5, -0.125], 1.125, "signed"],
     [[0.1, 0.2, -0.3], 0, "cancellation to exact +0"],
-    [[1e-7, 2e-8], Number("1.2e-7"), "exponent notation (Number.toString → 1e-7)"],
-    [[5e-324, 5e-324], Number("1e-323"), "smallest denormals"],
-    [[1e21, 1e21, 1e21], 3e21, "1e+21 exponent form (positive exponent)"],
-    [[1e16, 1, -1e16], 1, "large cancellation — Kahan/pairwise can give 0"],
-    [[1e20, 0.01, -1e20], 0.01, "no per-step Number conversion"],
-    [[1e308, 1e308, -1e308], 1e308, "INTERMEDIATE OVERFLOW: some JS orders hit Infinity; exact final total is finite (D-R2-2)"],
-    [[Number.MAX_VALUE, Number.MAX_VALUE], Infinity, "final exact total outside finite range → existing Number-output semantics (Infinity)"],
-    [[-Number.MAX_VALUE, -Number.MAX_VALUE], -Infinity, "negative overflow of the final total"],
+    // B1 VD-20: exponent-form / out-of-contract magnitudes are INVALID cells — partial, never a plausible total
+    [[1e-7, 2e-8], 0, "exponent notation → invalid cells (VD-20)", true],
+    [[5e-324, 5e-324], 0, "denormals → invalid cells (VD-20)", true],
+    [[1e21, 1e21, 1e21], 0, "1e+21 exponent form → invalid cells (VD-20)", true],
+    [[1e16, 1, -1e16], 1, "beyond the exact-amount contract → invalid cells; the valid cell only (VD-20)", true],
+    [[1e20, 0.01, -1e20], 0.01, "beyond the contract → invalid; the valid cell only (VD-20)", true],
+    [[1e308, 1e308, -1e308], 0, "overflow-scale cells → invalid (VD-20); no order dependence", true],
+    [[Number.MAX_VALUE, Number.MAX_VALUE], 0, "MAX_VALUE → invalid (VD-20); never Infinity", true],
+    [[-Number.MAX_VALUE, -Number.MAX_VALUE], 0, "−MAX_VALUE → invalid (VD-20); never −Infinity", true],
     [[123456789.123, 0.877, 1000000000], 1123456790, "large finite values"],
   ];
-  for (const [values, expected, label] of cases) await assertInvariant(values, expected, { label });
+  for (const [values, expected, label, partial = false] of cases) await assertInvariant(values, expected, { label, partial });
   // 0.01 repeated 10,000 times (two physical orders, both forms) → exactly 100
   const many = Array.from({ length: 10000 }, (_, i) => rowOf(uuidN(i + 1), D, { sales: 0.01 }));
   for (const node of [legacyNode(many), legacyNode(many.slice().reverse()), v2Node(many), v2Node(many.slice().reverse())]) {
@@ -107,46 +117,49 @@ test("adversarial numeric contract (each list = separate same-date rows; exact N
   // foodCost per-row fallback semantics preserved: supplier map wins when truthy, else food_cost; never both
   const fb = await metricsFor(legacyNode([rowOf(IDS[0], D, { supplier_payments: { s1: 10.1 }, food_cost: 999 }), rowOf(IDS[1], D, { supplier_payments: {}, food_cost: 20.2 }), rowOf(IDS[2], D, { food_cost: "30.3" })]));
   assert.ok(Object.is(fb[0].foodCost, Number("60.6")), "10.1 (map) + 20.2 (fallback) + 30.3 (fallback)");
+  assert.equal(fb[0].partial.purchases, false);
 });
 
-test("non-finite categories preserved (no new acceptance, no silent zeroing): +∞, −∞, both → NaN, NaN component → NaN", async () => {
-  // "1e309" coerces to Infinity at the UNCHANGED scalar boundary (existing behaviour)
-  await assertInvariant(["1e309", 5, 7], Infinity, { label: "+Infinity survives" });
-  await assertInvariant(["-1e309", 5], -Infinity, { label: "-Infinity survives" });
-  await assertInvariant(["1e309", "-1e309", 1], NaN, { label: "both infinities → NaN" });
-  // a NaN COMPONENT (Infinity + -Infinity inside one row) propagates; it is not zeroed a second time
+test("B1 (VD-20): non-finite / unparseable cells are INVALID — flagged partial, never Infinity/NaN, never silently zero", async () => {
+  // "1e309" is not a finite exact amount: the cell is invalid, the metric is partial and the
+  // legacy number carries the valid cells only (Slice A toDailyMetric contract)
+  await assertInvariant(["1e309", 5, 7], 12, { label: "+1e309 invalid", partial: true });
+  await assertInvariant(["-1e309", 5], 5, { label: "-1e309 invalid", partial: true });
+  await assertInvariant(["1e309", "-1e309", 1], 1, { label: "both invalid", partial: true });
   const d = await metricsFor(legacyNode([rowOf(IDS[0], D, { sales: "1e309", deliveries: "-1e309" }), rowOf(IDS[1], D, { sales: 5 })]));
-  assert.ok(Number.isNaN(d[0].revenue));
+  assert.ok(Object.is(d[0].revenue, 5) && d[0].partial.revenue === true, "no NaN propagation; the invalid cells are flagged");
   const single = await metricsFor(legacyNode([rowOf(IDS[0], D, { sales: "1e309", deliveries: "-1e309" })]));
-  assert.ok(Number.isNaN(single[0].revenue), "singleton NaN passthrough");
-  // existing scalar coercions unchanged: '1,234' / 'skip' / null / '' → 0 ; true → 1 ; '0x10' → 16
+  assert.ok(Object.is(single[0].revenue, 0) && single[0].partial.revenue === true, "singleton: invalid cells, other_income 0 valid ⇒ partial");
+  // B1 coercions: '1,234' strictly grouped (VD-10) ⇒ 1234; 'skip'/true/'0x10' in revenue ⇒ invalid (VD-20); null/'' ⇒ absent
   const c = await metricsFor(legacyNode([rowOf(IDS[0], D, { sales: "1,234", deliveries: "skip", other_income: null }), rowOf(IDS[1], D, { sales: true, deliveries: "0x10", other_income: "" })]));
-  assert.equal(c[0].revenue, 17);
+  assert.equal(c[0].revenue, 1234); assert.equal(c[0].partial.revenue, true);
+  for (const x of [...d, ...single, ...c]) for (const k of ["revenue", "laborCost", "foodCost"]) assert.ok(Number.isFinite(x[k]), k + " is finite");
 });
-
-test("singleton passthrough and unique-date behaviour are byte-identical to R1 (per-row binary arithmetic untouched)", async () => {
-  // singleton: 0.1 + 0.2 INSIDE one row stays the existing 0.30000000000000004 (D-R2-1: no per-row recomputation)
+test("B1: within-row sums are exact too (VD-19); unique-date behaviour, window, latest date; ratios of exact totals", async () => {
+  // B1 VD-19: 0.1 + 0.2 INSIDE one row is now the exact 0.3 (the per-row binary sum is retired)
   const s = await metricsFor(legacyNode([rowOf(IDS[0], D, { sales: 0.1, deliveries: 0.2 })]));
-  assert.ok(Object.is(s[0].revenue, 0.30000000000000004));
-  // singleton supplier-map residual: .1+.2-.3 inside one row is a tiny binary residual (truthy) → NOT the food_cost fallback
+  assert.ok(Object.is(s[0].revenue, 0.3));
+  // B1 VD-16 (revised): the recorded supplier map (.1+.2-.3 = exact 0) wins over legacy food_cost 7
   const m = await metricsFor(legacyNode([rowOf(IDS[0], D, { supplier_payments: { a: 0.1, b: 0.2, c: -0.3 }, food_cost: 7 })]));
-  assert.ok(Object.is(m[0].foodCost, 0.1 + 0.2 - 0.3), "existing per-row residual preserved (not 7, not 0)");
+  assert.ok(Object.is(m[0].foodCost, 0), "exact zero, not 7 and not a binary residual");
   // distinct dates interleaved with the duplicate date; inclusive window; latest date; ratios from final sums
   const rows = [rowOf(IDS[0], "2026-08-09", { sales: 50, payroll: 5 }), rowOf(IDS[1], D, { sales: 100.1, payroll: 1.1, food_cost: 2.2 }), rowOf(uuidN(1), "2026-08-11", { sales: 70 }), rowOf(IDS[2], D, { sales: 200.2, payroll: 2.2, food_cost: 3.3 }), rowOf(uuidN(2), D, { sales: 300.3, payroll: 3.3, food_cost: 4.4 })];
   for (const node of [legacyNode(rows), legacyNode(rows.slice().reverse()), v2Node(rows), v2Node(rows.slice().reverse())]) {
     const d = await metricsFor(node);
     assert.deepEqual(d.map((x) => [x.date, x.revenue, x.laborCost, x.foodCost]), [["2026-08-09", 50, 5, 0], [D, Number("600.6"), Number("6.6"), Number("9.9")], ["2026-08-11", 70, 0, 0]]);
-    assert.equal(d[1].laborPct, (Number("6.6") / Number("600.6")) * 100, "ratio from the deterministic final sums, never averaged");
-    assert.equal(d[1].foodCostPct, (Number("9.9") / Number("600.6")) * 100);
+    // B1 VD-19: the ratio of the EXACT totals, one 10 dp conversion (never averaged)
+    assert.equal(d[1].laborPct, 1.0989010989, "6.6 / 600.6 × 100");
+    assert.equal(d[1].foodCostPct, 1.6483516484, "9.9 / 600.6 × 100");
+    assert.equal(d[0].foodCostPct, null, "08-09 has no purchase fact (VD-08: null, never 0)");
     assert.deepEqual([d[1].transactionCount, d[1].avgTicket], [0, 0]);
     const win = await metricsFor(node, D, D); assert.deepEqual(win.map((x) => x.date), [D]);
     assert.equal(await DM.getLatestDailyDate(T, B), "2026-08-11");
   }
-  // denominator zero / non-positive revenue → zero ratios (unchanged)
+  // B1 VD-08: zero / negative revenue ⇒ ratios null (never 0)
   const z = await metricsFor(legacyNode([rowOf(IDS[0], D, { sales: -5, payroll: 3 }), rowOf(IDS[1], D, { sales: 5, payroll: 4 })]));
-  assert.deepEqual([z[0].revenue, z[0].laborCost, z[0].laborPct, z[0].foodCostPct], [0, 7, 0, 0]);
+  assert.deepEqual([z[0].revenue, z[0].laborCost, z[0].laborPct, z[0].foodCostPct], [0, 7, null, null]);
   const neg = await metricsFor(legacyNode([rowOf(IDS[0], D, { sales: -5, payroll: 3 })]));
-  assert.deepEqual([neg[0].revenue, neg[0].laborPct], [-5, 0]);
+  assert.deepEqual([neg[0].revenue, neg[0].laborPct], [-5, null]);
   assert.deepEqual(await metricsFor(legacyNode([])), []);
 });
 

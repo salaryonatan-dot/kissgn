@@ -17,23 +17,19 @@
  */
 
 import { getDb } from "../firebase/admin.js";
-import { requireEntriesRows, requireRowForDate } from "../../lib/analytics/entriesReader.js";
+import { loadCanonicalInputs } from "../finance-server/canonicalInputs.js";
+import { canonicalDayRecord, toAnalyticsFinancials } from "../finance-server/canonicalMetrics.js";
+import type { AnalyticsFinBlock } from "../finance-server/canonicalMetrics.js";
 import { resolveOrefAreas, type RegionSelection } from "./regionResolver.js";
 import { buildInsights } from "../insights/buildInsights.js";
-import type { InsightsDailyDoc } from "../insights/types.js";
+import type { AnalyticsDailyInput, InsightsDailyDoc } from "../insights/types.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface DailyEntry {
-  date: string;
-  sales: number | string;
-  deliveries?: number | string;
-  food_cost?: number | string;
-  payroll?: number | string;
-  other_income?: number | string;
-  other_expense?: number | string;
-  hourly_payroll?: Record<string, number | string>;
-  supplier_payments?: Record<string, number | string>;
+// Non-financial view of a stored entry row: the embedded (legacy) exception metadata only.
+// Financial values are read exclusively through the canonical API (Financial Core B1).
+interface EntryExceptionFields {
+  date?: string;
   // Exception-day model (Formula Bible §7). Legacy entries omit these and are
   // treated as non-exception. An exception day still counts in ACTUAL revenue
   // but is excluded from forecast/anomaly baselines.
@@ -75,13 +71,17 @@ export interface AnalyticsDoc {
     set_by: string | null;
   } | null;
 
+  // Financial Core B1: a legacy numeric field is present ONLY when its canonical fact is
+  // complete (Actual, D-1); an unavailable fact is omitted, never written as a plausible 0.
+  // `payroll` = canonical daily labor (`payroll` + global calendar-day allocation).
   revenue: {
-    sales: number;
-    deliveries: number;
-    other_income: number;
-    total: number;
-    food_cost: number;
-    payroll: number;
+    sales?: number;
+    deliveries?: number;
+    other_income?: number;
+    total?: number;
+    food_cost?: number;
+    payroll?: number;
+    // presence of the business date (an explicit zero is an entered day).
     had_entry: boolean;
     // P0: explicit "this day actually had sales/revenue" signal. Distinct from
     // had_entry (which is also true for a supplier-payment-only day). Revenue
@@ -90,6 +90,9 @@ export interface AnalyticsDoc {
     // total>0 in the insight baselines (backward compatible).
     has_sales: boolean;
   };
+
+  // Additive canonical block (exact amounts, presence, provenance); old readers ignore it.
+  fin?: AnalyticsFinBlock;
 
   weather: {
     temp_avg: number | null;
@@ -161,17 +164,6 @@ function num(value: any): number {
   }
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
-}
-
-/**
- * Sum a supplier_payments-style map (supplierId -> amount) into one number.
- * Amounts are form inputs (strings) and may be "", "skip", "0", or otherwise
- * non-numeric; num() coerces every such value to 0. Safe on null/undefined or
- * a non-object (returns 0, never throws).
- */
-function sumSupplierPayments(obj: Record<string, number | string> | undefined | null): number {
-  if (!obj || typeof obj !== "object") return 0;
-  return Object.values(obj).reduce<number>((acc, v) => acc + num(v), 0);
 }
 
 function parseFirebaseData<T>(value: any, fallback: T): T {
@@ -382,30 +374,27 @@ export function resolveEffectiveException(
 export async function buildAnalyticsForBiz(
   tenantId: string,
   bizId: string,
-  date: string
+  date: string,
+  opts?: { nowMs?: number }
 ): Promise<AnalyticsDoc> {
   const db = getDb();
 
-  // Read entry + config in parallel.
-  const [entriesSnap, configSnap, businessSnap, exceptionSnap] = await Promise.all([
-    db.ref(`tenants/${tenantId}/biz:${bizId}:entries`).once("value"),
-    db.ref(`tenants/${tenantId}/biz:${bizId}:config`).once("value"),
+  // Financial Core B1: the entries node and the business config are read ONCE through the
+  // canonical server loader (shared dual-mode entries reader: a malformed node throws a
+  // typed EntriesStorageError before any external fetch or derived write, CTO D3). A
+  // business date carried by several rows is one canonical day (every row contributes; no
+  // winner row, VD-04). A duplicate row id throws a typed FinanceContractError. Both
+  // propagate: buildAnalyticsForAll records the business failure and continues.
+  const [inputs, businessSnap, exceptionSnap] = await Promise.all([
+    loadCanonicalInputs(db, tenantId, bizId, { site: "dailyBuilder", nowMs: opts?.nowMs, need: { config: true, fixed: false } }),
     db.ref(`tenants/${tenantId}/app/business`).once("value"),
     db.ref(`tenants/${tenantId}/entry_exceptions/${bizId}/${date}`).once("value"),
   ]);
   const structuredExceptionEnvelope = exceptionSnap.val() as
     { state?: { status?: string; reasonCode?: string; reasonText?: string; updatedAt?: number; updatedBy?: string } } | null;
 
-  // Server reader convergence: the entries node is read through the shared dual-mode
-  // reader (legacy `_v` | Storage V2 rows | absent) — never through the generic
-  // envelope parser. A malformed node throws a typed EntriesStorageError before any
-  // external fetch or derived write (CTO D3); a business date carried by more than
-  // one immutable row throws a typed EntriesAmbiguityError (duplicate_business_date)
-  // — there is no silent first/last/position winner (CTO D1). Both propagate to the
-  // caller: buildAnalyticsForAll records the business failure and continues.
-  const readerCtx = { tenantId, bizId, site: "dailyBuilder" };
-  const rows = requireEntriesRows(entriesSnap.val(), readerCtx) as unknown as DailyEntry[];
-  const config = parseFirebaseData<BusinessConfig>(configSnap.val(), {});
+  // Location / region selection only (non-financial): the decoded config when readable.
+  const config = (inputs.config.state === "present" ? inputs.config.value : {}) as BusinessConfig;
   const businesses = parseFirebaseData<Array<{ id: string; name: string }>>(
     businessSnap.val(),
     []
@@ -416,7 +405,23 @@ export async function buildAnalyticsForBiz(
     config.businessName ||
     "Unknown";
 
-  const todayEntry = (requireRowForDate(rows as unknown as Array<{ date?: string }>, date, readerCtx) as unknown as DailyEntry | null) ?? undefined;
+  // Embedded (legacy) exception metadata of this date's rows (non-financial).
+  const dateRows = (inputs.rows as EntryExceptionFields[]).filter((r) => !!r && typeof r === "object" && r.date === date);
+  const exceptionRows = dateRows.filter((r) => r.is_exception === true);
+  const explicitNonException = dateRows.some((r) => r.is_exception === false);
+  // DD-08: legacy exception metadata is used only when exactly ONE contributing row carries
+  // it and no row explicitly disagrees (no winner row among several; the core flags
+  // exception_rows_disagree). The structured envelope still wins.
+  const legacyEntry: EntryExceptionFields | undefined = exceptionRows.length === 1 && !explicitNonException ? exceptionRows[0] : undefined;
+  const effectiveException = resolveEffectiveException(structuredExceptionEnvelope, legacyEntry);
+  const exceptionsByDate: Record<string, boolean> | undefined =
+    effectiveException.origin === "structured" ? { [date]: effectiveException.isException } : undefined;
+
+  const record = canonicalDayRecord({ ...inputs, exceptionsByDate }, date);
+  const { revenue, fin } = toAnalyticsFinancials(record);
+  const isException = effectiveException.origin === "structured"
+    ? effectiveException.isException
+    : record.inActual ? record.day.exception.isException : exceptionRows.length > 0;
 
   // Resolve location with sane defaults (Hadera) until the user sets it
   // explicitly through the map picker in SetupWizard.
@@ -459,31 +464,10 @@ export async function buildAnalyticsForBiz(
     fetchOrefAlerts(orefAreas, date),
   ]);
 
-  const sales = num(todayEntry?.sales);
-  const deliveries = num(todayEntry?.deliveries);
-  const other_income = num(todayEntry?.other_income);
-  // Food cost lives in supplier_payments for most businesses; fall back to the
-  // legacy food_cost field only when there are no supplier payments. This
-  // mirrors the canonical mapping used elsewhere (dailyMetricsRepo, snapshot,
-  // frontend): sum(supplier_payments) || food_cost. OR (not +) => no double count.
-  const supplierFood = sumSupplierPayments(todayEntry?.supplier_payments);
-  const food_cost = supplierFood || num(todayEntry?.food_cost);
-  const payroll_manual = num(todayEntry?.payroll);
-  const hourly_payroll = todayEntry?.hourly_payroll
-    ? Object.values(todayEntry.hourly_payroll).reduce<number>(
-        (sum, v) => sum + num(v),
-        0
-      )
-    : 0;
-  const total_payroll = payroll_manual + hourly_payroll;
-
-  const hadEntry = !!todayEntry && (sales > 0 || deliveries > 0 || food_cost > 0);
+  // Presence of the business date (VD-14/23): an explicit zero is an entered day.
+  const hadEntry = revenue.had_entry;
   const calendar = buildCalendar(date);
   const war_day = classifyOperationalStatus(alerts, hadEntry);
-
-  // Structured-first effective exception (falls back to legacy embedded fields).
-  const effectiveException = resolveEffectiveException(structuredExceptionEnvelope, todayEntry);
-  const isException = effectiveException.isException;
 
   return {
     date,
@@ -499,24 +483,17 @@ export async function buildAnalyticsForBiz(
               set_at: effectiveException.state.updatedAt ?? null,
               set_by: effectiveException.state.updatedBy ?? null,
             }
-          : {
-              reason: todayEntry?.exception_reason ?? null,
-              note: todayEntry?.exception_note ?? null,
-              set_at: todayEntry?.exception_set_at ?? null,
-              set_by: todayEntry?.exception_set_by ?? null,
-            })
+          : legacyEntry
+            ? {
+                reason: legacyEntry.exception_reason ?? null,
+                note: legacyEntry.exception_note ?? null,
+                set_at: legacyEntry.exception_set_at ?? null,
+                set_by: legacyEntry.exception_set_by ?? null,
+              }
+            : { reason: null, note: null, set_at: null, set_by: null })
       : null,
-    revenue: {
-      sales,
-      deliveries,
-      other_income,
-      total: sales + deliveries + other_income,
-      food_cost,
-      payroll: total_payroll,
-      had_entry: hadEntry,
-      // Real sales/revenue occurred (not a supplier-payment-only day).
-      has_sales: sales > 0 || deliveries > 0 || other_income > 0,
-    },
+    revenue,
+    fin,
     weather,
     alerts,
     operational: { war_day },
@@ -614,8 +591,15 @@ export async function buildAndSaveInsights(
   todayDoc: AnalyticsDoc
 ): Promise<void> {
   try {
+    // A current-day / future-date doc is a non-Actual context doc (D-1, VD-30): the empty
+    // insights path, saved under the date so the browser readback contract holds.
+    if (todayDoc.fin && todayDoc.fin.inActual === false) {
+      const emptyDoc = buildInsights({ ...(todayDoc as unknown as AnalyticsDailyInput), revenue: { ...(todayDoc.revenue as unknown as AnalyticsDailyInput["revenue"]), had_entry: false } }, []);
+      await saveInsightsDoc(tenantId, bizId, emptyDoc);
+      return;
+    }
     const history = await loadAnalyticsHistory(tenantId, bizId, date, 45);
-    const insightsDoc = buildInsights(todayDoc, history);
+    const insightsDoc = buildInsights(todayDoc as unknown as AnalyticsDailyInput, history as unknown as AnalyticsDailyInput[]);
     await saveInsightsDoc(tenantId, bizId, insightsDoc);
   } catch (err) {
     console.error(

@@ -1,10 +1,14 @@
 // dailyMetricsRepo / laborRepo / purchasesRepo + fetchPlannedData routing (D3).
+// Financial Core B1: the repositories serve the canonical server API (one engine); every changed
+// expectation is annotated with its VD. The clock is injected (asOfBusinessDate 2026-09-29).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { compileServer, makeDb, installDb, seedBusiness, offlineFetch, T, B } from "../support/server-reader-harness.mjs";
 import { FIXTURES, asLegacy, asV2, noFallbackNode, malformedNodes, plain, uuid, row } from "../support/entries-fixtures.mjs";
 
 offlineFetch();
+const NOW = Date.UTC(2026, 8, 29, 9); const REAL_NOW = Date.now; Date.now = () => NOW;
+process.on("exit", () => { Date.now = REAL_NOW; });
 const srv = compileServer();
 const DM = await srv.import("src/repositories/analytics/dailyMetricsRepo.js");
 const LR = await srv.import("src/repositories/analytics/laborRepo.js");
@@ -27,19 +31,31 @@ test("equivalence: every fixture yields the same metrics from `_v` and from rows
     assert.deepEqual(a.daily.map((x) => x.date), a.daily.map((x) => x.date).slice().sort(), name + ": sorted by date");
   }
   await withNode(asLegacy(FIXTURES.F4_variety)); const v = await all();
-  // the repositories' own numeric coercion (`Number(v) || 0`) is UNCHANGED: "1,234" is not a
-  // number to them (unlike dailyBuilder's parser), so the supplier sum is 0 and food_cost applies
-  assert.equal(v.daily[0].revenue, 1250, "1000 + '250' + '' "); assert.equal(v.daily[0].foodCost, 90); assert.equal(v.daily[0].laborCost, 400); assert.equal(v.daily[1].foodCost, 300);
-  assert.deepEqual(v.purchases.map((p) => [p.date, p.supplierName, p.amount]), [["2026-08-03", "ספק אחד", 40]], "supplier names resolved from the (legacy) suppliers list; '1,234'/skip/empty/0 ignored as before");
-  assert.equal(v.latest, "2026-08-03"); assert.equal(v.labor[0].employeeCount, 2, "e1 + e2 hourly keys (e2 = 0 still a key) … plus manual payroll 0 → not counted");
+  // B1: the repositories use the ONE canonical engine (no private `Number(v) || 0` coercion).
+  // VD-10: "1,234" is a strictly grouped amount; VD-16 (revised): the recorded supplier map wins
+  // over legacy food_cost 90; VD-31: labor = `payroll` ("0") + global (none) — hourly_payroll not counted.
+  assert.equal(v.daily[0].revenue, 1250, "1000 + '250' + '' "); assert.equal(v.daily[0].foodCost, 1234); assert.equal(v.daily[0].laborCost, 0); assert.equal(v.daily[1].foodCost, 300);
+  // VD-08: a zero-revenue day has ratios null, never 0
+  assert.equal(v.daily[1].laborPct, null); assert.equal(v.daily[1].foodCostPct, null);
+  // DD-15 / VD-16/17: one purchase record per (date, source); "skip"/0 are present zeros; legacy source named
+  assert.deepEqual(v.purchases.map((p) => [p.date, p.source, p.supplierName, p.amount]), [
+    ["2026-08-01", "supplier", "ספק אחד", 1234], ["2026-08-01", "supplier", "ספק s2", 0], ["2026-08-01", "supplier", "ספק s4", 0],
+    ["2026-08-02", "legacy_food_cost", "legacy_food_cost", 300], ["2026-08-03", "supplier", "ספק אחד", 40]], "supplier names resolved from the (legacy) suppliers list");
+  assert.equal(v.latest, "2026-08-03");
+  assert.equal(v.labor[0].employeeCount, null, "B1: no hourly-key head count (hourly_payroll is not a labor source)"); assert.equal(v.labor[0].totalCost, 0);
   await withNode(asLegacy([])); assert.equal((await all()).latest, null); await withNode(null); assert.deepEqual((await all()).daily, []);
 });
 test("date window is inclusive; duplicate dates → ONE daily metric with every row counted (R1 / D1); labor & purchases keep every row", async () => {
   await withNode(asV2(FIXTURES.F3_dup));
   const daily = plain(await DM.getDailyMetrics(T, "2026-08-10", "2026-08-10", B));
-  assert.deepEqual(daily, [{ date: "2026-08-10", revenue: 600, laborCost: 6, laborPct: 1, foodCost: 60, foodCostPct: 10, transactionCount: 0, avgTicket: 0 }], "100+500 sales, 1+5 hourly payroll, 10+50 supplier payments — no winner");
-  const purchases = plain(await PR.getPurchaseMetrics(T, "2026-08-10", "2026-08-10", B)); assert.deepEqual(purchases.map((p) => p.amount).sort(), [10, 50]);
-  const labor = plain(await LR.getLaborMetrics(T, "2026-08-10", "2026-08-10", B)); assert.deepEqual(labor.map((l) => l.totalCost).sort(), [1, 5]);
+  const legacyShape = ({ date, revenue, laborCost, laborPct, foodCost, foodCostPct, transactionCount, avgTicket }) => ({ date, revenue, laborCost, laborPct, foodCost, foodCostPct, transactionCount, avgTicket });
+  // B1 VD-31: hourly_payroll (1 + 5) is not counted — labor = payroll "0" + global (none)
+  assert.deepEqual(daily.map(legacyShape), [{ date: "2026-08-10", revenue: 600, laborCost: 0, laborPct: 0, foodCost: 60, foodCostPct: 10, transactionCount: 0, avgTicket: 0 }], "100+500 sales, 10+50 supplier payments — no winner");
+  assert.equal(daily.length, 1); assert.equal(daily[0].presence.day, "present");
+  // DD-15: ONE purchase record per (date, source) — every contribution of the date is summed
+  const purchases = plain(await PR.getPurchaseMetrics(T, "2026-08-10", "2026-08-10", B)); assert.deepEqual(purchases.map((p) => [p.supplierId, p.amount]), [["s1", 60]]);
+  // B1: one labor record per canonical day (duplicate dates ⇒ one)
+  const labor = plain(await LR.getLaborMetrics(T, "2026-08-10", "2026-08-10", B)); assert.deepEqual(labor.map((l) => l.totalCost), [0]);
   await withNode(asLegacy(FIXTURES.F3_dup));
   assert.deepEqual(plain(await DM.getDailyMetrics(T, "2026-08-10", "2026-08-10", B)), daily, "identical under legacy");
   await withNode(asLegacy(FIXTURES.F3_dup.slice().reverse()));

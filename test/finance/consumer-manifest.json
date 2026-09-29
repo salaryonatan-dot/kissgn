@@ -271,36 +271,40 @@
    "file": "src/repositories/analytics/dailyMetricsRepo.ts",
    "sites": "getDailyMetrics",
    "slice": "B1",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATED (B1)",
    "presenceImpact": true,
-   "purchaseBasisImpact": true
+   "purchaseBasisImpact": true,
+   "servedBy": "src/finance-server/canonicalMetrics.ts"
   },
   {
    "id": "S02",
    "file": "src/repositories/analytics/dailyMetricsRepo.ts",
    "sites": "getLatestDailyDate",
    "slice": "B1",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATED (B1)",
    "presenceImpact": true,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "servedBy": "src/finance-server/canonicalMetrics.ts"
   },
   {
    "id": "S03",
    "file": "src/repositories/analytics/laborRepo.ts",
    "sites": "getLaborMetrics",
    "slice": "B1",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATED (B1)",
    "presenceImpact": true,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "servedBy": "src/finance-server/canonicalMetrics.ts"
   },
   {
    "id": "S04",
    "file": "src/repositories/analytics/purchasesRepo.ts",
    "sites": "getPurchaseMetrics",
    "slice": "B1",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATED (B1)",
    "presenceImpact": true,
-   "purchaseBasisImpact": true
+   "purchaseBasisImpact": true,
+   "servedBy": "src/finance-server/canonicalMetrics.ts"
   },
   {
    "id": "S05",
@@ -316,7 +320,26 @@
    "file": "src/analytics/dailyBuilder.ts",
    "sites": "buildAnalyticsForBiz/saveAnalyticsDoc",
    "slice": "B1",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATED (B1)",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true,
+   "servedBy": "src/finance-server/canonicalMetrics.ts"
+  },
+  {
+   "id": "SV1",
+   "file": "src/finance-server/canonicalInputs.ts",
+   "sites": "loadCanonicalInputs (the only server I/O seam and clock read of the financial read path)",
+   "slice": "B1",
+   "disposition": "POLICY (server API, new)",
+   "presenceImpact": true,
+   "purchaseBasisImpact": false
+  },
+  {
+   "id": "SV2",
+   "file": "src/finance-server/canonicalMetrics.ts",
+   "sites": "canonical server wrappers over src/policy/productFinance.ts; persisted-doc encoding",
+   "slice": "B1",
+   "disposition": "POLICY (server API, new)",
    "presenceImpact": true,
    "purchaseBasisImpact": true
   },
@@ -336,7 +359,8 @@
    "slice": "D",
    "disposition": "DERIVE/POLICY",
    "presenceImpact": true,
-   "purchaseBasisImpact": true
+   "purchaseBasisImpact": true,
+   "b1Note": "B1 compatibility guard only (omitted numeric fields are never NaN samples); rules/thresholds unchanged"
   },
   {
    "id": "S07c",
@@ -345,7 +369,8 @@
    "slice": "D",
    "disposition": "DERIVE",
    "presenceImpact": true,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "b1Note": "B1 compatibility guard only (omitted numeric fields are never NaN samples); rules/thresholds unchanged"
   },
   {
    "id": "S07d",
@@ -354,7 +379,8 @@
    "slice": "D",
    "disposition": "MIGRATE (types)",
    "presenceImpact": false,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "b1Note": "B1 compatibility guard only (omitted numeric fields are never NaN samples); rules/thresholds unchanged"
   },
   {
    "id": "S08",
@@ -408,7 +434,8 @@
    "slice": "D",
    "disposition": "MIGRATE",
    "presenceImpact": true,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "b1Note": "B1 adds isCanonicalFinanceError to the typed-error rethrow (DD-09); quality scores unchanged"
   },
   {
    "id": "S15",
@@ -666,10 +693,11 @@
    "id": "S44a",
    "file": "src/agent/types/analytics.ts",
    "sites": "DailyMetric shape",
-   "slice": "B1",
+   "slice": "D",
    "disposition": "MIGRATE (types)",
    "presenceImpact": false,
-   "purchaseBasisImpact": true
+   "purchaseBasisImpact": true,
+   "b1Note": "B1 returns CanonicalDailyMetric (a superset of DailyMetric); the type file is owned by D"
   },
   {
    "id": "S44b",
@@ -790,21 +818,24 @@
     "file": "src/repositories/analytics/dailyMetricsRepo.ts",
     "sites": ":47 rowComponents",
     "current": "laborCost = payroll + sumObj(hourly_payroll); no global",
-    "required": "daily labor = payroll + global calendar-day allocation (toDailyMetric)"
+    "required": "daily labor = payroll + global calendar-day allocation (toDailyMetric)",
+    "migrated_in": "B1"
    },
    {
     "id": "H6",
     "file": "src/repositories/analytics/laborRepo.ts",
     "sites": ":33-38",
     "current": "totalCost = payroll + hourly; employeeCount from hourly keys",
-    "required": "payroll only (+ global allocation where labor cost is meant)"
+    "required": "payroll only (+ global allocation where labor cost is meant)",
+    "migrated_in": "B1"
    },
    {
     "id": "H7",
     "file": "src/analytics/dailyBuilder.ts",
     "sites": ":472-478",
     "current": "total_payroll = payroll + hourly_payroll",
-    "required": "payroll only (+ global allocation)"
+    "required": "payroll only (+ global allocation)",
+    "migrated_in": "B1"
    },
    {
     "id": "H8",

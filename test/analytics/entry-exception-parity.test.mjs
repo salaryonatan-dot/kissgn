@@ -1,7 +1,7 @@
 // Parity: the TS analytics resolver (src/analytics/dailyBuilder.ts) must agree with
 // the JS canonical (lib/entryExceptions.js) on structured-first effective resolution.
 //   Run: node test/analytics/entry-exception-parity.test.mjs   (needs TSC_BIN or npm i)
-import { mkdtempSync, writeFileSync, copyFileSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, copyFileSync, cpSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -24,6 +24,10 @@ copyFileSync(join(REPO, "src", "analytics", "dailyBuilder.ts"), join(dir, "src",
 // server reader convergence: dailyBuilder imports the shared entries reader (pure ESM + .d.ts)
 mkdirSync(join(dir, "lib", "analytics"), { recursive: true });
 for (const f of ["entriesReader.js", "entriesReader.d.ts"]) copyFileSync(join(REPO, "lib", "analytics", f), join(dir, "lib", "analytics", f));
+// Financial Core B1: dailyBuilder reads through the canonical server API (src/finance-server),
+// which composes the pure core (finance/metrics/policy) and the revenue forecast.
+for (const d of ["finance", "metrics", "policy", "forecast", "finance-server"])
+  cpSync(join(REPO, "src", d), join(dir, "src", d), { recursive: true });
 writeFileSync(join(dir, "src", "firebase", "admin.js"), `export function getDb(){ return globalThis.__DB; }`);
 writeFileSync(join(dir, "src", "analytics", "regionResolver.js"), `export function resolveOrefAreas(){ return ["x"]; }`);
 const r = spawnSync("node", [TSC, "--module","esnext","--target","es2020","--moduleResolution","bundler","--skipLibCheck","--noEmitOnError","false",

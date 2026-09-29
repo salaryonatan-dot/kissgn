@@ -4,7 +4,7 @@
 // Firebase, Vercel, email, or provider calls — every dependency is stubbed.
 //   Run:  node test/insights/false-insights-p0.test.mjs
 //   (needs `npm install` for `typescript`, or set TSC_BIN)
-import { mkdtempSync, writeFileSync, copyFileSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, copyFileSync, cpSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -26,6 +26,10 @@ copyFileSync(join(REPO, "src", "analytics", "dailyBuilder.ts"), join(dir, "src",
 mkdirSync(join(dir, "lib", "analytics"), { recursive: true });
 for (const f of ["entriesReader.js", "entriesReader.d.ts"])
   copyFileSync(join(REPO, "lib", "analytics", f), join(dir, "lib", "analytics", f));
+// Financial Core B1: dailyBuilder reads through the canonical server API (src/finance-server),
+// which composes the pure core (finance/metrics/policy) and the revenue forecast.
+for (const d of ["finance", "metrics", "policy", "forecast", "finance-server"])
+  cpSync(join(REPO, "src", d), join(dir, "src", d), { recursive: true });
 // stubs for dailyBuilder's external imports (resolved by Node at runtime)
 writeFileSync(join(dir, "src", "firebase", "admin.js"), `export function getDb(){ return globalThis.__DB; }`);
 writeFileSync(join(dir, "src", "analytics", "regionResolver.js"), `export function resolveOrefAreas(){ return ["חדרה"]; }`);
@@ -169,7 +173,9 @@ function stubDb(entries){ return { ref:(p)=>({ once: async()=>({ val:()=> p.ends
 {
   globalThis.__DB = stubDb([{date:"2026-07-01", sales:100}]); // missing target date
   const doc = await daily.buildAnalyticsForBiz("t1","b1","2026-07-10");
-  ok("34: missing revenue entry => total 0, has_sales false (not a valid baseline day)", doc.revenue.total===0 && doc.revenue.has_sales===false && doc.revenue.had_entry===false);
+  // B1 (VD-23 / DD-04): a missing business date is not a plausible zero — the numeric
+  // fields are OMITTED (never 0), had_entry=false, has_sales=false; still not a baseline day.
+  ok("34: missing revenue entry => total omitted, has_sales false (not a valid baseline day)", !("total" in doc.revenue) && doc.revenue.has_sales===false && doc.revenue.had_entry===false && baselines.validDays([doc]).length===0);
 }
 
 // ---- CHANGE 1: revenue-drop TARGET eligibility (guard the target, not just baseline) ----

@@ -9,6 +9,11 @@
 // keyed B→A, including the case where the UUID lexical order is reversed relative to the
 // sales order; and (negative control) that the PRE-FIX repository let the detector's
 // verdict depend on nothing but that order.
+//
+// Financial Core B1: the series is the canonical server series. The CURRENT business day is
+// outside every Actual output (D-1, VD-30), so the duplicate "most recent day" is YESTERDAY
+// (the last completed day); labor = `payroll` (+ global) and `hourly_payroll` is never
+// counted (VD-31); ratios are ratios of exact totals (VD-19, 10 dp legacy conversion).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
@@ -30,7 +35,7 @@ const today = new Date().toISOString().slice(0, 10);
 const dayBefore = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
 const ID_LO = "11111111-1111-4111-8111-000000000001";   // lexically FIRST
 const ID_HI = "11111111-1111-4111-8111-000000000002";   // lexically LAST
-const past = (n) => Array.from({ length: n }, (_, i) => ({ id: `22222222-2222-4222-8222-${String(i + 1).padStart(12, "0")}`, date: dayBefore(i + 1), sales: 1000, deliveries: 0, other_income: 0, payroll: 100, supplier_payments: { s1: 300 } }));
+const past = (n) => Array.from({ length: n }, (_, i) => ({ id: `22222222-2222-4222-8222-${String(i + 1).padStart(12, "0")}`, date: dayBefore(i + 2), sales: 1000, deliveries: 0, other_income: 0, payroll: 100, supplier_payments: { s1: 300 } }));
 const dup = (date, aSales, bSales, { reverseUuid = false, extra = {} } = {}) => {
   const A = { id: reverseUuid ? ID_HI : ID_LO, date, sales: aSales, deliveries: 0, other_income: 0, payroll: 20, supplier_payments: { s1: 30 }, hourly_payroll: { e1: 5 }, ...extra };
   const Bv = { id: reverseUuid ? ID_LO : ID_HI, date, sales: bSales, deliveries: 0, other_income: 0, payroll: 40, supplier_payments: { s1: 70 }, hourly_payroll: { e1: 15 }, ...extra };
@@ -48,6 +53,8 @@ const representations = (history, A, Bv) => ({
 });
 const baseline = { valid: true, baselineType: "rolling", sampleSize: 15, values: Array.from({ length: 15 }, (_, i) => [900, 1000, 1100][i % 3]) };
 const plan = { intent: "anomaly_detection", metrics: ["daily", "labor", "purchases"], dimensions: [], filters: {}, timeRange: { start: dayBefore(28), end: today }, requiresBaseline: true, requiresComparison: false, requiresAnomalyDetection: true };
+// B1: the most recent COMPLETED business day (the current day is never Actual)
+const lastDay = dayBefore(1);
 const ctx = { tenantId: T, bizId: B, timezone: "Asia/Jerusalem", locale: "he", nowIso: new Date().toISOString(), userQuestion: "proactive" };
 const SUPPLIERS = { _v: JSON.stringify([{ id: "s1", name: "S1" }]) };
 async function seed(node) { const db = installDb(makeDb()); seedBusiness(db, { entries: node }); db.seed(`tenants/${T}/biz:${B}:suppliers`, SUPPLIERS); return db; }
@@ -57,20 +64,23 @@ test("dailyMetricsRepo: exactly one record per business date; duplicates aggrega
   const { A, B: Bv } = dup("2026-08-10", 100, 500);
   const single = { id: "33333333-3333-4333-8333-000000000001", date: "2026-08-11", sales: 700, deliveries: 0, other_income: 0, payroll: 0 };
   const expected = [
-    { date: "2026-08-10", revenue: 600, laborCost: 80, laborPct: (80 / 600) * 100, foodCost: 100, foodCostPct: (100 / 600) * 100, transactionCount: 0, avgTicket: 0 },
-    { date: "2026-08-11", revenue: 700, laborCost: 0, laborPct: 0, foodCost: 0, foodCostPct: 0, transactionCount: 0, avgTicket: 0 },
+    // B1 VD-31: labor = payroll 20 + 40 (hourly_payroll 5 + 15 not counted); VD-19: exact ratio, 10 dp
+    { date: "2026-08-10", revenue: 600, laborCost: 60, laborPct: 10, foodCost: 100, foodCostPct: 16.6666666667, transactionCount: 0, avgTicket: 0 },
+    // no purchase fact on 08-11: foodCostPct null (VD-08), never 0
+    { date: "2026-08-11", revenue: 700, laborCost: 0, laborPct: 0, foodCost: 0, foodCostPct: null, transactionCount: 0, avgTicket: 0 },
   ];
+  const legacyShape = (xs) => xs.map(({ date, revenue, laborCost, laborPct, foodCost, foodCostPct, transactionCount, avgTicket }) => ({ date, revenue, laborCost, laborPct, foodCost, foodCostPct, transactionCount, avgTicket }));
   for (const [name, node] of Object.entries(representations([single], A, Bv))) {
     await seed(node);
     const daily = plain(await DM.getDailyMetrics(T, "2026-08-01", "2026-08-31", B));
-    assert.deepEqual(daily, expected, name);
+    assert.deepEqual(legacyShape(daily), expected, name);
     assert.equal(await DM.getLatestDailyDate(T, B), "2026-08-11", name);
   }
   // reversed UUID lexical order (the 100-sales row now carries the LAST uuid) → identical
   const rev = dup("2026-08-10", 100, 500, { reverseUuid: true });
   for (const [name, node] of Object.entries(representations([single], rev.A, rev.B))) {
     await seed(node);
-    assert.deepEqual(plain(await DM.getDailyMetrics(T, "2026-08-01", "2026-08-31", B)), expected, "reversed uuid: " + name);
+    assert.deepEqual(legacyShape(plain(await DM.getDailyMetrics(T, "2026-08-01", "2026-08-31", B))), expected, "reversed uuid: " + name);
   }
   // unique dates are untouched by aggregation: one row → one record with the per-row formulas
   await seed(legacyNode([single, { ...single, id: "33333333-3333-4333-8333-000000000002", date: "2026-08-12", sales: "80", supplier_payments: { s1: "40" }, food_cost: "999" }]));
@@ -85,9 +95,9 @@ test("dailyMetricsRepo: exactly one record per business date; duplicates aggrega
 
 test("detector: identical FINAL result for every representation (A=100, B=500 on the most recent day)", async () => {
   const history = past(15);
-  const { A, B: Bv } = dup(today, 100, 500);
+  const { A, B: Bv } = dup(lastDay, 100, 500);
   const results = {};
-  for (const [name, node] of Object.entries({ ...representations(history, A, Bv), ...Object.fromEntries(Object.entries(representations(history, ...Object.values(dup(today, 100, 500, { reverseUuid: true })))).map(([k, v]) => ["reversed-uuid " + k, v])) })) {
+  for (const [name, node] of Object.entries({ ...representations(history, A, Bv), ...Object.fromEntries(Object.entries(representations(history, ...Object.values(dup(lastDay, 100, 500, { reverseUuid: true })))).map(([k, v]) => ["reversed-uuid " + k, v])) })) {
     await seed(node);
     const fetched = await AS.fetchPlannedData(plan, ctx);
     results[name] = plain(DET.detectDailyRevenueUnderperformance(fetched, baseline));
@@ -98,14 +108,14 @@ test("detector: identical FINAL result for every representation (A=100, B=500 on
   const r = results[names[0]];
   assert.ok(r && r.type === "revenue_underperformance", "the aggregated day underperforms the baseline");
   assert.equal(r.currentValue, 600, "currentValue is the sum of both rows — never 100 or 500");
-  assert.equal(r.periodEnd, today);
+  assert.equal(r.periodEnd, lastDay);
 });
 
 test("detector: the Codex reproduction (1 vs 1000 on the same day) — no representation can flip the verdict", async () => {
   const history = past(15);
   const out = new Set();
   for (const rev of [false, true]) {
-    const { A, B: Bv } = dup(today, 1, 1000, { reverseUuid: rev });
+    const { A, B: Bv } = dup(lastDay, 1, 1000, { reverseUuid: rev });
     for (const [, node] of Object.entries(representations(history, A, Bv))) {
       await seed(node);
       const fetched = await AS.fetchPlannedData(plan, ctx);
@@ -118,7 +128,7 @@ test("detector: the Codex reproduction (1 vs 1000 on the same day) — no repres
 });
 
 test("actual proactive flow (runForBiz): identical persisted insight and digest across legacy/V2 and both orders", async () => {
-  const history = past(20).filter((r) => r.date !== dayBefore(1));
+  const history = past(20);
   const { A, B: Bv } = dup(dayBefore(1), 100, 500);   // "yesterday" is the duplicate day (its only rows)
   const snapshots = {};
   for (const [name, node] of Object.entries(representations(history, A, Bv))) {
@@ -146,12 +156,12 @@ test("NEGATIVE CONTROL — the PRE-FIX repository (f00568d2) let the detector ve
   writeFileSync(prePath, js);
   const PRE = await import(pathToFileURL(prePath).href);
   const history = past(15);
-  const { A, B: Bv } = dup(today, 1, 1000);
+  const { A, B: Bv } = dup(lastDay, 1, 1000);
   const verdicts = {};
   for (const [name, node] of Object.entries({ "legacy [A,B]": legacyNode([...history, A, Bv]), "legacy [B,A]": legacyNode([...history, Bv, A]), "v2 (reader sorts (date,id): A first)": v2Node([Bv, A, ...history]) })) {
     await seed(node);
     const daily = plain(await PRE.getDailyMetrics(T, dayBefore(28), today, B));
-    assert.equal(daily.filter((d) => d.date === today).length, 2, name + ": pre-fix emitted two records for one day");
+    assert.equal(daily.filter((d) => d.date === lastDay).length, 2, name + ": pre-fix emitted two records for one day");
     verdicts[name] = plain(DET.detectDailyRevenueUnderperformance({ metrics: { daily } }, baseline));
   }
   assert.equal(verdicts["legacy [A,B]"], null, "pre-fix: last row 1000 → no anomaly");
@@ -160,6 +170,6 @@ test("NEGATIVE CONTROL — the PRE-FIX repository (f00568d2) let the detector ve
   // the R1 repository on the same nodes: one record, one verdict
   await seed(legacyNode([...history, Bv, A]));
   const fixed = plain(await DM.getDailyMetrics(T, dayBefore(28), today, B));
-  assert.equal(fixed.filter((d) => d.date === today).length, 1);
+  assert.equal(fixed.filter((d) => d.date === lastDay).length, 1);
   assert.equal(plain(DET.detectDailyRevenueUnderperformance({ metrics: { daily: fixed } }, baseline)), null);
 });

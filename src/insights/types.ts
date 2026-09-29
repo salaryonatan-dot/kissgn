@@ -29,8 +29,10 @@ export interface AnalyticsDailyInput {
     deliveries: number;
     other_income?: number;
     total: number;
-    food_cost: number; // aggregate supplier spend
-    payroll: number; // labor
+    // B1 (canonical server metrics): a component is written only when complete; an
+    // incomplete/invalid component is ABSENT (never a plausible 0).
+    food_cost?: number; // aggregate supplier spend
+    payroll?: number; // labor
     had_entry: boolean;
   };
   weather: {

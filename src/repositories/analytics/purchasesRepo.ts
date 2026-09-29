@@ -1,14 +1,11 @@
-import { bizEntriesRef } from "../../firebase/refs.js";
+import { getDb } from "../../firebase/admin.js";
 import { bizSuppliersRef } from "../../firebase/refs.js";
-import { requireEntriesRows } from "../../../lib/analytics/entriesReader.js";
-import type { PurchaseMetric } from "../../agent/types/analytics.js";
-
-function num(v: unknown): number {
-  return Number(v) || 0;
-}
+import { loadCanonicalInputs } from "../../finance-server/canonicalInputs.js";
+import { canonicalPurchaseRecords } from "../../finance-server/canonicalMetrics.js";
+import type { CanonicalPurchaseMetric } from "../../finance-server/canonicalMetrics.js";
 
 // The SUPPLIERS list is a legacy `_v` envelope that is NOT part of Storage V2; this
-// parser is kept for it alone. Entries go through the shared dual-mode reader below.
+// parser is kept for it alone (display names only). Entries go through the canonical API below.
 function parseLegacyListEnvelope(snapshot: any): any[] {
   const raw = snapshot.val();
   if (!raw) return [];
@@ -26,36 +23,17 @@ export async function getPurchaseMetrics(
   endDate: string,
   bizId: string,
   _branchId?: string
-): Promise<PurchaseMetric[]> {
-  // Get supplier names for lookup
+): Promise<CanonicalPurchaseMetric[]> {
+  // Supplier display names (the suppliers list is not financial data).
   const suppSnap = await bizSuppliersRef(tenantId, bizId).once("value");
   const suppliers = parseLegacyListEnvelope(suppSnap) as Array<{ id: string | number; name: string }>;
   const nameMap: Record<string, string> = {};
   for (const s of suppliers) {
-    nameMap[String(s.id)] = s.name;
+    if (s && s.id !== undefined && s.id !== null) nameMap[String(s.id)] = s.name;
   }
-
-  // Entries: shared dual-mode reader; every stored row contributes its payments;
-  // a malformed node throws a typed EntriesStorageError (no silent empty result).
-  const ref = bizEntriesRef(tenantId, bizId);
-  const snapshot = await ref.once("value");
-  const rows: any[] = requireEntriesRows(snapshot.val(), { tenantId, bizId, site: "purchasesRepo.getPurchaseMetrics" });
-
-  const results: PurchaseMetric[] = [];
-  for (const e of rows) {
-    if (!e.date || e.date < startDate || e.date > endDate) continue;
-    if (!e.supplier_payments || typeof e.supplier_payments !== "object") continue;
-    for (const [suppId, amount] of Object.entries(e.supplier_payments)) {
-      const val = num(amount);
-      if (val > 0) {
-        results.push({
-          date: e.date,
-          supplierName: nameMap[suppId] || `ספק ${suppId}`,
-          amount: val,
-        });
-      }
-    }
-  }
-
-  return results.sort((a, b) => a.date.localeCompare(b.date));
+  // Financial Core B1: one record per (present completed date, purchase source) — the
+  // aggregate of ALL contributions of that date and source (several per supplier per day are
+  // summed; explicit 0 / "skip" kept as 0; negatives (refunds) kept; legacy `food_cost` named).
+  const inputs = await loadCanonicalInputs(getDb(), tenantId, bizId, { site: "purchasesRepo.getPurchaseMetrics", need: { config: false, fixed: false } });
+  return canonicalPurchaseRecords(inputs, { from: startDate, to: endDate }, nameMap);
 }

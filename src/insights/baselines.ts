@@ -105,13 +105,14 @@ export function sameWeekdayRecentAvg(
 /** Mean of a ratio (numerator/total) over valid days with total>0. */
 export function trailingRatioAvg(
   history: AnalyticsDailyInput[],
-  pick: (d: AnalyticsDailyInput) => number,
+  pick: (d: AnalyticsDailyInput) => number | undefined,
   windowDays: number
 ): { avg: number | null; n: number } {
+  // A day whose numerator is absent (incomplete component, B1) is not a sample.
   const valid = validDays(history)
     .slice(-windowDays)
-    .filter((d) => d.revenue.total > 0);
-  const ratios = valid.map((d) => pick(d) / d.revenue.total);
+    .filter((d) => d.revenue.total > 0 && Number.isFinite(pick(d)));
+  const ratios = valid.map((d) => (pick(d) as number) / d.revenue.total);
   return { avg: mean(ratios), n: valid.length };
 }
 
