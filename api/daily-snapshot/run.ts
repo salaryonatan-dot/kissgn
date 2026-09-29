@@ -2,6 +2,7 @@ import { VercelRequest, VercelResponse } from "@vercel/node";
 import { getDb } from "../../src/firebase/admin.js";
 import { buildSnapshotForBiz, buildSnapshotForAll } from "../../src/snapshot/snapshotBuilder.js";
 import { sendSnapshotEmail } from "../../src/snapshot/snapshotEmail.js";
+import { requireCron, requireBizContext } from "../../lib/securityContext.js";
 
 function setCorsHeaders(req: VercelRequest, res: VercelResponse): void {
   const origin = (req.headers.origin as string) || "";
@@ -11,30 +12,6 @@ function setCorsHeaders(req: VercelRequest, res: VercelResponse): void {
   }
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-}
-
-function verifyAuth(req: VercelRequest): boolean {
-  // Check for Vercel cron header
-  const verelCron = req.headers["x-vercel-cron"];
-  if (verelCron) {
-    return true;
-  }
-
-  // Check for CRON_SECRET Bearer token
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret) {
-    console.warn("CRON_SECRET not configured");
-    return false;
-  }
-
-  const authHeader = req.headers.authorization || "";
-  const [scheme, token] = authHeader.split(" ");
-
-  if (scheme === "Bearer" && token === cronSecret) {
-    return true;
-  }
-
-  return false;
 }
 
 async function getOwnerEmail(tenantId: string): Promise<string | null> {
@@ -96,9 +73,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end();
   }
 
-  // Verify authentication for non-OPTIONS requests
-  if (!verifyAuth(req)) {
-    return res.status(401).json({ error: "Unauthorized" });
+  // Reject unsupported methods before any authorization or side effect.
+  if (req.method !== "GET" && req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  // GET = scheduled cron (all businesses): authorized ONLY by a server-verified
+  // `Authorization: Bearer ${CRON_SECRET}` (centralized requireCron).
+  // x-vercel-cron is never accepted.
+  if (req.method === "GET") {
+    try {
+      requireCron(req);
+    } catch (e: any) {
+      return res.status(e?.status ?? 401).json({ error: e?.msg ?? "unauthorized" });
+    }
+  }
+
+  // POST = manual single-business email: a VERIFIED owner/super_owner with
+  // canonical server-side tenant + business scope. requireBizContext rejects a
+  // caller-supplied tenant/biz the user does not own (fail-closed); no
+  // client-supplied role or membership can establish authorization.
+  let snapshotCtx: { tenantId: string; bizId: string; role: string } | null = null;
+  if (req.method === "POST") {
+    const rawTenantId = (req.body as { tenantId?: unknown } | undefined)?.tenantId;
+    const rawBizId = (req.body as { bizId?: unknown } | undefined)?.bizId;
+    try {
+      const ctx = await requireBizContext(req, {
+        tenantId: rawTenantId as string,
+        bizId: rawBizId as string,
+        mode: "write",
+      });
+      if (ctx.role !== "owner" && ctx.role !== "super_owner") {
+        return res.status(403).json({ error: "owner_role_required" });
+      }
+      snapshotCtx = { tenantId: ctx.tenantId, bizId: ctx.bizId, role: ctx.role };
+    } catch (e: any) {
+      return res.status(e?.status ?? 401).json({ error: e?.msg ?? "unauthorized" });
+    }
   }
 
   try {
@@ -171,20 +182,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // POST = manual trigger for single business
-    if (req.method === "POST") {
-      const { tenantId, bizId } = req.body;
-
-      if (!tenantId || !bizId) {
-        return res.status(400).json({ error: "Missing tenantId or bizId" });
-      }
-      if (tenantId === bizId) {
-        return res.status(400).json({
-          error: "Invalid tenantId/bizId pair",
-          tenantId,
-          bizId,
-        });
-      }
+    // POST = manual trigger for single business (authorized above).
+    if (req.method === "POST" && snapshotCtx) {
+      const { tenantId, bizId } = snapshotCtx;
 
       const snapshot = await buildSnapshotForBiz(tenantId, bizId);
       if (isUnknownBusinessName(snapshot.bizName)) {
