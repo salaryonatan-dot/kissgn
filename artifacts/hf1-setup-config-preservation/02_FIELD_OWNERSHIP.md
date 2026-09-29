@@ -1,5 +1,7 @@
 # 02 — Field Ownership of `biz:{bizId}:config`
 
+> **Superseded in part by R1** (successor of `95d20d86`): the edit save is now an atomic config transaction plus a destination-bound write sequence — see `08_R1_REMEDIATION.md`, `09_R1_FINDINGS_MAP.md`, `10_R1_TEST_MATRIX_AND_RESULTS.md`, `11_R1_RELEASE_MANIFEST_DELTA.md`. The original candidate is not a deployable identity.
+
 Derived from every writer and reader in the repository (`index.html`, `src/**`, `api/**`, `lib/**`). "Owned" = written by the Setup Wizard's `cfg` literal (`finish`, :3978-3994 at the base). The ownership list is asserted by a test against the real `finish` output.
 
 | Field | Owned by Setup Wizard | Writer(s) | Readers | Write behaviour after HF-1 | Preserve on edit |

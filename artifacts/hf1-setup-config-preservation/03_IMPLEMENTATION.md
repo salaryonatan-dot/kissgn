@@ -1,5 +1,7 @@
 # 03 — Implementation
 
+> **Superseded in part by R1** (successor of `95d20d86`): the edit save is now an atomic config transaction plus a destination-bound write sequence — see `08_R1_REMEDIATION.md`, `09_R1_FINDINGS_MAP.md`, `10_R1_TEST_MATRIX_AND_RESULTS.md`, `11_R1_RELEASE_MANIFEST_DELTA.md`. The original candidate is not a deployable identity.
+
 ## Contract
 `newConfig = existingStoredConfig + (wizard-owned keys, as the wizard produced them)`. Unrelated keys are carried over unchanged (same JSON values). No key is ever deleted. No business rule is added.
 

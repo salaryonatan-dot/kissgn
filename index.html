@@ -1170,7 +1170,102 @@ function mergeSetupWizardConfig(existing, wizardCfg) {
   }
   return next;
 }
-window.MarjinConfigMerge = Object.freeze({ SETUP_WIZARD_OWNED_KEYS, SETUP_WIZARD_TARGET_KEYS, parseStoredBusinessConfig, mergeSetupWizardConfig });
+// ── HF-1 R1: atomic, destination-bound Setup Wizard edit save ─────────────────
+// The config document is ONE RTDB node (`{_v: "<json>"}`) shared by several writers,
+// so the edit save merges the wizard-owned keys INSIDE an RTDB transaction
+// (window.storage.mutateFor = runTransaction at the exact node): the callback decodes
+// and re-merges against the CURRENT remote value on every (re)run, so a concurrent
+// employee / petty-cash / unknown-key change is never reverted. Every later write is
+// bound to ONE immutable {tenantId, bizId, gen} context through the explicit-tenant
+// transport, with a liveness + operation-ownership check before every dispatch and
+// after every await. The config transaction is the first remote side effect; the
+// sequence stops at the first failure or stale boundary; nothing is rolled back.
+// Raw config node → { ok, config, envelope } | { ok:false, reason }. Only a confirmed
+// absent node is an empty base; a node that cannot be decoded is never replaced.
+function decodeRawBusinessConfigNode(raw) {
+  if (raw === null || raw === undefined) return { ok: true, config: null, envelope: null };
+  if (!isPlainConfigObject(raw)) return { ok: false, reason: "node_not_an_object" };
+  if (!Object.prototype.hasOwnProperty.call(raw, "_v")) return { ok: true, config: { ...raw }, envelope: null }; // legacy direct config object
+  if (typeof raw._v !== "string") return { ok: false, reason: "v_not_a_string" };
+  let parsed;
+  try { parsed = JSON.parse(raw._v); } catch (_) { return { ok: false, reason: "v_unparseable" }; }
+  if (!isPlainConfigObject(parsed)) return { ok: false, reason: "v_not_an_object" };
+  return { ok: true, config: parsed, envelope: raw };
+}
+// Deep copy of the submitted wizard intent (plain objects / arrays; `undefined` kept).
+function cloneWizardIntent(v) {
+  if (Array.isArray(v)) return Object.freeze(v.map(cloneWizardIntent));
+  if (isPlainConfigObject(v)) { const o = {}; for (const k of Object.keys(v)) o[k] = cloneWizardIntent(v[k]); return Object.freeze(o); }
+  return v;
+}
+// The PURE transaction callback: no I/O, clock, randomness, logging or UI; the same
+// input always yields the same output; `undefined` aborts (malformed current node).
+function makeSetupWizardConfigTxn(intent) {
+  return function setupWizardConfigTxn(rawCurrent) {
+    try {
+      const d = decodeRawBusinessConfigNode(rawCurrent);
+      if (!d.ok) return undefined;
+      const json = JSON.stringify(mergeSetupWizardConfig(d.config, intent));
+      return d.envelope ? { ...d.envelope, _v: json } : { _v: json };
+    } catch (_) {
+      return undefined;
+    }
+  };
+}
+const setupSaveErrorReason = (e) => {
+  const m = String((e && (e.code || e.message)) || "");
+  if (/maxretry/i.test(m)) return "retry_exhausted";
+  if (/permission/i.test(m)) return "permission_denied";
+  return "write_failed";
+};
+// io: { selection:{isLive}, isCurrentOp(token), mutateFor(tenantId,key,fn), setFor(tenantId,key,valueStr) }
+// req: { ctx:{tenantId,bizId,gen}, token, wizardCfg, suppliers, fixed, businesses }
+// → { status:"committed", config, businesses } | { status:"stale", stage, wrote } |
+//   { status:"failed", stage, reason, wrote }   (`wrote` = remote writes already committed)
+async function runSetupWizardEditSave(io, req) {
+  const src = req && req.ctx;
+  const ctx = Object.freeze({ tenantId: src && src.tenantId, bizId: src && src.bizId, gen: src && src.gen });
+  const token = req && req.token;
+  const wrote = [];
+  if (typeof ctx.tenantId !== "string" || !ctx.tenantId || typeof ctx.bizId !== "string" || !ctx.bizId) return { status: "failed", stage: "context", reason: "missing_identity", wrote };
+  if (!isPlainConfigObject(req.wizardCfg)) return { status: "failed", stage: "context", reason: "wizard_malformed", wrote };
+  const live = () => !!io.selection.isLive(ctx) && !!io.isCurrentOp(token);
+  const configKey = "biz:" + ctx.bizId + ":config";
+  const suppliersKey = "biz:" + ctx.bizId + ":suppliers";
+  const fixedKey = "biz:" + ctx.bizId + ":fixed";
+  const intent = cloneWizardIntent(req.wizardCfg);
+  const suppliersStr = JSON.stringify(req.suppliers);
+  const fixedStr = req.fixed ? JSON.stringify(req.fixed) : null;
+  const bizList = Array.isArray(req.businesses) ? req.businesses.slice() : [];
+  // 1. config: the atomic merge is the FIRST remote side effect
+  if (!live()) return { status: "stale", stage: "config", wrote };
+  let res;
+  try { res = await io.mutateFor(ctx.tenantId, configKey, makeSetupWizardConfigTxn(intent)); }
+  catch (e) { return io.selection.isLive(ctx) && io.isCurrentOp(token) ? { status: "failed", stage: "config", reason: setupSaveErrorReason(e), wrote } : { status: "stale", stage: "config", wrote }; }
+  if (!live()) return { status: "stale", stage: "config", wrote: res && res.committed === true ? ["config"] : wrote };
+  const snapVal = res && res.snapshot && typeof res.snapshot.val === "function" ? res.snapshot.val() : undefined;
+  if (!res || res.committed !== true) {
+    const d = snapVal === undefined ? null : decodeRawBusinessConfigNode(snapVal);
+    return { status: "failed", stage: "config", reason: d && !d.ok ? "malformed_config" : "not_committed", wrote };
+  }
+  wrote.push("config");
+  const committed = decodeRawBusinessConfigNode(snapVal);
+  if (!committed.ok || !committed.config) return { status: "failed", stage: "config", reason: "commit_unreadable", wrote };
+  const config = committed.config;
+  const businesses = bizList.map((b) => (b && b.id === ctx.bizId ? { ...b, name: config.businessName || b.name } : b));
+  // 2–4. business list, suppliers, optional fixed costs — sequential, stop at the first failure / stale boundary
+  const steps = [["app-businesses", "app-businesses", JSON.stringify(businesses)], ["suppliers", suppliersKey, suppliersStr]];
+  if (fixedStr !== null) steps.push(["fixed", fixedKey, fixedStr]);
+  for (const [stage, key, value] of steps) {
+    if (!live()) return { status: "stale", stage, wrote };
+    try { await io.setFor(ctx.tenantId, key, value); }
+    catch (e) { return io.selection.isLive(ctx) && io.isCurrentOp(token) ? { status: "failed", stage, reason: setupSaveErrorReason(e), wrote } : { status: "stale", stage, wrote }; }
+    wrote.push(stage);
+    if (!live()) return { status: "stale", stage, wrote };
+  }
+  return { status: "committed", config, businesses, wrote };
+}
+window.MarjinConfigMerge = Object.freeze({ SETUP_WIZARD_OWNED_KEYS, SETUP_WIZARD_TARGET_KEYS, parseStoredBusinessConfig, mergeSetupWizardConfig, decodeRawBusinessConfigNode, makeSetupWizardConfigTxn, runSetupWizardEditSave });
 // ── P0-DATA-01: canonical daily-entries identity & upsert helpers ──────────────
 // Identity for a daily entry is (tenant, business, business-date). Tenant+business
 // scope is carried by the storage path (tenants/{tid}/biz:{bizId}:entries); inside
@@ -4556,6 +4651,7 @@ function PilotDashboard() {
   const selectionCtrlRef = useRef(null);
   if (!selectionCtrlRef.current) selectionCtrlRef.current = window.MarjinSaveLifecycle.createSelectionController();
   const saveNavTimerRef = useRef(null); // delayed success-navigation timer (selection-bound)
+  const setupEditOpRef = useRef(null); // HF-1 R1: the Setup Wizard edit save that currently owns later writes + UI
   const captureSelectionCtx = () => selectionCtrlRef.current.capture();
   const isSelectionLive = (ctx) => selectionCtrlRef.current.isLive(ctx);
   // R4: mandatory-context domain-specific persistence, wired to the explicit-tenant
@@ -5960,41 +6056,40 @@ function PilotDashboard() {
       initialFixed={fixedList}
       onComplete={async (wizardCfg, sups, fixed) => {
         // EDIT existing business — do NOT create new bizId
-        const bizId = currentBizId;
-        // HF-1: the wizard owns only some config keys. Merge them into the CURRENT
-        // stored config (fresh read) so employees, petty-cash categories and every
-        // other setting survive. An unreadable or malformed stored config is never
-        // replaced: nothing is written and the wizard stays open.
+        // HF-1 R1: the wizard owns only some config keys. They are merged into the
+        // CURRENT remote config inside an RTDB transaction (re-merged on every retry),
+        // and the whole save is bound to ONE captured {tenantId, bizId, gen} through
+        // explicit-tenant writes, with liveness + ownership checked before every write
+        // and after every await. Local state changes only after the full sequence
+        // succeeds; a failure or partial save keeps the wizard open (retry converges).
         const ctx = captureSelectionCtx();
-        let storedConfig = null;
+        const token = {};
+        setupEditOpRef.current = token;
+        if (!ctx || ctx.bizId !== currentBizId || !isSelectionLive(ctx)) return;
+        let out;
         try {
-          const got = await window.storage.get(`biz:${bizId}:config`, true);
-          storedConfig = got ? got.value : null;
-        } catch(e) {
-          if (!e || e.message !== "not found") {
-            console.error("[setup] config read failed:", e && e.message);
-            alert("טעינת הגדרות העסק נכשלה — השינויים לא נשמרו. נסה שוב.");
-            return;
-          }
+          out = await window.MarjinConfigMerge.runSetupWizardEditSave({
+            selection: { isLive: (c) => isSelectionLive(c) },
+            isCurrentOp: (t) => setupEditOpRef.current === t,
+            mutateFor: (tenantId, key, fn) => window.storage.mutateFor(tenantId, key, fn),
+            setFor: (tenantId, key, value) => window.storage.setFor(tenantId, key, value, true),
+          }, { ctx, token, wizardCfg, suppliers: sups, fixed, businesses });
+        } catch (_) {
+          out = { status: "failed", stage: "unexpected", reason: "unexpected_error" };
         }
-        if (!isSelectionLive(ctx)) return;
-        const decoded = window.MarjinConfigMerge.parseStoredBusinessConfig(storedConfig);
-        if (!decoded.ok) {
-          console.error("[setup] stored config is malformed:", decoded.reason);
-          alert("הגדרות העסק השמורות פגומות — השינויים לא נשמרו כדי לא למחוק נתונים קיימים.");
+        if (out.status === "stale" || !isSelectionLive(ctx) || setupEditOpRef.current !== token) return;
+        if (out.status !== "committed") {
+          console.error("[setup] save failed:", out.stage, out.reason);
+          alert(out.reason === "malformed_config"
+            ? "הגדרות העסק השמורות פגומות — השינויים לא נשמרו כדי לא למחוק נתונים קיימים."
+            : "השמירה לא הושלמה — השינויים לא נשמרו במלואם. האשף נשאר פתוח, נסה לשמור שוב.");
           return;
         }
-        const cfg = window.MarjinConfigMerge.mergeSetupWizardConfig(decoded.config, wizardCfg);
-        setBusinessConfig(cfg);
+        setupEditOpRef.current = null;
+        setBusinessConfig(out.config);
+        setBusinesses(out.businesses);
         setSuppliers(sups);
         if(fixed) setFixedList(fixed);
-        // Update business name in list
-        const updatedBizList = businesses.map(b => b.id===bizId ? {...b, name:cfg.businessName||b.name} : b);
-        setBusinesses(updatedBizList);
-        try { await window.storage.set("app-businesses", JSON.stringify(updatedBizList), true); } catch(e){ console.error(e); }
-        try { await window.storage.set(`biz:${bizId}:config`, JSON.stringify(cfg), true); } catch(e){ console.error(e); }
-        try { await window.storage.set(`biz:${bizId}:suppliers`, JSON.stringify(sups), true); } catch(e){ console.error(e); }
-        if(fixed) { try { await window.storage.set(`biz:${bizId}:fixed`, JSON.stringify(fixed), true); } catch(e){ console.error(e); } }
         setShowSetup(false);
         setSetupDone(true);
       }}

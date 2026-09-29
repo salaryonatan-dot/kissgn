@@ -1,5 +1,7 @@
 # 07 — Review Guide (Codex focused review of HF-1)
 
+> **Superseded in part by R1** (successor of `95d20d86`): the edit save is now an atomic config transaction plus a destination-bound write sequence — see `08_R1_REMEDIATION.md`, `09_R1_FINDINGS_MAP.md`, `10_R1_TEST_MATRIX_AND_RESULTS.md`, `11_R1_RELEASE_MANIFEST_DELTA.md`. The original candidate is not a deployable identity.
+
 Review scope: one commit on `claude/hf1-setup-config-preservation`, parent `05bf5a59`.
 
 1. `git show --stat HEAD` — expect `index.html` (+71/−1), one new test file, this artifacts folder. Nothing else.

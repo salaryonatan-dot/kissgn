@@ -1,0 +1,11 @@
+# 09 — Codex findings → R1 fixes
+
+| Finding | Severity | R1 fix | Proof |
+|---|---|---|---|
+| **HF1-F1** config update is a non-atomic stale whole-node replacement (`get` → merge → await → blind `set`) | P0 | Config merged inside `window.storage.mutateFor` (RTDB `runTransaction`, `applyLocally:false`) at the exact node; decode + allowlist merge on **every** callback invocation against the value RTDB supplies; no pre-transaction snapshot; malformed ⇒ abort; `committed !== true` ⇒ failure; committed value read from the result snapshot | R1-01…R1-15, R1-28; negative control: the pre-R1 handler loses the concurrently added employee (R1-01 fails at `95d20d86`) |
+| **HF1-F2** the stale-selection guard does not span the mutation sequence (one check; later writes via mutable-tenant `set`) | P1 | One frozen `{tenantId, bizId, gen}` + per-submission token; explicit-tenant `mutateFor` / `setFor` only; liveness + ownership immediately before every dispatch and after every await; stop at the first stale boundary; config first; no optimistic local state | R1-16…R1-24, R1-26, R1-28 (log-level proof of the check pattern); negative control: at `95d20d86` writes continue after the selection changes (R1-19/21/23 fail) |
+| **HF1-F3** security narrative overstated / conflated the config authorization | P2 | `05_SECURITY_REVIEW.md` rewritten path by path: the wizard node `biz:{bizId}:config` is governed by `$dataKey` (read: member + owner/super_owner or `biz_access`; write: owner/super_owner or manager + `biz_access`); the literal `tenants/{tenantId}/config` rule is separate and not the wizard path. No Rules change | doc 05; `database.rules.json` byte-identical |
+| Partial-write containment (contract 03) | — | Config first; sequential later writes; stop on first failure; visible failure; wizard open; no rollback; idempotent retry | R1-25 |
+| Create / first-business paths unchanged (contract 00 §5) | — | Not touched | R1-27, tests 11, 12 |
+
+Contract decision table honoured: mechanism `mutateFor`; non-owned concurrent changes survive; wizard-intent-wins for owned keys; stale ⇒ abort the remaining mutation; no cross-node atomicity; **no Rules change**; 28 mandatory scenarios; no owner decision reopened.

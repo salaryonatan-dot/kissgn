@@ -1,15 +1,27 @@
-# 05 — Security Review
+# 05 — Security Review (corrected in R1 — Codex HF1-F3)
 
+The original HF-1 text described the wizard's config authorization loosely as "owner / super_owner, or manager with `biz_access`" and did not distinguish the two different config nodes. The corrected, path-by-path statement follows. `database.rules.json` is **not** changed by HF-1 or R1.
+
+## The actual Setup Wizard node: `tenants/{tenantId}/biz:{bizId}:config`
+It is a business-prefixed key directly under `tenants/{tenantId}` and is governed by the **`$dataKey`** branch (the `$dataKey.matches(/^biz:[^:]+:config$/)` arm), not by the literal `config` child:
+
+| Operation | Current Rules for `biz:{bizId}:config` |
+|---|---|
+| read | authenticated **and** tenant member (`members/{uid} === true`) **and** (role `owner` / `super_owner` **or** `biz_access/{bizId}/{uid} === true`) |
+| write | authenticated **and** (role `owner` / `super_owner` **or** (role `manager` **and** `biz_access/{bizId}/{uid} === true`)) |
+
+So `biz_access` is enforced for a manager on the wizard's config write, owner / super_owner bypass it, and read additionally requires membership. An RTDB transaction needs both read and write: a role record without the matching membership could pass the write expression but cannot run the transaction — that inconsistent account state fails closed (typed save failure, no fallback write).
+
+## The separate literal node: `tenants/{tenantId}/config`
+A different, non-business-prefixed node with its own explicit rule (read: tenant member; write: tenant member or owner / super_owner / manager; `_v` string < 4096). It does **not** consult `biz_access`. It is not the Setup Wizard's node and its rule must not be cited for `biz:{bizId}:config`; conversely the business-prefixed rule must not be generalised to it. HF-1 / R1 neither read nor write it. (Codex HF1-F3 cited this literal rule for the wizard path; the contract's path analysis — reproduced above — is the accurate one.)
+
+## R1 questions
 | Question | Finding |
 |---|---|
-| New write path? | No. Same `window.storage.set("biz:{bizId}:config", …, true)` call on the same key, by the same UI action. |
-| New write capability? | No. The Rules already let the writer replace the whole `_v` document (owner / super_owner, or manager with `biz_access`). HF-1 only changes the content to "stored + owned edits". |
-| Could a user persist fields they cannot write? | No. Preserved content comes from a read of the same node the user is about to write, and the Rules validate the whole document on write exactly as before. There is no field-level Rule to bypass (the document is one opaque `_v` string). |
-| Could a user read data they could not read before? | No. The new read is `biz:{bizId}:config`, which the same UI already reads live via `sub()` for the selected business (`members` + owner/super_owner or `biz_access`). A principal that can write but not read (none in the current Rules) would get a read error ⇒ **fail-closed**, nothing written. |
-| Tenant / business scoping | Unchanged: the key is built from the currently selected `bizId` under `tenants/{currentTenant}` by the storage layer. `captureSelectionCtx()` / `isSelectionLive()` abort the save if the tenant/business selection changes during the read, so a merged document is never written to another business. |
-| Role checks, `biz_access`, `members` | Untouched. No Rules file changed. No role, membership or access mutation. |
-| Failure behaviour | Stricter than before: read error or malformed stored document ⇒ no write (previously a blind overwrite). |
-| Injection / prototype pollution | Merge copies only 11 fixed owned keys and 3 fixed `targets` sub-keys; stored JSON is only spread into a fresh object and serialised again; no dynamic key from input is assigned. |
-| Secrets / Production | None read, none changed. No Production access. |
-
-Conflict with write authorization: **none found** — preserving unknown fields does not require any permission the writer did not already have.
+| New path? | No. The config transaction addresses the exact node the old blind `set` wrote (`tenants/{tenantId}/biz:{bizId}:config`); the later writes address the same `app/business`, `biz:{bizId}:suppliers`, `biz:{bizId}:fixed` nodes. |
+| New capability? | No. A transaction reads and writes the same node; authorised, internally consistent wizard principals already hold both. The node keeps the `{_v: string}` envelope (plus any sibling it already had). |
+| Rules change | **No** (`RULES_CHANGE_REQUIRED: NO`). |
+| Destination binding | Every write uses the explicit-tenant transport (`mutateFor` / `setFor`) with the tenant and keys taken once from the captured `{tenantId, bizId, gen}`; the mutable-tenant `get` / `set` are no longer used on the edit path, so a tenant switch cannot retarget a write. |
+| Failure behaviour | Permission denied, missing membership, revoked `biz_access`, read / network failure, retry exhaustion, abort or `committed:false` ⇒ terminal save failure, no later write, no fallback. Client checks are not authorization. |
+| `biz_access`, `members`, roles, secrets | Untouched. No grant, no mutation, no credential. |
+| Data exposure in logs | Failures log only a stage and a typed reason; raw config content is never logged. |

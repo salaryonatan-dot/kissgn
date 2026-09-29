@@ -1,5 +1,7 @@
 # 01 — Reproduction (before any runtime change)
 
+> **Superseded in part by R1** (successor of `95d20d86`): the edit save is now an atomic config transaction plus a destination-bound write sequence — see `08_R1_REMEDIATION.md`, `09_R1_FINDINGS_MAP.md`, `10_R1_TEST_MATRIX_AND_RESULTS.md`, `11_R1_RELEASE_MANIFEST_DELTA.md`. The original candidate is not a deployable identity.
+
 ## Method
 `test/dashboard/setup-config-preservation.test.mjs` executes the **production text** of `index.html` (extracted by unique anchor + brace matching, evaluated in `node:vm`):
 - `SetupWizard` `finish` (builds the wizard `cfg` and calls `onComplete`),

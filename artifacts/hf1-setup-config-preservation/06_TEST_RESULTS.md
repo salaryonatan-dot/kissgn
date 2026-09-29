@@ -1,5 +1,7 @@
 # 06 — Test Results
 
+> **Superseded in part by R1** (successor of `95d20d86`): the edit save is now an atomic config transaction plus a destination-bound write sequence — see `08_R1_REMEDIATION.md`, `09_R1_FINDINGS_MAP.md`, `10_R1_TEST_MATRIX_AND_RESULTS.md`, `11_R1_RELEASE_MANIFEST_DELTA.md`. The original candidate is not a deployable identity.
+
 | Check | Cloud (`/home/claude/hf1`) | Mac worktree |
 |---|---|---|
 | Focused `test/dashboard/setup-config-preservation.test.mjs` at base | 4 pass / 19 fail (reproduction) | — |
