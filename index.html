@@ -1125,6 +1125,52 @@ function normalizeDailyEntryRevenueForVat(entry) {
   };
 }
 window.MarjinVat = Object.freeze({ VAT_RATE, grossToNetAmount, normalizeDailyEntryRevenueForVat });
+// ── HF-1: Setup Wizard config preservation ────────────────────────────────────
+// `biz:{bizId}:config` is ONE document written by several screens (Setup Wizard,
+// Employees, petty-cash categories, …). The Setup Wizard owns ONLY the keys below.
+// Editing a business merges those keys into the CURRENT stored config; every other
+// key (employees, pettyCashCategories, legacy region/checklist settings, keys added
+// by future screens) is kept exactly as stored. A stored config that cannot be
+// decoded is never replaced. No business rule is added: the owned values are the
+// wizard's own values, unchanged.
+const SETUP_WIZARD_OWNED_KEYS = Object.freeze(["businessName", "rentType", "rentPct", "rentFixed", "hasRoyalty", "royaltyPct", "targets", "lat", "lon", "region_ids", "subregion_ids"]);
+const SETUP_WIZARD_TARGET_KEYS = Object.freeze(["salesGrowthPct", "foodCostPct", "laborCostPct"]);
+// Location keys are written only once picked (or when already stored): an untouched
+// empty location is not added to a config that never had one.
+const SETUP_WIZARD_OPTIONAL_KEYS = Object.freeze(["lat", "lon", "region_ids", "subregion_ids"]);
+const isPlainConfigObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+// `stored` is null when the node does not exist, else the `window.storage.get` value.
+function parseStoredBusinessConfig(stored) {
+  if (stored === null || stored === undefined) return { ok: true, config: null };
+  if (typeof stored !== "string") return { ok: false, reason: "not_a_string" };
+  let parsed;
+  try { parsed = JSON.parse(stored); } catch (_) { return { ok: false, reason: "unparseable" }; }
+  if (!isPlainConfigObject(parsed)) return { ok: false, reason: "not_an_object" };
+  return { ok: true, config: parsed };
+}
+function mergeSetupWizardConfig(existing, wizardCfg) {
+  if (existing !== null && existing !== undefined && !isPlainConfigObject(existing)) throw new Error("setup_config_existing_malformed");
+  if (!isPlainConfigObject(wizardCfg)) throw new Error("setup_config_wizard_malformed");
+  const base = existing || {};
+  const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  const next = { ...base };
+  for (const key of SETUP_WIZARD_OWNED_KEYS) {
+    if (!has(wizardCfg, key)) continue;
+    const value = wizardCfg[key];
+    if (key === "targets") {
+      if (!isPlainConfigObject(value)) continue;
+      const targets = isPlainConfigObject(base.targets) ? { ...base.targets } : {};
+      for (const t of SETUP_WIZARD_TARGET_KEYS) if (has(value, t)) targets[t] = value[t];
+      next.targets = targets;
+      continue;
+    }
+    const unset = value === null || value === undefined || (Array.isArray(value) && value.length === 0);
+    if (SETUP_WIZARD_OPTIONAL_KEYS.includes(key) && unset && !has(base, key)) continue;
+    next[key] = value;
+  }
+  return next;
+}
+window.MarjinConfigMerge = Object.freeze({ SETUP_WIZARD_OWNED_KEYS, SETUP_WIZARD_TARGET_KEYS, parseStoredBusinessConfig, mergeSetupWizardConfig });
 // ── P0-DATA-01: canonical daily-entries identity & upsert helpers ──────────────
 // Identity for a daily entry is (tenant, business, business-date). Tenant+business
 // scope is carried by the storage path (tenants/{tid}/biz:{bizId}:entries); inside
@@ -5912,9 +5958,33 @@ function PilotDashboard() {
       initial={businessConfig}
       initialSuppliers={suppliers}
       initialFixed={fixedList}
-      onComplete={async (cfg, sups, fixed) => {
+      onComplete={async (wizardCfg, sups, fixed) => {
         // EDIT existing business — do NOT create new bizId
         const bizId = currentBizId;
+        // HF-1: the wizard owns only some config keys. Merge them into the CURRENT
+        // stored config (fresh read) so employees, petty-cash categories and every
+        // other setting survive. An unreadable or malformed stored config is never
+        // replaced: nothing is written and the wizard stays open.
+        const ctx = captureSelectionCtx();
+        let storedConfig = null;
+        try {
+          const got = await window.storage.get(`biz:${bizId}:config`, true);
+          storedConfig = got ? got.value : null;
+        } catch(e) {
+          if (!e || e.message !== "not found") {
+            console.error("[setup] config read failed:", e && e.message);
+            alert("טעינת הגדרות העסק נכשלה — השינויים לא נשמרו. נסה שוב.");
+            return;
+          }
+        }
+        if (!isSelectionLive(ctx)) return;
+        const decoded = window.MarjinConfigMerge.parseStoredBusinessConfig(storedConfig);
+        if (!decoded.ok) {
+          console.error("[setup] stored config is malformed:", decoded.reason);
+          alert("הגדרות העסק השמורות פגומות — השינויים לא נשמרו כדי לא למחוק נתונים קיימים.");
+          return;
+        }
+        const cfg = window.MarjinConfigMerge.mergeSetupWizardConfig(decoded.config, wizardCfg);
         setBusinessConfig(cfg);
         setSuppliers(sups);
         if(fixed) setFixedList(fixed);
