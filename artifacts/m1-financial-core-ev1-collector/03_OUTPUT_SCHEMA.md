@@ -9,7 +9,9 @@
 | `PRE_FLIGHT.md` | run id; mode/project/database/as-of; credential **safe identity** (type, project, sha256 prefix of the client email); granted database permissions; checkout HEAD + clean flag; approved commit; classifier version; source digests |
 | `EV1_REPORT.json` | full machine-readable report (below) |
 | `EV1_SUMMARY.md` | answers the seven gate questions, B1 signals, invariant table, failure list |
-| `COMPLETE.json` | **written last**: `runId`, `mode`, `project`, `asOfBusinessDate`, `classifierVersion`, `repoSha`, `sourceDigests`, `scopeDigest`, `evidenceComplete`, and the sha256 of the three files above |
+| `COMPLETE.json` | **written last**: `runId`, `mode`, `project`, `asOfBusinessDate`, `classifierVersion`, `repoSha`, `sourceDigests`, `scopeDigest`, `evidenceComplete`, the sha256 of the three files above (`files`), and (R1) `bundleManifest` = the four file names |
+
+**Closed bundle (R1).** The directory contains exactly `COMPLETE.json`, `EV1_REPORT.json`, `EV1_SUMMARY.md`, `PRE_FLIGHT.md`, each a regular 0600 file. `--verify` fails on any other entry (hidden files such as `.DS_Store`, symlinks and sub-directories included), on any missing file, and when `COMPLETE.json` does not bind exactly the three evidence files or declare exactly this manifest.
 
 ## `EV1_REPORT.json`
 ```

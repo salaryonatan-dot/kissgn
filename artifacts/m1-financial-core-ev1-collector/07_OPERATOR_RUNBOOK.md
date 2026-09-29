@@ -48,7 +48,7 @@ env -i HOME="$HOME" PATH="$PATH" node tools/finance-core/ev1-collector.mjs \
   - `"project": "kissgn-1227b"`;
   - `repoSha` = the approved commit;
   - `classifierVersion` = `EV1/3`;
-- `EV1_REPORT.json`: `failures: []`; every invariant I01–I19 `holds: true`;
+- `EV1_REPORT.json`: `failures: []`; every invariant I01–I20 `holds: true`; `counters.rows.unclassifiable == 0`;
 - `node tools/finance-core/ev1-collector.mjs --verify <out-dir>` ⇒ exit 0, `EV1_BUNDLE_VERIFIED_COMPLETE`.
 
 ## Stop markers (any ⇒ stop, keep the bundle, no retry, operator/CTO review)
@@ -63,10 +63,11 @@ env -i HOME="$HOME" PATH="$PATH" node tools/finance-core/ev1-collector.mjs \
   - any invariant `holds: false`;
   - `--verify` ≠ `EV1_BUNDLE_VERIFIED_COMPLETE`;
   - missing `COMPLETE.json`.
-- **Counter checks:** `businesses.attempted ≠ businesses.discovered`, `readFailed > 0`, `classifierFailed > 0`, or `tenants.failed > 0`.
+- **Counter checks:** `businesses.attempted ≠ businesses.discovered`, `readFailed > 0`, `classifierFailed > 0`, `tenants.failed > 0`, or (R1) `rows.unclassifiable > 0` (also a `rows_unclassifiable` failure and invariant I20 `holds: false`).
 - **Unexpected mode or identity:** `mode ≠ production` or `repoSha ≠ approved`.
 
 ## Post-run checks
+0. (R1) Run `--verify` immediately and do not open, browse, copy into or edit the bundle directory before it passes. The bundle is closed: any extra entry (including a Finder `.DS_Store`) makes verification fail. Never delete an unexpected entry to make it pass — stop and review.
 1. `--verify <out-dir>`: digests, modes, run identity, scope/source digests, full invariant re-evaluation, secret scan.
 2. Independently recompute from `EV1_REPORT.json`:
    - `businesses.attempted == businesses.discovered`;

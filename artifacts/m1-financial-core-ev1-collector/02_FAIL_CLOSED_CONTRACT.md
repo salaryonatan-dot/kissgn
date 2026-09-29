@@ -2,7 +2,7 @@
 
 ## `evidenceComplete`
 - Computed by `evaluateReport(report)` from the report JSON alone. The same function re-runs in `--verify`.
-- `evidenceComplete` is the conjunction of I01–I19.
+- `evidenceComplete` is the conjunction of I01–I20 (I20 and the per-business `rows.unclassifiable == malformedRows` equation added in remediation R1; see `../m1-financial-core-ev1-collector-remediation-r1/01_P1_UNCLASSIFIABLE_CLOSURE.md`).
 - It is `true` only if **every** invariant holds; I15 includes "the failure list is empty".
 
 | id | Invariant |
@@ -26,6 +26,7 @@
 | I17 | transport read-only: every database request is GET; the only POSTs are `oauth_token` and `iam_test_permissions` |
 | I18 | number of entries reads == `businesses.attempted` (exactly one per business) |
 | I19 | recorded `scopeDigest` == digest recomputed from the tenant/business lists |
+| I20 (R1) | zero unclassifiable rows: `counters.rows.unclassifiable == 0`, Σ per-business `rows.unclassifiable == 0` and Σ classifier `malformedRows == 0`; every business with such rows also carries a `rows_unclassifiable` failure (count only) |
 
 **Per-business equations (I12).**
 - Row counts:

@@ -4,7 +4,8 @@
 // generated throwaway RSA key in a temporary 0600 file.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, readFileSync, chmodSync, symlinkSync, mkdirSync, statSync, readdirSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, chmodSync, symlinkSync, mkdirSync, statSync, readdirSync, existsSync, unlinkSync, renameSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -257,7 +258,11 @@ test("10–22 every EV1/3 row state reaches the classifier unmodified and is cou
   ];
   const tr = { tenants: { t1: { app: { business: reg("b1") }, "biz:b1:entries": v(rows) } } };
   const { report } = await run(tr);
-  assert.equal(report.evidenceComplete, true, failed(report).join(","));
+  // R1 (Codex P1): the one non-object row is unclassifiable ⇒ evidence is INCOMPLETE; every other
+  // census count is still produced and the unclassifiable row stays counted (never discarded).
+  assert.equal(report.evidenceComplete, false);
+  assert.deepEqual(failed(report).sort(), ["I15_no_failures", "I20_no_unclassifiable_rows"]);
+  assert.deepEqual(report.failures, [{ scope: "classifier", tenantId: "t1", bizId: "b1", code: "rows_unclassifiable", count: 1 }]);
   const s = report.classification.b1Signals;
   assert.equal(report.counters.rows.observed, rows.length);
   assert.equal(report.counters.rows.unclassifiable, 1);
@@ -552,4 +557,290 @@ test("fail-open patterns are absent from the collector modules", () => {
     assert.doesNotMatch(src, /\.catch\(\s*\(\)\s*=>\s*(\[\]|\{\}|null)/, f);
     assert.doesNotMatch(src, /catch\s*(\([^)]*\))?\s*\{\s*\}/, f + " has an empty catch");
   }
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════
+// REMEDIATION R1 — Codex re-review findings P1 (unclassifiable rows) and P2 (closed bundle),
+// plus the Codex-recommended GCLOUD_* relaxation. Offline only.
+// ════════════════════════════════════════════════════════════════════════════════════════════
+const sha = (b) => createHash("sha256").update(b).digest("hex");
+const holds = (report, id) => report.invariants.find((i) => i.id === id).holds;
+async function bundleOf(tr, opts = {}) {
+  const { report } = await run(tr, opts);
+  const out = tmpOut();
+  C.writeBundle(out, report, {});
+  return { out, report };
+}
+/** Rewrite one bundle file and re-bind its digest in COMPLETE.json (an attacker with write access). */
+function forge(out, file, mutate, completeMutate = (c) => c) {
+  const p = join(out, file);
+  const next = mutate(readFileSync(p, "utf8"));
+  writeFileSync(p, next);
+  const cp = join(out, "COMPLETE.json");
+  const complete = JSON.parse(readFileSync(cp, "utf8"));
+  if (file !== "COMPLETE.json") complete.files[file] = sha(next);
+  writeFileSync(cp, JSON.stringify(completeMutate(complete), null, 2) + "\n");
+}
+
+// ── P1 — unclassifiable rows ⇒ evidenceComplete false ─────────────────────────────────────
+test("R1-P1-1 clean, fully classifiable evidence ⇒ evidenceComplete true; I20 holds", async () => {
+  const { report } = await run(tree());
+  assert.equal(report.evidenceComplete, true, failed(report).join(","));
+  assert.equal(holds(report, "I20_no_unclassifiable_rows"), true);
+  assert.equal(report.invariants.length, 20);
+  assert.equal(report.counters.rows.unclassifiable, 0);
+});
+
+test("R1-P1-2 exactly one unclassifiable row ⇒ false; counted, typed failure, bundle and --verify incomplete, CLI exit 10", async () => {
+  const tr = tree();
+  tr.tenants.t1["biz:b1:entries"] = v([CLEAN_ROW(1), "garbage"]);
+  const { report } = await run(tr);
+  assert.equal(report.evidenceComplete, false);
+  assert.deepEqual(failed(report).sort(), ["I15_no_failures", "I20_no_unclassifiable_rows"]);
+  assert.deepEqual(report.failures, [{ scope: "classifier", tenantId: "t1", bizId: "b1", code: "rows_unclassifiable", count: 1 }]);
+  assert.deepEqual(biz(report, "t1", "b1").rows, { observed: 2, classified: 1, unclassifiable: 1 });
+  assert.equal(biz(report, "t1", "b1").classification.state, "CLASSIFIED", "safe aggregate counts are preserved");
+  assert.equal(report.counters.rows.unclassifiable, 1);
+  const out = tmpOut();
+  C.writeBundle(out, report, {});
+  assert.equal(readFileSync(join(out, "EV1_REPORT.json"), "utf8").includes("garbage"), false, "row content is never persisted");
+  assert.equal(JSON.parse(readFileSync(join(out, "COMPLETE.json"), "utf8")).evidenceComplete, false);
+  assert.deepEqual(C.verifyBundle(out), { ok: true, evidenceComplete: false, problems: [] });
+  const dir = mkdtempSync(join(tmpdir(), "ev1r1-"));
+  const fx = join(dir, "tree.json");
+  writeFileSync(fx, JSON.stringify({ tree: tr }));
+  const r = await mainRun(["--fixture", fx, "--as-of", AS_OF, "--out-dir", join(dir, "run")]);
+  assert.equal(r.code, 10, r.logs.join(" "));
+  assert.match(r.logs.join(" "), /EV1_EVIDENCE_INCOMPLETE/);
+  const logs = [];
+  assert.equal(await C.main(["--verify", join(dir, "run")], { log: (x) => logs.push(x) }), 10);
+  assert.match(logs[0], /EV1_BUNDLE_VERIFIED_INCOMPLETE/);
+});
+
+test("R1-P1-3 multiple unclassifiable rows across businesses ⇒ false; one failure per business with its count", async () => {
+  const tr = tree();
+  tr.tenants.t1["biz:b1:entries"] = v([CLEAN_ROW(1), null, 5, [], "x"]);
+  tr.tenants.t2["biz:c1:entries"] = v(["y", CLEAN_ROW(4)]);
+  const { report } = await run(tr);
+  assert.equal(report.evidenceComplete, false);
+  assert.equal(holds(report, "I20_no_unclassifiable_rows"), false);
+  assert.equal(report.counters.rows.unclassifiable, 5);
+  assert.equal(report.counters.rows.observed, report.counters.rows.classified + 5);
+  assert.deepEqual(report.failures.filter((f) => f.code === "rows_unclassifiable").map((f) => [f.tenantId, f.bizId, f.count]), [["t1", "b1", 4], ["t2", "c1", 1]]);
+  assert.equal(holds(report, "I11_rows_observed_eq_classified_plus_unclassifiable"), true);
+  assert.equal(holds(report, "I12_per_business_exclusive_equations"), true);
+});
+
+test("R1-P1-4 stored counters/partitions claiming zero unclassifiable while the partitions show otherwise ⇒ recomputation fails", async () => {
+  const tr = tree();
+  tr.tenants.t1["biz:b1:entries"] = v([CLEAN_ROW(1), "garbage"]);
+  const base = (await run(tr)).report;
+  const clone = () => JSON.parse(JSON.stringify(base));
+  // (a) counters forged to zero; per-business partitions still show 1
+  const a = clone(); a.counters.rows.unclassifiable = 0; a.counters.rows.classified += 1; a.failures = []; a.counters.failures = 0;
+  const ea = C.evaluateReport(a);
+  assert.equal(ea.evidenceComplete, false);
+  for (const id of ["I13_counters_match_recomputation", "I20_no_unclassifiable_rows"]) assert.equal(ea.invariants.find((i) => i.id === id).holds, false, id);
+  // (b) the business partition forged to zero; the classifier's malformedRows still says 1
+  const b = clone(); const bb = b.scope.businesses.find((x) => x.bizId === "b1"); bb.rows.unclassifiable = 0; bb.rows.classified = bb.rows.observed;
+  b.failures = []; b.counters = C.computeCounters(b);
+  const eb = C.evaluateReport(b);
+  assert.equal(eb.evidenceComplete, false);
+  for (const id of ["I12_per_business_exclusive_equations", "I20_no_unclassifiable_rows"]) assert.equal(eb.invariants.find((i) => i.id === id).holds, false, id);
+  // (c) only the typed failure removed and the boolean flipped: still recomputed as incomplete
+  const c = clone(); c.failures = []; c.counters.failures = 0; c.evidenceComplete = true;
+  const ec = C.evaluateReport(c);
+  assert.equal(ec.evidenceComplete, false);
+  assert.equal(ec.invariants.find((i) => i.id === "I20_no_unclassifiable_rows").holds, false);
+});
+
+test("R1-P1-5 --verify recomputes: a bundle forged to evidenceComplete:true over unclassifiable rows is rejected", async () => {
+  const tr = tree();
+  tr.tenants.t1["biz:b1:entries"] = v([CLEAN_ROW(1), "garbage"]);
+  const { out } = await bundleOf(tr);
+  // forge the report: boolean true, all invariants "holding", failure removed, counters zeroed; re-bind digests
+  forge(out, "EV1_REPORT.json", (text) => {
+    const r = JSON.parse(text);
+    r.evidenceComplete = true; r.failures = []; r.counters.failures = 0;
+    r.counters.rows.unclassifiable = 0; r.counters.rows.classified = r.counters.rows.observed;
+    r.invariants = r.invariants.map((i) => ({ id: i.id, holds: true }));
+    return JSON.stringify(r, null, 2) + "\n";
+  }, (c) => ({ ...c, evidenceComplete: true }));
+  const vb = C.verifyBundle(out);
+  assert.equal(vb.ok, false);
+  assert.equal(vb.evidenceComplete, false);
+  assert.ok(vb.problems.includes("recorded evidenceComplete conflicts with the recomputed value"), vb.problems.join("; "));
+  assert.ok(vb.problems.includes("COMPLETE.json evidenceComplete conflicts with the recomputed value"));
+  assert.ok(vb.problems.includes("recomputed invariants differ from the recorded invariants"));
+  const logs = [];
+  assert.equal(await C.main(["--verify", out], { log: (x) => logs.push(x) }), 10);
+  assert.match(logs[0], /EV1_BUNDLE_INVALID/);
+  // and COMPLETE.json alone flipped to true (report left honest) is also rejected
+  const second = (await bundleOf(tr)).out;
+  forge(second, "COMPLETE.json", (t) => t, (c) => ({ ...c, evidenceComplete: true }));
+  const v2 = C.verifyBundle(second);
+  assert.equal(v2.ok, false);
+  assert.ok(v2.problems.includes("COMPLETE.json evidenceComplete conflicts with the recomputed value"));
+});
+
+// ── P2 — closed bundle ────────────────────────────────────────────────────────────────────
+const unexpected = (vb) => vb.problems.filter((p) => p.startsWith("unexpected bundle entry"));
+test("R1-P2-1 valid exact bundle ⇒ passes; COMPLETE.json declares the closed manifest", async () => {
+  const { out } = await bundleOf(tree());
+  assert.deepEqual(readdirSync(out).sort(), [...C.BUNDLE_MANIFEST]);
+  assert.deepEqual(C.BUNDLE_MANIFEST, ["COMPLETE.json", "EV1_REPORT.json", "EV1_SUMMARY.md", "PRE_FLIGHT.md"]);
+  const complete = JSON.parse(readFileSync(join(out, "COMPLETE.json"), "utf8"));
+  assert.deepEqual(complete.bundleManifest, [...C.BUNDLE_MANIFEST]);
+  assert.deepEqual(C.verifyBundle(out), { ok: true, evidenceComplete: true, problems: [] });
+});
+
+test("R1-P2-2/3/4 extra text, JSON or hidden files ⇒ fail (no metadata allowance)", async () => {
+  for (const [name, body] of [["UNLISTED.txt", "unverified content"], ["EXTRA.json", "{}"], [".DS_Store", "x"], [".hidden", ""], ["notes.md", "# more"]]) {
+    const { out } = await bundleOf(tree());
+    writeFileSync(join(out, name), body, { mode: 0o600 });
+    const vb = C.verifyBundle(out);
+    assert.equal(vb.ok, false, name);
+    assert.equal(vb.evidenceComplete, false, name);
+    assert.equal(unexpected(vb).length, 1, name + ": " + vb.problems.join("; "));
+    assert.ok(unexpected(vb)[0].includes(JSON.stringify(name)), vb.problems.join("; "));
+  }
+});
+
+test("R1-P2-5 unexpected symlink, sub-directory, an expected file replaced by a symlink, or a symlinked bundle dir ⇒ fail", async () => {
+  const a = (await bundleOf(tree())).out;
+  symlinkSync(join(a, "EV1_REPORT.json"), join(a, "REPORT_LINK.json"));
+  assert.equal(unexpected(C.verifyBundle(a)).length, 1);
+  const b = (await bundleOf(tree())).out;
+  mkdirSync(join(b, "extra-dir"), { mode: 0o700 });
+  assert.equal(C.verifyBundle(b).ok, false);
+  const c = (await bundleOf(tree())).out;
+  const keep = join(dirname(c), "summary-copy.md");
+  renameSync(join(c, "EV1_SUMMARY.md"), keep);
+  symlinkSync(keep, join(c, "EV1_SUMMARY.md"));
+  const vc = C.verifyBundle(c);
+  assert.equal(vc.ok, false);
+  assert.ok(vc.problems.includes("EV1_SUMMARY.md is a symlink"), vc.problems.join("; "));
+  const d = (await bundleOf(tree())).out;
+  const link = join(dirname(d), "run-link");
+  symlinkSync(d, link);
+  assert.deepEqual(C.verifyBundle(link), { ok: false, evidenceComplete: false, problems: ["bundle path is not a real directory"] });
+});
+
+test("R1-P2-6 missing expected file (evidence file or COMPLETE.json) ⇒ fail", async () => {
+  for (const f of C.BUNDLE_MANIFEST) {
+    const { out } = await bundleOf(tree());
+    unlinkSync(join(out, f));
+    const vb = C.verifyBundle(out);
+    assert.equal(vb.ok, false, f);
+    assert.ok(vb.problems.includes(`${f} missing`), f + ": " + vb.problems.join("; "));
+  }
+  assert.equal(C.verifyBundle(join(tmpdir(), "ev1-no-such-bundle-dir")).ok, false);
+});
+
+test("R1-P2-7 modified expected file ⇒ digest failure", async () => {
+  for (const f of C.BUNDLE_FILES) {
+    const { out } = await bundleOf(tree());
+    writeFileSync(join(out, f), readFileSync(join(out, f), "utf8") + " ");
+    const vb = C.verifyBundle(out);
+    assert.equal(vb.ok, false, f);
+    assert.ok(vb.problems.includes(`${f} digest mismatch`), vb.problems.join("; "));
+  }
+});
+
+test("R1-P2-8 secret-like content cannot bypass validation (extra file, or a re-digested expected file)", async () => {
+  const a = (await bundleOf(tree())).out;
+  writeFileSync(join(a, "token.txt"), "Authorization: Bearer ya29.leaked -----BEGIN PRIVATE KEY-----", { mode: 0o600 });
+  const va = C.verifyBundle(a);
+  assert.equal(va.ok, false);
+  assert.equal(va.evidenceComplete, false);
+  assert.equal(va.problems.some((p) => p.includes("ya29") || p.includes("BEGIN")), false, "file content is never echoed");
+  const b = (await bundleOf(tree())).out;
+  forge(b, "EV1_SUMMARY.md", (t) => t + "\nBearer ya29.leaked\n");
+  const vb = C.verifyBundle(b);
+  assert.equal(vb.ok, false);
+  assert.ok(vb.problems.includes("EV1_SUMMARY.md contains secret-like text"), vb.problems.join("; "));
+});
+
+test("R1-P2-9 COMPLETE.json that omits, adds or re-declares a bundle artifact ⇒ fail", async () => {
+  const cases = [
+    ["omits a bound file", (c) => { const files = { ...c.files }; delete files["EV1_SUMMARY.md"]; return { ...c, files }; }],
+    ["binds an extra file", (c) => ({ ...c, files: { ...c.files, "EXTRA.json": "0".repeat(64) } })],
+    ["no manifest", (c) => { const x = { ...c }; delete x.bundleManifest; return x; }],
+    ["manifest omits a file", (c) => ({ ...c, bundleManifest: c.bundleManifest.filter((f) => f !== "PRE_FLIGHT.md") })],
+    ["manifest adds a file", (c) => ({ ...c, bundleManifest: [...c.bundleManifest, "EXTRA.json"].sort() })],
+  ];
+  for (const [name, mut] of cases) {
+    const { out } = await bundleOf(tree());
+    forge(out, "COMPLETE.json", (t) => t, mut);
+    const vb = C.verifyBundle(out);
+    assert.equal(vb.ok, false, name);
+    assert.equal(vb.evidenceComplete, false, name);
+  }
+});
+
+test("R1-P2-10 ambiguous / look-alike entries fail closed wherever the filesystem permits them", async () => {
+  // Unicode look-alike (Cyrillic Е), full-width (NFKC-equal to COMPLETE.json), trailing space, zero-width joiner
+  for (const name of ["\u0415V1_REPORT.json", "\uFF23\uFF2F\uFF2D\uFF30\uFF2C\uFF25\uFF34\uFF25.json", "EV1_REPORT.json ", "EV1_\u200DREPORT.json"]) {
+    const { out } = await bundleOf(tree());
+    writeFileSync(join(out, name), "{}", { mode: 0o600 });
+    const vb = C.verifyBundle(out);
+    assert.equal(vb.ok, false, JSON.stringify(name));
+    assert.ok(unexpected(vb).length >= 1, JSON.stringify(name));
+  }
+  // case variant: on a case-sensitive filesystem it is an extra (ambiguous) entry; on a case-insensitive
+  // one it cannot be created next to the real file (exclusive create refuses) — either way no bypass.
+  const { out } = await bundleOf(tree());
+  let created = true;
+  try { writeFileSync(join(out, "complete.json"), "{}", { flag: "wx", mode: 0o600 }); } catch (e) { assert.equal(e.code, "EEXIST"); created = false; }
+  const vb = C.verifyBundle(out);
+  if (created) {
+    assert.equal(vb.ok, false);
+    assert.ok(vb.problems.some((p) => p.startsWith("ambiguous bundle entry resembles an expected file")), vb.problems.join("; "));
+  } else assert.deepEqual(vb, { ok: true, evidenceComplete: true, problems: [] });
+});
+
+test("R1-P2 CLI: --verify of a bundle with an added file ⇒ EV1_BUNDLE_INVALID, exit 10", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ev1r1cli-"));
+  const fx = join(dir, "tree.json");
+  writeFileSync(fx, JSON.stringify({ tree: tree() }));
+  const out = join(dir, "run");
+  assert.equal((await mainRun(["--fixture", fx, "--as-of", AS_OF, "--out-dir", out])).code, 0);
+  writeFileSync(join(out, "UNLISTED.txt"), "x", { mode: 0o600 });
+  const logs = [];
+  assert.equal(await C.main(["--verify", out], { log: (x) => logs.push(x) }), 10);
+  assert.match(logs[0], /EV1_BUNDLE_INVALID/);
+});
+
+// ── GCLOUD_* relaxation (Codex re-review 04: RELAX) ────────────────────────────────────────
+test("R1-ENV GCLOUD_PROJECT / GOOGLE_CLOUD_PROJECT no longer refuse; identity still comes only from explicit, verified inputs", async () => {
+  assert.deepEqual([...P.FORBIDDEN_ENV].sort(), [
+    "CLOUDSDK_AUTH_ACCESS_TOKEN", "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE", "FIREBASE_AUTH_EMULATOR_HOST", "FIREBASE_CONFIG",
+    "FIREBASE_DATABASE_EMULATOR_HOST", "FIREBASE_EMULATOR_HUB", "FIREBASE_SA_CLIENT_EMAIL", "FIREBASE_SA_JSON", "FIREBASE_SA_PRIVATE_KEY",
+    "FIREBASE_TOKEN", "FIRESTORE_EMULATOR_HOST", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_OAUTH_ACCESS_TOKEN",
+  ]);
+  const env = { GCLOUD_PROJECT: "someone-elses-project", GOOGLE_CLOUD_PROJECT: "another-project" };
+  const g = fakeGoogle(tree());
+  const out = tmpOut();
+  const r = await mainRun(prodArgs({ "out-dir": out }), { fetchImpl: g.fetchImpl, env });
+  assert.equal(r.code, 0, r.logs.join(" "));
+  const iam = g.seen.find((x) => x.host === "cloudresourcemanager.googleapis.com");
+  assert.equal(iam.path, "/v1/projects/kissgn-1227b:testIamPermissions", "IAM project comes from --project, not the environment");
+  assert.ok(g.seen.filter((x) => x.method === "GET").every((x) => x.host === "kissgn-1227b-default-rtdb.firebaseio.com"));
+  assert.equal(JSON.parse(readFileSync(join(out, "EV1_REPORT.json"), "utf8")).environmentIdentity.project, "kissgn-1227b");
+  // with those variables present, every identity refusal still holds before the network
+  for (const [name, args, extra] of [
+    ["project mismatch", prodArgs({ project: "someone-elses-project" }), {}],
+    ["credential project mismatch", prodArgs({ "credentials-file": credFile({ project: "someone-elses-project" }) }), {}],
+    ["database mismatch", prodArgs({ "database-url": "https://other-1-default-rtdb.firebaseio.com" }), {}],
+    ["ADC", prodArgs(), { GOOGLE_APPLICATION_CREDENTIALS: "/tmp/x.json" }],
+    ["emulator", prodArgs(), { FIREBASE_DATABASE_EMULATOR_HOST: "127.0.0.1:9000" }],
+  ]) {
+    const rr = await mainRun(args, { env: { ...env, ...extra } });
+    assert.equal(rr.code, 2, name);
+    assert.equal(rr.calls.length, 0, name);
+  }
+  for (const f of ["tools/finance-core/ev1-collector.mjs", "tools/finance-core/ev1-transport.mjs"]) {
+    assert.doesNotMatch(readFileSync(join(REPO, f), "utf8"), /GCLOUD_PROJECT|GOOGLE_CLOUD_PROJECT/, f + " must not read the project from the environment");
+  }
+  assert.doesNotMatch(readFileSync(join(REPO, "tools/finance-core/ev1-preflight.mjs"), "utf8").replace(/\/\/.*$/gm, ""), /GCLOUD_PROJECT|GOOGLE_CLOUD_PROJECT/, "preflight code never reads them");
 });

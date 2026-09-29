@@ -29,7 +29,7 @@
 //        --expected-commit <approved 40-hex sha> --out-dir <new dir outside git>
 //   node tools/finance-core/ev1-collector.mjs --fixture <tree.json> --as-of <YYYY-MM-DD> --out-dir <dir>   # offline
 //   node tools/finance-core/ev1-collector.mjs --verify <bundle dir>                                       # post-run check
-import { readFileSync, mkdirSync, writeFileSync, chmodSync, lstatSync, existsSync } from "node:fs";
+import { readFileSync, mkdirSync, writeFileSync, chmodSync, lstatSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
@@ -50,6 +50,13 @@ export const SOURCE_FILES = Object.freeze([
   "lib/analytics/entriesReader.js",
 ]);
 export const BUNDLE_FILES = Object.freeze(["PRE_FLIGHT.md", "EV1_REPORT.json", "EV1_SUMMARY.md"]);
+/**
+ * R1 (Codex P2): the CLOSED bundle. A completed bundle directory contains EXACTLY these regular
+ * files — the three digest-bound evidence files plus COMPLETE.json — and nothing else: no hidden
+ * file, no symlink, no sub-directory, no other entry of any kind. No filesystem metadata entry is
+ * allowed (e.g. a Finder `.DS_Store` makes the bundle fail verification).
+ */
+export const BUNDLE_MANIFEST = Object.freeze(["COMPLETE.json", "EV1_REPORT.json", "EV1_SUMMARY.md", "PRE_FLIGHT.md"]);
 export const EXIT = Object.freeze({ COMPLETE: 0, REFUSED: 2, TRANSPORT_REFUSED: 3, OUTPUT_FAILED: 4, INCOMPLETE: 10 });
 export const USAGE = `usage:
   node tools/finance-core/ev1-collector.mjs --env production --project <id> --database-url <https url> --credentials-file <ro-sa.json> --as-of <YYYY-MM-DD> --expected-commit <sha> --out-dir <new dir outside git>
@@ -281,6 +288,9 @@ export async function collect({ transport, asOfBusinessDate, classify = classify
     }
     biz.rows = { observed: rows.length, classified: s.value.rowsTotal - s.value.malformedRows, unclassifiable: s.value.malformedRows };
     biz.classification = { state: "CLASSIFIED", counts: s.value };
+    // R1 (Codex P1): a row the classifier cannot classify is unexamined evidence. It stays
+    // counted (safe aggregate, no row content) and blocks completeness — never discarded.
+    if (s.value.malformedRows !== 0) fail({ scope: "classifier", tenantId: t, bizId: b, code: "rows_unclassifiable", count: s.value.malformedRows });
   }
 
   return { tenantEnumeration, tenants, businesses, failures };
@@ -365,6 +375,8 @@ export function businessEquations(b) {
   return [
     ["rowsTotal == rows.observed", c.rowsTotal === b.rows.observed],
     ["rows.observed == rows.classified + rows.unclassifiable", b.rows.observed === b.rows.classified + b.rows.unclassifiable],
+    ["rows.unclassifiable == malformedRows", b.rows.unclassifiable === n(c.malformedRows)],
+    ["rows.classified == rowsTotal - malformedRows", b.rows.classified === c.rowsTotal - n(c.malformedRows)],
     ["objectRows == validIds + missingIds + malformedIds", obj === n(c.identity.validIds) + n(c.identity.missingIds) + n(c.identity.malformedIds)],
     ["objectRows == validDate + badShape + impossibleDate", obj === n(c.dates.validDateRows) + n(c.dates.badShapeDateRows) + n(c.dates.impossibleDateRows)],
     ["validDateRows == futureRows + actualWindowRows", n(c.dates.validDateRows) === n(c.dates.futureRows) + n(c.dates.actualWindowRows)],
@@ -423,6 +435,12 @@ export function evaluateReport(report) {
   const entriesReads = rq ? rq.filter((r) => r.kind === "entries").length : -1;
   add("I18_exactly_one_entries_read_per_business", entriesReads === c.businesses.attempted, { entriesReads, attempted: c.businesses.attempted });
   add("I19_scope_digest_matches", report.scope.scopeDigest === scopeDigest(report));
+  // R1 (Codex P1): complete evidence requires ZERO unclassifiable rows, recomputed from the
+  // per-business partitions AND from the classifier's own malformed-row counts (never from a
+  // stored counter or boolean).
+  const partitionUnclassifiable = B.reduce((a, b) => a + (b.rows ? n(b.rows.unclassifiable) : 0), 0);
+  const classifierMalformed = B.reduce((a, b) => a + (b.classification.state === "CLASSIFIED" && b.classification.counts ? n(b.classification.counts.malformedRows) : 0), 0);
+  add("I20_no_unclassifiable_rows", c.rows.unclassifiable === 0 && partitionUnclassifiable === 0 && classifierMalformed === 0, { unclassifiable: partitionUnclassifiable, classifierMalformedRows: classifierMalformed });
   return { invariants: inv, evidenceComplete: inv.every((i) => i.holds) };
 }
 
@@ -528,7 +546,8 @@ export function writeBundle(outDir, report, { secrets = [] } = {}) {
   const complete = {
     schemaVersion: EV1_COLLECTOR_SCHEMA, runId: report.runId, mode: report.environmentIdentity.mode, project: report.environmentIdentity.project,
     asOfBusinessDate: report.environmentIdentity.asOfBusinessDate, classifierVersion: report.classifierVersion, repoSha: report.tool.repoSha,
-    sourceDigests: report.tool.sourceDigests, scopeDigest: report.scope.scopeDigest, evidenceComplete: report.evidenceComplete, files: digests, writtenAt: new Date().toISOString(),
+    sourceDigests: report.tool.sourceDigests, scopeDigest: report.scope.scopeDigest, evidenceComplete: report.evidenceComplete, files: digests,
+    bundleManifest: BUNDLE_MANIFEST, writtenAt: new Date().toISOString(),
   };
   const cp = join(outDir, "COMPLETE.json");
   writeFileSync(cp, JSON.stringify(complete, null, 2) + "\n", { flag: "wx", mode: 0o600 });
@@ -536,33 +555,74 @@ export function writeBundle(outDir, report, { secrets = [] } = {}) {
   return { outDir, files: [...BUNDLE_FILES, "COMPLETE.json"] };
 }
 
-/** Post-run verification of a bundle: digests, modes, run identity, and a full re-evaluation. */
+/** A printable, bounded form of an unexpected directory-entry name (never its content). */
+const entryLabel = (name) => JSON.stringify(name.replace(/[^\x21-\x7e]/g, "?").slice(0, 64)) + ` (length ${name.length})`;
+
+/**
+ * Post-run verification of a bundle. The bundle is CLOSED (R1, Codex P2): the directory must
+ * be a real directory whose entries are exactly BUNDLE_MANIFEST, each a regular file (no
+ * symlink/dir/other), COMPLETE.json must bind exactly BUNDLE_FILES by digest and declare the
+ * same manifest, every file is secret-scanned, and completeness is RECOMPUTED from the report
+ * (a stored `evidenceComplete` is never trusted).
+ */
 export function verifyBundle(dir, { platform = process.platform } = {}) {
   const problems = [];
-  const mode = (p) => lstatSync(p).mode & 0o777;
-  if (!existsSync(join(dir, "COMPLETE.json"))) return { ok: false, evidenceComplete: false, problems: ["COMPLETE.json missing"] };
-  if (platform !== "win32" && mode(dir) !== 0o700) problems.push("bundle directory mode is not 0700");
-  let complete, report;
-  try { complete = JSON.parse(readFileSync(join(dir, "COMPLETE.json"), "utf8")); } catch { return { ok: false, evidenceComplete: false, problems: ["COMPLETE.json unparseable"] }; }
-  for (const f of [...BUNDLE_FILES, "COMPLETE.json"]) {
-    const p = join(dir, f);
-    if (!existsSync(p)) { problems.push(`${f} missing`); continue; }
-    if (lstatSync(p).isSymbolicLink()) problems.push(`${f} is a symlink`);
-    if (platform !== "win32" && mode(p) !== 0o600) problems.push(`${f} mode is not 0600`);
-    if (f !== "COMPLETE.json" && (!complete.files || complete.files[f] !== sha256(readFileSync(p)))) problems.push(`${f} digest mismatch`);
-    if (secretScan(readFileSync(p, "utf8")).length) problems.push(`${f} contains secret-like text`);
+  const fail = (p) => ({ ok: false, evidenceComplete: false, problems: [...problems, p] });
+  let dst;
+  try { dst = lstatSync(dir); } catch (e) { return fail("bundle directory missing or unreadable"); }
+  if (dst.isSymbolicLink() || !dst.isDirectory()) return fail("bundle path is not a real directory");
+  if (platform !== "win32" && (dst.mode & 0o777) !== 0o700) problems.push("bundle directory mode is not 0700");
+  let entries;
+  try { entries = readdirSync(dir); } catch (e) { return fail("bundle directory cannot be listed"); }
+  // closure: actual entries == expected entries (exact byte-for-byte names, hidden entries included)
+  if (new Set(entries).size !== entries.length) problems.push("ambiguous bundle listing (duplicate entry names)");
+  const fold = (x) => x.normalize("NFKC").toLowerCase();
+  for (const e of entries) {
+    if (BUNDLE_MANIFEST.includes(e)) continue;
+    problems.push(`unexpected bundle entry: ${entryLabel(e)}`);
+    if (BUNDLE_MANIFEST.some((m) => fold(m) === fold(e))) problems.push(`ambiguous bundle entry resembles an expected file: ${entryLabel(e)}`);
   }
-  try { report = JSON.parse(readFileSync(join(dir, "EV1_REPORT.json"), "utf8")); } catch { problems.push("EV1_REPORT.json unparseable"); }
+  const regular = new Set();
+  for (const f of BUNDLE_MANIFEST) {
+    if (!entries.includes(f)) { problems.push(`${f} missing`); continue; }
+    let st;
+    try { st = lstatSync(join(dir, f)); } catch (e) { problems.push(`${f} unreadable`); continue; }
+    if (st.isSymbolicLink()) { problems.push(`${f} is a symlink`); continue; }
+    if (!st.isFile()) { problems.push(`${f} is not a regular file`); continue; }
+    if (platform !== "win32" && (st.mode & 0o777) !== 0o600) problems.push(`${f} mode is not 0600`);
+    regular.add(f);
+  }
+  if (!regular.has("COMPLETE.json")) return fail("COMPLETE.json missing or not a regular file");
+  const text = {};
+  for (const f of regular) text[f] = readFileSync(join(dir, f));
+  let complete, report;
+  try { complete = JSON.parse(text["COMPLETE.json"].toString("utf8")); } catch (e) { return fail("COMPLETE.json unparseable"); }
+  if (!isPlain(complete)) return fail("COMPLETE.json is not an object");
+  if (!same(complete.bundleManifest, BUNDLE_MANIFEST)) problems.push("COMPLETE.json bundleManifest differs from the closed bundle manifest");
+  const bound = isPlain(complete.files) ? Object.keys(complete.files).sort() : null;
+  if (!same(bound, [...BUNDLE_FILES].sort())) problems.push("COMPLETE.json does not bind exactly the bundle files");
+  for (const f of regular) {
+    if (f !== "COMPLETE.json" && (!isPlain(complete.files) || complete.files[f] !== sha256(text[f]))) problems.push(`${f} digest mismatch`);
+    if (secretScan(text[f].toString("utf8")).length) problems.push(`${f} contains secret-like text`);
+  }
+  if (regular.has("EV1_REPORT.json")) {
+    try { report = JSON.parse(text["EV1_REPORT.json"].toString("utf8")); } catch (e) { problems.push("EV1_REPORT.json unparseable"); }
+  }
   let evidenceComplete = false;
-  if (report) {
+  if (isPlain(report)) {
     if (report.runId !== complete.runId) problems.push("runId mismatch between COMPLETE.json and EV1_REPORT.json");
     if (report.evidenceComplete !== complete.evidenceComplete) problems.push("evidenceComplete mismatch between COMPLETE.json and EV1_REPORT.json");
     for (const [k, a, b] of [["mode", complete.mode, report.environmentIdentity && report.environmentIdentity.mode], ["project", complete.project, report.environmentIdentity && report.environmentIdentity.project], ["asOfBusinessDate", complete.asOfBusinessDate, report.environmentIdentity && report.environmentIdentity.asOfBusinessDate], ["classifierVersion", complete.classifierVersion, report.classifierVersion], ["repoSha", complete.repoSha, report.tool && report.tool.repoSha], ["scopeDigest", complete.scopeDigest, report.scope && report.scope.scopeDigest]]) if (!same(a, b)) problems.push(`${k} mismatch between COMPLETE.json and EV1_REPORT.json`);
     if (!same(complete.sourceDigests, report.tool && report.tool.sourceDigests)) problems.push("sourceDigests mismatch between COMPLETE.json and EV1_REPORT.json");
-    const ev = evaluateReport(report);
-    if (!same(ev.invariants, report.invariants)) problems.push("recomputed invariants differ from the recorded invariants");
-    evidenceComplete = ev.evidenceComplete && report.evidenceComplete === true;
-  }
+    let ev = null;
+    try { ev = evaluateReport(report); } catch (e) { problems.push("EV1_REPORT.json cannot be re-evaluated"); }
+    if (ev) {
+      if (!same(ev.invariants, report.invariants)) problems.push("recomputed invariants differ from the recorded invariants");
+      if (report.evidenceComplete !== ev.evidenceComplete) problems.push("recorded evidenceComplete conflicts with the recomputed value");
+      if (complete.evidenceComplete !== ev.evidenceComplete) problems.push("COMPLETE.json evidenceComplete conflicts with the recomputed value");
+      evidenceComplete = ev.evidenceComplete;
+    }
+  } else if (report !== undefined) problems.push("EV1_REPORT.json is not an object");
   return { ok: problems.length === 0, evidenceComplete: problems.length === 0 && evidenceComplete, problems };
 }
 

@@ -24,8 +24,12 @@ export const FORBIDDEN_ENV = Object.freeze([
   "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_OAUTH_ACCESS_TOKEN", "CLOUDSDK_AUTH_ACCESS_TOKEN", "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE",
   "FIREBASE_TOKEN", "FIREBASE_SA_JSON", "FIREBASE_SA_PRIVATE_KEY", "FIREBASE_SA_CLIENT_EMAIL", "FIREBASE_CONFIG",
   "FIREBASE_DATABASE_EMULATOR_HOST", "FIREBASE_AUTH_EMULATOR_HOST", "FIRESTORE_EMULATOR_HOST", "FIREBASE_EMULATOR_HUB",
-  "GCLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT",
 ]);
+// R1 (Codex re-review 04, GCLOUD_ENV_POLICY: RELAX): `GCLOUD_PROJECT` / `GOOGLE_CLOUD_PROJECT`
+// are no longer refused. They carry no credential and nothing in the collector reads them: the
+// project comes only from `--project` (exact `kissgn-1227b`), the credential `project_id` must
+// equal it, the database comes only from the exact `--database-url`, and there is no SDK/ADC
+// resolver that could consult them. Credential, token and emulator variables stay refused.
 
 const PLACEHOLDER = /^(|<.*>|your[-_].*|example.*|changeme|placeholder|todo|xxx+|fixture.*|test.*|demo.*|my[-_]project)$/i;
 
