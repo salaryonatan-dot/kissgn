@@ -28,7 +28,8 @@ const SEP = { from: "2026-09-01", to: "2026-09-30" };
 const day = (rows, date, opts) => CM.canonicalDailySeries(si(rows, opts), { from: date, to: date }).days[0];
 const sepRows = (f = () => ({ sales: "1000", supplier_payments: { s1: "300" }, payroll: "100" }), last = 28) => Array.from({ length: last }, (_, i) => entry(uid(100 + i), `2026-09-${String(i + 1).padStart(2, "0")}`, f(i)));
 const augRows = (f) => Array.from({ length: 31 }, (_, i) => entry(uid(200 + i), `2026-08-${String(i + 1).padStart(2, "0")}`, f(i)));
-const month = (rows, sel, opts) => CM.canonicalMonthReport(si(rows, opts), sel).report;
+// CD-M1 R1 / F-01: the month report needs a LOADED ledger; "absent" is the valid empty one (what the loader returns when config/fixed are read and no ledger node exists).
+const month = (rows, sel, opts) => CM.canonicalMonthReport(si(rows, { exceptionsState: "absent", ...opts }), sel).report;
 
 test("API-01 provenance: every output carries ServerProvenance; ids are the core constants", () => {
   const i = si(sepRows(), { config: configWithGlobal("3000"), exceptionsState: "absent" });
@@ -37,7 +38,7 @@ test("API-01 provenance: every output carries ServerProvenance; ids are the core
   assert.equal(p.exceptionsState, "absent");
   assert.deepEqual(
     { api: p.api, product: p.product, fin: p.fin, norm: p.norm, dec: p.dec, labor: p.labor, pb: p.pb, pbPolicy: p.pbPolicy, laborSource: p.laborSource, windowRule: p.windowRule, asOf: p.asOfBusinessDate, cal: p.operatingCalendar },
-    { api: CI.CANONICAL_SERVER_API_VERSION, product: PF.PRODUCT_FINANCE_VERSION, fin: REP.FINANCIAL_FORMULA_VERSION, norm: NORM.NORMALIZATION_VERSION, dec: DEC.DECIMAL_CONTRACT_VERSION, labor: LAB.LABOR_CONTRACT_VERSION, pb: PBC.PURCHASE_BASIS_CONTRACT_VERSION, pbPolicy: "PB_NET/BD-1", laborSource: "LABOR_SRC/shiftorganizer-hourly-manual/2026-09-29", windowRule: "completed_days_through_d_minus_1", asOf: AS_OF, cal: "none_declared" });
+    { api: CI.CANONICAL_SERVER_API_VERSION, product: PF.PRODUCT_FINANCE_VERSION, fin: REP.FINANCIAL_FORMULA_VERSION, norm: NORM.NORMALIZATION_VERSION, dec: DEC.DECIMAL_CONTRACT_VERSION, labor: LAB.LABOR_CONTRACT_VERSION, pb: PBC.PURCHASE_BASIS_CONTRACT_VERSION, pbPolicy: "PB_NET/BD-1", laborSource: "LABOR_SRC/shiftorganizer-hourly-manual/2026-09-29", windowRule: "completed_days_through_d_minus_1", asOf: AS_OF, cal: PF.PRODUCT_CLOSURE_SOURCE });
   assert.equal(p.api, "MARJIN_FIN_SERVER/1"); assert.equal(p.laborSource, LS.productLaborSource().policyId); assert.equal(PB.PB_NET_POLICY_ID, "PB_NET/BD-1");
   assert.equal(p.timelineSource, "compat_current_config"); assert.deepEqual([...p.configurationBasis], ["current_applied_retrospectively"]);
   for (const d of s.days) assert.deepEqual(d.fin, p);
@@ -278,7 +279,7 @@ test("API-20 a completed day without payroll ⇒ laborCostComplete false, laborP
 test("API-21 missing / invalid global employer cost (no amount, 'abc', −5, config absent, config unreadable) ⇒ null, never 0", () => {
   const cases = [["no amount", { employees: [{ id: "g1", type: "global" }] }, "incomplete_components"], ["abc", configWithGlobal("abc"), "invalid_components"], ["-5", configWithGlobal("-5"), "invalid_components"], ["config absent", null, "incomplete_components"], ["config unreadable", { state: "unreadable", reason: "envelope_json" }, "incomplete_components"]];
   for (const [name, config, state] of cases) {
-    const i = si(sepRows(), { config });
+    const i = si(sepRows(), { config, exceptionsState: "absent" });
     const d = CM.canonicalDailySeries(i, { from: "2026-09-01", to: "2026-09-01" }).days[0];
     assert.equal(d.globalLaborCost, null, name); assert.equal(d.laborCostComplete, false, name); assert.equal(d.laborPct, null, name);
     const g = CM.canonicalMonthReport(i, { kind: "open_month", month: "2026-09" }).report.actual.labor.globalEmployerCost;
@@ -313,7 +314,7 @@ test("API-24 performance: N ≥ EV-1 maxRowsTotal (213) rows over ≥ 3 years, a
   const first = spread[spread.length - 1].date; assert.ok(first <= "2023-09-29", "≥ 3 years of dates: " + first);
   const stress = Array.from({ length: 1100 }, (_, i) => entry(uid(20000 + i), daysBefore("2026-09-28", i), { sales: String(500 + i), supplier_payments: { s1: "100" }, payroll: "50" }));
   for (const [label, rows] of [["EV-1 max (213 rows)", spread], ["3-year daily stress (1100 rows)", stress]]) {
-    const i = si(rows, { config: configWithGlobal("3000"), fixed: fixedItems("3100") });
+    const i = si(rows, { config: configWithGlobal("3000"), fixed: fixedItems("3100"), exceptionsState: "absent" });
     const t0 = process.hrtime.bigint();
     const s = CM.canonicalDailySeries(i, { from: daysBefore("2026-09-28", 89), to: "2026-09-28" });
     const t1 = process.hrtime.bigint();
@@ -330,7 +331,7 @@ test("API-25 deterministic decimals: 100.1 + 200.2 + 300.3 = 600.6 in every orde
   const out = new Set();
   for (const perm of permutations(["100.1", 200.2, "300.3"])) out.add(day(perm.map((v, k) => entry(uid(k + 1), "2026-09-10", { sales: v })), "2026-09-10").revenue);
   assert.deepEqual([...out], [600.6]);
-  const i = si(sepRows(), { config: configWithGlobal("1000") });
+  const i = si(sepRows(), { config: configWithGlobal("1000"), exceptionsState: "absent" });
   const r = CM.canonicalMonthReport(i, { kind: "open_month", month: "2026-09" }).report;
   assert.equal(r.actual.labor.globalEmployerCost.value, "2800/3", "28 × 1000/30 kept exact");
   assert.equal(CM.canonicalDailySeries(i, { from: "2026-09-01", to: "2026-09-01" }).days[0].globalLaborCost, 33.3333333333, "one conversion, 10 dp, half away from zero");
@@ -352,7 +353,7 @@ test("API-26 percentage unavailable: revenue missing / zero / negative ⇒ ratio
 });
 
 test("API-27 duplicate row id ⇒ FinanceContractError(duplicate_row_id) from series, day record and month report; isCanonicalFinanceError", () => {
-  const i = si([entry("X", "2026-09-10", { sales: "1" }), entry("X", "2026-09-11", { sales: "2" })]);
+  const i = si([entry("X", "2026-09-10", { sales: "1" }), entry("X", "2026-09-11", { sales: "2" })], { exceptionsState: "absent" });
   for (const fn of [() => CM.canonicalDailySeries(i, SEP), () => CM.canonicalDayRecord(i, "2026-09-10"), () => CM.canonicalMonthReport(i, { kind: "open_month", month: "2026-09" }), () => CM.canonicalLatestCompletedPresentDate(i)]) {
     assert.throws(fn, (e) => e.name === "FinanceContractError" && /duplicate_row_id/.test(e.message) && CM.isCanonicalFinanceError(e));
   }
@@ -392,7 +393,9 @@ test("B1R1-01 need.exceptions: the structured ledger decodes with the parity-tes
   for (let k = 0; k < 90; k++) { const date = daysBefore("2026-09-28", k); hist.push(entry(uid(40000 + k), date, { sales: date === "2026-09-22" ? "90000" : "1000", supplier_payments: { s1: "300" }, payroll: "100" })); }
   const opts = { config: configWithGlobal("3000"), fixed: fixedItems("3100") };
   const base = si(hist, opts);
-  const rep = CM.canonicalMonthReport(base, { kind: "open_month", month: "2026-09" }).report;
+  // CD-M1 R1 / F-01: a not-loaded ledger is refused by the month report too (never "no closures").
+  assert.throws(() => CM.canonicalMonthReport(base, { kind: "open_month", month: "2026-09" }), (e) => e.name === "FinanceContractError" && /exceptions_required/.test(e.message));
+  const rep = CM.canonicalMonthReport(si(hist, { ...opts, exceptionsState: "absent" }), { kind: "open_month", month: "2026-09" }).report;
   assert.throws(() => CM.canonicalMonthProjection(base, rep, { nowMs: NOW_MS }), (e) => e.name === "FinanceContractError" && /exceptions_required/.test(e.message));
   const unreadable = CM.canonicalMonthProjection(si(hist, { ...opts, exceptionsState: "unreadable" }), rep, { nowMs: NOW_MS });
   assert.deepEqual([unreadable.projection, unreadable.forecast.projectedRevenue, unreadable.forecast.warnings], [null, null, ["exception_ledger_unreadable"]]);
@@ -407,7 +410,7 @@ test("B1R1-01 need.exceptions: the structured ledger decodes with the parity-tes
 
 test("AT-18 a future `costVersions`-shaped field (and any unknown field) on the inputs changes nothing and needs no call-site rewrite", async (t) => {
   const rows = sepRows();
-  const opts = { config: configWithGlobal("3000"), fixed: fixedItems("3100") };
+  const opts = { config: configWithGlobal("3000"), fixed: fixedItems("3100"), exceptionsState: "absent" };
   const plainIn = si(rows, opts);
   const future = { ...si(rows, opts), costVersions: [{ versionId: "f1:2026-09", effectiveFrom: "2026-09-01", basis: "effective_dated", globalEmployees: [{ employeeKey: "g9", kind: "authoritative_employer_cost", monthlyAmount: "999999" }], fixedItems: [{ itemKey: "x", monthlyAmount: "888888" }] }], someFutureField: { any: "thing" } };
   const outs = (i) => stableJson({

@@ -50,7 +50,7 @@ function validateCalendar(c) {
     }
     return c;
 }
-function coverageOf(days, closed, pick, partialOf) {
+function coverageOf(days, closed, pick, partialOf, conflicted = new Set()) {
     const missing = [];
     const invalid = [];
     const partial = [];
@@ -58,6 +58,14 @@ function coverageOf(days, closed, pick, partialOf) {
     let present = 0;
     let expected = 0;
     for (const d of days) {
+        // A declared closure whose recorded value contradicts it (CDA-02) is not a known zero: it is
+        // an expected date whose value is INVALID until repaired (the declaration itself stays in
+        // report.operatingCalendar and in the closed_day_has_recorded_values flag / issue).
+        if (conflicted.has(d.date)) {
+            expected += 1;
+            invalid.push(d.date);
+            continue;
+        }
         if (closed.has(d.date)) {
             closedDays.push(d.date);
             continue;
@@ -197,7 +205,14 @@ export function computePeriodReport(days, timeline, purchaseBasis, laborSource, 
     const operatingCount = dates.length - closedInWindow.length;
     const empty = dates.length < 1;
     const noOperatingDays = operatingCount < 1;
-    const revenue = totalOf(inWindow, closed, (d) => d.revenue);
+    // CDA-02: recorded NON-ZERO revenue on a declared closure contradicts the declaration. The
+    // recorded amount is kept (diagnosis; never zeroed or clamped), but revenue is then NOT a
+    // complete fact: the total is incomplete, the date is an invalid revenue date, and every
+    // revenue-dependent output carries an invalid revenue issue.
+    const contradicted = inWindow.filter((d) => closed.has(d.date) && nonZero(d.revenue)).map((d) => d.date);
+    const contradictedSet = new Set(contradicted);
+    const revenueTotal = totalOf(inWindow, closed, (d) => d.revenue);
+    const revenue = contradicted.length >= 1 ? { ...revenueTotal, total: { ...revenueTotal.total, complete: false } } : revenueTotal;
     const purchases = totalOf(inWindow, closed, (d) => d.purchases);
     const hourly = totalOf(inWindow, closed, (d) => d.hourlyLabor);
     const other = totalOf(inWindow, closed, (d) => d.otherExpense);
@@ -241,10 +256,11 @@ export function computePeriodReport(days, timeline, purchaseBasis, laborSource, 
     // recorded); an invalid value is an invalid component on any day. Global employer cost and
     // fixed configuration must cover every recognised day and carry no missing/invalid value.
     const revenueIssues = metricIssues(inWindow, closed, "revenue", (d) => d.revenue, true);
+    if (contradicted.length >= 1)
+        revenueIssues.push({ component: "revenue", kind: "invalid", reason: "closed_day_has_recorded_values", dates: contradicted });
     const purchaseIssues = metricIssues(inWindow, closed, "purchases", (d) => d.purchases, true);
     const hourlyIssues = metricIssues(inWindow, closed, "hourly_employer_cost", (d) => d.hourlyLabor, true);
     const otherIssues = metricIssues(inWindow, closed, "other_expense", (d) => d.otherExpense, false);
-    const contradicted = inWindow.filter((d) => closed.has(d.date) && nonZero(d.revenue)).map((d) => d.date);
     for (const d of contradicted)
         flags.push({ code: "closed_day_has_recorded_values", date: d });
     const calendarIssues = contradicted.length >= 1
@@ -336,7 +352,7 @@ export function computePeriodReport(days, timeline, purchaseBasis, laborSource, 
         timelineSource: timeline.timelineSource,
         coverage: {
             day: coverageOf(inWindow, closed, (d) => d.presence.day, partialAny),
-            revenue: coverageOf(inWindow, closed, (d) => d.presence.revenue, (d) => d.revenue.partial),
+            revenue: coverageOf(inWindow, closed, (d) => d.presence.revenue, (d) => d.revenue.partial, contradictedSet),
             purchases: coverageOf(inWindow, closed, (d) => d.presence.purchases, (d) => d.purchases.partial),
             hourlyLabor: coverageOf(inWindow, closed, (d) => d.presence.hourlyLabor, (d) => d.hourlyLabor.partial),
             otherExpense: coverageOf(inWindow, closed, (d) => d.presence.otherExpense, (d) => d.otherExpense.partial),
@@ -369,7 +385,7 @@ export function computePeriodReport(days, timeline, purchaseBasis, laborSource, 
             },
             purchasesPct,
             averages: {
-                revenuePerPresentDay: perPresentDay(revenue.rat, revenue.operatingPresent),
+                revenuePerPresentDay: contradicted.length >= 1 ? { state: "invalid_components" } : perPresentDay(revenue.rat, revenue.operatingPresent),
                 purchasesPerPresentDay: perPresentDay(purchases.rat, purchases.operatingPresent),
                 hourlyLaborPerPresentDay: perPresentDay(hourly.rat, hourly.operatingPresent),
             },

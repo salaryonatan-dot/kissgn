@@ -4486,6 +4486,14 @@
      "value": null,
      "issues": [
       {
+       "component": "revenue",
+       "kind": "invalid",
+       "reason": "closed_day_has_recorded_values",
+       "dates": [
+        "2026-09-02"
+       ]
+      },
+      {
        "component": "operating_calendar",
        "kind": "invalid",
        "reason": "closed_day_has_recorded_values",
@@ -4494,7 +4502,29 @@
        ]
       }
      ]
-    }
+    },
+    "report.actual.revenue": {
+     "value": "1050",
+     "presentDays": 2,
+     "complete": false
+    },
+    "report.coverage.revenue": {
+     "expectedDays": 2,
+     "presentDays": 1,
+     "missingDays": [],
+     "invalidDays": [
+      "2026-09-02"
+     ],
+     "partialDays": [],
+     "closedDays": []
+    },
+    "report.operatingCalendar.closedDates": [
+     "2026-09-02"
+    ],
+    "report.actual.averages.revenuePerPresentDay": {
+     "state": "invalid_components"
+    },
+    "report.actual.purchasesPct.state": "invalid_components"
    },
    "expectFlags": [
     {

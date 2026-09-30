@@ -16,7 +16,7 @@ import type { FinancialReport } from "../metrics/report.js";
 import { PB_NET_POLICY_ID } from "../policy/purchaseBasis.js";
 import { productLaborSource } from "../policy/laborSource.js";
 import {
-  PRODUCT_FINANCE_VERSION, REV_FORECAST_FORMULA_ID, productDailyMetrics, productDayRecord, productDays, productMonthProjection, productMonthReport, productTimeline,
+  PRODUCT_CLOSURE_SOURCE, PRODUCT_FINANCE_VERSION, REV_FORECAST_FORMULA_ID, productDailyMetrics, productDayRecord, productDays, productMonthProjection, productMonthReport, productTimeline,
 } from "../policy/productFinance.js";
 import type { ProductDailyMetric, ProductProjection, ProductRange } from "../policy/productFinance.js";
 import { CANONICAL_SERVER_API_VERSION } from "./canonicalInputs.js";
@@ -39,7 +39,12 @@ export interface ServerProvenance {
   readonly configState: InputState;
   readonly fixedState: InputState;
   readonly exceptionsState: ServerInputs["exceptionsState"];
-  readonly operatingCalendar: "none_declared";
+  /**
+   * The closure source the calculation actually used (R1 / F-03): the product closure calendar
+   * (structured ledger + narrow legacy fallback) when the ledger was loaded ("present" or the valid
+   * empty "absent"); "unknown" when it was unreadable or not loaded (see `exceptionsState`).
+   */
+  readonly operatingCalendar: typeof PRODUCT_CLOSURE_SOURCE | "unknown";
 }
 
 export function provenanceOf(inputs: ServerInputs): ServerProvenance {
@@ -62,7 +67,7 @@ export function provenanceOf(inputs: ServerInputs): ServerProvenance {
     configState: inputs.configState,
     fixedState: inputs.fixedState,
     exceptionsState: inputs.exceptionsState,
-    operatingCalendar: "none_declared" as const,
+    operatingCalendar: inputs.exceptionsState === "present" || inputs.exceptionsState === "absent" ? PRODUCT_CLOSURE_SOURCE : "unknown",
   });
 }
 
@@ -250,7 +255,11 @@ export function toAnalyticsFinancials(rec: CanonicalDayRecord): { revenue: Legac
   if (complete(parts.sales)) revenue.sales = numOf(parts.sales);
   if (complete(parts.deliveries)) revenue.deliveries = numOf(parts.deliveries);
   if (complete(parts.otherIncome)) revenue.other_income = numOf(parts.otherIncome);
-  if (complete(day.revenue)) {
+  // CDA-02 (R1 / F-02): revenue recorded on a declared closure is kept for diagnosis but is not a
+  // complete fact — no legacy revenue number, and the fin block says why.
+  const closureConflict = metric.partial.revenue && !day.revenue.partial && day.revenue.presence === "present";
+  if (closureConflict) { delete revenue.sales; delete revenue.deliveries; delete revenue.other_income; }
+  if (complete(day.revenue) && !closureConflict) {
     revenue.total = metric.revenue;
     const v = day.revenue.value as NonNullable<MetricValue["value"]>;
     revenue.has_sales = !decIsZero(v) && !decIsNegative(v);
@@ -273,7 +282,7 @@ export function toAnalyticsFinancials(rec: CanonicalDayRecord): { revenue: Legac
     inActual: true,
     presence: { day: day.presence.day, revenue: day.presence.revenue, purchases: day.presence.purchases, hourlyLabor: day.presence.hourlyLabor, otherExpense: day.presence.otherExpense },
     rowCount: day.rowCount,
-    revenue: stateOf(day.revenue),
+    revenue: closureConflict ? { state: "closed_day_has_recorded_values", value: serializeDec(day.revenue.value as NonNullable<MetricValue["value"]>) } : stateOf(day.revenue),
     purchases: bySource.length ? { ...stateOf(day.purchases), bySource } : stateOf(day.purchases),
     hourlyEmployerCost: stateOf(day.hourlyLabor),
     derived,
@@ -289,6 +298,9 @@ export function toAnalyticsFinancials(rec: CanonicalDayRecord): { revenue: Legac
 
 /** Server month report (B2's first runtime consumer): the product composition + provenance. */
 export function canonicalMonthReport(inputs: ServerInputs, sel: { readonly kind: "open_month" | "closed_month"; readonly month: string }): { provenance: ServerProvenance; report: FinancialReport; inputIssues: readonly InputIssue[] } {
+  // R1 / F-01: the month report is closure-dependent (coverage, CDA-02 contradiction, monthly-cost
+  // placement); a ledger that was not loaded is a programming error, never "no closures".
+  if (inputs.exceptionsState === "not_loaded") throw new FinanceContractError("exceptions_required", "canonicalMonthReport");
   return { provenance: provenanceOf(inputs), report: productMonthReport(inputs, sel), inputIssues: inputs.inputIssues };
 }
 

@@ -453,9 +453,20 @@ case(id="O-13",type="error",desc="contract B: a non-employer-cost (gross) global
  timeline=[{"versionId":"g","effectiveFrom":"0000-01-01","recordedAt":1,"basis":"recorded","globalEmployees":[{"employeeKey":"e","kind":"gross_salary","monthlyAmount":"1"}],"fixedItems":[],"rent":{"mode":"none"},"royalty":{"mode":"none"}}],
  expectError="global_cost_not_employer_cost")
 # O-14: closed day with recorded non-zero revenue contradicts the declaration => invalid; explicit zeros are consistent.
+# CD-M1 R1 (Codex F-02): the contradiction is also a REVENUE fact — the recorded 50 is kept (1000 + 50 = 1050, never
+# zeroed), but the revenue total is not complete, 09-02 is an expected revenue date with an invalid value (it leaves
+# closedDays; the declaration itself stays in operatingCalendar.closedDates), revenue per day is not a value, and every
+# revenue-dependent output carries the invalid revenue issue ahead of the operating-calendar one.
 case(id="O-14",desc="closed day with recorded non-zero revenue contradicts the declaration (invalid, flagged)",asOf=D3,window=ONE,config={},closedDates=["2026-09-02"],
  rows=[{"id":"a","date":"2026-09-01","sales":"1000","supplier_payments":{"s1":"0"},"payroll":"100"},{"id":"b","date":"2026-09-02","sales":"50"}],
- expect={"report.actual.operatingProfit":{"state":"invalid_components","value":None,"issues":[{"component":"operating_calendar","kind":"invalid","reason":"closed_day_has_recorded_values","dates":["2026-09-02"]}]}},
+ expect={"report.actual.operatingProfit":{"state":"invalid_components","value":None,"issues":[
+   {"component":"revenue","kind":"invalid","reason":"closed_day_has_recorded_values","dates":["2026-09-02"]},
+   {"component":"operating_calendar","kind":"invalid","reason":"closed_day_has_recorded_values","dates":["2026-09-02"]}]},
+  "report.actual.revenue":{"value":"1050","presentDays":2,"complete":False},
+  "report.coverage.revenue":{"expectedDays":2,"presentDays":1,"missingDays":[],"invalidDays":["2026-09-02"],"partialDays":[],"closedDays":[]},
+  "report.operatingCalendar.closedDates":["2026-09-02"],
+  "report.actual.averages.revenuePerPresentDay":{"state":"invalid_components"},
+  "report.actual.purchasesPct.state":"invalid_components"},
  expectFlags=[{"code":"closed_day_has_recorded_values","date":"2026-09-02"}])
 case(id="O-14z",desc="closed day with explicit zero revenue and a recorded purchase is consistent (purchase counted)",asOf=D3,window=ONE,config={},closedDates=["2026-09-02"],
  rows=[{"id":"a","date":"2026-09-01","sales":"1000","supplier_payments":{"s1":"0"},"payroll":"100"},{"id":"b","date":"2026-09-02","sales":"0","supplier_payments":{"s1":"40"}}],

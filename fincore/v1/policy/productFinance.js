@@ -7,6 +7,7 @@ import { toDailyMetric } from "../metrics/adapters/legacyNumber.js";
 import { computePeriodReport } from "../metrics/report.js";
 import { applyProjection } from "../metrics/projected.js";
 import { computeRevenueForecastV2, REV_FORECAST_V2_FORMULA_ID } from "../metrics/revenueForecast.js";
+import { decIsZero } from "../finance/decimal.js";
 import { productPurchaseBasis } from "./purchaseBasis.js";
 import { productLaborSource } from "./laborSource.js";
 export const PRODUCT_FINANCE_VERSION = "MARJIN_PRODUCT/2";
@@ -128,9 +129,13 @@ function normalized(inputs) {
     requireInputs(inputs);
     return normalizeRows(mapFieldReadback(inputs.rows), { asOfBusinessDate: inputs.asOfBusinessDate });
 }
-/** The closure calendar cannot be known when the structured ledger was unreadable. */
+/**
+ * The closure calendar cannot be known when the structured ledger was unreadable or was not
+ * loaded at all (R1 / F-01: "not_loaded" is never an empty ledger). "absent" and "present" are
+ * loaded ledgers; an omitted state means the caller supplied the complete structured ledger.
+ */
 export function closureCalendarUnknown(inputs) {
-    return inputs.exceptionLedgerState === "unreadable";
+    return inputs.exceptionLedgerState === "unreadable" || inputs.exceptionLedgerState === "not_loaded";
 }
 function exceptionsOf(inputs) {
     if (inputs.exceptionsByDate)
@@ -201,7 +206,14 @@ export function productDays(inputs, range) {
 function metricOf(day, timeline, asOf, calendar, closureCalendarUnreadable) {
     const basis = resolvePurchaseBasis(day.purchases.presence === "present" ? [day.date] : [], productPurchaseBasis());
     const metric = toDailyMetric(day, basis, productLaborSource(), timeline, { asOfBusinessDate: asOf, operatingCalendar: calendar, closureCalendarUnreadable });
-    return { ...metric, partial: { revenue: day.revenue.partial, purchases: day.purchases.partial, hourlyLabor: day.hourlyLabor.partial } };
+    // CDA-02 (R1 / F-02): non-zero revenue recorded on a declared closure is not a complete fact
+    // on its date either — the recorded amount is kept, the revenue is marked partial/invalid.
+    const conflict = calendar.closedDates.includes(day.date) && closedDayRevenueConflict(day);
+    return { ...metric, partial: { revenue: day.revenue.partial || conflict, purchases: day.purchases.partial, hourlyLabor: day.hourlyLabor.partial } };
+}
+/** A declared closure's recorded revenue that is present and non-zero (CDA-02 contradiction). */
+export function closedDayRevenueConflict(day) {
+    return day.revenue.presence === "present" && day.revenue.value !== null && !decIsZero(day.revenue.value);
 }
 /** One DailyMetric-shaped record per PRESENT completed day of the range (missing days are omitted). */
 export function productDailyMetrics(inputs, range) {
@@ -233,6 +245,10 @@ export function productDayRecord(inputs, date) {
  * the month (provenance only; no arithmetic depends on flags of other months).
  */
 export function productMonthReport(inputs, sel) {
+    // R1 / F-01: coverage, contradiction and the monthly-cost placement all depend on the closure
+    // calendar; a ledger that was never loaded is refused, never read as "no closures".
+    if (inputs && inputs.exceptionLedgerState === "not_loaded")
+        throw new FinanceContractError("closure_calendar_not_loaded", "productMonthReport");
     const n = normalized(inputs);
     const { first, last } = monthBounds(sel && sel.month);
     const days = groupByDate(n.rows, { from: first, to: last, exceptionsByDate: exceptionsOf(inputs) });
