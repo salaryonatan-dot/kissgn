@@ -1,111 +1,69 @@
 import { getDb } from "../firebase/admin.js";
-import { requireEntriesRows } from "../../lib/analytics/entriesReader.js";
+import { loadCanonicalInputs } from "../finance-server/canonicalInputs.js";
+import { canonicalMonthProjection, canonicalMonthReport } from "../finance-server/canonicalMetrics.js";
+import type { SnapshotFinancials, SnapshotInsight } from "./snapshotEmail.js";
+import { buildSnapshotView, snapshotInsights } from "./snapshotEmail.js";
 
+// Financial Core B2: the morning snapshot is ONE canonical month report (Actual = completed
+// days through D-1) plus the ONE canonical projection (REV_FORECAST/v2 → MARJIN_PROJ/2), both
+// from the server API, captured on ONE clock. This file orchestrates only: discovery, the
+// business name, the two server-API calls and the legacy field names for
+// `api/daily-snapshot/run.ts`. It imports no core module (it is B2's server-API consumer; the
+// view model is encoded by the e-mail module, B2's core consumer) and computes no value: every
+// legacy `number` below is COPIED from the view's one conversion. A figure the core does not
+// state as complete is `null`, never 0.
 export interface SnapshotData {
   tenantId: string;
   bizId: string;
   bizName: string;
-  date: string; // ISO date in Israel timezone
-  month: string; // YYYY-MM
+  date: string; // the Israel business date of the run (the as-of date; never part of Actual)
+  month: string; // YYYY-MM of the reported month
 
-  // P&L Metrics
-  totalSales: number;
-  totalFood: number;
-  totalPayroll: number;
-  totalOtherExpense: number;
-  fixedRegular: number;
-  rentAmount: number;
-  royaltyAmount: number;
-  totalExpenses: number;
-  netProfit: number;
+  /** VD-45 (owner default, not an owner choice): the 1st of a month has no completed day ⇒ no figures. */
+  presentation: SnapshotFinancials["presentation"];
 
-  // Percentages
-  foodCostPct: number;
-  laborPct: number;
+  // P&L Metrics — legacy names; `null` = unavailable (incomplete / invalid / missing), never 0
+  totalSales: number | null;
+  totalFood: number | null;
+  totalPayroll: number | null;
+  totalOtherExpense: number | null;
+  fixedRegular: number | null;
+  // Rent as the core states it: the fixed part and the percentage-of-revenue part (no B2 sum)
+  rentFixedAmount: number | null;
+  rentPctAmount: number | null;
+  royaltyAmount: number | null;
+  netProfit: number | null;
 
-  // Time metrics
+  // Percentages (ratio of totals from the core)
+  foodCostPct: number | null;
+  laborPct: number | null;
+
+  // Time metrics — calendar days (D-1), not entry-row counts and not closure-adjusted
   daysPassed: number;
+  presentDays: number;
   daysInMonth: number;
   daysLeft: number;
 
-  // Forecasts
-  dailyAvg: number;
-  forecast: number;
-  paceRevenue: number;
-  paceVsTarget: number; // percentage
+  // Projection (REV_FORECAST/v2 revenue; MARJIN_PROJ/2 profit) — null ⇒ unavailable;
+  // `financials.projection.*.state` says whether a value is complete or partial
+  forecast: number | null;
+  paceRevenue: number | null;
 
-  // Targets
+  // Targets (food/labor from config.targets.* or labelled compat defaults; sales = legacy key or 700,000)
   targetSales: number;
   targetFoodCost: number;
   targetLabor: number;
 
-  // Insights
-  insights: Array<{
-    type: "positive" | "negative" | "warning";
-    message: string;
-  }>;
-}
+  // Insights (retained rules; suppressed when their input is not complete — VD-44)
+  insights: SnapshotInsight[];
 
-interface DailyEntry {
-  date: string;
-  sales: number;
-  deliveries: number;
-  food_cost: number;
-  payroll: number;
-  hourly_payroll?: Record<string, number>;
-  other_expense: number;
-  other_income: number;
-  supplier_payments?: Record<string, number>;
-}
-
-interface FixedExpense {
-  name: string;
-  amount: number;
-  rentPct?: boolean;
-  royaltyPct?: boolean;
-  disabled?: boolean;
-}
-
-interface Employee {
-  name: string;
-  type: "global" | "hourly" | "fixed";
-  monthlySalary?: number;
-}
-
-interface Config {
-  rentPct?: number;
-  rentType?: "pct" | "fixed";
-  rentFixed?: number;
-  hasRoyalty?: boolean;
-  royaltyPct?: number;
-  targetSales: number;
-  targetFoodCost: number;
-  targetLabor: number;
-  employees?: Employee[];
-  suppliers?: Array<{ name: string }>;
+  /** The exact, typed view model the e-mail renders (strings, states, coverage, closures, provenance). */
+  financials: SnapshotFinancials;
 }
 
 interface Business {
   id: string;
   name: string;
-}
-
-function getIsraelDateString(date: Date): string {
-  return date.toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
-}
-
-function getMonthString(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  return `${year}-${month}`;
-}
-
-function getDaysInMonth(date: Date): number {
-  return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
-}
-
-function getDayOfMonth(date: Date): number {
-  return date.getDate();
 }
 
 function parseFirebaseData<T>(value: any): T {
@@ -127,22 +85,6 @@ function parseFirebaseData<T>(value: any): T {
   return value as T;
 }
 
-// Coerce a value to a finite number. Handles strings, "1,234", null, undefined.
-// Critical: form inputs and demo data store numeric fields as strings in Firebase
-// (e.target.value from <input>, plus explicit String(...) wrapping in demo data),
-// so naive `+=` causes string concatenation: 0 + "5000" + 3000 = "050003000".
-function num(value: any): number {
-  if (value === null || value === undefined || value === "") return 0;
-  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
-  if (typeof value === "string") {
-    const cleaned = value.replace(/,/g, "").trim();
-    const n = Number(cleaned);
-    return Number.isFinite(n) ? n : 0;
-  }
-  const n = Number(value);
-  return Number.isFinite(n) ? n : 0;
-}
-
 function isUnknownBusinessName(value?: string | null): boolean {
   const name = value?.trim();
   return !name || name === "Unknown";
@@ -150,229 +92,67 @@ function isUnknownBusinessName(value?: string | null): boolean {
 
 export async function buildSnapshotForBiz(
   tenantId: string,
-  bizId: string
+  bizId: string,
+  opts?: { readonly nowMs?: number }
 ): Promise<SnapshotData> {
   const db = getDb();
+  // ONE clock read for the whole snapshot: the same instant fixes the business date of the
+  // loader (Actual = D-1) and the projection's engine run.
+  const nowMs = opts?.nowMs ?? Date.now();
 
-  // Get current date in Israel timezone
-  const now = new Date();
-  const israelDate = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
-  const currentDateStr = getIsraelDateString(israelDate);
-  const currentMonth = getMonthString(israelDate);
-  const currentDayOfMonth = getDayOfMonth(israelDate);
-  const daysInCurrentMonth = getDaysInMonth(israelDate);
-
-  // Fetch all required data
-  const [entriesSnap, fixedSnap, configSnap, businessSnap] = await Promise.all([
-    db.ref(`tenants/${tenantId}/biz:${bizId}:entries`).once("value"),
-    db.ref(`tenants/${tenantId}/biz:${bizId}:fixed`).once("value"),
-    db.ref(`tenants/${tenantId}/biz:${bizId}:config`).once("value"),
+  const [inputs, businessSnap] = await Promise.all([
+    loadCanonicalInputs(db, tenantId, bizId, { site: "snapshotBuilder", nowMs, need: { config: true, fixed: true, exceptions: true } }),
     db.ref(`tenants/${tenantId}/app/business`).once("value"),
   ]);
 
-  // Server reader convergence: entries through the shared dual-mode reader — every
-  // stored row (duplicate business dates included) is aggregated exactly as before; a
-  // malformed node throws a typed EntriesStorageError, so no snapshot (and no email)
-  // is ever derived from the frozen `_v` (CTO D3).
-  const rows = requireEntriesRows(entriesSnap.val(), { tenantId, bizId, site: "snapshotBuilder" }) as unknown as DailyEntry[];
-  const fixedExpenses = parseFirebaseData<FixedExpense[]>(fixedSnap.val());
-  const config = parseFirebaseData<Config>(configSnap.val());
+  // Business name (not financial)
   const businesses = parseFirebaseData<Business[]>(businessSnap.val());
-
-  // Find business name
-  const business = businesses.find((b) => b.id === bizId);
+  const business = Array.isArray(businesses) ? businesses.find((b) => b.id === bizId) : undefined;
   const bizName = business?.name || "Unknown";
 
-  // Filter entries for current month
-  const monthEntries = rows.filter((e) => e.date?.startsWith(currentMonth));
-
-  // Initialize metrics
-  let totalSales = 0;
-  let totalFood = 0;
-  let totalPayroll = 0;
-  let totalOtherExpense = 0;
-  let totalSupplierPayments = 0;
-  let totalHourlyPayroll = 0;
-
-  // Aggregate entries — coerce every field via num() because Firebase stores
-  // these as strings (form inputs) and `+=` would otherwise concatenate.
-  for (const entry of monthEntries) {
-    totalSales += num(entry.sales);
-    totalSales += num(entry.deliveries);
-    totalSales += num((entry as any).other_income);
-
-    totalFood += num(entry.food_cost);
-    totalSupplierPayments += Object.values(entry.supplier_payments || {}).reduce(
-      (sum: number, val) => sum + num(val),
-      0
-    );
-
-    totalPayroll += num(entry.payroll);
-    totalHourlyPayroll += Object.values(entry.hourly_payroll || {}).reduce(
-      (sum: number, val) => sum + num(val),
-      0
-    );
-
-    totalOtherExpense += num(entry.other_expense);
-  }
-
-  // Use supplier_payments if available, otherwise food_cost
-  if (totalSupplierPayments > 0) {
-    totalFood = totalSupplierPayments;
-  }
-
-  // Calculate prorated global employees for the month
-  let globalEmployeePayroll = 0;
-  const employees = config.employees || [];
-  const globalEmployees = employees.filter((e) => e.type === "global");
-  const globalMonthlyTotal = globalEmployees.reduce(
-    (a: number, e) => a + num(e.monthlySalary),
-    0
-  );
-  globalEmployeePayroll = daysInCurrentMonth > 0
-    ? Math.round(globalMonthlyTotal * (monthEntries.length / daysInCurrentMonth))
-    : 0;
-
-  totalPayroll += globalEmployeePayroll;
-  totalPayroll += totalHourlyPayroll;
-
-  // Calculate fixed expenses (excluding rent and royalty)
-  let fixedRegular = 0;
-  for (const fixed of fixedExpenses) {
-    if (fixed.disabled) continue;
-    if (fixed.rentPct || fixed.royaltyPct) continue;
-    fixedRegular += num(fixed.amount);
-  }
-
-  // Calculate rent
-  let rentAmount = 0;
-  const rentPct = num(config.rentPct);
-  const rentFixed = num(config.rentFixed);
-  if (config.rentType === "pct" && rentPct) {
-    rentAmount = totalSales * (rentPct / 100);
-  } else if (rentFixed) {
-    rentAmount = rentFixed;
-  }
-
-  // Calculate royalty
-  let royaltyAmount = 0;
-  const royaltyPct = num(config.royaltyPct);
-  if (config.hasRoyalty && royaltyPct) {
-    royaltyAmount = totalSales * (royaltyPct / 100);
-  }
-
-  // Calculate totals
-  const totalExpenses =
-    totalFood + totalPayroll + totalOtherExpense + fixedRegular + rentAmount + royaltyAmount;
-  const netProfit = totalSales - totalExpenses;
-
-  // Calculate percentages
-  const foodCostPct = totalSales > 0 ? (totalFood / totalSales) * 100 : 0;
-  const laborPct = totalSales > 0 ? (totalPayroll / totalSales) * 100 : 0;
-
-  // Time metrics — use actual entries count (days with data entered)
-  const daysPassed = monthEntries.length;
-  const daysLeft = daysInCurrentMonth - currentDayOfMonth;
-
-  // Forecasts
-  const dailyAvg = daysPassed > 0 ? netProfit / daysPassed : 0;
-  const forecast = netProfit + dailyAvg * daysLeft;
-  const paceRevenue = daysPassed > 0 ? (totalSales / daysPassed) * daysInCurrentMonth : 0;
-  const targetSales = num(config.targetSales);
-  const targetFoodCost = num(config.targetFoodCost);
-  const targetLabor = num(config.targetLabor);
-  const paceVsTarget = targetSales > 0
-    ? ((paceRevenue - targetSales) / targetSales) * 100
-    : 0;
-
-  // Generate insights
-  const insights: Array<{ type: "positive" | "negative" | "warning"; message: string }> = [];
-
-  // Resolved targets (with defaults) for both insights and the returned snapshot.
-  const resolvedTargetSales = targetSales || 700000;
-  const resolvedTargetFood = targetFoodCost || 33;
-  const resolvedTargetLabor = targetLabor || 27;
-
-  // Food cost insight
-  if (foodCostPct > resolvedTargetFood + 3) {
-    insights.push({
-      type: "negative",
-      message: `עלות המזון גבוהה מהיעד: ${foodCostPct.toFixed(1)}% (יעד: ${resolvedTargetFood}%)`,
-    });
-  } else if (foodCostPct < resolvedTargetFood - 3) {
-    insights.push({
-      type: "positive",
-      message: `עלות המזון נמוכה מהיעד: ${foodCostPct.toFixed(1)}% (יעד: ${resolvedTargetFood}%)`,
-    });
-  }
-
-  // Labor insight
-  if (laborPct > resolvedTargetLabor + 3) {
-    insights.push({
-      type: "negative",
-      message: `עלות העובדים גבוהה מהיעד: ${laborPct.toFixed(1)}% (יעד: ${resolvedTargetLabor}%)`,
-    });
-  } else if (laborPct < resolvedTargetLabor - 3) {
-    insights.push({
-      type: "positive",
-      message: `עלות העובדים נמוכה מהיעד: ${laborPct.toFixed(1)}% (יעד: ${resolvedTargetLabor}%)`,
-    });
-  }
-
-  // Revenue pace insight
-  if (paceRevenue < resolvedTargetSales * 0.9) {
-    insights.push({
-      type: "negative",
-      message: `קצב ההכנסות נמוך מהיעד: ₪${Math.round(paceRevenue).toLocaleString("he-IL")} (יעד: ₪${Math.round(resolvedTargetSales).toLocaleString("he-IL")})`,
-    });
-  } else if (paceRevenue > resolvedTargetSales * 1.05) {
-    insights.push({
-      type: "positive",
-      message: `קצב ההכנסות גבוה מהיעד: ₪${Math.round(paceRevenue).toLocaleString("he-IL")} (יעד: ₪${Math.round(resolvedTargetSales).toLocaleString("he-IL")})`,
-    });
-  }
-
-  // Net profit insight
-  if (netProfit < 0) {
-    insights.push({
-      type: "negative",
-      message: `רווח נקי שלילי: ₪${Math.round(netProfit).toLocaleString("he-IL")}`,
-    });
-  } else if (netProfit > resolvedTargetSales * 0.15) {
-    insights.push({
-      type: "positive",
-      message: `רווח נקי חזק: ₪${Math.round(netProfit).toLocaleString("he-IL")}`,
-    });
-  }
+  const month = inputs.asOfBusinessDate.slice(0, 7);
+  const { report, provenance } = canonicalMonthReport(inputs, { kind: "open_month", month });
+  const projection = report.window.state === "actual" ? canonicalMonthProjection(inputs, report, { nowMs }) : null;
+  const financials = buildSnapshotView({
+    report,
+    projection,
+    provenance,
+    config: inputs.config.state === "present" ? inputs.config.value : null,
+  });
+  const f = financials;
+  // A legacy `number` field carries a COMPLETE value only: it has no room for the "partial" label,
+  // so a partial or unavailable value is `null` there and is shown, labelled, from `financials`.
+  const complete = (a: { readonly state: string; readonly number: number | null }): number | null => (a.state === "complete" ? a.number : null);
 
   return {
     tenantId,
     bizId,
     bizName,
-    date: currentDateStr,
-    month: currentMonth,
-    totalSales,
-    totalFood,
-    totalPayroll,
-    totalOtherExpense,
-    fixedRegular,
-    rentAmount,
-    royaltyAmount,
-    totalExpenses,
-    netProfit,
-    foodCostPct,
-    laborPct,
-    daysPassed,
-    daysInMonth: daysInCurrentMonth,
-    daysLeft,
-    dailyAvg,
-    forecast,
-    paceRevenue,
-    paceVsTarget,
-    targetSales: resolvedTargetSales,
-    targetFoodCost: resolvedTargetFood,
-    targetLabor: resolvedTargetLabor,
-    insights,
+    date: inputs.asOfBusinessDate,
+    month: f.month,
+    presentation: f.presentation,
+    totalSales: complete(f.amounts.revenue),
+    totalFood: complete(f.amounts.purchases),
+    totalPayroll: complete(f.amounts.laborEmployerCost),
+    totalOtherExpense: complete(f.amounts.otherExpense),
+    fixedRegular: complete(f.amounts.fixedRegular),
+    rentFixedAmount: complete(f.amounts.rentFixed),
+    rentPctAmount: complete(f.amounts.rentPct),
+    royaltyAmount: complete(f.amounts.royalty),
+    netProfit: complete(f.amounts.operatingProfit),
+    foodCostPct: f.ratios.purchasesPct.number,
+    laborPct: f.ratios.laborPct.number,
+    daysPassed: f.window.recognizedDays,
+    presentDays: f.window.presentDays,
+    daysInMonth: f.window.daysInMonth,
+    daysLeft: f.window.daysLeft,
+    forecast: complete(f.projection.operatingProfit),
+    paceRevenue: complete(f.projection.revenue),
+    targetSales: f.goals.sales.number,
+    targetFoodCost: f.goals.foodCostPct.number,
+    targetLabor: f.goals.laborPct.number,
+    insights: snapshotInsights(f),
+    financials,
   };
 }
 

@@ -38,7 +38,7 @@ const RAW = collectServerReaderScopeInputs(ROOT);
 const CORE_RULES = JSON.parse(gitIn(ROOT, ["show", `${SERVER_READER_BASE}:database.rules.json`]).stdout);
 const FENCE_OK = authorizedVersionFenceRulesDelta(CORE_RULES, JSON.parse(readFileSync(join(ROOT, "database.rules.json"), "utf8"))).ok === true;
 const REAL = { ...RAW, changedProtectedPaths: RAW.changedProtectedPaths.filter((rel) => !(FENCE_OK && rel === "database.rules.json")) };
-const DB = "src/analytics/dailyBuilder.ts", DM = "src/repositories/analytics/dailyMetricsRepo.ts", SB = "src/snapshot/snapshotBuilder.ts";
+const DB = "src/analytics/dailyBuilder.ts", DM = "src/repositories/analytics/dailyMetricsRepo.ts", SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const src = (rel) => readFileSync(join(ROOT, rel), "utf8");
 const clone = (o) => JSON.parse(JSON.stringify(o));
 /** Verdict for the real tree with ONE file's bytes replaced by `text`. */
@@ -47,14 +47,14 @@ const mustFail = (inputs, reason, m) => { const v = serverReaderScopeVerdict(inp
 const mutate = (rel, fn, m) => { const before = src(rel); const after = fn(before); assert.notEqual(after, before, m + ": mutation applied"); return withText(rel, after); };
 const line = (text, needle) => { const l = text.split("\n").find((x) => x.includes(needle)); assert.ok(l, "line: " + needle); return l; };
 
-test("I. positive control: the exact approved tree passes; five plain files; pins are reviewed changes on top of the core; git agrees on the identity", () => {
+test("I. positive control: the exact approved tree passes; six plain files (B2 adds the e-mail presenter); pins are reviewed changes on top of the core; git agrees on the identity", () => {
   assert.equal(SERVER_READER_BASE, "8cac71c1248ad5cc49dfa1a727bf292398ae74e8");
   assert.deepEqual(serverReaderScopeVerdict(REAL), { ok: true });
   // the reader layer itself still rejects the Rules change: only the validated fence projection admits it
   assert.equal(FENCE_OK, true);
   assert.ok(RAW.changedProtectedPaths.includes("database.rules.json"));
   assert.deepEqual(serverReaderScopeVerdict(RAW), { ok: false, reason: "unauthorized_protected_path", detail: ["database.rules.json"] }, "unprojected: Rules remain a protected path for the reader layer");
-  assert.deepEqual([...SERVER_READER_AUTHORIZED_FILES].sort(), [DB, DM, "src/repositories/analytics/laborRepo.ts", "src/repositories/analytics/purchasesRepo.ts", SB]);
+  assert.deepEqual([...SERVER_READER_AUTHORIZED_FILES].sort(), [DB, DM, "src/repositories/analytics/laborRepo.ts", "src/repositories/analytics/purchasesRepo.ts", SB, SE]);
   for (const f of SERVER_READER_AUTHORIZED_FILES) {
     assert.ok(isPlainAuthorizedFile(f) && isProtectedPath(f), f);
     assert.match(SERVER_READER_APPROVED_BLOBS[f], /^[0-9a-f]{40}$/, f);
@@ -129,7 +129,13 @@ test("E. financial formula changed → approved_content_mismatch", () => {
   mustFail(mutate(DB, (t) => t.replace("    revenue,\n    fin,", "    revenue: { ...revenue, total: (revenue.total ?? 0) / 1.18 },\n    fin,"), "VAT division"), "approved_content_mismatch", "VAT division inserted");
   mustFail(mutate(DB, (t) => t.replace("  const hadEntry = revenue.had_entry;", "  const hadEntry = (revenue.total ?? 0) > 0;"), "presence rule"), "approved_content_mismatch", "presence rule changed");
   mustFail(mutate(DM, (t) => t.replace('{ site: "dailyMetricsRepo.getDailyMetrics", need: { config: true, fixed: false, exceptions: false } }', '{ site: "dailyMetricsRepo.getDailyMetrics", need: { config: false, fixed: false, exceptions: false } }'), "global labor source dropped"), "approved_content_mismatch", "config read dropped (global employer cost unknown)");
-  mustFail(mutate(SB, (t) => { const l = line(t, "totalSales +="); return t.replace(l, l.replace(";", " * 1.18;")); }, "snapshot gross-up"), "approved_content_mismatch", "snapshot sales grossed up");
+  // B2: needles re-anchored to the B2 snapshot bytes (every mutation class kept)
+  mustFail(mutate(SB, (t) => { const l = line(t, "totalSales: complete(f.amounts.revenue),"); return t.replace(l, l.replace("complete(f.amounts.revenue),", "(complete(f.amounts.revenue) ?? 0) * 1.18,")); }, "snapshot gross-up"), "approved_content_mismatch", "snapshot sales grossed up");
+  mustFail(mutate(SB, (t) => t.replace('const complete = (a: { readonly state: string; readonly number: number | null }): number | null => (a.state === "complete" ? a.number : null);', "const complete = (a: { readonly state: string; readonly number: number | null }): number | null => a.number;"), "legacy partial leak"), "approved_content_mismatch", "snapshot legacy fields leak a partial value as a plain number");
+  mustFail(mutate(SE, (t) => t.replace("revenueShare: shareOfRevenue(amounts.revenue, amounts.revenue),", 'revenueShare: Object.freeze({ exact: "100", number: 100, state: "value" as const, reason: null }),'), "B2-R02 forced 100%"), "approved_content_mismatch", "e-mail forces a 100% revenue share");
+  mustFail(mutate(SE, (t) => t.replace("if (c.missing.length > 0) parts.push(", "if (false) parts.push("), "CDA-18 warning dropped"), "approved_content_mismatch", "e-mail drops the dated missing-revenue warning");
+  mustFail(mutate(SB, (t) => t.replace("need: { config: true, fixed: true, exceptions: true }", "need: { config: true, fixed: true, exceptions: false }"), "snapshot exceptions dropped"), "approved_content_mismatch", "snapshot exception history dropped");
+  mustFail(mutate(SE, (t) => { const l = line(t, "if (a.state === \"unavailable\" || a.exact === null) return NOT_AVAILABLE;"); return t.replace(l, "  if (a.exact === null) return formatShekel(\"0\");"); }, "e-mail missing ⇒ ₪0"), "approved_content_mismatch", "e-mail renders a missing value as ₪0");
 });
 
 test("F. part of the reader change reverted (tokens still present elsewhere) → approved_content_mismatch", () => {
@@ -158,10 +164,19 @@ test("F. part of the reader change reverted (tokens still present elsewhere) →
     const bv = mustFail(withText(f, b1.stdout), "approved_content_mismatch", f + " B1 658cd05 bytes");
     assert.equal(bv.detail.file, f); assert.notEqual(bv.detail.actual, SERVER_READER_APPROVED_BLOBS[f]);
   }
-  // and the snapshot pin is byte-identical to its c46c2727 and pre-B1 versions (B1 does not touch it)
+  // B2 re-pin: the snapshot bytes of every earlier approved state (c46c2727, the B1 base, B1
+  // 658cd05 and the approved B1 R1 4675eb20 — all the same pre-B2 blob) and the pre-B2 e-mail
+  // presenter are no longer the approved version — reverting either file to them is denied
+  const PRE_B2 = "4675eb20a97e8750429fad3e2ebda94f42f187b5";
+  const preSnap = gitIn(ROOT, ["rev-parse", `${PRE_B2}:${SB}`]).stdout.trim();
   for (const rev of ["c46c27278966e517a02a91e7adc0911084012b20", B1_BASE, "658cd05bdae7d236ece221203c0700523e188c9e"]) {
     const at = gitIn(ROOT, ["rev-parse", `${rev}:${SB}`]); assert.equal(at.status, 0);
-    assert.equal(at.stdout.trim(), SERVER_READER_APPROVED_BLOBS[SB], SB + ": pin unchanged at " + rev.slice(0, 8));
+    assert.equal(at.stdout.trim(), preSnap, SB + ": one pre-B2 version at " + rev.slice(0, 8));
+  }
+  for (const f of [SB, SE]) {
+    const prev = gitIn(ROOT, ["show", `${PRE_B2}:${f}`]); assert.equal(prev.status, 0, prev.stderr);
+    const pv = mustFail(withText(f, prev.stdout), "approved_content_mismatch", f + " pre-B2 bytes");
+    assert.equal(pv.detail.file, f); assert.notEqual(pv.detail.actual, SERVER_READER_APPROVED_BLOBS[f]);
   }
   // and a file missing from the tree
   const gone = clone(REAL); gone.blobs[DB] = null; mustFail(gone, "approved_content_mismatch", "file absent");

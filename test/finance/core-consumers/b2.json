@@ -1,0 +1,9 @@
+{
+  "slice": "B2",
+  "consumers": [
+    "src/snapshot/snapshotEmail.ts"
+  ],
+  "serverApiConsumers": [
+    "src/snapshot/snapshotBuilder.ts"
+  ]
+}

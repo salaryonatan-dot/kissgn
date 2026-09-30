@@ -39,9 +39,17 @@ test("GUARD-02 core import allowlist: only src/finance-server loads the core; ex
     if (importsCore(src)) coreImporters.add(f);
     if (!f.startsWith("src/finance-server/") && importsServerApi(src)) serverImporters.add(f);
   }
-  assert.deepEqual([...coreImporters].sort(), [...B1_JSON.consumers].sort());
-  assert.deepEqual([...serverImporters].sort(), [...B1_JSON.serverApiConsumers].sort());
-  assert.ok([...coreImporters].every((f) => f.startsWith("src/finance-server/")));
+  // B2 (AMEND-02): later slices list their own importers in their own
+  // test/finance/core-consumers/<slice>.json. The importer sets must equal the UNION of the
+  // slice files; the B1 entries stay exactly as approved; every B1 core importer is a
+  // src/finance-server file.
+  const union = { consumers: new Set(), serverApiConsumers: new Set() };
+  for (const { json } of loadConsumerFiles(REPO)) for (const k of ["consumers", "serverApiConsumers"]) for (const f of json[k] || []) union[k].add(f);
+  assert.deepEqual([...coreImporters].sort(), [...union.consumers].sort());
+  assert.deepEqual([...serverImporters].sort(), [...union.serverApiConsumers].sort());
+  for (const f of B1_JSON.consumers) assert.ok(coreImporters.has(f), "B1 consumer still imports the core: " + f);
+  for (const f of B1_JSON.serverApiConsumers) assert.ok(serverImporters.has(f), "B1 server-API consumer still imports it: " + f);
+  assert.ok(B1_JSON.consumers.every((f) => f.startsWith("src/finance-server/")));
 });
 
 test("GUARD-03 computePeriodReport( and toDailyMetric( are called only in src/policy/productFinance.ts, with the product basis and labor source", () => {
@@ -74,23 +82,28 @@ test("GUARD-04 the retired helpers are absent from the migrated files; no hourly
   for (const a of numUses) assert.match(a, /^(?:config\.(?:lat|lon)|raw\?\.daily\?\.\w+\?\.\[0\])$/, "num() survives for location / weather only: " + a);
 });
 
-test("GUARD-05 server-reader pins: exactly 5 files; the 4 B1 files re-pinned to their git hash-object; the snapshot pin unchanged; no other protected path changed", () => {
-  assert.deepEqual([...SERVER_READER_AUTHORIZED_FILES].sort(), ["src/analytics/dailyBuilder.ts", "src/repositories/analytics/dailyMetricsRepo.ts", "src/repositories/analytics/laborRepo.ts", "src/repositories/analytics/purchasesRepo.ts", "src/snapshot/snapshotBuilder.ts"]);
+test("GUARD-05 server-reader pins: the 4 B1 files re-pinned to their git hash-object; B2 adds only the two snapshot files; no other protected path changed", () => {
+  // B2: the snapshot pin is re-pinned by B2 (its owner) and the approved B2 MODIFY of
+  // src/snapshot/snapshotEmail.ts is pinned as the sixth exact file.
+  const SNAPSHOT_FILES = ["src/snapshot/snapshotBuilder.ts", "src/snapshot/snapshotEmail.ts"];
+  assert.deepEqual([...SERVER_READER_AUTHORIZED_FILES].sort(), ["src/analytics/dailyBuilder.ts", "src/repositories/analytics/dailyMetricsRepo.ts", "src/repositories/analytics/laborRepo.ts", "src/repositories/analytics/purchasesRepo.ts", ...SNAPSHOT_FILES]);
   for (const f of MIGRATED) {
     const h = gitIn(REPO, ["hash-object", f]); assert.equal(h.status, 0);
     assert.equal(SERVER_READER_APPROVED_BLOBS[f], h.stdout.trim(), f + " pin = working tree");
     const atBase = gitIn(REPO, ["rev-parse", `${B1_BASE}:${f}`]).stdout.trim();
     assert.notEqual(SERVER_READER_APPROVED_BLOBS[f], atBase, f + " is a reviewed B1 change (re-pinned)");
   }
-  const snap = "src/snapshot/snapshotBuilder.ts";
-  assert.equal(SERVER_READER_APPROVED_BLOBS[snap], gitIn(REPO, ["rev-parse", `${B1_BASE}:${snap}`]).stdout.trim(), "snapshot pin unchanged (B2 owns it)");
+  for (const snap of SNAPSHOT_FILES) {
+    assert.equal(SERVER_READER_APPROVED_BLOBS[snap], gitIn(REPO, ["hash-object", snap]).stdout.trim(), snap + " pin = working tree (B2)");
+    assert.notEqual(SERVER_READER_APPROVED_BLOBS[snap], gitIn(REPO, ["rev-parse", `${B1_BASE}:${snap}`]).stdout.trim(), snap + " is a reviewed B2 change (re-pinned)");
+  }
   const raw = collectServerReaderScopeInputs(REPO);
   const core = JSON.parse(gitIn(REPO, ["show", `${SERVER_READER_BASE}:database.rules.json`]).stdout);
   const fence = authorizedVersionFenceRulesDelta(core, JSON.parse(read("database.rules.json"))).ok === true;
   const live = { ...raw, changedProtectedPaths: raw.changedProtectedPaths.filter((r) => !(fence && r === "database.rules.json")) };
   assert.deepEqual(serverReaderScopeVerdict(live), { ok: true });
   const b1Protected = gitIn(REPO, ["diff", "--name-only", B1_BASE, "--"]).stdout.trim().split("\n").filter((f) => /^src\/(analytics|repositories|agent|snapshot|forecast)\//.test(f));
-  assert.deepEqual(b1Protected.sort(), [...MIGRATED].sort(), "B1 changes no other protected file");
+  assert.deepEqual(b1Protected.sort(), [...MIGRATED, ...SNAPSHOT_FILES].sort(), "B1 + B2 change no other protected file");
 });
 
 test("GUARD-06 ServerProvenance constants are imported from the core, never re-typed", () => {
@@ -183,9 +196,11 @@ test("G2-05 an unlisted importer fails (core and server API, static / dynamic / 
 
 test("G2-06 the committed b1.json passes against the real repository", () => {
   const files = loadConsumerFiles(REPO);
-  assert.deepEqual(files.map((f) => f.name), ["b1.json"]);
+  // B2 (AMEND-02): later slices add their own <slice>.json next to b1.json; b1.json itself is unchanged
+  assert.ok(files.map((f) => f.name).includes("b1.json"));
   const v = validateConsumerFiles(files, repoKindOf(REPO));
   assert.deepEqual(v.errors, []); assert.equal(v.ok, true);
-  assert.deepEqual([...v.consumers].sort(), ["src/finance-server/canonicalInputs.ts", "src/finance-server/canonicalMetrics.ts"]);
-  assert.equal(v.serverApiConsumers.size, 5);
+  const b1 = validateConsumerFiles(files.filter((f) => f.name === "b1.json"), repoKindOf(REPO));
+  assert.deepEqual([...b1.consumers].sort(), ["src/finance-server/canonicalInputs.ts", "src/finance-server/canonicalMetrics.ts"]);
+  assert.equal(b1.serverApiConsumers.size, 5);
 });
