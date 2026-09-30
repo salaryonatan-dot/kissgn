@@ -85,8 +85,14 @@ export function toDailyMetric(day: CanonicalDay, basis: PurchaseBasisResolution,
   const globalKnown = placement.state === "placed" && ctx.closureCalendarUnreadable !== true && !(timeline.flags || []).some((f) => GLOBAL_CONFIG_CODES.includes(f.code));
   const globalDay = globalKnown && placement.state === "placed" ? placement.global : null;
   const laborRat = hourly === null || globalDay === null ? null : ratAdd(ratFromDec(hourly), globalDay);
+  // A daily ratio needs a VALID revenue denominator (CD-M1 R2 / CDA-02): recorded non-zero revenue
+  // on a declared closure contradicts the declaration, and a partial (partly invalid) revenue is
+  // not a complete fact. The recorded revenue stays on the metric; only the ratios over it are
+  // unavailable (null — never 0).
+  const revenueClosureConflict = closed && rev !== null && !decIsZero(rev);
+  const revenueDenominatorValid = rev !== null && !day.revenue.partial && !revenueClosureConflict;
   const pct = (num: ReturnType<typeof ratFromDec> | null): number | null => {
-    if (num === null || rev === null) return null;
+    if (num === null || !revenueDenominatorValid) return null;
     const r = ratioOfTotals(num, ratFromDec(rev));
     return r.state === "value" ? amountToNumber(r.value) : null;
   };

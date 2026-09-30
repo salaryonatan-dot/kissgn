@@ -270,8 +270,11 @@ export function toAnalyticsFinancials(rec: CanonicalDayRecord): { revenue: Legac
   const derived: NonNullable<AnalyticsFinBlock["derived"]> = { laborCostComplete: metric.laborCostComplete, conversion: `legacyNumber/${DECIMAL_CONTRACT_VERSION}/10dp` };
   if (metric.laborCostComplete) derived.laborCost = metric.laborCost;
   if (metric.globalLaborCost !== null) derived.globalLaborCost = metric.globalLaborCost;
-  if (metric.laborPct !== null) derived.laborPct = metric.laborPct;
-  if (metric.foodCostPct !== null) derived.foodCostPct = metric.foodCostPct;
+  // Revenue-dependent ratios are persisted only over a complete, non-contradicted revenue
+  // denominator (CD-M1 R2): an unavailable ratio is OMITTED, never written as 0 or null.
+  const revenueDenominatorComplete = complete(day.revenue) && !closureConflict;
+  if (metric.laborPct !== null && revenueDenominatorComplete) derived.laborPct = metric.laborPct;
+  if (metric.foodCostPct !== null && revenueDenominatorComplete) derived.foodCostPct = metric.foodCostPct;
   const p = rec.provenance;
   const bySource = Object.keys(day.purchases.bySource).sort().map((source) => ({ source, amount: day.purchases.bySource[source] }));
   const flagCodes = Array.from(new Set(day.flags.map((f) => f.code))).sort();
