@@ -444,6 +444,23 @@ migrate state binding (R1). Evidence bundles are written to a per-run temporary 
 
 Expected: `total=18 passed=18 failed=0` — `ALL CASES PASSED`.
 
-There are now ELEVEN emulator scripts, and they all reseed the database root (the mutation
+There are now TWELVE emulator scripts (with `closure-action-emulator.mjs` below), and they all reseed the database root (the mutation
 probe, the fence matrix and the historical page proof also swap the loaded Rules), so they
 still must run one at a time against a single emulator.
+
+## Run the CD-M2 closure action proof
+
+`closure-action-emulator.mjs` drives the "Business closed" action (the production seam
+`window.MarjinClosureLifecycle` vm-extracted from `index.html`, the one destination lane and the
+remote-atomic mutator) over real RTDB transactions. The structured-exception step runs the
+PRODUCTION `lib/repositories/entryExceptionsRepo.js` `runEntryExceptionTxn` (optionally on a
+fresh Admin app per request — a cold instance cache), and the result is read back by the approved
+CD-M1 canonical report / closure calendar compiled from `src/finance-server/*`. Cases: cancel
+writes nothing; unrelated concurrent edit survives; revenue conflict → visible contradiction →
+repair; reopen; future-date closure; close/reopen/re-close on cold instances.
+
+```
+... "node test/emulator/closure-action-emulator.mjs"
+```
+
+Expected: `total=6 passed=6 failed=0` — `ALL CASES PASSED`.

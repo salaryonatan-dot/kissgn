@@ -2385,6 +2385,210 @@ function createRemoteEntriesMutator(io) {
 }
 
 window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, scheduleSelectionBoundTimeout, loadExceptionsBound, createPersistence, createEntriesWriteCoordinator, createSaveOwnership, createInsightReadback, createInsightUiLoader, createSaveUiRunner, createExceptionOwnership, createSupplierResultOwnership, applySupplierWriteResult, executeEntrySave, createRemoteEntriesMutator, applyEntryIntent, resolveEntryTarget, parseEntriesNode, contentFingerprint, stableStringify, buildEntryUpsertIntent, buildEntryDeleteIntent, rowDiffPaths, describeSaveOutcome, validateEntriesNode, isValidEntryId, generateEntryId });
+// ── CD-M2: EXPLICIT "BUSINESS CLOSED" ACTION (closed-days amendment CD-01/CD-17, CDA-01/CDA-17) ──
+// One business date of the CAPTURED selection. The structured exception ledger stays the
+// ONLY closure store (active `reasonCode:"closure"`, written by the existing server
+// set/clear-entry-exception operations with revision + operationId); revenue becomes an
+// explicit zero through the SAME typed `upsert_entry` intents, the ONE destination lane and
+// the remote transaction every entries write uses. No field, node, intent type or store is
+// added, and no revenue is ever restored.
+//
+// ORDER — closure first, then revenue zero. The two writes live in different stores and
+// cannot be one transaction. A failure between them leaves "closure + recorded revenue",
+// which the shared core reports as a CDA-02 contradiction (revenue invalid, never a
+// complete fact) until a retry converges. The reverse order would leave an ordinary
+// operating-day zero — a VALID fact that enters the weekday forecast baseline — so a
+// partial failure would be silently wrong instead of visibly invalid.
+//
+// CONFIRMATION — any recorded non-zero (or unreadable) revenue on the date needs a second
+// explicit confirmation of the exact plan shown to the operator (rows + amounts). The
+// confirmation is bound to the plan fingerprint: if the revenue changed after it was
+// shown, nothing is written and the operator must confirm the new state. Cancelling means
+// never calling the executor — the planner performs no I/O.
+//
+// CONCURRENCY — each zeroing intent patches ONLY the revenue fields that are not already
+// zero, with the confirmed values as its base: a concurrent revenue change is a remote
+// `conflict` (nothing overwritten), while a concurrent change to any other field of the
+// row (suppliers, payroll, notes, unknown fields) merges untouched. Success is reported
+// only after the committed rows show an explicit zero revenue on the date.
+//
+// FUTURE DATES — a scheduled closure is recorded in the ledger only (its forecast revenue
+// becomes zero at once in the shared core); no future entry row is created. Revenue already
+// recorded on that date is zeroed under the same confirmation.
+const CLOSURE_REASON_CODE = "closure";
+const CLOSURE_REVENUE_FIELDS = ["sales", "deliveries", "other_income"];
+function closureCellKind(v) {
+  if (v === undefined || v === null) return "absent";
+  if (typeof v === "number") return Number.isFinite(v) ? (v === 0 ? "zero" : "nonzero") : "invalid";
+  if (typeof v !== "string") return "invalid";
+  const t = v.trim();
+  if (t === "") return "absent";
+  if (!/^[+-]?(\d+(\.\d*)?|\.\d+)$/.test(t)) return "invalid";
+  return Number(t) === 0 ? "zero" : "nonzero";
+}
+function isActiveClosureState(st) {
+  return !!st && st.status === "active" && st.reasonCode === CLOSURE_REASON_CODE;
+}
+// Pure: the closure plan for ONE date of the given rows. No I/O, no clock (today is given).
+function planClosure(rows, date, opts) {
+  const key = entryDateKey(date);
+  if (!key || !/^\d{4}-\d{2}-\d{2}$/.test(key)) return { status: "invalid_date" };
+  const today = opts && typeof opts.today === "string" ? opts.today : null;
+  if (!today) return { status: "clock_required" };
+  const timing = key < today ? "completed" : key === today ? "current" : "future";
+  const hits = (Array.isArray(rows) ? rows : []).filter(r => isPlainRow(r) && entryDateKey(r.date) === key);
+  if (hits.some(r => !isValidEntryId(r.id))) return { status: "blocked_entry_identity_required", date: key };
+  const planRows = hits.map(r => {
+    const values = {}, kinds = {};
+    CLOSURE_REVENUE_FIELDS.forEach(f => { values[f] = r[f] === undefined ? null : r[f]; kinds[f] = closureCellKind(r[f]); });
+    const toZero = CLOSURE_REVENUE_FIELDS.filter(f => kinds[f] === "nonzero" || kinds[f] === "invalid");
+    const hasRecorded = CLOSURE_REVENUE_FIELDS.some(f => kinds[f] !== "absent");
+    return { id: r.id, values, kinds, toZero, hasRecorded };
+  }).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const needsConfirmation = planRows.some(p => p.toZero.length > 0);
+  // Display only (the confirmation dialog): the recorded numeric amounts; unreadable cells are listed, not summed.
+  let displayTotal = 0, unreadableCells = 0;
+  planRows.forEach(p => CLOSURE_REVENUE_FIELDS.forEach(f => {
+    if (p.kinds[f] === "nonzero") displayTotal += Number(typeof p.values[f] === "string" ? p.values[f].trim() : p.values[f]);
+    if (p.kinds[f] === "invalid") unreadableCells += 1;
+  }));
+  // Explicit zero: on a completed/current date the revenue must be RECORDED as zero, not merely absent.
+  // When no row records any revenue cell, one row (the lowest id — deterministic) receives sales 0.
+  const explicitZeroOn = (timing === "future" || planRows.some(p => p.hasRecorded) || planRows.length === 0) ? [] : [planRows[0].id];
+  const createZeroRow = timing !== "future" && planRows.length === 0;
+  const fingerprint = stableStringify({ date: key, rows: planRows.map(p => ({ id: p.id, values: p.values })) });
+  return { status: "ok", date: key, timing, rows: planRows, needsConfirmation, displayTotal, unreadableCells, explicitZeroOn, createZeroRow, fingerprint };
+}
+// The typed intents that turn the confirmed plan into an explicit zero revenue.
+function closureZeroIntents(plan, opts) {
+  const out = [];
+  plan.rows.forEach(p => {
+    const fields = {}, base = {};
+    p.toZero.forEach(f => { fields[f] = 0; base[f] = p.values[f] === null ? undefined : p.values[f]; });
+    if (plan.explicitZeroOn.indexOf(p.id) !== -1) { fields.sales = 0; base.sales = p.values.sales === null ? undefined : p.values.sales; }
+    if (Object.keys(fields).length) out.push({ type: "upsert_entry", target: { id: p.id }, patch: { fields, maps: {}, unset: {} }, base: { fields: base, maps: {} }, createIfMissing: false });
+  });
+  if (plan.createZeroRow) {
+    const newId = opts && opts.newRowId ? opts.newRowId() : undefined;
+    if (!isValidEntryId(newId)) return { status: "invalid_identity" };
+    const empty = { ...((opts && opts.emptyEntry) || {}) };
+    delete empty.is_exception; delete empty.exception_reason; delete empty.exception_note; delete empty.exception_set_at; delete empty.exception_set_by;
+    const newRow = { ...empty, id: newId, date: plan.date, sales: 0, deliveries: 0, other_income: 0 };
+    out.push({ type: "upsert_entry", target: { id: newId }, createIfMissing: true, newRow, patch: {}, base: {} });
+  }
+  return { status: "ok", intents: out };
+}
+// Converged: every row of the date has no non-zero/unreadable revenue and (completed/current) the date records a zero.
+function closureRevenueConverged(rows, date, timing) {
+  const hits = (Array.isArray(rows) ? rows : []).filter(r => isPlainRow(r) && entryDateKey(r.date) === date);
+  const kinds = [];
+  hits.forEach(r => CLOSURE_REVENUE_FIELDS.forEach(f => kinds.push(closureCellKind(r[f]))));
+  if (kinds.some(k => k === "nonzero" || k === "invalid")) return false;
+  return timing === "future" ? true : kinds.some(k => k === "zero");
+}
+function closureRoleAllowed(role) { return role === "super_owner" || role === "owner" || role === "manager"; }
+// Shared structured-exception call (set or clear), faithful to executeEntrySave's handling.
+async function closureExceptionCall(io, ctx, date, action, loaded) {
+  const opId = io.opIds.ensure(date, io.newOpId);
+  const expRev = (loaded && Number.isSafeInteger(loaded.revision)) ? loaded.revision : 0;
+  const body = action === "set"
+    ? { tenantId: ctx.tenantId, bizId: ctx.bizId, businessDate: date, reasonCode: CLOSURE_REASON_CODE, expectedRevision: expRev, operationId: opId }
+    : { tenantId: ctx.tenantId, bizId: ctx.bizId, businessDate: date, expectedRevision: expRev, operationId: opId };
+  let resp, json;
+  try {
+    resp = await io.apiFetch(`/api/admin?action=${action === "set" ? "set-entry-exception" : "clear-entry-exception"}`, { method: "POST", body: JSON.stringify(body) });
+    json = await resp.json().catch(() => ({}));
+  } catch (_) {
+    if (!io.selection.isLive(ctx)) return { status: "stale" };
+    io.setError(action === "set" ? "סימון העסק כסגור נכשל (שגיאת רשת). לא בוצע שינוי בהכנסות." : "ביטול הסגירה נכשל (שגיאת רשת).");
+    await io.reloadExceptions(ctx);
+    return { status: "error", stage: "closure_state" };
+  }
+  if (!io.selection.isLive(ctx)) return { status: "stale" };
+  if (!resp.ok) {
+    const ec = json && json.error;
+    if (ec === "operation_owner_required") io.setError("יום זה הגיע למגבלת שינויים למנהל. נדרש בעלים כדי לבצע שינוי נוסף.");
+    else if (ec === "operation_hard_limit_reached") io.setError("יום זה הגיע למגבלת השינויים המרבית. לא ניתן לבצע שינוי נוסף ללא טיפול מערכת.");
+    else if (resp.status === 409) io.setError("מצב היום עודכן במקביל — רענן ונסה שוב. לא בוצע שינוי בהכנסות.");
+    else if (resp.status === 403 || resp.status === 401) io.setError("אין הרשאה לסמן או לבטל סגירה לעסק זה.");
+    else io.setError(action === "set" ? "סימון העסק כסגור נכשל. לא בוצע שינוי בהכנסות." : "ביטול הסגירה נכשל.");
+    await io.reloadExceptions(ctx);
+    return { status: "error", stage: "closure_state", httpStatus: resp.status, error: ec };
+  }
+  // The structured operation is complete (a retry would REPLAY it) — its operationId is consumed now.
+  io.opIds.consume(date);
+  const st = json && json.exception;
+  io.exceptionState.set(date, { source: "structured", status: st ? st.status : (action === "set" ? "active" : "cleared"), revision: json.revision, reasonCode: (st && st.reasonCode) || "", reasonText: (st && st.reasonText) || "" });
+  io.exceptionState.applyActive(date, !!(st && st.status === "active"));
+  return { status: "ok", response: json };
+}
+// The "Business closed" action. Returns a typed outcome; writes only when authorised,
+// confirmed where required, and live.
+async function executeClosureAction(io) {
+  const sel = io.selection;
+  const ctx = sel.capture();
+  if (!closureRoleAllowed(io.role)) return { status: "forbidden" };
+  const plan = planClosure(io.rows, io.date, { today: io.today });
+  if (plan.status !== "ok") {
+    if (plan.status === "blocked_entry_identity_required") io.setError(describeSaveOutcome("blocked_entry_identity_required", false));
+    return plan;
+  }
+  if (plan.needsConfirmation && io.confirmedFingerprint !== plan.fingerprint) return { status: "confirmation_required", plan };
+  const built = closureZeroIntents(plan, { newRowId: io.newRowId, emptyEntry: io.emptyEntry });
+  if (built.status !== "ok") { io.setError(describeSaveOutcome(built.status, false)); return { status: "error", stage: "plan", outcome: built.status }; }
+  // 1) closure state (skipped when the structured ledger already holds an active closure — repair / retry)
+  const loaded = io.exceptionState.get(plan.date) || null;
+  let exResponse = null;
+  if (!(isActiveClosureState(loaded) && loaded.source === "structured")) {
+    const ex = await closureExceptionCall(io, ctx, plan.date, "set", loaded);
+    if (ex.status !== "ok") return { ...ex, plan };
+    exResponse = ex.response;
+  }
+  // 2) revenue → explicit zero, one narrow intent per row, through the lane
+  let latestRows = io.rows;
+  for (const intent of built.intents) {
+    if (!sel.isLive(ctx)) return { status: "stale" };
+    const r = await io.persistMutation(intent, ctx);
+    if (!sel.isLive(ctx)) return { status: "stale" };
+    if (!r || !r.ok) {
+      io.setError(`היום סומן כסגור, אך איפוס ההכנסות לא הושלם: ${describeSaveOutcome(r || "failed", true)} עד להשלמה היום מוצג כלא תקין. נסה שוב.`);
+      return { status: "partial", stage: "revenue", outcome: r && r.status, plan };
+    }
+    if (Array.isArray(r.canonical)) { latestRows = r.canonical; io.applyRows(r.canonical); }
+  }
+  // 3) success only when the committed rows show the explicit zero
+  if (!closureRevenueConverged(latestRows, plan.date, plan.timing)) {
+    io.setError("היום סומן כסגור, אך נמצאו הכנסות שנרשמו במקביל. עד להשלמה היום מוצג כלא תקין — בדוק ואשר שוב.");
+    return { status: "partial", stage: "verify", reason: "revenue_changed_concurrently", plan };
+  }
+  if (!sel.isLive(ctx)) return { status: "stale" };
+  const rebuild = built.intents.length > 0 || (exResponse && exResponse.applied === true && exResponse.rebuildRequired === true);
+  if (rebuild && io.rebuildInsights) {
+    try { await io.rebuildInsights(plan.date, ctx); }
+    catch (err) { if (!sel.isLive(ctx)) return { status: "stale" }; if (io.onInsightsFailure) io.onInsightsFailure(err && err.message); }
+  }
+  if (!sel.isLive(ctx)) return { status: "stale" };
+  return { status: "closed", date: plan.date, timing: plan.timing, closureApplied: exResponse != null, revenueIntents: built.intents.length, rowCreated: plan.createZeroRow };
+}
+// Reopen: clears the structured closure; the explicit zero revenue stays (never restored).
+async function executeClosureReopen(io) {
+  const sel = io.selection;
+  const ctx = sel.capture();
+  if (!closureRoleAllowed(io.role)) return { status: "forbidden" };
+  const key = entryDateKey(io.date);
+  if (!key) return { status: "invalid_date" };
+  const loaded = io.exceptionState.get(key) || null;
+  if (!isActiveClosureState(loaded)) return { status: "not_closed" };
+  const ex = await closureExceptionCall(io, ctx, key, "clear", loaded);
+  if (ex.status !== "ok") return ex;
+  if (ex.response && ex.response.applied === true && ex.response.rebuildRequired === true && io.rebuildInsights) {
+    try { await io.rebuildInsights(key, ctx); }
+    catch (err) { if (!sel.isLive(ctx)) return { status: "stale" }; if (io.onInsightsFailure) io.onInsightsFailure(err && err.message); }
+  }
+  if (!sel.isLive(ctx)) return { status: "stale" };
+  return { status: "reopened", date: key };
+}
+window.MarjinClosureLifecycle = Object.freeze({ CLOSURE_REASON_CODE, CLOSURE_REVENUE_FIELDS, closureCellKind, isActiveClosureState, planClosure, closureZeroIntents, closureRevenueConverged, executeClosureAction, executeClosureReopen });
 // ══ STORAGE V2 — ROW-KEYED ENTRIES ═══════════════════════════════════════════
 // LEGACY storage keeps every row inside one opaque JSON string at
 // `biz:{bizId}:entries/_v`, so RTDB Rules cannot see a row at all: the node has a
@@ -4501,6 +4705,9 @@ function PilotDashboard() {
   const [dashboardInsightsWarning, setDashboardInsightsWarning] = useState("");
   const [entrySaveInFlight, setEntrySaveInFlight] = useState(false);
   const [entrySaveError, setEntrySaveError] = useState("");
+  // CD-M2: the "Business closed" confirmation dialog ({date, plan}) and its outcome notice.
+  const [closureDialog, setClosureDialog] = useState(null);
+  const [closureNotice, setClosureNotice] = useState("");
   const [entriesPolicyUi, setEntriesPolicyUi] = useState(null); // VERSION FENCE: the selected business's storage-policy decision (display only)
   const activeBizIdRef = useRef(null); // P0-DATA-01: current business selection, for stale-async guards
   const editingDateRef = useRef(null); // R2: stable edit identity — canonical business date captured at editor-open (never an array index)
@@ -5546,6 +5753,81 @@ function PilotDashboard() {
           selectionCtrlRef.current, c2, saveNavTimerRef,
           () => { setSaved(false); setEntryStep('idle'); setScreen("dashboard"); }, ms),
       });
+    });
+  };
+
+  // CD-M2: explicit "Business closed" action and its reopen. Thin call sites over the
+  // production seam window.MarjinClosureLifecycle (closure state → revenue zero through the
+  // ONE lane), bound to the selection captured when the action starts and serialized with
+  // every other save by the same save-UI runner.
+  const closureIo = (date, confirmedFingerprint) => ({
+    selection: selectionCtrlRef.current,
+    date,
+    rows: entries,
+    today: israelDateKey(0),
+    role: loggedInUser?.role,
+    confirmedFingerprint: confirmedFingerprint || null,
+    exceptionState: {
+      get: (d) => exceptionOwnershipRef.current.getState(d),
+      set: (d, st) => { exceptionOwnershipRef.current.setState(d, st); },
+      applyActive: (d, active) => setEntryExceptions(prev=>({ ...prev, [d]: active })),
+    },
+    opIds: {
+      ensure: (d, make) => exceptionOwnershipRef.current.ensureOpId(d, make),
+      consume: (d) => exceptionOwnershipRef.current.consumeOpId(d),
+    },
+    newOpId: () => (window.crypto&&window.crypto.randomUUID)?window.crypto.randomUUID():("ee-"+Date.now()+"-"+Math.random().toString(36).slice(2)),
+    newRowId,
+    emptyEntry: EMPTY_ENTRY,
+    apiFetch: (url, opts) => window.apiFetch(url, opts),
+    persistMutation: (intent2) => entriesWriteCoordRef.current.submitIntent(intent2)
+      .then(r => ({
+        ok: r.status === "committed" || r.status === "committed_idempotent",
+        canonical: r.rows,
+        status: r.status,
+        reason: r.reason,
+        detail: r.detail || r.reason || r.error || (r.conflictPaths && r.conflictPaths.join(",")),
+      })),
+    applyRows: setEntries,
+    reloadExceptions: (c2) => loadEntryExceptions(c2),
+    rebuildInsights: (date2, c2) => rebuildInsightsAfterEntrySave(date2, c2),
+    onInsightsFailure: (msg) => {
+      console.warn("[closure] insights rebuild failed:", msg);
+      setDashboardInsightsWarning("הסגירה נשמרה, אך התובנות לא רועננו.");
+    },
+    setError: setEntrySaveError,
+  });
+  const closeBusinessDay = async (confirmedFingerprint) => {
+    const ownCtx = captureSelectionCtx();
+    const date = form.date;
+    setEntrySaveError("");
+    setClosureNotice("");
+    await saveUiRunnerRef.current.run(ownCtx, async () => {
+      const res = await window.MarjinClosureLifecycle.executeClosureAction(closureIo(date, confirmedFingerprint));
+      if (!selectionCtrlRef.current.isLive(ownCtx) || res.status === "stale") return;
+      if (res.status === "confirmation_required") { setClosureDialog({ date, plan: res.plan }); return; }
+      setClosureDialog(null);
+      if (res.status === "closed") {
+        setForm(f => (f.date === date ? formWithException({ ...f, sales: "0", deliveries: "0", other_income: "0", includeVat: false }, date) : f));
+        setClosureNotice(res.timing === "future"
+          ? "היום סומן כסגור (סגירה מתוכננת). תחזית ההכנסות ליום זה היא 0; העלויות החודשיות יחולקו מחדש רק לאחר שהיום יעבור."
+          : "היום סומן כסגור וההכנסות נרשמו כ-0. הוצאות שנרשמו ליום זה נשמרו.");
+      }
+    });
+  };
+  const reopenBusinessDay = async () => {
+    const ownCtx = captureSelectionCtx();
+    const date = form.date;
+    setEntrySaveError("");
+    setClosureNotice("");
+    setClosureDialog(null);
+    await saveUiRunnerRef.current.run(ownCtx, async () => {
+      const res = await window.MarjinClosureLifecycle.executeClosureReopen(closureIo(date, null));
+      if (!selectionCtrlRef.current.isLive(ownCtx) || res.status === "stale") return;
+      if (res.status === "reopened") {
+        setForm(f => (f.date === date ? { ...f, is_exception: false, exception_reason: "", exception_note: "" } : f));
+        setClosureNotice("הסגירה בוטלה. ההכנסות שנרשמו כ-0 לא שוחזרו — הזן הכנסות אם היו.");
+      }
     });
   };
 
@@ -6879,7 +7161,7 @@ function PilotDashboard() {
             </div>
 
             <label className="label">תאריך</label>
-            <input className="input" type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))}/>
+            <input className="input" type="date" value={form.date} onChange={e=>{ const __d=e.target.value; setClosureDialog(null); setClosureNotice(""); setForm(f=>{ if (window.MarjinClosureLifecycle.isActiveClosureState(exceptionOwnershipRef.current.getState(__d))) return formWithException({...f,date:__d}, __d); if (f.exception_reason===window.MarjinClosureLifecycle.CLOSURE_REASON_CODE) return {...f,date:__d,is_exception:false,exception_reason:"",exception_note:""}; return {...f,date:__d}; }); }}/>
 
             <div className="form-sec">מכירות</div>
 
@@ -7003,8 +7285,52 @@ function PilotDashboard() {
             <label className="label">הערות</label>
             <textarea className="input" style={{minHeight:52,resize:"vertical"}} placeholder="חריגות, אירועים..." value={form.notes} onChange={e=>setForm(f=>({...f,notes:e.target.value}))}/>
 
-            {/* Exception-day control (REV_FORECAST/v1) — role-gated to super_owner/owner/manager */}
-            {window.MarjinForecast.canEditException(loggedInUser?.role) && (
+            {/* CD-M2: explicit "Business closed" action — the ONLY path that records a closure (CD-01/CD-17) */}
+            {window.MarjinForecast.canEditException(loggedInUser?.role) && form.date && (()=>{
+              const __cl = window.MarjinClosureLifecycle;
+              const __closed = __cl.isActiveClosureState(exceptionOwnershipRef.current.getState(form.date));
+              const __plan = __cl.planClosure(entries, form.date, { today: israelDateKey(0) });
+              const __conflict = __closed && __plan.status === "ok" && __plan.needsConfirmation;
+              const __dlg = closureDialog && closureDialog.date === form.date ? closureDialog.plan : null;
+              return (
+                <div data-closure-panel="1" style={{marginTop:8,padding:"10px 12px",background:__closed?"#F1F5F9":"#FFFFFF",border:"1px solid #CBD5E1",borderRadius:8}}>
+                  {__closed ? (
+                    <div>
+                      <div style={{fontSize:13,fontWeight:700,color:"#334155"}}>העסק מסומן כסגור ביום זה{__plan.status === "ok" && __plan.timing === "future" ? " (סגירה מתוכננת — תחזית ההכנסות ליום זה היא 0)" : ""}</div>
+                      {__conflict && (
+                        <div role="alert" style={{marginTop:6,padding:"8px 10px",background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:6,color:"#B91C1C",fontSize:12,fontWeight:600}}>
+                          יום סגור עם הכנסות רשומות — הנתונים לתאריך זה מוצגים כלא תקינים עד שהסגירה תושלם או תבוטל.
+                          <button className="btn btn-secondary" disabled={entrySaveInFlight} style={{marginTop:6,display:"block"}} onClick={()=>!entrySaveInFlight && closeBusinessDay(null)}>השלם סגירה (איפוס הכנסות)</button>
+                        </div>
+                      )}
+                      <button className="btn btn-secondary" disabled={entrySaveInFlight} style={{marginTop:8}} onClick={()=>!entrySaveInFlight && reopenBusinessDay()}>ביטול סגירה</button>
+                    </div>
+                  ) : (
+                    <button className="btn btn-secondary" disabled={entrySaveInFlight} onClick={()=>!entrySaveInFlight && closeBusinessDay(null)}>העסק היה סגור ביום זה</button>
+                  )}
+                  {__dlg && (
+                    <div role="dialog" aria-label="אישור סגירה" style={{marginTop:8,padding:"10px 12px",background:"#FFF7ED",border:"1px solid #FDBA74",borderRadius:8,fontSize:12,color:"#7C2D12"}}>
+                      <div style={{fontWeight:700,marginBottom:6}}>כבר נרשמו הכנסות לתאריך {__dlg.date}. סימון העסק כסגור יאפס אותן ל-0 (הוצאות לא ישתנו):</div>
+                      {__dlg.rows.filter(p=>p.toZero.length>0).map(p=>(
+                        <div key={p.id} style={{marginBottom:2}}>
+                          {__cl.CLOSURE_REVENUE_FIELDS.filter(f=>p.toZero.indexOf(f)!==-1).map(f=>`${f==="sales"?"מכירות":f==="deliveries"?"משלוחים":"הכנסות אחרות"}: ${p.kinds[f]==="invalid"?`ערך לא תקין (${String(p.values[f])})`:fmt(p.values[f])}`).join(" · ")}
+                        </div>
+                      ))}
+                      <div style={{fontWeight:700,marginTop:6}}>סה״כ הכנסות שיאופסו: {fmt(__dlg.displayTotal)}{__dlg.unreadableCells>0?` (+${__dlg.unreadableCells} ערכים לא תקינים)`:""}</div>
+                      <div style={{display:"flex",gap:8,marginTop:8}}>
+                        <button className="btn btn-primary" disabled={entrySaveInFlight} onClick={()=>!entrySaveInFlight && closeBusinessDay(__dlg.fingerprint)}>אשר: העסק היה סגור ואפס הכנסות</button>
+                        <button className="btn btn-secondary" disabled={entrySaveInFlight} onClick={()=>setClosureDialog(null)}>ביטול</button>
+                      </div>
+                    </div>
+                  )}
+                  {closureNotice && <div style={{marginTop:6,fontSize:12,color:"#166534"}}>{closureNotice}</div>}
+                </div>
+              );
+            })()}
+
+            {/* Exception-day control (REV_FORECAST/v1) — role-gated to super_owner/owner/manager.
+                CD-M2: hidden while the date is closed; "closure" is recorded only by the action above. */}
+            {window.MarjinForecast.canEditException(loggedInUser?.role) && !window.MarjinClosureLifecycle.isActiveClosureState(exceptionOwnershipRef.current.getState(form.date)) && (
               <div style={{marginTop:8,padding:"10px 12px",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:8}}>
                 <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:13,fontWeight:600,color:"#92400E"}}>
                   <input type="checkbox" checked={form.is_exception===true} onChange={e=>setForm(f=>({...f,is_exception:e.target.checked,...(e.target.checked?{}:{exception_reason:"",exception_note:""})}))}/>
@@ -7014,7 +7340,7 @@ function PilotDashboard() {
                   <div style={{marginTop:8}}>
                     <select className="input" value={form.exception_reason||""} onChange={e=>setForm(f=>({...f,exception_reason:e.target.value}))}>
                       <option value="">בחר סיבה…</option>
-                      {window.MarjinForecast.EXCEPTION_REASONS.map(r=>(<option key={r} value={r}>{window.MarjinForecast.REASON_HE[r]}</option>))}
+                      {window.MarjinForecast.EXCEPTION_REASONS.filter(r=>r!==window.MarjinClosureLifecycle.CLOSURE_REASON_CODE).map(r=>(<option key={r} value={r}>{window.MarjinForecast.REASON_HE[r]}</option>))}
                     </select>
                     <textarea className="input" style={{marginTop:6,minHeight:40,resize:"vertical"}} placeholder="הערה ליום החריג" value={form.exception_note||""} onChange={e=>setForm(f=>({...f,exception_note:e.target.value}))}/>
                   </div>
