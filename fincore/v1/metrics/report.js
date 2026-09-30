@@ -5,7 +5,7 @@ import { PURCHASE_BASIS_CONTRACT_VERSION, resolvePurchaseBasis, validatePurchase
 import { FIXED_COST_ALLOCATION, GLOBAL_COST_ALLOCATION, LABOR_CONTRACT_VERSION, validateLaborSource } from "../finance/labor.js";
 import { FinanceContractError } from "../finance/types.js";
 import { accrueWindow } from "./costTimeline.js";
-export const FINANCIAL_FORMULA_VERSION = "MARJIN_FIN/2";
+export const FINANCIAL_FORMULA_VERSION = "MARJIN_FIN/3";
 /** Manual-operation Actual window rule. A future live/same-day model is deferred and would be a new rule. */
 export const ACTUAL_WINDOW_RULE = "completed_days_through_d_minus_1";
 export const NO_DECLARED_CLOSURES = Object.freeze({ source: "none_declared", closedDates: Object.freeze([]) });
@@ -212,8 +212,9 @@ export function computePeriodReport(days, timeline, purchaseBasis, laborSource, 
     const revenueByDate = new Map();
     for (const d of inWindow)
         revenueByDate.set(d.date, d.revenue.presence === "present" && d.revenue.value !== null ? ratFromDec(d.revenue.value) : null);
-    // Calendar-day accrual over EVERY recognised date (closed days included).
-    const accrual = accrueWindow(timeline, dates, revenueByDate);
+    // Entitlement-then-placement over the recognised dates: a completed declared closure has no
+    // monthly-cost placement; the one captured business date decides completion (CDA-10).
+    const accrual = accrueWindow(timeline, dates, revenueByDate, { asOfBusinessDate: window.asOfBusinessDate, closedDates: calendar.closedDates });
     const timelineFlags = timeline.flags || [];
     const flags = [];
     for (const d of inWindow)
@@ -234,15 +235,16 @@ export function computePeriodReport(days, timeline, purchaseBasis, laborSource, 
     }
     // ── Completeness (TI-18). Required on every OPERATING recognised day: revenue, purchases
     // and the hourly employer cost (an explicit 0 / "skip" is a complete fact). Declared closed
-    // days require none of them, but recorded non-zero revenue or hourly labor on a closed day
-    // contradicts the declaration (invalid). other_expense is optional (absence = none
+    // days require none of them and are known zero revenue; recorded NON-ZERO REVENUE on a closed
+    // day contradicts the declaration (invalid, CDA-02). Costs actually recorded on a closed day
+    // (purchases, payroll, other) are kept on it and are no contradiction (CDA-08). other_expense is optional (absence = none
     // recorded); an invalid value is an invalid component on any day. Global employer cost and
     // fixed configuration must cover every recognised day and carry no missing/invalid value.
     const revenueIssues = metricIssues(inWindow, closed, "revenue", (d) => d.revenue, true);
     const purchaseIssues = metricIssues(inWindow, closed, "purchases", (d) => d.purchases, true);
     const hourlyIssues = metricIssues(inWindow, closed, "hourly_employer_cost", (d) => d.hourlyLabor, true);
     const otherIssues = metricIssues(inWindow, closed, "other_expense", (d) => d.otherExpense, false);
-    const contradicted = inWindow.filter((d) => closed.has(d.date) && (nonZero(d.revenue) || nonZero(d.hourlyLabor))).map((d) => d.date);
+    const contradicted = inWindow.filter((d) => closed.has(d.date) && nonZero(d.revenue)).map((d) => d.date);
     for (const d of contradicted)
         flags.push({ code: "closed_day_has_recorded_values", date: d });
     const calendarIssues = contradicted.length >= 1
@@ -251,11 +253,24 @@ export function computePeriodReport(days, timeline, purchaseBasis, laborSource, 
     const globalIssues = [];
     if (accrual.uncoveredDates.length >= 1)
         globalIssues.push({ component: "global_employer_cost", kind: "missing", reason: "cost_config_absent", dates: accrual.uncoveredDates });
+    // A segment without eligible dates that the window only partly covers has no determinable window share (CDA-14).
+    const allocationUndetermined = !accrual.allocation.aggregateDeterminable ? accrual.allocation.placementUnavailableDates : [];
+    if (allocationUndetermined.length >= 1)
+        globalIssues.push({ component: "global_employer_cost", kind: "missing", reason: "no_eligible_allocation_days", dates: allocationUndetermined });
+    // An unreadable closure source leaves the placement of an OPEN window unknown; a closed month's
+    // total is its entitlement whatever the closures, so it stays determinable.
+    const calendarUnknownDates = context.closureCalendarUnreadable === true && window.kind === "open_month" ? dates : [];
+    if (calendarUnknownDates.length >= 1)
+        globalIssues.push({ component: "global_employer_cost", kind: "invalid", reason: "closure_calendar_unreadable", dates: calendarUnknownDates });
     globalIssues.push(...flagIssue(timelineFlags, ["invalid_global_amount"], "global_employer_cost", "invalid", dates));
     globalIssues.push(...flagIssue(timelineFlags, ["missing_global_amount"], "global_employer_cost", "missing", dates));
     const configIssues = [];
     if (accrual.uncoveredDates.length >= 1)
         configIssues.push({ component: "cost_configuration", kind: "missing", reason: "cost_config_absent", dates: accrual.uncoveredDates });
+    if (allocationUndetermined.length >= 1)
+        configIssues.push({ component: "cost_configuration", kind: "missing", reason: "no_eligible_allocation_days", dates: allocationUndetermined });
+    if (calendarUnknownDates.length >= 1)
+        configIssues.push({ component: "cost_configuration", kind: "invalid", reason: "closure_calendar_unreadable", dates: calendarUnknownDates });
     configIssues.push(...flagIssue(timelineFlags, CONFIG_INVALID_CODES, "cost_configuration", "invalid", dates));
     configIssues.push(...flagIssue(timelineFlags, CONFIG_MISSING_CODES, "cost_configuration", "missing", dates));
     // Purchases % (food cost %) is an Actual KPI: a value only over complete revenue and purchases (TI-18).
@@ -360,6 +375,14 @@ export function computePeriodReport(days, timeline, purchaseBasis, laborSource, 
             },
             contributionBeforeFixed,
             operatingProfit,
+            costAllocation: {
+                policy: accrual.allocation.policy,
+                allocationEligibleDays: accrual.allocation.eligibleDates,
+                completedClosureDates: accrual.allocation.completedClosureDates,
+                dayPlacement: context.closureCalendarUnreadable === true ? "closure_calendar_unreadable" : accrual.allocation.placementUnavailableDates.length >= 1 ? "no_eligible_allocation_days" : "available",
+                noEligibleSegments: accrual.allocation.noEligibleSegments,
+                placementUnavailableDates: accrual.allocation.placementUnavailableDates,
+            },
         },
         quarantine: context.quarantine || { futureRows: [], invalidDateRows: [] },
         flags: sortFlags(dedupeFlags(flags)),

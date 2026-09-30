@@ -129,7 +129,9 @@ test("G-S4 computePeriodReport / toDailyMetric have ONE runtime caller (src/poli
   assert.equal(dailyCalls.length, 1, "exactly one toDailyMetric call");
   assert.match(dailyCalls[0][1], /^day, basis, productLaborSource\(\), timeline,/);
   assert.match(caller, /const basis = resolvePurchaseBasis\([^;]*productPurchaseBasis\(\)\);/, "the daily basis resolves from the bound product policy");
-  assert.match(caller, /operatingCalendar: NO_DECLARED_CLOSURES/, "no closure is inferred");
+  // CD-M1: the calendar is derived from the exception domain only (no inference, no caller parameter)
+  assert.match(caller, /operatingCalendar: productClosureCalendar\(inputs, n\)/, "the closure calendar is the product's exception-domain derivation");
+  assert.doesNotMatch(caller, /NO_DECLARED_CLOSURES/, "no product path bypasses the closure calendar");
   const src = readFileSync(join(REPO, "src/metrics/report.ts"), "utf8");
   assert.match(src, /purchaseBasis: unknown,\n\s*laborSource: unknown,\n\s*window: ReportWindow/, "purchaseBasis and laborSource are positional required parameters without default");
 });

@@ -62,14 +62,17 @@ test("API-02 envelope decoding through the loader: absent / present / unreadable
   assert.deepEqual(empty.fixed, { state: "present", value: [] }, "an empty list is PRESENT (R-17 valid zero)");
 });
 
-test("API-03 loader I/O: entries read once; config/fixed only when asked; a rejected read propagates; exactly one clock read when nowMs is omitted; no write", async () => {
+test("API-03 loader I/O: entries read once; config/fixed only when asked (CD-M1: the ledger whenever monthly costs are read); a rejected read propagates; exactly one clock read when nowMs is omitted; no write", async () => {
   const base = seedRaw(makeDb(), { entries: asLegacy([entry(uid(1), "2026-09-01", { sales: "1" })]), fixed: env([]) });
   for (const need of [{ config: false, fixed: false }, { config: true, fixed: false }, { config: false, fixed: true }, { config: true, fixed: true }]) {
     const db = recordingDb(base);
     const i = await CI.loadCanonicalInputs(db, T, B, { site: "t", nowMs: NOW_MS, need });
     assert.deepEqual(db.reads.filter((p) => p.endsWith(":entries")).length, 1, JSON.stringify(need));
     assert.equal(db.reads.some((p) => p.endsWith(":config")), need.config); assert.equal(db.reads.some((p) => p.endsWith(":fixed")), need.fixed);
-    assert.equal(db.reads.length, 1 + (need.config ? 1 : 0) + (need.fixed ? 1 : 0));
+    // CD-M1 (TD-CDM1-2): monthly-cost placement depends on declared closures ⇒ a cost-reading call also reads the ledger once
+    const ledgerRead = need.config || need.fixed;
+    assert.equal(db.reads.some((p) => p === `tenants/${T}/entry_exceptions/${B}`), ledgerRead, JSON.stringify(need) + " ledger");
+    assert.equal(db.reads.length, 1 + (need.config ? 1 : 0) + (need.fixed ? 1 : 0) + (ledgerRead ? 1 : 0));
     assert.equal(i.configState, need.config ? "present" : "not_loaded"); assert.equal(i.fixedState, need.fixed ? "present" : "not_loaded");
     assert.equal(i.storageMode, "legacy"); assert.equal(i.asOfBusinessDate, AS_OF);
   }
@@ -105,6 +108,9 @@ test("API-03 loader I/O: entries read once; config/fixed only when asked; a reje
     assert.equal(rec.reads.some((p) => p === `tenants/${T}/entry_exceptions/${B}`), exceptions);
     assert.equal(li.exceptionsState, exceptions ? "present" : "not_loaded");
     assert.deepEqual(li.exceptionsByDate, exceptions ? { "2026-09-02": true, "2026-09-03": false } : undefined);
+    // CD-M1: the same decode, reason-aware (the only structured closure source)
+    assert.deepEqual(li.exceptionStates, exceptions ? { "2026-09-02": { status: "active", reasonCode: null }, "2026-09-03": { status: "cleared", reasonCode: null } } : undefined);
+    assert.equal(li.exceptionLedgerState, exceptions ? "present" : "not_loaded");
   }
 });
 
@@ -209,7 +215,8 @@ test("API-13 parity: canonicalMonthReport ≡ direct computePeriodReport for 20 
       const n = NORM.normalizeRows(rows, { asOfBusinessDate: AS_OF });
       const bounds = sel.month === "2026-09" ? ["2026-09-01", "2026-09-30"] : ["2026-08-01", "2026-08-31"];
       const days = NORM.groupByDate(n.rows, { from: bounds[0], to: bounds[1] });
-      const direct = REP.computePeriodReport(days, CC.costTimelineFromCurrentConfig(config, fixed), PB.productPurchaseBasis(), LS.productLaborSource(), { kind: sel.kind, month: sel.month, asOfBusinessDate: AS_OF }, { quarantine: n.quarantine, flags: n.flags, operatingCalendar: REP.NO_DECLARED_CLOSURES });
+      // CD-M1: the product binds its exception-domain closure calendar (empty here) instead of NO_DECLARED_CLOSURES
+      const direct = REP.computePeriodReport(days, CC.costTimelineFromCurrentConfig(config, fixed), PB.productPurchaseBasis(), LS.productLaborSource(), { kind: sel.kind, month: sel.month, asOfBusinessDate: AS_OF }, { quarantine: n.quarantine, flags: n.flags, operatingCalendar: { source: PF.PRODUCT_CLOSURE_SOURCE, closedDates: [] }, closureCalendarUnreadable: false });
       assert.equal(got, REP.serializeReport(direct), `business ${b} ${sel.kind}`);
     }
   }
@@ -370,7 +377,8 @@ test("B1R1-01 need.exceptions: the structured ledger decodes with the parity-tes
     if (date === "not-a-date") { assert.ok(!(date in d.value)); continue; }
     const r = resolveEffectiveException(env, null);
     assert.equal(date in d.value, r.origin === "structured", date);
-    if (r.origin === "structured") assert.equal(d.value[date], r.isException, date);
+    // CD-M1: the decode is reason-aware (status + active reasonCode); the boolean meaning is unchanged
+    if (r.origin === "structured") { assert.equal(d.value[date].status === "active", r.isException, date); assert.equal(d.value[date].reasonCode, r.isException && typeof r.state.reasonCode === "string" ? r.state.reasonCode : null, date); }
   }
   assert.deepEqual(PF.decodeExceptionLedger(null), { state: "absent" });
   for (const bad of ["x", 5, [1], true]) assert.deepEqual(PF.decodeExceptionLedger(bad), { state: "unreadable", reason: "ledger_shape" });

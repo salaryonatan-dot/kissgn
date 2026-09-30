@@ -55,7 +55,10 @@ test("GUARD-03 computePeriodReport( and toDailyMetric( are called only in src/po
   assert.deepEqual(callers.toDailyMetric, ["src/policy/productFinance.ts"]);
   const pf = code("src/policy/productFinance.ts");
   assert.match(pf, /computePeriodReport\(days, productTimeline\(inputs\), productPurchaseBasis\(\), productLaborSource\(\),/);
-  assert.match(pf, /toDailyMetric\(day, basis, productLaborSource\(\), timeline, \{ asOfBusinessDate: asOf, operatingCalendar: NO_DECLARED_CLOSURES \}\)/);
+  // CD-M1 (owner closed-days amendment, MARJIN_PRODUCT/2): the bound calendar is the product
+  // closure calendar derived from the exception domain (was NO_DECLARED_CLOSURES); still no caller-supplied calendar.
+  assert.match(pf, /toDailyMetric\(day, basis, productLaborSource\(\), timeline, \{ asOfBusinessDate: asOf, operatingCalendar: calendar, closureCalendarUnreadable \}\)/);
+  assert.match(pf, /operatingCalendar: productClosureCalendar\(inputs, n\), closureCalendarUnreadable: closureCalendarUnknown\(inputs\) \}\)/);
   assert.match(pf, /resolvePurchaseBasis\([^;]*productPurchaseBasis\(\)\)/);
 });
 
@@ -107,12 +110,12 @@ test("GUARD-07 the B1 diff adds no line matching the vat-invariant forbidden-wor
   assert.deepEqual(added.filter((l) => re.test(l)), []);
 });
 
-test("GUARD-08 fincore/v1 regenerates byte-identically; the browser closure is the BASE closure plus src/policy/productFinance.ts", () => {
+test("GUARD-08 fincore/v1 regenerates byte-identically; the browser closure is the BASE closure plus src/policy/productFinance.ts (+ CD-M1 src/metrics/revenueForecast.ts)", () => {
   const tmp = mkdtempSync(join(tmpdir(), "b1-fincore-"));
   const m = generate({ repo: REPO, outDir: tmp });
   for (const rel of ["MANIFEST.json", "browser/marjinFinanceGlobal.js", "policy/productFinance.js"]) assert.ok(readFileSync(join(tmp, rel)).equals(readFileSync(join(REPO, "fincore/v1", rel))), rel);
   const baseManifest = JSON.parse(gitIn(REPO, ["show", `${B1_BASE}:fincore/v1/MANIFEST.json`]).stdout);
-  assert.deepEqual([...closureSources(REPO)].sort(), [...baseManifest.sources, "src/policy/productFinance.ts"].sort());
+  assert.deepEqual([...closureSources(REPO)].sort(), [...baseManifest.sources, "src/policy/productFinance.ts", "src/metrics/revenueForecast.ts"].sort());
   assert.deepEqual(m.sources, closureSources(REPO));
   assert.equal(m.typescript, "5.9.3");
 });

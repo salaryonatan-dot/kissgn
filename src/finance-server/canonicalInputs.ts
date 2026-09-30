@@ -1,7 +1,10 @@
 // Canonical server inputs (Slice B1, MARJIN_FIN_SERVER/1): the ONLY server I/O seam of the
 // financial read path and its ONLY clock read. Reads the entries node once through the shared
 // dual-mode reader (typed EntriesStorageError on a malformed node), and the business config /
-// fixed-cost envelopes and the structured exception ledger only when asked. Everything is
+// fixed-cost envelopes only when asked, and the structured exception ledger when asked OR when
+// monthly costs are needed (config / fixed): since MARJIN_LABOR/3 the placement of monthly
+// costs depends on the declared closures, so a cost-reading caller always gets the one decoded
+// ledger (closed-days amendment, TD-CDM1-2; the four B1 reader call sites are unchanged). Everything is
 // decoded by the core's shared decoders (decodeEnvelope / decodeExceptionLedger): an
 // undecodable input is reported as `unreadable`, never defaulted to {} / [] / "no exceptions".
 // Entry rows are passed UNMODIFIED — the shared product composition applies the storage
@@ -9,7 +12,7 @@
 // propagates (it is never treated as "absent"). No write.
 import { readEntriesNode, requireEntriesRows } from "../../lib/analytics/entriesReader.js";
 import { israelBusinessDate } from "../finance/businessDate.js";
-import { decodeEnvelope, decodeExceptionLedger } from "../policy/productFinance.js";
+import { decodeEnvelope, decodeExceptionLedger, exceptionsByDateOf } from "../policy/productFinance.js";
 import type { EnvelopeState, ExceptionLedgerState, ProductInputs } from "../policy/productFinance.js";
 
 export const CANONICAL_SERVER_API_VERSION = "MARJIN_FIN_SERVER/1";
@@ -43,7 +46,7 @@ export async function loadCanonicalInputs(
     db.ref(`${base}:entries`).once("value"),
     opts.need.config ? db.ref(`${base}:config`).once("value") : Promise.resolve(null),
     opts.need.fixed ? db.ref(`${base}:fixed`).once("value") : Promise.resolve(null),
-    opts.need.exceptions ? db.ref(`tenants/${tenantId}/entry_exceptions/${bizId}`).once("value") : Promise.resolve(null),
+    opts.need.exceptions || opts.need.config || opts.need.fixed ? db.ref(`tenants/${tenantId}/entry_exceptions/${bizId}`).once("value") : Promise.resolve(null),
   ]);
   const raw = entriesSnap.val();
   const rows = requireEntriesRows(raw, { tenantId, bizId, site: opts.site }) as unknown[];
@@ -66,7 +69,8 @@ export async function loadCanonicalInputs(
     configState: configSnap ? config.state : "not_loaded",
     fixedState: fixedSnap ? fixed.state : "not_loaded",
     exceptionsState: ledger ? ledger.state : "not_loaded",
-    ...(ledger && ledger.state === "present" ? { exceptionsByDate: ledger.value } : {}),
+    ...(ledger && ledger.state === "present" ? { exceptionStates: ledger.value, exceptionsByDate: exceptionsByDateOf(ledger.value) } : {}),
+    exceptionLedgerState: ledger ? ledger.state : "not_loaded",
     inputIssues,
     asOfBusinessDate: israelBusinessDate(nowMs),
   };

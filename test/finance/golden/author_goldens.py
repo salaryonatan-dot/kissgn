@@ -1,7 +1,12 @@
 # Authoring source of test/finance/golden/financial-core-goldens.json.
 # Every expected value below is written literally by hand (R1.2/R1.3 golden contract,
 # revised by the R1.4 owner decisions and the FINAL owner contract of 2026-09-29:
-# MARJIN_FIN/2 + MARJIN_LABOR/2 + MARJIN_NORM/3); nothing here calls the Financial Core.
+# MARJIN_FIN/2 + MARJIN_LABOR/2 + MARJIN_NORM/3; amended by the owner-approved closed-days
+# decision of 2026-09-30 => MARJIN_FIN/3 + MARJIN_LABOR/3); nothing here calls the Financial Core.
+# Closed-days amendment (CD-M1): monthly global/fixed entitlement is placed on eligible dates —
+# every date except a declared closure already COMPLETED (< asOf). Without closures this equals
+# the previous calendar-day placement, so only the closed-day cases O-02/O-15/O-20 and the two
+# identifier cases G-10/R1-G change (listed as owner-authorized supersessions in the CD-M1 handoff).
 # Regenerate the JSON with:  python3 test/finance/golden/author_goldens.py
 #
 # FINAL owner contract reminders used by the hand computations below:
@@ -125,7 +130,7 @@ case(id="G-09",desc="future month has no actual window",asOf="2026-09-10",window
 case(id="G-10",desc="historical month on compatibility basis is labelled; global amount is employer cost",asOf="2026-09-10",window={"kind":"closed_month","month":"2026-08"},
  expand=[rep("2026-08-01","2026-08-31",{"sales":"100"})],config=SAL30,
  expect={"report.configurationBasis":["current_applied_retrospectively"],"report.timelineSource":"compat_current_config",
- "report.actual.labor.globalEmployerCost":{"state":"complete","value":"30000","issues":[]},"report.actual.labor.globalAllocation":"calendar_days"})
+ "report.actual.labor.globalEmployerCost":{"state":"complete","value":"30000","issues":[]},"report.actual.labor.globalAllocation":"eligible_days_excluding_completed_closures"})
 case(id="G-11-mid",desc="global amount change on day 15: 30000*14/30 + 45000*16/30",asOf="2026-10-01",window=CLOSED_SEPT,rows=[],
  timeline=[V("v1","2026-09-01",1,{"e1":"30000"}),V("v2","2026-09-15",2,{"e1":"45000"})],expect={"report.actual.labor.globalEmployerCost.value":"38000","report.costVersionsApplied":["v1","v2"]})
 case(id="G-11-first",desc="global amount change on day 1",asOf="2026-10-01",window=CLOSED_SEPT,rows=[],
@@ -339,7 +344,7 @@ case(id="R1-G",desc="canonical labor = hourly (ShiftOrganizer, manual) + global 
  "report.actual.labor.source.ingestionMethod":"manual","report.actual.labor.source.meaning":"authoritative_employer_cost",
  "report.actual.labor.source.coverage":"hourly_employees_only","report.actual.labor.source.fields":["payroll"],
  "report.actual.labor.employerCostPct.value":"125","report.actual.labor.legacyHourlyPayroll":{"counted":False,"dates":["2026-09-01"]},
- "report.actual.operatingProfit":{"state":"complete","value":"-550","issues":[]},"report.versions.labor":"MARJIN_LABOR/2","report.versions.fin":"MARJIN_FIN/2"},
+ "report.actual.operatingProfit":{"state":"complete","value":"-550","issues":[]},"report.versions.labor":"MARJIN_LABOR/3","report.versions.fin":"MARJIN_FIN/3"},
  expectFlags=[{"code":"legacy_hourly_payroll_not_counted","rowId":"a","field":"hourly_payroll"}])
 case(id="R1-H",desc="listed global employee without an amount => global employer cost missing (never zero)",asOf=D2,window=ONE,
  config={"employees":[{"id":"e1","type":"global","monthlySalary":""}]},
@@ -379,15 +384,16 @@ case(id="R1-P",desc="revenue invalid on every day => invalid_components (not rev
 case(id="O-01",desc="test 1: global 30000 in a 30-day month accrues 1000 per calendar day",asOf=D2,window=ONE,config=SAL30,
  rows=[{"id":"a","date":"2026-09-01","sales":"5000","supplier_payments":{"s1":"0"},"payroll":"0"}],
  expect={"report.actual.labor.globalEmployerCost.value":"1000","dm.2026-09-01.globalLaborCost":1000})
-# O-02 (tests 2,3): Sep 1..10 completed, Sep 5 declared closed (no data). global 30000*10/30 = 10000 incl. Sep 5;
-# fixed 3000*10/30 = 1000 incl. Sep 5; revenue 9*1000; purchases 9*300; hourly 9*200 = 1800;
-# labor 1800+10000 = 11800; profit 9000-2700-1800-10000-1000 = -6500.
+# O-02 (tests 2,3; CD-M1 supersession): Sep 1..10 completed, Sep 5 a COMPLETED declared closure (no data).
+# September eligible dates = 30 - 1 = 29, so each eligible date carries 30000/29 global and 3000/29 fixed; the
+# window has 9 eligible dates: global 270000/29, fixed 27000/29, Sep 5 carries 0. revenue 9*1000; purchases 9*300;
+# hourly 9*200 = 1800; labor 1800 + 270000/29 = 322200/29; profit 9000-2700-1800-270000/29-27000/29 = -166500/29.
 CL5=[rep("2026-09-01","2026-09-04",FULL),rep("2026-09-06","2026-09-10",FULL)]
-case(id="O-02",desc="tests 2+3: a declared closed day still carries global and fixed cost; closed is not missing",asOf="2026-09-11",window=SEPT,
+case(id="O-02",desc="tests 2+3 (closed-days amendment): a completed declared closure carries no monthly placement; the month's other eligible dates carry it; closed is not missing",asOf="2026-09-11",window=SEPT,
  expand=CL5,config=SAL30,fixed=[{"id":"f1","amount":"3000"}],closedDates=["2026-09-05"],
- expect={"report.actual.labor.globalEmployerCost.value":"10000","report.actual.fixedAccrual.regular":"1000","report.actual.fixedAccrual.allocation":"calendar_days",
- "report.actual.revenue.value":"9000","report.actual.labor.employerCost.value":"11800",
- "report.actual.operatingProfit":{"state":"complete","value":"-6500","issues":[]},
+ expect={"report.actual.labor.globalEmployerCost.value":"270000/29","report.actual.fixedAccrual.regular":"27000/29","report.actual.fixedAccrual.allocation":"eligible_days_excluding_completed_closures",
+ "report.actual.revenue.value":"9000","report.actual.labor.employerCost.value":"322200/29",
+ "report.actual.operatingProfit":{"state":"complete","value":"-166500/29","issues":[]},
  "report.coverage.revenue.missingDays":[],"report.coverage.revenue.closedDays":["2026-09-05"],"report.coverage.revenue.expectedDays":9,
  "report.operatingCalendar":{"source":"fixture","closedDates":["2026-09-05"],"operatingDays":9}})
 # O-02b (tests 2+10): same data, closure NOT declared: Sep 5 is MISSING (absent revenue is never inferred to be closed).
@@ -454,10 +460,12 @@ case(id="O-14",desc="closed day with recorded non-zero revenue contradicts the d
 case(id="O-14z",desc="closed day with explicit zero revenue and a recorded purchase is consistent (purchase counted)",asOf=D3,window=ONE,config={},closedDates=["2026-09-02"],
  rows=[{"id":"a","date":"2026-09-01","sales":"1000","supplier_payments":{"s1":"0"},"payroll":"100"},{"id":"b","date":"2026-09-02","sales":"0","supplier_payments":{"s1":"40"}}],
  expect={"report.actual.operatingProfit":{"state":"complete","value":"860","issues":[]}})
-# O-15: every completed day declared closed: revenue is a known zero; profit = -(global + fixed) = -(2000 + 200).
-case(id="O-15",desc="all completed days closed: known zero revenue, costs still accrue, labor % has a zero denominator",asOf=D3,window=ONE,config=SAL30,fixed=[{"id":"f1","amount":"3000"}],
+# O-15 (CD-M1 supersession): every completed day is a completed declared closure: revenue is a known zero and the
+# two closures carry no monthly placement (the month's 28 other dates — still future — carry it), so the window's
+# global and fixed placements are 0 and profit = 0.
+case(id="O-15",desc="all completed days closed (closed-days amendment): known zero revenue, no monthly placement on the completed closures, labor % has a zero denominator",asOf=D3,window=ONE,config=SAL30,fixed=[{"id":"f1","amount":"3000"}],
  closedDates=["2026-09-01","2026-09-02"],rows=[],
- expect={"report.actual.operatingProfit":{"state":"complete","value":"-2200","issues":[]},"report.actual.labor.employerCost.value":"2000",
+ expect={"report.actual.operatingProfit":{"state":"complete","value":"0","issues":[]},"report.actual.labor.employerCost.value":"0",
  "report.actual.labor.employerCostPct":{"state":"zero_denominator"},"report.operatingCalendar.operatingDays":0})
 # self-review of the final contract: negative global amount, fixed cost typed, % rent on incomplete revenue.
 case(id="O-17",desc="negative global monthly amount is invalid (never a negative employer cost)",asOf=D2,window=ONE,config={"employees":[{"id":"n","type":"global","monthlySalary":"-30000"}]},
@@ -475,12 +483,14 @@ case(id="O-19",desc="percentage rent on incomplete revenue: fixed cost incomplet
  rows=[{"id":"a","date":"2026-09-01","sales":"1000","supplier_payments":{"s1":"0"},"payroll":"0"}],
  expect={"report.actual.fixedAccrual.state":"incomplete_components","report.actual.fixedAccrual.rentPct":None,
  "report.actual.fixedAccrual.issues":[{"component":"revenue","kind":"missing","reason":"not_recorded","dates":["2026-09-02"]}]})
-case(id="O-20",desc="daily adapter: a declared closed day's labor is the global allocation alone",asOf=D3,window=ONE,config=SAL30,closedDates=["2026-09-02"],
+# O-20 (CD-M1 supersession): Sep 2 is a completed declared closure: its placement is 0 (complete), Sep 1 carries
+# 30000/29 = 1034.4827586207 (10 dp) + hourly 100; report labor = 100 + 30000/29 = 32900/29.
+case(id="O-20",desc="daily adapter (closed-days amendment): a completed declared closure has no monthly placement; the other dates carry 30000/29",asOf=D3,window=ONE,config=SAL30,closedDates=["2026-09-02"],
  rows=[{"id":"a","date":"2026-09-01","sales":"1000","supplier_payments":{"s1":"0"},"payroll":"100"}],
- expect={"dm.2026-09-02.laborCost":1000,"dm.2026-09-02.laborCostComplete":True,"dm.2026-09-02.hourlyLaborCost":0,"dm.2026-09-01.laborCost":1100,
- "report.actual.labor.employerCost.value":"2100"})
+ expect={"dm.2026-09-02.laborCost":0,"dm.2026-09-02.laborCostComplete":True,"dm.2026-09-02.hourlyLaborCost":0,"dm.2026-09-02.globalLaborCost":0,
+ "dm.2026-09-01.laborCost":1134.4827586207,"dm.2026-09-01.globalLaborCost":1034.4827586207,"report.actual.labor.employerCost.value":"32900/29"})
 case(id="O-16",type="error",desc="malformed operating calendar is a contract error",asOf=D2,window=ONE,rows=[],closedDates=["2026-9-1"],expectError="invalid_operating_calendar")
 
-json.dump({"contract":"MARJIN_FIN/2 + MARJIN_LABOR/2 + MARJIN_NORM/3 + MARJIN_DEC/1 + MARJIN_PB/1","authoredBy":"hand (R1.3/R1.4 goldens + final owner contract 2026-09-29)","cases":C},
+json.dump({"contract":"MARJIN_FIN/3 + MARJIN_LABOR/3 + MARJIN_NORM/3 + MARJIN_DEC/1 + MARJIN_PB/1","authoredBy":"hand (R1.3/R1.4 goldens + final owner contract 2026-09-29)","cases":C},
  open(os.path.join(os.path.dirname(os.path.abspath(__file__)),"financial-core-goldens.json"),"w"),ensure_ascii=False,indent=1)
 print(len(C))

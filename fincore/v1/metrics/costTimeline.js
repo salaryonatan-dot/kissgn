@@ -1,5 +1,5 @@
 import { isCanonicalAmountString, parseAmountString, RAT_ZERO, ratAdd, ratDiv, ratFromInt, ratIsNegative, ratMul } from "../finance/decimal.js";
-import { daysInMonthOf, isBusinessDate } from "../finance/businessDate.js";
+import { addDays, datesInRange, daysInMonthOf, isBusinessDate, monthBounds } from "../finance/businessDate.js";
 import { FinanceContractError } from "../finance/types.js";
 function cmpVersion(a, b) {
     if (a.recordedAt !== b.recordedAt)
@@ -56,30 +56,101 @@ export function revenueLinkedCharges(version, revenue) {
     const royaltyPct = version.royalty.mode === "pct" ? ratMul(ratDiv(parseAmountString(version.royalty.ratePct), HUNDRED), revenue) : RAT_ZERO;
     return { rentPct, royaltyPct };
 }
-/**
- * One calendar day's recognised cost under the version in force that day. Monthly amounts
- * (global employer cost, fixed items, fixed rent) accrue as monthly / daysInMonth(day) on
- * EVERY calendar day. Percentage rent/royalty apply to the day's recorded revenue (null ⇒
- * no recorded revenue ⇒ nothing to apply the rate to).
- */
-export function accrueDay(version, date, dayRevenue) {
-    const dim = ratFromInt(daysInMonthOf(date));
-    const perDay = (monthly) => ratDiv(monthly, dim);
-    const revenue = dayRevenue === null ? RAT_ZERO : dayRevenue;
-    const global = perDay(sumAmounts(version.globalEmployees.map((e) => e.monthlyAmount)));
-    const fixedRegular = perDay(sumAmounts(version.fixedItems.map((f) => f.monthlyAmount)));
-    const rentFixed = version.rent.mode === "fixed" ? perDay(parseAmountString(version.rent.monthlyAmount)) : RAT_ZERO;
-    const { rentPct, royaltyPct } = revenueLinkedCharges(version, revenue);
-    return { global, fixedRegular, rentFixed, rentPct, royaltyPct };
+// ── Eligible-day allocation (CDA-09 / CDA-10 / CDA-14) ─────────────────────────────
+export const COST_ALLOCATION_POLICY = "eligible_days_excluding_completed_closures";
+export const NO_CLOSURE_ALLOCATION = Object.freeze({ asOfBusinessDate: null, closedDates: Object.freeze([]) });
+export function isCompletedClosure(date, ctx, closed) {
+    return ctx.asOfBusinessDate !== null && closed.has(date) && date < ctx.asOfBusinessDate;
 }
-export function accrueWindow(timeline, dates, revenueByDate) {
+function validateAllocationContext(ctx) {
+    if (!ctx || typeof ctx !== "object" || !Array.isArray(ctx.closedDates))
+        throw new FinanceContractError("invalid_allocation_context");
+    if (ctx.asOfBusinessDate !== null && !isBusinessDate(ctx.asOfBusinessDate))
+        throw new FinanceContractError("invalid_as_of", ctx.asOfBusinessDate);
+    for (const d of ctx.closedDates)
+        if (!isBusinessDate(d))
+            throw new FinanceContractError("invalid_allocation_context", d);
+    return ctx;
+}
+/** Entitlement then eligible-date placement for every effective segment of one month. */
+export function allocateMonth(resolved, month, ctx) {
+    validateAllocationContext(ctx);
+    const { first, last } = monthBounds(month);
+    const dim = ratFromInt(daysInMonthOf(first));
+    const closed = new Set(ctx.closedDates);
+    const segments = [];
+    const uncovered = [];
+    const ordered = resolved.ordered;
+    // dates before the first version in force are uncovered (never invented)
+    const firstFrom = ordered.length ? ordered[0].effectiveFrom : null;
+    for (const d of datesInRange(first, last))
+        if (firstFrom === null || d < firstFrom)
+            uncovered.push(d);
+    for (let i = 0; i < ordered.length; i += 1) {
+        const v = ordered[i];
+        const next = i + 1 < ordered.length ? ordered[i + 1].effectiveFrom : null;
+        const from = v.effectiveFrom > first ? v.effectiveFrom : first;
+        const toExcl = next === null ? null : next;
+        const to = toExcl !== null && toExcl <= last ? addDays(toExcl, -1) : last;
+        if (from > last || to < first || from > to)
+            continue;
+        const dates = datesInRange(from, to);
+        const completedClosureDates = dates.filter((d) => isCompletedClosure(d, ctx, closed));
+        const eligibleDates = dates.filter((d) => !isCompletedClosure(d, ctx, closed));
+        const share = ratDiv(ratFromInt(dates.length), dim);
+        const entitlement = {
+            global: ratMul(sumAmounts(v.globalEmployees.map((e) => e.monthlyAmount)), share),
+            fixedRegular: ratMul(sumAmounts(v.fixedItems.map((f) => f.monthlyAmount)), share),
+            rentFixed: v.rent.mode === "fixed" ? ratMul(parseAmountString(v.rent.monthlyAmount), share) : RAT_ZERO,
+        };
+        segments.push({ month, versionId: v.versionId, from, to, calendarDays: dates.length, eligibleDates, completedClosureDates, entitlement, state: eligibleDates.length >= 1 ? "allocated" : "no_eligible_allocation_days" });
+    }
+    return { month, segments, uncoveredDates: uncovered };
+}
+function placementIn(seg, date) {
+    if (seg.state === "no_eligible_allocation_days")
+        return { state: "no_eligible_allocation_days", versionId: seg.versionId, from: seg.from, to: seg.to };
+    if (!seg.eligibleDates.includes(date))
+        return { state: "placed", versionId: seg.versionId, global: RAT_ZERO, fixedRegular: RAT_ZERO, rentFixed: RAT_ZERO, completedClosure: true };
+    const n = ratFromInt(seg.eligibleDates.length);
+    return { state: "placed", versionId: seg.versionId, global: ratDiv(seg.entitlement.global, n), fixedRegular: ratDiv(seg.entitlement.fixedRegular, n), rentFixed: ratDiv(seg.entitlement.rentFixed, n), completedClosure: false };
+}
+function segmentOf(alloc, date) {
+    for (const s of alloc.segments)
+        if (s.from <= date && date <= s.to)
+            return s;
+    return null;
+}
+/** The monthly-cost placement of ONE date (its month/segment computed whole — the only divisor). */
+export function dayPlacement(timeline, date, ctx = NO_CLOSURE_ALLOCATION) {
+    if (!isBusinessDate(date))
+        throw new FinanceContractError("invalid_date", date);
+    const alloc = allocateMonth(resolveTimeline(timeline), date.slice(0, 7), ctx);
+    const seg = segmentOf(alloc, date);
+    return seg === null ? { state: "uncovered" } : placementIn(seg, date);
+}
+/**
+ * Monthly-cost allocation summed over `dates` (any window). An allocated segment contributes
+ * its placements on the window dates; a segment without eligible dates contributes its whole
+ * entitlement when the window contains the whole segment (the aggregate is determinable), and
+ * leaves the aggregate undeterminable otherwise. Percentage charges use each date's revenue.
+ */
+export function accrueWindow(timeline, dates, revenueByDate, ctx = NO_CLOSURE_ALLOCATION) {
     const resolved = resolveTimeline(timeline);
+    validateAllocationContext(ctx);
     let global = RAT_ZERO, fixedRegular = RAT_ZERO, rentFixed = RAT_ZERO, rentPct = RAT_ZERO, royaltyPct = RAT_ZERO;
     const bases = new Set();
     const applied = new Set();
     const globalKeys = new Set();
     let revenueLinked = false;
     const uncovered = [];
+    const months = new Map();
+    const windowSet = new Set(dates);
+    const noEligible = new Map();
+    const unavailable = [];
+    const completedClosures = [];
+    let eligible = 0;
+    let determinable = true;
     for (const d of dates) {
         const v = versionForDay(resolved, d);
         if (!v) {
@@ -92,12 +163,39 @@ export function accrueWindow(timeline, dates, revenueByDate) {
             globalKeys.add(e.employeeKey);
         if (v.rent.mode === "pct" || v.royalty.mode === "pct")
             revenueLinked = true;
-        const a = accrueDay(v, d, revenueByDate.has(d) ? revenueByDate.get(d) : null);
-        global = ratAdd(global, a.global);
-        fixedRegular = ratAdd(fixedRegular, a.fixedRegular);
-        rentFixed = ratAdd(rentFixed, a.rentFixed);
-        rentPct = ratAdd(rentPct, a.rentPct);
-        royaltyPct = ratAdd(royaltyPct, a.royaltyPct);
+        const month = d.slice(0, 7);
+        if (!months.has(month))
+            months.set(month, allocateMonth(resolved, month, ctx));
+        const seg = segmentOf(months.get(month), d);
+        const p = placementIn(seg, d);
+        if (p.state === "placed") {
+            if (p.completedClosure)
+                completedClosures.push(d);
+            else
+                eligible += 1;
+            global = ratAdd(global, p.global);
+            fixedRegular = ratAdd(fixedRegular, p.fixedRegular);
+            rentFixed = ratAdd(rentFixed, p.rentFixed);
+        }
+        else if (p.state === "no_eligible_allocation_days") {
+            unavailable.push(d);
+            completedClosures.push(d);
+            const key = seg.versionId + "|" + seg.from;
+            if (!noEligible.has(key)) {
+                noEligible.set(key, { versionId: seg.versionId, from: seg.from, to: seg.to });
+                const whole = datesInRange(seg.from, seg.to).every((x) => windowSet.has(x));
+                if (whole) {
+                    global = ratAdd(global, seg.entitlement.global);
+                    fixedRegular = ratAdd(fixedRegular, seg.entitlement.fixedRegular);
+                    rentFixed = ratAdd(rentFixed, seg.entitlement.rentFixed);
+                }
+                else
+                    determinable = false;
+            }
+        }
+        const charges = revenueLinkedCharges(v, revenueByDate.has(d) ? (revenueByDate.get(d) ?? RAT_ZERO) : RAT_ZERO);
+        rentPct = ratAdd(rentPct, charges.rentPct);
+        royaltyPct = ratAdd(royaltyPct, charges.royaltyPct);
     }
     const total = [global, fixedRegular, rentFixed, rentPct, royaltyPct].reduce(ratAdd, RAT_ZERO);
     return {
@@ -108,5 +206,13 @@ export function accrueWindow(timeline, dates, revenueByDate) {
         uncoveredDates: uncovered,
         globalEmployeesApplied: globalKeys.size,
         revenueLinked,
+        allocation: {
+            policy: COST_ALLOCATION_POLICY,
+            eligibleDates: eligible,
+            completedClosureDates: completedClosures,
+            noEligibleSegments: [...noEligible.values()],
+            placementUnavailableDates: unavailable,
+            aggregateDeterminable: determinable,
+        },
     };
 }

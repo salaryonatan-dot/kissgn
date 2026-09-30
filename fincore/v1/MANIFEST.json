@@ -17,6 +17,7 @@
     "src/metrics/costTimeline.ts",
     "src/metrics/projected.ts",
     "src/metrics/report.ts",
+    "src/metrics/revenueForecast.ts",
     "src/policy/evaluate.ts",
     "src/policy/intelligence.ts",
     "src/policy/laborSource.ts",
@@ -27,11 +28,11 @@
     "src/presenters/money.ts",
     "src/presenters/percent.ts"
   ],
-  "sourceDigest": "cfd0dd7d13937660d2bc96f3fdf9f67fd0c6017429596d572e54c41c5d633554",
+  "sourceDigest": "0889ffa03c7a9d623d8e164b39bb18eeb4d29b16a9597255d14b62df444f0a49",
   "files": [
     {
       "path": "browser/marjinFinanceGlobal.js",
-      "sha256": "7adab524bba9e57ade1697cbdab361937760962f03c4da86aa45968ba8d44e68"
+      "sha256": "7ea8caf3c0750b221138fd7800e93fcf47cf2d5fa8bcaeee32202c2ac62847a1"
     },
     {
       "path": "finance/businessDate.js",
@@ -47,7 +48,7 @@
     },
     {
       "path": "finance/labor.js",
-      "sha256": "f2cf950078fb56f9e3d674ac33bcb4898064bb49ba4ff26a0ce7e9159e0482f8"
+      "sha256": "fdb2dcf2fa31d402cc457a3b176228c87430ed4c335867a9326ef9b25a6ed997"
     },
     {
       "path": "finance/normalize.js",
@@ -71,19 +72,23 @@
     },
     {
       "path": "metrics/adapters/legacyNumber.js",
-      "sha256": "f6ff7fdbdfeb25ff16414fae42ad8c141750aa676b6ee60a397547f36db396a0"
+      "sha256": "7c628c7437e0035bcff9ae600caec1917e45705e28d37732b06f30dc382b24ef"
     },
     {
       "path": "metrics/costTimeline.js",
-      "sha256": "a271dba8bea1752b7eb70703b2adc2a962df5cd49d7271bb3f377aca67f137cd"
+      "sha256": "e1d26af8f7066bde27e7c0a11814d5f6e70875d1ad55662c0705070c5a2704dc"
     },
     {
       "path": "metrics/projected.js",
-      "sha256": "c75a4752e90183a4d9de2c010014d9e93143f304a088b466ae3762d10b25f2bb"
+      "sha256": "a63c414f7efd13d1909e20137d4fd7b773721aa9e353e13fd890451a94195807"
     },
     {
       "path": "metrics/report.js",
-      "sha256": "21013617ee513b2cccbe0dc060be3b91831f7abb74ba038e43667c8e86697ba4"
+      "sha256": "89f5d4b53b2b741ab617384ff125f573c02946945b980a791ef627c9d2ef9993"
+    },
+    {
+      "path": "metrics/revenueForecast.js",
+      "sha256": "c431f75c53e952d63b2399bb416f1e79d723f0e250082d6ef467c6d98cb519ec"
     },
     {
       "path": "policy/evaluate.js",
@@ -99,7 +104,7 @@
     },
     {
       "path": "policy/productFinance.js",
-      "sha256": "f07269ce3412bef5f37ce29844d535ba8f1e0f83772a60fc36981bff2937ea70"
+      "sha256": "65dd9fe22c00c5123a3d27b392765a261a34caf3cc4a3fc58adf81727c2f6ad8"
     },
     {
       "path": "policy/purchaseBasis.js",

@@ -302,7 +302,7 @@ export function canonicalMonthProjection(inputs: ServerInputs, report: Financial
   if (inputs.exceptionsState === "not_loaded") throw new FinanceContractError("exceptions_required", "canonicalMonthProjection");
   const provenance = provenanceOf(inputs);
   if (inputs.exceptionsState === "unreadable") {
-    return { projection: null, forecast: { formulaId: REV_FORECAST_FORMULA_ID, projectedRevenue: null, warnings: ["exception_ledger_unreadable"] }, provenance };
+    return { projection: null, forecast: { formulaId: REV_FORECAST_FORMULA_ID, projectedRevenue: null, state: "unavailable", missingRevenueDates: [], invalidRevenueDates: [], warnings: ["exception_ledger_unreadable"], engine: null }, provenance };
   }
   return { ...productMonthProjection(inputs, report, { nowMs: opts.nowMs, tenantId: inputs.tenantId, bizId: inputs.bizId }), provenance };
 }

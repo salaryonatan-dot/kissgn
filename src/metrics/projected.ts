@@ -2,9 +2,12 @@
 // Projected month-end values are a separate object that never shares fields with Actual and
 // is never merged into Actual MTD. Projected revenue is owned by the forecast engine
 // (REV_FORECAST/*); this adapter applies the Actual cost ratios of totals to it and adds the
-// FULL calendar month of global employer cost and fixed cost. The days after the Actual
-// window (the current day and later) are reported separately in `afterActual`: they belong
-// to projection context only and never change Actual.
+// FULL month ENTITLEMENT of global employer cost and fixed cost (MARJIN_LABOR/3: placed on
+// eligible dates; the month total is preserved whatever the closures). The days after the
+// Actual window (the current day and later) are reported separately in `afterActual`: they
+// belong to projection context only and never change Actual. Only the report's COMPLETED
+// closures change placements — a recorded future closure changes the forecast REVENUE (the
+// forecast engine gives it zero) but not the cost denominator (CDA-04 / CDA-10).
 import type { AmountString, Rat } from "../finance/decimal.js";
 import { RAT_ZERO, decFromNumber, parseAmountString, ratAdd, ratFromDec, ratFromInt, ratMul, serializeRat } from "../finance/decimal.js";
 import { addDays, datesInRange, monthBounds } from "../finance/businessDate.js";
@@ -18,7 +21,7 @@ import { FinanceContractError } from "../finance/types.js";
 export const PROJECTION_FORMULA_VERSION = "MARJIN_PROJ/2";
 
 export interface ForecastRevenueInput {
-  readonly formulaId: string; // e.g. "REV_FORECAST/v1"
+  readonly formulaId: string; // e.g. "REV_FORECAST/v2" (the product forecast)
   readonly month: string;
   /** Projected month-end revenue from the forecast engine (number or canonical amount string); null ⇒ insufficient history. */
   readonly projectedRevenue: number | AmountString | null;
@@ -58,7 +61,9 @@ export function applyProjection(actual: FinancialReport, forecast: ForecastReven
   const warnings: string[] = [];
   const { first, last } = monthBounds(forecast.month);
   const monthDates = datesInRange(first, last);
-  const accrual = accrueWindow(timeline, monthDates, new Map());
+  // The completed closures of the month are exactly the report's closed Actual dates.
+  const allocation = { asOfBusinessDate: actual.window.asOfBusinessDate, closedDates: actual.operatingCalendar.closedDates };
+  const accrual = accrueWindow(timeline, monthDates, new Map(), allocation);
   const globalConfigBad = (timeline.flags || []).some((f) => GLOBAL_CONFIG_CODES.includes(f.code));
   const globalKnown = !globalConfigBad && accrual.uncoveredDates.length < 1;
   if (!globalKnown) warnings.push("global_employer_cost_unavailable");
@@ -71,7 +76,7 @@ export function applyProjection(actual: FinancialReport, forecast: ForecastReven
   const afterFrom = actual.window.completedThrough === null ? first : addDays(actual.window.completedThrough, 1);
   let afterActual: ProjectedFinancials["afterActual"] = null;
   if (afterFrom <= last && afterFrom >= first) {
-    const after = accrueWindow(timeline, datesInRange(afterFrom, last), new Map());
+    const after = accrueWindow(timeline, datesInRange(afterFrom, last), new Map(), allocation);
     afterActual = {
       from: afterFrom, to: last, days: datesInRange(afterFrom, last).length,
       globalEmployerCost: globalKnown ? serializeRat(after.global) : null,

@@ -3,16 +3,19 @@ import { addDays, isBusinessDate, monthBounds } from "../finance/businessDate.js
 import { groupByDate, normalizeRows } from "../finance/normalize.js";
 import { resolvePurchaseBasis } from "../finance/purchaseBasis.js";
 import { costTimelineFromCurrentConfig } from "../metrics/adapters/configCompat.js";
-import { toDailyMetric, toForecastDay } from "../metrics/adapters/legacyNumber.js";
-import { computePeriodReport, NO_DECLARED_CLOSURES } from "../metrics/report.js";
+import { toDailyMetric } from "../metrics/adapters/legacyNumber.js";
+import { computePeriodReport } from "../metrics/report.js";
 import { applyProjection } from "../metrics/projected.js";
-import { computeRevenueForecast, REV_FORECAST_FORMULA_ID } from "../forecast/revenueForecast.js";
-import { decFromNumber, serializeDec } from "../finance/decimal.js";
+import { computeRevenueForecastV2, REV_FORECAST_V2_FORMULA_ID } from "../metrics/revenueForecast.js";
 import { productPurchaseBasis } from "./purchaseBasis.js";
 import { productLaborSource } from "./laborSource.js";
-export const PRODUCT_FINANCE_VERSION = "MARJIN_PRODUCT/1";
-/** The one forecast formula the month projection is bound to (re-exported for the server wrappers). */
-export { REV_FORECAST_FORMULA_ID };
+export const PRODUCT_FINANCE_VERSION = "MARJIN_PRODUCT/2";
+/** The one forecast formula the month projection is bound to (REV_FORECAST/v2; re-exported for the server wrappers). */
+export const REV_FORECAST_FORMULA_ID = REV_FORECAST_V2_FORMULA_ID;
+/** Source label of the product closure calendar (derived from the entry-exception domain). */
+export const PRODUCT_CLOSURE_SOURCE = "entry_exception_closure";
+/** The one exception reason code that declares an accounting closure (CD-01). */
+export const CLOSURE_REASON_CODE = "closure";
 /** Reserved flag key for an unreadable fixed-cost node (AMEND-03). Emitted ONLY for that state. */
 export const FIXED_LIST_UNREADABLE_KEY = "__fixed_list_unreadable__";
 function isPlainObject(v) {
@@ -74,9 +77,10 @@ export function mapFieldReadback(rows) {
 }
 /**
  * Structured exception ledger (`tenants/{t}/entry_exceptions/{bizId}` = {[date]: {state, operations}})
- * → `exceptionsByDate`. Same meaning as the parity-tested resolver (lib/entryExceptions.js
- * resolveEffectiveException): a date whose envelope carries a truthy `state` is structured and
- * is an exception iff `state.status === "active"`; a date without a state falls back to the
+ * → effective structured states. Same meaning as the parity-tested resolver (lib/entryExceptions.js
+ * resolveEffectiveException / buildEffectiveRecord): a date whose envelope carries a truthy `state`
+ * is structured; it is ACTIVE iff `state.status === "active"` (then its `reasonCode` is kept),
+ * otherwise CLEARED (reason dropped, like the list API). A date without a state falls back to the
  * rows' embedded flag (it is omitted here). Invalid date keys are ignored. A non-object ledger is
  * unreadable (never defaulted to "no exceptions").
  */
@@ -93,9 +97,18 @@ export function decodeExceptionLedger(raw) {
         const st = isPlainObject(env) ? env.state : undefined;
         if (!st)
             continue;
-        value[key] = isPlainObject(st) && st.status === "active";
+        const active = isPlainObject(st) && st.status === "active";
+        const reason = active && isPlainObject(st) && typeof st.reasonCode === "string" ? st.reasonCode : null;
+        value[key] = { status: active ? "active" : "cleared", reasonCode: reason };
     }
     return { state: "present", value };
+}
+/** Structured states → the boolean exception ledger (active ⇔ exception). */
+export function exceptionsByDateOf(states) {
+    const out = {};
+    for (const k of Object.keys(states).sort())
+        out[k] = states[k].status === "active";
+    return out;
 }
 function requireInputs(inputs) {
     if (!inputs || typeof inputs !== "object")
@@ -114,6 +127,45 @@ function requireRange(range) {
 function normalized(inputs) {
     requireInputs(inputs);
     return normalizeRows(mapFieldReadback(inputs.rows), { asOfBusinessDate: inputs.asOfBusinessDate });
+}
+/** The closure calendar cannot be known when the structured ledger was unreadable. */
+export function closureCalendarUnknown(inputs) {
+    return inputs.exceptionLedgerState === "unreadable";
+}
+function exceptionsOf(inputs) {
+    if (inputs.exceptionsByDate)
+        return inputs.exceptionsByDate;
+    return inputs.exceptionStates ? exceptionsByDateOf(inputs.exceptionStates) : undefined;
+}
+/**
+ * The product closure calendar (CDA-01, CD-AT24): every declared closure, completed or future.
+ *   structured state present  → closure ⇔ active with reasonCode "closure" (cleared wins over legacy);
+ *   structured state absent   → narrow legacy fallback: exactly ONE row on the date, carrying
+ *                               `is_exception:true` and `exception_reason:"closure"`.
+ * A date listed only in the boolean `exceptionsByDate` is structured with an unknown reason: it
+ * blocks the legacy fallback and is not a closure.
+ */
+export function productClosureCalendar(inputs, n = normalized(inputs)) {
+    const states = inputs.exceptionStates || {};
+    const structured = new Set([...Object.keys(states), ...Object.keys(inputs.exceptionsByDate || {})]);
+    const closed = new Set();
+    for (const [date, st] of Object.entries(states))
+        if (isBusinessDate(date) && st.status === "active" && st.reasonCode === CLOSURE_REASON_CODE)
+            closed.add(date);
+    const rowsByDate = new Map();
+    for (const r of n.rows) {
+        const l = rowsByDate.get(r.date) || [];
+        l.push(r);
+        rowsByDate.set(r.date, l);
+    }
+    for (const [date, list] of rowsByDate) {
+        if (structured.has(date) || list.length !== 1)
+            continue;
+        const r = list[0];
+        if (r.isException && r.annotations.exceptionReason.length === 1 && r.annotations.exceptionReason[0] === CLOSURE_REASON_CODE)
+            closed.add(date);
+    }
+    return { source: PRODUCT_CLOSURE_SOURCE, closedDates: [...closed].sort() };
 }
 /**
  * Cost timeline under the current compatibility model (Slice A configCompat; F1 replaces it
@@ -134,7 +186,7 @@ function daysOf(n, inputs, range) {
     const completedThrough = addDays(inputs.asOfBusinessDate, -1);
     const to = range.to < completedThrough ? range.to : completedThrough;
     const effective = range.from <= to ? { from: range.from, to } : null;
-    const days = effective ? groupByDate(n.rows, { from: effective.from, to: effective.to, exceptionsByDate: inputs.exceptionsByDate }) : [];
+    const days = effective ? groupByDate(n.rows, { from: effective.from, to: effective.to, exceptionsByDate: exceptionsOf(inputs) }) : [];
     return {
         window: { requested: { from: range.from, to: range.to }, effective, asOfBusinessDate: inputs.asOfBusinessDate, completedThrough },
         days,
@@ -146,16 +198,19 @@ function daysOf(n, inputs, range) {
 export function productDays(inputs, range) {
     return daysOf(normalized(inputs), inputs, range);
 }
-function metricOf(day, timeline, asOf) {
+function metricOf(day, timeline, asOf, calendar, closureCalendarUnreadable) {
     const basis = resolvePurchaseBasis(day.purchases.presence === "present" ? [day.date] : [], productPurchaseBasis());
-    const metric = toDailyMetric(day, basis, productLaborSource(), timeline, { asOfBusinessDate: asOf, operatingCalendar: NO_DECLARED_CLOSURES });
+    const metric = toDailyMetric(day, basis, productLaborSource(), timeline, { asOfBusinessDate: asOf, operatingCalendar: calendar, closureCalendarUnreadable });
     return { ...metric, partial: { revenue: day.revenue.partial, purchases: day.purchases.partial, hourlyLabor: day.hourlyLabor.partial } };
 }
 /** One DailyMetric-shaped record per PRESENT completed day of the range (missing days are omitted). */
 export function productDailyMetrics(inputs, range) {
-    const d = productDays(inputs, range);
+    const n = normalized(inputs);
+    const d = daysOf(n, inputs, range);
     const timeline = productTimeline(inputs);
-    return d.days.filter((day) => day.presence.day === "present").map((day) => metricOf(day, timeline, inputs.asOfBusinessDate));
+    const calendar = productClosureCalendar(inputs, n);
+    const unknown = closureCalendarUnknown(inputs);
+    return d.days.filter((day) => day.presence.day === "present").map((day) => metricOf(day, timeline, inputs.asOfBusinessDate, calendar, unknown));
 }
 /** The canonical record of one business date: Actual (≤ asOf − 1) or an explicit non-Actual context. */
 export function productDayRecord(inputs, date) {
@@ -166,11 +221,11 @@ export function productDayRecord(inputs, date) {
     if (date > asOf)
         return { inActual: false, date, reason: "future_date", presenceDay: "not_examined" };
     if (date === asOf) {
-        const [today] = groupByDate(n.rows, { from: date, to: date, exceptionsByDate: inputs.exceptionsByDate });
+        const [today] = groupByDate(n.rows, { from: date, to: date, exceptionsByDate: exceptionsOf(inputs) });
         return { inActual: false, date, reason: "current_day", presenceDay: today.presence.day };
     }
     const [day] = daysOf(n, inputs, { from: date, to: date }).days;
-    return { inActual: true, date, day, metric: metricOf(day, productTimeline(inputs), asOf) };
+    return { inActual: true, date, day, metric: metricOf(day, productTimeline(inputs), asOf, productClosureCalendar(inputs, n), closureCalendarUnknown(inputs)) };
 }
 /**
  * The Actual month report — the ONLY runtime call of computePeriodReport (G-S4). Quarantine
@@ -180,54 +235,43 @@ export function productDayRecord(inputs, date) {
 export function productMonthReport(inputs, sel) {
     const n = normalized(inputs);
     const { first, last } = monthBounds(sel && sel.month);
-    const days = groupByDate(n.rows, { from: first, to: last, exceptionsByDate: inputs.exceptionsByDate });
+    const days = groupByDate(n.rows, { from: first, to: last, exceptionsByDate: exceptionsOf(inputs) });
     const inMonth = new Set(n.rows.filter((r) => r.date >= first && r.date <= last).map((r) => r.id));
     const flags = n.flags.filter((f) => f.code !== "row_without_id" || (f.rowId !== undefined && inMonth.has(f.rowId)));
     const quarantine = n.quarantine;
-    return computePeriodReport(days, productTimeline(inputs), productPurchaseBasis(), productLaborSource(), { kind: sel.kind, month: sel.month, asOfBusinessDate: inputs.asOfBusinessDate }, { quarantine, flags, operatingCalendar: NO_DECLARED_CLOSURES });
+    return computePeriodReport(days, productTimeline(inputs), productPurchaseBasis(), productLaborSource(), { kind: sel.kind, month: sel.month, asOfBusinessDate: inputs.asOfBusinessDate }, { quarantine, flags, operatingCalendar: productClosureCalendar(inputs, n), closureCalendarUnreadable: closureCalendarUnknown(inputs) });
 }
 /**
- * Month projection (AMEND-04; first runtime consumer: B2): approved REV_FORECAST/v1 over the
- * canonical completed-day history → approved MARJIN_PROJ/2 applyProjection on the Actual report.
- * `nowMs` is required so the engine never reads the clock. Insufficient history ⇒ projection null.
+ * Month projection (AMEND-04; first runtime consumer: B2): REV_FORECAST/v2 over the canonical
+ * completed-day history and the product closure calendar → approved MARJIN_PROJ/2
+ * applyProjection on the Actual report. `nowMs` stays required (the caller's one captured clock;
+ * the business date is `asOfBusinessDate`, the engine reads no clock). No month figure when no
+ * remaining eligible weekday has enough history (projection null).
  */
 export function productMonthProjection(inputs, report, opts) {
     if (!opts || typeof opts.nowMs !== "number" || !isFinite(opts.nowMs))
         throw new FinanceContractError("now_required", opts && opts.nowMs);
+    if (report.window.asOfBusinessDate !== inputs.asOfBusinessDate)
+        throw new FinanceContractError("projection_clock_mismatch", report.window.asOfBusinessDate);
     const n = normalized(inputs);
     let firstDate = null;
     for (const r of n.rows)
         if (firstDate === null || r.date < firstDate)
             firstDate = r.date;
-    const history = [];
-    if (firstDate !== null) {
-        for (const day of daysOf(n, inputs, { from: firstDate, to: inputs.asOfBusinessDate }).days) {
-            const f = toForecastDay(day);
-            if (f !== null)
-                history.push(f);
-        }
-    }
-    const forecast = computeRevenueForecast({
-        tenantId: opts.tenantId || "", bizId: opts.bizId || "", targetMonth: report.window.month,
-        today: inputs.asOfBusinessDate, nowMs: opts.nowMs, history,
-    });
-    if (forecast.formulaId !== REV_FORECAST_FORMULA_ID)
-        throw new FinanceContractError("forecast_formula_mismatch", forecast.formulaId);
-    const warnings = [...forecast.warnings];
-    if (forecast.monthEndForecastRevenue === null) {
+    if (closureCalendarUnknown(inputs))
+        throw new FinanceContractError("closure_calendar_unknown", "productMonthProjection");
+    const history = firstDate === null ? [] : daysOf(n, inputs, { from: firstDate, to: inputs.asOfBusinessDate }).days;
+    const calendar = productClosureCalendar(inputs, n);
+    const engine = computeRevenueForecastV2({ month: report.window.month, asOfBusinessDate: inputs.asOfBusinessDate, history, closedDates: calendar.closedDates });
+    if (engine.formulaId !== REV_FORECAST_FORMULA_ID)
+        throw new FinanceContractError("forecast_formula_mismatch", engine.formulaId);
+    const warnings = [...engine.warnings];
+    const base = { formulaId: REV_FORECAST_FORMULA_ID, state: engine.state, missingRevenueDates: engine.missingRevenueDates, invalidRevenueDates: engine.invalidRevenueDates, engine };
+    if (engine.monthEndForecastRevenue === null) {
         warnings.push("insufficient_history");
-        return { projection: null, forecast: { formulaId: REV_FORECAST_FORMULA_ID, projectedRevenue: null, warnings } };
+        return { projection: null, forecast: { ...base, projectedRevenue: null, warnings } };
     }
-    // The engine's number is converted ONCE to the exact decimal of its canonical round-trip
-    // string (no binary arithmetic); the projection and the output use that exact string.
-    let projectedRevenue;
-    try {
-        projectedRevenue = serializeDec(decFromNumber(forecast.monthEndForecastRevenue));
-    }
-    catch (_) {
-        warnings.push("forecast_revenue_not_exact");
-        return { projection: null, forecast: { formulaId: REV_FORECAST_FORMULA_ID, projectedRevenue: null, warnings } };
-    }
+    const projectedRevenue = engine.monthEndForecastRevenue;
     const projection = applyProjection(report, { formulaId: REV_FORECAST_FORMULA_ID, month: report.window.month, projectedRevenue }, productTimeline(inputs));
-    return { projection, forecast: { formulaId: REV_FORECAST_FORMULA_ID, projectedRevenue, warnings } };
+    return { projection, forecast: { ...base, projectedRevenue, warnings } };
 }

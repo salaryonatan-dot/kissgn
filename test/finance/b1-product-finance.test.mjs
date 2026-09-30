@@ -84,12 +84,13 @@ test("PFN-04 productFinance.ts is pure and binds the product policies (no clock,
     assert.doesNotMatch(code, re, "productFinance.ts must not match " + re);
   assert.equal((code.match(/JSON\.parse\(/g) || []).length, 1, "JSON.parse only inside decodeEnvelope");
   assert.ok(code.indexOf("JSON.parse(") > code.indexOf("export function decodeEnvelope(raw: unknown, expect: \"object\" | \"array\")"));
-  for (const m of code.matchAll(/import\s[^;]*?from\s+["']([^"']+)["']/g)) assert.ok(m[1].startsWith("./") || m[1].startsWith("../finance/") || m[1].startsWith("../metrics/") || m[1] === "../forecast/revenueForecast.js", "import " + m[1]);
+  // CD-M1: the product forecast is the core REV_FORECAST/v2 (src/metrics); the E-owned v1 engine is no longer imported
+  for (const m of code.matchAll(/import\s[^;]*?from\s+["']([^"']+)["']/g)) assert.ok(m[1].startsWith("./") || m[1].startsWith("../finance/") || m[1].startsWith("../metrics/"), "import " + m[1]);
   // no exported function takes a basis / labor source / calendar parameter
   for (const m of code.matchAll(/export function (\w+)\(([^)]*)\)/g)) assert.doesNotMatch(m[2], /basis|laborSource|calendar|closure/i, m[1] + " exposes a policy parameter");
-  assert.match(code, /productPurchaseBasis\(\)/); assert.match(code, /productLaborSource\(\)/); assert.match(code, /NO_DECLARED_CLOSURES/);
-  assert.equal(SERVER.PRODUCT_FINANCE_VERSION, "MARJIN_PRODUCT/1");
-  assert.equal(BROWSER.versions.product, "MARJIN_PRODUCT/1"); assert.equal(COMMITTED.versions.product, "MARJIN_PRODUCT/1");
+  assert.match(code, /productPurchaseBasis\(\)/); assert.match(code, /productLaborSource\(\)/); assert.match(code, /productClosureCalendar\(inputs, n\)/);
+  assert.equal(SERVER.PRODUCT_FINANCE_VERSION, "MARJIN_PRODUCT/2");
+  assert.equal(BROWSER.versions.product, "MARJIN_PRODUCT/2"); assert.equal(COMMITTED.versions.product, "MARJIN_PRODUCT/2");
 });
 
 // ── AMEND-03 / R-17 ───────────────────────────────────────────────────────────
@@ -152,24 +153,25 @@ const histRows = () => {
   return rows;
 };
 
-test("PRJ-01 productMonthProjection ≡ the direct composition toForecastDay → computeRevenueForecast → applyProjection", () => {
+test("PRJ-01 productMonthProjection ≡ the direct composition canonical days → computeRevenueForecastV2 → applyProjection (CD-M1: REV_FORECAST/v2 supersedes the v1 composition)", () => {
   const inp = inputs(histRows(), { config: configWithGlobal("3000"), fixed: fixedItems("3100") });
   const report = SERVER.productMonthReport(inp, { kind: "open_month", month: "2026-09" });
   const got = SERVER.productMonthProjection(inp, report, { nowMs: NOW_MS });
   const F = BROWSER;
   const n = F.finance.normalize.normalizeRows(inp.rows, { asOfBusinessDate: AS_OF });
-  const days = F.finance.normalize.groupByDate(n.rows, { from: "2026-06-01", to: "2026-09-28" });
-  const history = days.map((d) => F.metrics.adapters.legacyNumber.toForecastDay(d)).filter((x) => x !== null);
-  const fc = F.forecast.computeRevenueForecast({ tenantId: "", bizId: "", targetMonth: "2026-09", today: AS_OF, nowMs: NOW_MS, history });
+  const first = n.rows.map((r) => r.date).sort()[0];
+  const history = F.finance.normalize.groupByDate(n.rows, { from: first, to: "2026-09-28" });
+  const fc = F.metrics.revenueForecast.computeRevenueForecastV2({ month: "2026-09", asOfBusinessDate: AS_OF, history, closedDates: [] });
   assert.ok(fc.monthEndForecastRevenue !== null, "fixture has enough history");
   const expected = F.metrics.projected.applyProjection(report, { formulaId: fc.formulaId, month: "2026-09", projectedRevenue: fc.monthEndForecastRevenue }, SERVER.productTimeline(inp));
   assert.equal(serializeReport(got.projection), serializeReport(expected));
-  // B1 R1 (Codex FC-04): exact contract shape — literal formula id, projected revenue as the
-  // exact decimal STRING of the engine's value (no binary number crosses the product boundary)
-  assert.deepEqual(got.forecast, { formulaId: "REV_FORECAST/v1", projectedRevenue: String(fc.monthEndForecastRevenue), warnings: fc.warnings });
-  assert.equal(typeof got.forecast.projectedRevenue, "string"); assert.match(got.forecast.projectedRevenue, /^-?\d+(\.\d+)?$/);
+  // exact contract shape — literal formula id, projected revenue as the exact amount string of
+  // the engine (exact rationals; no binary number crosses the product boundary)
+  assert.deepEqual([got.forecast.formulaId, got.forecast.projectedRevenue, got.forecast.state, [...got.forecast.warnings]], ["REV_FORECAST/v2", fc.monthEndForecastRevenue, fc.state, [...fc.warnings]]);
+  assert.equal(typeof got.forecast.projectedRevenue, "string"); assert.match(got.forecast.projectedRevenue, /^-?\d+(\.\d+)?(\/\d+)?$/);
   assert.equal(got.projection.revenue, got.forecast.projectedRevenue, "the projection uses the same exact string");
 });
+
 
 test("PRJ-02 insufficient history ⇒ projection null + warning insufficient_history (never a fabricated month-end)", () => {
   for (const rows of [[], [entry(uid(1), "2026-09-27", { sales: "100" })]]) {

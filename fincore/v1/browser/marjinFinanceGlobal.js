@@ -18,7 +18,10 @@ import * as productLaborSource from "../policy/laborSource.js";
 import * as money from "../presenters/money.js";
 import * as percent from "../presenters/percent.js";
 import * as labels from "../presenters/labels.js";
+// REV_FORECAST/v1 (E-owned; mirrored by index.html) stays exported unchanged for its parity tests.
 import * as forecast from "../forecast/revenueForecast.js";
+// Closed-days amendment (MARJIN_PRODUCT/2): the closure-aware REV_FORECAST/v2 of the product composition.
+import * as revenueForecast from "../metrics/revenueForecast.js";
 // Slice B1 (AMEND-01): the product composition shared by server and browser.
 import * as product from "../policy/productFinance.js";
 const api = Object.freeze({
@@ -30,11 +33,13 @@ const api = Object.freeze({
         labor: labor.LABOR_CONTRACT_VERSION,
         policy: policyRegistry.POLICY_VERSION,
         projection: projected.PROJECTION_FORMULA_VERSION,
-        forecast: forecast.REV_FORECAST_FORMULA_ID,
+        // the forecast formula of the product composition (projection); v1 is the legacy page mirror
+        forecast: product.REV_FORECAST_FORMULA_ID,
+        forecastLegacy: forecast.REV_FORECAST_FORMULA_ID,
         product: product.PRODUCT_FINANCE_VERSION,
     }),
     finance: Object.freeze({ decimal, cells, businessDate, normalize, purchaseBasis, labor }),
-    metrics: Object.freeze({ costTimeline, report, projected, adapters: Object.freeze({ legacyNumber, configCompat }) }),
+    metrics: Object.freeze({ costTimeline, report, projected, revenueForecast, adapters: Object.freeze({ legacyNumber, configCompat }) }),
     policy: Object.freeze({ registry: policyRegistry, evaluate: policyEvaluate, purchaseBasis: productPurchaseBasis, laborSource: productLaborSource }),
     presenters: Object.freeze({ money, percent, labels }),
     forecast,

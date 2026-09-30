@@ -14,7 +14,7 @@ import type { PurchaseBasisResolution } from "../../finance/purchaseBasis.js";
 import type { LaborSourceInput } from "../../finance/labor.js";
 import { validateLaborSource } from "../../finance/labor.js";
 import type { CostTimeline } from "../costTimeline.js";
-import { accrueDay, resolveTimeline, versionForDay } from "../costTimeline.js";
+import { dayPlacement } from "../costTimeline.js";
 
 export function amountToNumber(a: AmountString | null): number | null {
   if (a === null) return null;
@@ -25,12 +25,12 @@ export function amountToNumber(a: AmountString | null): number | null {
 export interface LegacyDailyMetric {
   date: string;
   revenue: number;
-  /** Canonical daily labor = hourly employer cost + global calendar-day allocation (MARJIN_LABOR/2); 0 for old readers when not complete. */
+  /** Canonical daily labor = hourly employer cost + this date's global placement (MARJIN_LABOR/3); 0 for old readers when not complete. */
   laborCost: number;
   laborCostComplete: boolean;
   /** Hourly employees' employer cost entered on `payroll` (0 for old readers when absent; see presence.hourlyLabor). */
   hourlyLaborCost: number;
-  /** This calendar day's global employer-cost allocation; null when global configuration is missing/invalid. */
+  /** This date's global employer-cost placement (0 on a completed declared closure); null when global configuration is missing/invalid or the segment has no eligible date (CDA-14). */
   globalLaborCost: number | null;
   laborPct: number | null;
   foodCost: number;
@@ -53,16 +53,20 @@ export interface LegacyDailyMetric {
  */
 const GLOBAL_CONFIG_CODES: readonly string[] = ["invalid_global_amount", "missing_global_amount"];
 
-/** Actual-window context of a daily metric: the current business date and the declared closures. */
+/** Actual-window context of a daily metric: the current business date and the declared closures (any date; only completed ones change placements). */
 export interface DailyMetricContext {
   readonly asOfBusinessDate: BusinessDate;
   readonly operatingCalendar?: OperatingCalendar;
+  /** the declared-closure source was unreadable ⇒ the monthly-cost placement of the date is unknown */
+  readonly closureCalendarUnreadable?: boolean;
 }
 
 /**
  * One COMPLETED day's metric. The current day (and later) is outside Actual and is refused.
- * Daily laborCost = hourly employer cost + that calendar day's global allocation; on a
- * declared closed day the hourly part is not required (global still accrues). Daily values
+ * Daily laborCost = hourly employer cost + that date's global placement, taken from the whole
+ * month/segment allocation (the one divisor, CDA-09/10): 0 on a completed declared closure;
+ * unavailable when the segment has no eligible date. On a declared closed day the hourly part
+ * is not required; a recorded value stays on its date (CDA-08). Daily values
  * are per-day views: an MTD total always comes from computePeriodReport, never from summing
  * `laborCost` over entered days.
  */
@@ -77,9 +81,9 @@ export function toDailyMetric(day: CanonicalDay, basis: PurchaseBasisResolution,
   // A declared closed day has no hourly labor by definition; a recorded value is kept as recorded.
   const hourly = hourlyRecorded === null && closed && day.hourlyLabor.presence === "absent" ? DEC_ZERO : hourlyRecorded;
   const food = val(day.purchases);
-  const version = versionForDay(resolveTimeline(timeline), day.date);
-  const globalKnown = version !== null && !(timeline.flags || []).some((f) => GLOBAL_CONFIG_CODES.includes(f.code));
-  const globalDay = globalKnown && version !== null ? accrueDay(version, day.date, null).global : null;
+  const placement = dayPlacement(timeline, day.date, { asOfBusinessDate: ctx.asOfBusinessDate, closedDates: ctx.operatingCalendar && Array.isArray(ctx.operatingCalendar.closedDates) ? ctx.operatingCalendar.closedDates : [] });
+  const globalKnown = placement.state === "placed" && ctx.closureCalendarUnreadable !== true && !(timeline.flags || []).some((f) => GLOBAL_CONFIG_CODES.includes(f.code));
+  const globalDay = globalKnown && placement.state === "placed" ? placement.global : null;
   const laborRat = hourly === null || globalDay === null ? null : ratAdd(ratFromDec(hourly), globalDay);
   const pct = (num: ReturnType<typeof ratFromDec> | null): number | null => {
     if (num === null || rev === null) return null;

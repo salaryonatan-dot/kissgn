@@ -1,5 +1,5 @@
 {
- "contract": "MARJIN_FIN/2 + MARJIN_LABOR/2 + MARJIN_NORM/3 + MARJIN_DEC/1 + MARJIN_PB/1",
+ "contract": "MARJIN_FIN/3 + MARJIN_LABOR/3 + MARJIN_NORM/3 + MARJIN_DEC/1 + MARJIN_PB/1",
  "authoredBy": "hand (R1.3/R1.4 goldens + final owner contract 2026-09-29)",
  "cases": [
   {
@@ -952,7 +952,7 @@
      "value": "30000",
      "issues": []
     },
-    "report.actual.labor.globalAllocation": "calendar_days"
+    "report.actual.labor.globalAllocation": "eligible_days_excluding_completed_closures"
    }
   },
   {
@@ -3502,8 +3502,8 @@
      "value": "-550",
      "issues": []
     },
-    "report.versions.labor": "MARJIN_LABOR/2",
-    "report.versions.fin": "MARJIN_FIN/2"
+    "report.versions.labor": "MARJIN_LABOR/3",
+    "report.versions.fin": "MARJIN_FIN/3"
    },
    "expectFlags": [
     {
@@ -3872,7 +3872,7 @@
   },
   {
    "id": "O-02",
-   "desc": "tests 2+3: a declared closed day still carries global and fixed cost; closed is not missing",
+   "desc": "tests 2+3 (closed-days amendment): a completed declared closure carries no monthly placement; the month's other eligible dates carry it; closed is not missing",
    "asOf": "2026-09-11",
    "window": {
     "kind": "open_month",
@@ -3923,14 +3923,14 @@
     "2026-09-05"
    ],
    "expect": {
-    "report.actual.labor.globalEmployerCost.value": "10000",
-    "report.actual.fixedAccrual.regular": "1000",
-    "report.actual.fixedAccrual.allocation": "calendar_days",
+    "report.actual.labor.globalEmployerCost.value": "270000/29",
+    "report.actual.fixedAccrual.regular": "27000/29",
+    "report.actual.fixedAccrual.allocation": "eligible_days_excluding_completed_closures",
     "report.actual.revenue.value": "9000",
-    "report.actual.labor.employerCost.value": "11800",
+    "report.actual.labor.employerCost.value": "322200/29",
     "report.actual.operatingProfit": {
      "state": "complete",
-     "value": "-6500",
+     "value": "-166500/29",
      "issues": []
     },
     "report.coverage.revenue.missingDays": [],
@@ -4544,7 +4544,7 @@
   },
   {
    "id": "O-15",
-   "desc": "all completed days closed: known zero revenue, costs still accrue, labor % has a zero denominator",
+   "desc": "all completed days closed (closed-days amendment): known zero revenue, no monthly placement on the completed closures, labor % has a zero denominator",
    "asOf": "2026-09-03",
    "window": {
     "kind": "open_month",
@@ -4573,10 +4573,10 @@
    "expect": {
     "report.actual.operatingProfit": {
      "state": "complete",
-     "value": "-2200",
+     "value": "0",
      "issues": []
     },
-    "report.actual.labor.employerCost.value": "2000",
+    "report.actual.labor.employerCost.value": "0",
     "report.actual.labor.employerCostPct": {
      "state": "zero_denominator"
     },
@@ -4768,7 +4768,7 @@
   },
   {
    "id": "O-20",
-   "desc": "daily adapter: a declared closed day's labor is the global allocation alone",
+   "desc": "daily adapter (closed-days amendment): a completed declared closure has no monthly placement; the other dates carry 30000/29",
    "asOf": "2026-09-03",
    "window": {
     "kind": "open_month",
@@ -4798,11 +4798,13 @@
     }
    ],
    "expect": {
-    "dm.2026-09-02.laborCost": 1000,
+    "dm.2026-09-02.laborCost": 0,
     "dm.2026-09-02.laborCostComplete": true,
     "dm.2026-09-02.hourlyLaborCost": 0,
-    "dm.2026-09-01.laborCost": 1100,
-    "report.actual.labor.employerCost.value": "2100"
+    "dm.2026-09-02.globalLaborCost": 0,
+    "dm.2026-09-01.laborCost": 1134.4827586207,
+    "dm.2026-09-01.globalLaborCost": 1034.4827586207,
+    "report.actual.labor.employerCost.value": "32900/29"
    }
   },
   {

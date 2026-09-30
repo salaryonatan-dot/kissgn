@@ -17,7 +17,9 @@ export function applyProjection(actual, forecast, timeline) {
     const warnings = [];
     const { first, last } = monthBounds(forecast.month);
     const monthDates = datesInRange(first, last);
-    const accrual = accrueWindow(timeline, monthDates, new Map());
+    // The completed closures of the month are exactly the report's closed Actual dates.
+    const allocation = { asOfBusinessDate: actual.window.asOfBusinessDate, closedDates: actual.operatingCalendar.closedDates };
+    const accrual = accrueWindow(timeline, monthDates, new Map(), allocation);
     const globalConfigBad = (timeline.flags || []).some((f) => GLOBAL_CONFIG_CODES.includes(f.code));
     const globalKnown = !globalConfigBad && accrual.uncoveredDates.length < 1;
     if (!globalKnown)
@@ -32,7 +34,7 @@ export function applyProjection(actual, forecast, timeline) {
     const afterFrom = actual.window.completedThrough === null ? first : addDays(actual.window.completedThrough, 1);
     let afterActual = null;
     if (afterFrom <= last && afterFrom >= first) {
-        const after = accrueWindow(timeline, datesInRange(afterFrom, last), new Map());
+        const after = accrueWindow(timeline, datesInRange(afterFrom, last), new Map(), allocation);
         afterActual = {
             from: afterFrom, to: last, days: datesInRange(afterFrom, last).length,
             globalEmployerCost: globalKnown ? serializeRat(after.global) : null,

@@ -1,22 +1,28 @@
-// MARJIN_LABOR/2 — labor and fixed-cost recognition contract (FINAL owner contract 2026-09-29,
-// supersedes MARJIN_LABOR/1).
+// MARJIN_LABOR/3 — labor and fixed-cost recognition contract (FINAL owner contract 2026-09-29,
+// amended by the owner-approved closed-days / active-day allocation decision of 2026-09-30,
+// CD-07…CD-13; supersedes MARJIN_LABOR/2).
 //
-// CANONICAL DAILY LABOR COST = hourly employer cost + global employer cost allocation.
+// CANONICAL DAILY LABOR COST = hourly employer cost + global employer cost placement.
 //   1. Hourly employer cost: the authoritative daily FULL EMPLOYER COST of HOURLY employees
 //      from the attendance system (ShiftOrganizer), entered manually into Marjin on the entry
-//      row field `payroll`. It excludes global/full-time employees.
+//      row field `payroll`. It excludes global/full-time employees. It stays on its recorded
+//      date — a closure never moves it (CD-10).
 //   2. Global employer cost: each global/full-time employee's MONTHLY amount entered in
-//      Marjin IS full employer cost (not gross, not net, no multiplier). It is allocated by
-//      CALENDAR DAY: monthly / calendar days of the month, on every calendar day — closed days
-//      included, never conditioned on revenue, never divided by operating days.
+//      Marjin IS full employer cost (not gross, not net, no multiplier). Its ENTITLEMENT is
+//      computed first for each month / effective segment (monthly × segment calendar days /
+//      calendar days of the month — the approved effective-date contract), then PLACED across
+//      the segment's cost-allocation-eligible dates: every date except a declared closure that
+//      is already COMPLETED under D-1. A recorded future closure stays in the denominator until
+//      it completes (CD-07). The entitlement is never changed by a closure (CD-08).
 //   The two sources never overlap. The core applies no payroll formula, uplift or conversion.
-// Fixed costs (rent, arnona, subscriptions, accounting, …) are allocated the same way:
-// monthly / calendar days, on every calendar day.
-// `hourly_payroll` is a LEGACY field with no current owner-recognised meaning: it is never a
-// labor source, never added to labor cost, and is only reported as an uncounted datum.
+// Fixed monthly costs (fixed items, fixed rent) use the same entitlement-then-placement rule.
+// Percentage rent/royalty stay rate × revenue (CD-11). With NO eligible date in a segment the
+// placement is typed unavailable — never a division by zero, a calendar fallback or a zero
+// (CD-13). `hourly_payroll` is a LEGACY field with no current owner-recognised meaning: it is
+// never a labor source, never added to labor cost, and is only reported as an uncounted datum.
 import { FinanceContractError } from "./types.js";
 
-export const LABOR_CONTRACT_VERSION = "MARJIN_LABOR/2";
+export const LABOR_CONTRACT_VERSION = "MARJIN_LABOR/3";
 
 export type LaborMeaning = "authoritative_employer_cost";
 export type LaborSourceSystem = "attendance_workforce" | "marjin_workforce";
@@ -44,8 +50,9 @@ const METHODS: readonly string[] = ["manual", "integration"];
 export const ENTRY_LABOR_FIELDS: readonly string[] = ["payroll"];
 /** Legacy entry-row labor-like fields that are NEVER counted (meaning unknown; see R1.4 09). */
 export const LEGACY_UNCOUNTED_LABOR_FIELDS: readonly string[] = ["hourly_payroll"];
-export const GLOBAL_COST_ALLOCATION = "calendar_days";
-export const FIXED_COST_ALLOCATION = "calendar_days";
+/** Entitlement per month / effective segment, placed on dates other than COMPLETED declared closures (CD-07…CD-09). */
+export const GLOBAL_COST_ALLOCATION = "eligible_days_excluding_completed_closures";
+export const FIXED_COST_ALLOCATION = "eligible_days_excluding_completed_closures";
 
 /** Throws FinanceContractError unless the input declares the frozen hourly employer-cost source. */
 export function validateLaborSource(input: unknown): LaborSourceInput {
