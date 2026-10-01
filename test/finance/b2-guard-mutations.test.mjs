@@ -83,15 +83,17 @@ const P0 = "05bf5a59cd62bcfde2bc74f3ab0b9d38ba619661";      // P0 Scheduled Auth
 const HF1R1 = "9dea13f5d15af96699cbc91a34d0af841fe2e5af";   // HF-1 R1 (hf1-remediation-r1 independent review: APPROVED)
 const HF1_BASE = "f5d0a8edffc216f0b6ad342f8bd1bb0d630276ab"; // merge base of the RC lineage and HF-1 R1
 const P0_APPROVED = ["api/analytics/daily-builder.ts", "api/daily-snapshot/run.ts", "api/proactive/run.ts"];
-const hashBytes = (bytes) => { const r = spawnSync("git", ["hash-object", "--stdin"], { input: bytes, encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+// repository-independent git plumbing (run OUTSIDE any checkout, so a relocated worktree's
+// unreadable .git pointer cannot break it; repository objects are read only through gitIn)
+const hashBytes = (bytes) => { const r = spawnSync("git", ["hash-object", "--stdin"], { input: bytes, encoding: "utf8", cwd: tmpdir() }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
 /** The ONE approved index.html of the assembled tree: the clean (conflict-free) 3-way merge of the approved CD-M2 R1 and HF-1 R1 blobs over their merge base, computed from the git objects. */
 function approvedIndexMerge(root, theirs = HF1R1) {
   const dir = mkdtempSync(join(tmpdir(), "rca-index-"));
   try {
     const put = (n, spec) => { const p = join(dir, n); writeFileSync(p, blobBytes(root, spec)); return p; };
     const ours = put("ours", CDM2R1 + ":index.html"), base = put("base", HF1_BASE + ":index.html"), other = put("theirs", theirs + ":index.html");
-    const r = spawnSync("git", ["merge-file", "-p", ours, base, other], { encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
-    assert.equal(r.status, 0, "the approved index.html sources must merge without conflict");
+    const r = spawnSync("git", ["merge-file", "-p", ours, base, other], { encoding: "buffer", maxBuffer: 64 * 1024 * 1024, cwd: dir });
+    assert.equal(r.status, 0, "the approved index.html sources must merge without conflict: " + String(r.stderr));
     return r.stdout;
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
