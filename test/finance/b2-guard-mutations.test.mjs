@@ -219,6 +219,24 @@ test("B2G-05-M3 standalone approved B2 tree: unchanged behaviour — the exact B
 });
 
 // ── RC 1.0 release assembly: committed (history-level) substitutions of the approved sources fail ──
+// These cases COMMIT, and committing an object that already exists in a borrowed (alternates)
+// object store makes git "freshen" (re-timestamp) that store's pack files. So the writable clone
+// does NOT borrow this repository's objects: it is cloned from a temporary bundle of HEAD's
+// history (written outside the repository), and every write lands in the disposable clone only.
+function withWritableClone(commit, fn) {
+  const dir = mkdtempSync(join(tmpdir(), "b2g05w-"));
+  try {
+    const bundle = join(dir, "head.bundle"), clone = join(dir, "clone");
+    assert.equal(gitIn(REPO, ["rev-parse", "HEAD"]).stdout.trim(), commit, "the writable clone is of this checkout's HEAD");
+    const b = gitIn(REPO, ["bundle", "create", bundle, "HEAD"]);   // a bundle needs a ref; HEAD === commit (asserted)
+    assert.equal(b.status, 0, String(b.stderr));
+    const c = spawnSync("git", ["clone", "-q", "--no-checkout", bundle, clone], { encoding: "utf8", cwd: dir });
+    assert.equal(c.status, 0, c.stderr);
+    const co = spawnSync("git", ["-C", clone, "-c", "advice.detachedHead=false", "checkout", "-q", "--detach", commit], { encoding: "utf8" });
+    assert.equal(co.status, 0, co.stderr);
+    return fn(clone);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
 const commitIn = (dir, msg) => { assert.equal(spawnSync("git", ["-C", dir, "add", "-A"]).status, 0); const c = spawnSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg], { encoding: "utf8" }); assert.equal(c.status, 0, c.stderr); };
 test("B2G-05-M4 assembled tree: committing a non-approved index.html (CD-M2 R1 alone, HF-1 alone, or the merge with the REJECTED HF-1 95d20d86), pre-P0 API bytes, or a stray API file fails; the exact assembled commit passes", { skip: !isAssembledRepo && "HF-1 R1 / P0 not integrated in this tree" }, () => {
   const REJECTED_HF1 = "95d20d8646736fe1c80c949924fa7875fbda90d2";
@@ -230,9 +248,9 @@ test("B2G-05-M4 assembled tree: committing a non-approved index.html (CD-M2 R1 a
     ["a committed edit of the P0 run.ts", (dir) => appendTo(dir, "api/daily-snapshot/run.ts", "\n// edit\n"), /api\/daily-snapshot\/run\.ts is byte-identical to the approved 05bf5a59/],
     ["a stray API route", (dir) => writeFileSync(join(dir, "api", "stray.ts"), "export default function h() {}\n"), /protected changes are exactly/],
   ];
-  withClone(HEAD_SHA, (dir) => assertB2Scope(dir));                     // positive control
+  withWritableClone(HEAD_SHA, (dir) => assertB2Scope(dir));             // positive control
   for (const [label, mut, re] of cases) {
-    withClone(HEAD_SHA, (dir) => {
+    withWritableClone(HEAD_SHA, (dir) => {
       mut(dir); commitIn(dir, label);
       assert.throws(() => assertB2Scope(dir), re, label);
     });
