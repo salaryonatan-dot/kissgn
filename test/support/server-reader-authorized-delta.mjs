@@ -13,7 +13,7 @@
 //
 // Layer B (this module) authorizes the P0-DATA-01 server-reader convergence on top of
 // that core, and it authorizes it by IDENTITY, never by path and never by content
-// heuristics: for each of exactly five named files the working-tree bytes must hash to
+// heuristics: for each of exactly the named files (five up to B1; six from B2) the working-tree bytes must hash to
 // the pinned blob of the reviewed version. The guard therefore proves "this protected
 // file IS the reviewed version" — a relocated declaration, reordered statements, an extra
 // statement, a partial revert, a touched formula, even a changed comment or whitespace,
@@ -75,13 +75,24 @@ const SHA1_RE = /^[0-9a-f]{40}$/;
  * `exceptions:false` explicitly (dailyBuilder also gains a two-line comment). No other byte
  * of these files changed. Previous pins (B1 658cd05): dailyBuilder ecaa5333,
  * dailyMetricsRepo b04e0193, laborRepo 78f35d55, purchasesRepo d5f0a1ee.
+ *
+ * Financial Core B2 re-pin (morning snapshot / e-mail, B2 successor on top of the approved
+ * CD-M1 6d54e367, which carries the approved B1 R1 4675eb20): `snapshotBuilder.ts` now
+ * orchestrates the canonical month report + projection (previous pin, unchanged since
+ * P0-DATA-01 R2: e36df4d8). `snapshotEmail.ts` is the approved B2 MODIFY (B2 preflight §4,
+ * S09) and, as B2's only core consumer, also encodes the snapshot view: it lies under the
+ * protected `src/snapshot/` root, so the reviewed bytes are pinned here as a SIXTH exact file
+ * (its core blob 137cdd04 is no longer the approved version). The unreviewed checkpoint blobs
+ * c7f3beae / 95f31af7 (c16ac110) were never approved and are not pinned. The four B1 reader
+ * pins are unchanged.
  */
 export const SERVER_READER_APPROVED_BLOBS = Object.freeze({
   "src/analytics/dailyBuilder.ts": "6b70d03c245d163264f1bad2cefa71c0d85ff761",
   "src/repositories/analytics/dailyMetricsRepo.ts": "4a5cb8f8ee234520f0db1f8c2c4b7b5f7f8e978a",
   "src/repositories/analytics/laborRepo.ts": "14eff463d08c612b6e5c7e5de355b0b95d67bcd9",
   "src/repositories/analytics/purchasesRepo.ts": "7916308f20e0a3f8a639c6fad5c63ecda7f3cde4",
-  "src/snapshot/snapshotBuilder.ts": "e36df4d83d945d16e158dacc82b12ce2500f9956",
+  "src/snapshot/snapshotBuilder.ts": "b7ad0f76904876e71739208b4019573a0879d6c4",
+  "src/snapshot/snapshotEmail.ts": "cae44e7911fbc5613938e5a6d12b61aa7ed29f09",
 });
 export const SERVER_READER_AUTHORIZED_FILES = Object.freeze(Object.keys(SERVER_READER_APPROVED_BLOBS));
 

@@ -246,7 +246,10 @@ test("S0 diff contains no historical data transform, migration, RTDB rules, or f
     "src/repositories/analytics/laborRepo.ts",
     "src/repositories/analytics/purchasesRepo.ts",
     "src/snapshot/snapshotBuilder.ts",
-  ], "the reader authorization names exactly the five approved files");
+    // Financial Core B2: the approved B2 MODIFY of the e-mail presenter (under the protected
+    // src/snapshot/ root) is authorized the same way — by the exact reviewed blob.
+    "src/snapshot/snapshotEmail.ts",
+  ], "the reader authorization names exactly the approved files (five readers + the B2 e-mail presenter)");
   const collected = collectServerReaderScopeInputs(ROOT);
   // The fence Rules change was validated ABOVE (semantic delta + exact blob); only that one
   // validated change is excluded from the reader-layer protected-path projection. The

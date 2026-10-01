@@ -1,0 +1,373 @@
+SUBJECT: 📊 Biz bizA — דוח בוקר 29 ספטמבר 2026 | רווח: ₪10,521
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body {
+font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+direction: rtl;
+margin: 0;
+padding: 0;
+background-color: #f3f4f6;
+}
+.container {
+max-width: 600px;
+margin: 20px auto;
+background-color: white;
+border-radius: 8px;
+box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+overflow: hidden;
+}
+.header {
+background: linear-gradient(135deg, #111827 0%, #1f2937 100%);
+color: white;
+padding: 32px 24px;
+text-align: center;
+}
+.header-title {
+font-size: 28px;
+font-weight: bold;
+margin: 0 0 12px 0;
+}
+.header-subtitle {
+font-size: 14px;
+opacity: 0.9;
+margin: 0;
+}
+.content {
+padding: 24px;
+}
+.date-line {
+text-align: center;
+margin-bottom: 24px;
+padding-bottom: 12px;
+border-bottom: 1px solid #e5e7eb;
+}
+.date-line-date {
+font-size: 16px;
+font-weight: 600;
+color: #1f2937;
+margin-bottom: 4px;
+}
+.date-line-day {
+font-size: 12px;
+color: #6b7280;
+}
+.progress-section {
+margin-bottom: 24px;
+}
+.progress-label {
+font-size: 13px;
+color: #6b7280;
+margin-bottom: 8px;
+text-align: right;
+}
+.progress-bar-container {
+width: 100%;
+height: 8px;
+background-color: #e5e7eb;
+border-radius: 4px;
+overflow: hidden;
+}
+.progress-bar-fill {
+height: 100%;
+background-color: #3b82f6;
+transition: width 0.3s ease;
+}
+.progress-stats {
+display: flex;
+justify-content: space-between;
+margin-top: 8px;
+font-size: 12px;
+color: #6b7280;
+}
+.kpi-section {
+margin-bottom: 24px;
+}
+.kpi-title {
+font-size: 14px;
+font-weight: 600;
+color: #1f2937;
+margin-bottom: 12px;
+text-align: right;
+}
+.kpi-table {
+width: 100%;
+border-collapse: collapse;
+}
+.kpi-row {
+border-bottom: 1px solid #e5e7eb;
+}
+.kpi-row:last-child {
+border-bottom: none;
+background-color: #f9fafb;
+font-weight: 600;
+}
+.kpi-cell {
+padding: 12px 8px;
+font-size: 13px;
+text-align: right;
+}
+.kpi-label {
+color: #374151;
+}
+.kpi-value {
+color: #1f2937;
+font-weight: 500;
+text-align: left;
+}
+.kpi-pct {
+color: #6b7280;
+font-size: 12px;
+text-align: left;
+}
+.pace-section {
+margin-bottom: 24px;
+padding: 16px;
+background-color: #eff6ff;
+border-radius: 6px;
+border-right: 4px solid #3b82f6;
+}
+.pace-title {
+font-size: 14px;
+font-weight: 600;
+color: #1f2937;
+margin-bottom: 12px;
+text-align: right;
+}
+.pace-row {
+display: flex;
+justify-content: space-between;
+margin: 8px 0;
+font-size: 13px;
+}
+.pace-label {
+color: #374151;
+}
+.pace-value {
+color: #1f2937;
+font-weight: 500;
+}
+.forecast-section {
+margin-bottom: 24px;
+padding: 16px;
+background-color: #fef3c7;
+border-radius: 6px;
+border-right: 4px solid #f59e0b;
+}
+.forecast-title {
+font-size: 14px;
+font-weight: 600;
+color: #1f2937;
+margin-bottom: 12px;
+text-align: right;
+}
+.forecast-value {
+font-size: 20px;
+font-weight: bold;
+color: #1f2937;
+text-align: right;
+}
+.forecast-label {
+font-size: 12px;
+color: #6b7280;
+margin-top: 4px;
+text-align: right;
+}
+.insights-section {
+margin-bottom: 24px;
+}
+.insights-title {
+font-size: 14px;
+font-weight: 600;
+color: #1f2937;
+margin-bottom: 12px;
+text-align: right;
+}
+.insight-item {
+margin: 12px 0;
+padding: 12px;
+background-color: #f9fafb;
+border-right: 4px solid #cbd5e1;
+border-radius: 4px;
+text-align: right;
+}
+.insight-positive {
+border-right-color: #10b981;
+}
+.insight-negative {
+border-right-color: #ef4444;
+}
+.insight-warning {
+border-right-color: #f59e0b;
+}
+.insight-emoji {
+font-size: 16px;
+margin-left: 8px;
+}
+.insight-text {
+color: #374151;
+font-size: 14px;
+}
+.footer {
+background-color: #f9fafb;
+padding: 16px 24px;
+text-align: center;
+border-top: 1px solid #e5e7eb;
+}
+.footer-text {
+font-size: 12px;
+color: #6b7280;
+margin: 4px 0;
+}
+.footer-link {
+color: #3b82f6;
+text-decoration: none;
+}
+.footer-link:hover {
+text-decoration: underline;
+}
+.kpi-warning {
+color: #b91c1c;
+font-size: 12px;
+font-weight: 600;
+text-align: right;
+padding-top: 0;
+}
+.kpi-note {
+color: #6b7280;
+font-size: 12px;
+text-align: right;
+padding-top: 0;
+}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header">
+<div class="header-title">📊 דוח בוקר יומי — Marjin</div>
+<div class="header-subtitle">Biz bizA</div>
+</div>
+<div class="content">
+<div class="date-line">
+<div class="date-line-date">29 ספטמבר 2026</div>
+<div class="date-line-day">נתונים עד 28.09 · 28 ימים שהושלמו מתוך 30 · 27 ימים עם נתונים</div>
+</div>
+<div class="progress-section">
+<div class="progress-label">התקדמות החודש</div>
+<div class="progress-bar-container">
+<div class="progress-bar-fill" style="width: 93.3%"></div>
+</div>
+<div class="progress-stats">
+<span>2 ימים נותרים (כולל היום)</span>
+<span>93.3%</span>
+</div>
+</div>
+<div class="kpi-section">
+<div class="kpi-title">📊 מדדי ביצוע עיקריים</div>
+<table class="kpi-table">
+<tbody>
+<tr class="kpi-row">
+<td class="kpi-cell kpi-label" style="width: 40%;">הכנסות</td>
+<td class="kpi-cell kpi-value" style="width: 35%; text-align: left;">₪27,000</td>
+<td class="kpi-cell kpi-pct" style="width: 25%; text-align: left;">
+100.0%
+</td>
+</tr>
+<tr class="kpi-note-row">
+<td class="kpi-cell kpi-note" colspan="3">יום סגור (הכנסה 0, לא חסר): 06.09</td>
+</tr>
+<tr class="kpi-row">
+<td class="kpi-cell kpi-label" style="width: 40%;">קניות (מזון)</td>
+<td class="kpi-cell kpi-value" style="width: 35%; text-align: left;">₪8,100</td>
+<td class="kpi-cell kpi-pct" style="width: 25%; text-align: left;">
+30.0% (יעד: 33.0%)
+</td>
+</tr>
+<tr class="kpi-row">
+<td class="kpi-cell kpi-label" style="width: 40%;">עלות עובדים</td>
+<td class="kpi-cell kpi-value" style="width: 35%; text-align: left;">₪5,493</td>
+<td class="kpi-cell kpi-pct" style="width: 25%; text-align: left;">
+20.3% (יעד: 27.0%)
+</td>
+</tr>
+<tr class="kpi-row">
+<td class="kpi-cell kpi-label" style="width: 40%;">הוצאות קבועות</td>
+<td class="kpi-cell kpi-value" style="width: 35%; text-align: left;">₪2,886</td>
+<td class="kpi-cell kpi-pct" style="width: 25%; text-align: left;">
+10.7%
+</td>
+</tr>
+<tr class="kpi-row">
+<td class="kpi-cell kpi-label" style="width: 40%;">שכר דירה קבוע</td>
+<td class="kpi-cell kpi-value" style="width: 35%; text-align: left;">₪0</td>
+<td class="kpi-cell kpi-pct" style="width: 25%; text-align: left;">
+0.0%
+</td>
+</tr>
+<tr class="kpi-row">
+<td class="kpi-cell kpi-label" style="width: 40%;">שכר דירה באחוזים</td>
+<td class="kpi-cell kpi-value" style="width: 35%; text-align: left;">₪0</td>
+<td class="kpi-cell kpi-pct" style="width: 25%; text-align: left;">
+0.0%
+</td>
+</tr>
+<tr class="kpi-row">
+<td class="kpi-cell kpi-label" style="width: 40%;">תמלוגים</td>
+<td class="kpi-cell kpi-value" style="width: 35%; text-align: left;">₪0</td>
+<td class="kpi-cell kpi-pct" style="width: 25%; text-align: left;">
+0.0%
+</td>
+</tr>
+<tr class="kpi-row">
+<td class="kpi-cell kpi-label" style="width: 40%;">רווח נקי</td>
+<td class="kpi-cell kpi-value" style="width: 35%; text-align: left;">₪10,521</td>
+<td class="kpi-cell kpi-pct" style="width: 25%; text-align: left;">
+39.0%
+</td>
+</tr>
+</tbody>
+</table>
+<div class="forecast-label">עלויות חודשיות (עובדים גלובליים והוצאות קבועות) מחולקות על 27 ימים שאינם סגורים; ימים סגורים שהסתיימו (06.09) אינם נושאים עלות חודשית</div>
+</div>
+<div class="pace-section">
+<div class="pace-title">📈 הכנסה חזויה לחודש</div>
+<div class="pace-row">
+<span class="pace-value">₪28,000</span>
+<span class="pace-label">תחזית הכנסות (REV_FORECAST/v2)</span>
+</div>
+<div class="pace-row">
+<span class="pace-value">₪700,000</span>
+<span class="pace-label">יעד מכירות חודשי</span>
+</div>
+<div class="forecast-label">ימים סגורים מתוכננים: 30.09 — ללא תחזית הכנסות</div>
+</div>
+<div class="forecast-section">
+<div class="forecast-title">🎯 תחזית לסוף החודש</div>
+<div class="forecast-value" style="color: #10b981;">₪10,700</div>
+<div class="forecast-label">רווח נקי חזוי בסיום החודש</div>
+</div>
+<div class="insights-section">
+<div class="insights-title">💡 התראות חכמות</div>
+<div class="insight-item insight-positive">
+<span class="insight-emoji">🟢</span>
+<span class="insight-text">עלות העובדים נמוכה מהיעד: 20.3% (יעד: 27%)</span>
+</div>
+<div class="insight-item insight-negative">
+<span class="insight-emoji">🔴</span>
+<span class="insight-text">קצב ההכנסות נמוך מהיעד: ₪28,000 (יעד: ₪700,000)</span>
+</div>
+</div>
+</div>
+<div class="footer">
+<div class="footer-text">
+<a href="https://app.marjin.app" class="footer-link">🔗 לחץ כאן לחזרה לאפליקציה</a>
+</div>
+<div class="footer-text">דוח זה נשלח אליך אוטומטית על ידי מערכת Marjin</div>
+<div class="footer-text">נטו (ללא מע״מ) · לפי הגדרות נוכחיות · בפועל עד אתמול (היום אינו נכלל)</div>
+</div>
+</div>
+</body>
+</html>

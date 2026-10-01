@@ -23,7 +23,7 @@
 // `payroll` + the global employees' calendar-day allocation, `hourly_payroll` never counted
 // (VD-31); a duplicate business date is ONE aggregated canonical day (VD-04); the current
 // day and future dates are never Actual (VD-03/30); an unavailable fact is omitted, never a
-// plausible 0. SR-13 covers the B1 matrix on legacy and V2.
+// plausible 0. SR-13 covers the B1 matrix on legacy and V2; SR-14 the B2 snapshot.
 //
 // Deliberately NOT named *.test.mjs — it must never be swept up by the emulator-free
 // repository glob. Host run: see test/emulator/README.md.
@@ -442,13 +442,54 @@ async function main() {
     return `asOf ${asOf}: zero/dup/omitted/current/future correct in both forms; legacy ≡ V2`;
   });
 
+  // ══ 14. FINANCIAL CORE B2 — the morning snapshot from the canonical report (B2-T17) ══
+  await run("SR-14", "b2-snapshot", "legacy and V2 (numeric-key maps read back as arrays) through the real Admin SDK: snapshot Actual = D-1, R-17 absent fixed = 0 complete, unreadable fixed = unavailable, structured closures (future / contradicted) and unreadable ledger, legacy ≡ V2", async () => {
+    const NOW = Date.UTC(2026, 8, 29, 9); // asOf 2026-09-29 ⇒ Actual 09-01…09-28
+    const day = (n) => `2026-09-${String(n).padStart(2, "0")}`;
+    const rows = Array.from({ length: 28 }, (_, i) => row("b2s" + i, day(i + 1), { sales: "1000", supplier_payments: { "0": "200", "1": "100" }, payroll: "100", other_expense: "0", hourly_payroll: { "0": 55 } }));
+    rows.push(row("b2today", day(29), { sales: "999999" }));
+    const cfg = { businessName: "Biz bizA", lat: 32.1, lon: 34.8, employees: [{ id: "g1", type: "global", name: "G", monthlySalary: "3000" }] };
+    const out = {};
+    for (const [form, node] of [["legacy", asLegacy(rows)], ["v2", asV2(rows)]]) {
+      await reseed({ bizA: node });
+      await db().ref(`tenants/${T}/biz:bizA:config`).set({ _v: JSON.stringify(cfg) });
+      await db().ref(`tenants/${T}/biz:bizA:fixed`).set({ _v: JSON.stringify([{ id: "f1", name: "F", amount: "3000" }]) });
+      if (form === "v2") { const n = await readNode("bizA"); expect(Object.values(n.rows).some((r) => Array.isArray(r.supplier_payments)), "RTDB read the numeric-key supplier map back as an array"); }
+      const s = await SB.buildSnapshotForBiz(T, "bizA", { nowMs: NOW });
+      eq(s.date, "2026-09-29", form + " as-of"); eq(s.financials.window.completedThrough, "2026-09-28", form + " Actual ends at D-1");
+      eq(s.totalSales, 28000, form + " today's 999999 row is not Actual"); eq(s.totalFood, 8400, form + " supplier map per row (array readback accepted)");
+      eq(s.totalPayroll, 5600, form + " labor = payroll + global calendar-day allocation; hourly_payroll never counted");
+      eq(s.fixedRegular, 2800, form + " fixed by calendar day"); eq(s.financials.provenance.exceptionsState, "absent", form + " exception ledger requested (absent)");
+      await db().ref(`tenants/${T}/biz:bizA:fixed`).remove();
+      const r17 = await SB.buildSnapshotForBiz(T, "bizA", { nowMs: NOW });
+      eq(r17.fixedRegular, 0, form + " R-17: absent fixed list ⇒ 0"); eq(r17.financials.amounts.operatingProfit.state, "complete", form + " R-17: profit complete");
+      await db().ref(`tenants/${T}/biz:bizA:fixed`).set({ _v: "[broken" });
+      const bad = await SB.buildSnapshotForBiz(T, "bizA", { nowMs: NOW });
+      eq(bad.fixedRegular, null, form + " unreadable fixed ⇒ unavailable"); eq(bad.netProfit, null, form + " profit unavailable");
+      // B2 successor (closed-days contract, real SDK readback of the structured ledger): a future
+      // closure lowers only the forecast; a closure over recorded revenue is the CDA-02 contradiction
+      await db().ref(`tenants/${T}/biz:bizA:fixed`).set({ _v: JSON.stringify([{ id: "f1", name: "F", amount: "3000" }]) });
+      await db().ref(`tenants/${T}/entry_exceptions/bizA`).set({ "2026-09-30": { state: { status: "active", reasonCode: "closure", revision: 1 } }, "2026-09-06": { state: { status: "active", reasonCode: "closure", revision: 1 } } });
+      const cl = await SB.buildSnapshotForBiz(T, "bizA", { nowMs: NOW });
+      eq(cl.financials.provenance.exceptionsState, "present", form + " structured ledger read"); deq(cl.financials.projection.futureClosureDates, ["2026-09-30"], form + " future closure: forecast only");
+      deq(cl.financials.coverage.closedWithRevenue, ["2026-09-06"], form + " closure over recorded revenue is a contradiction"); eq(cl.totalSales, null, form + " contradicted revenue is not a complete fact");
+      eq(cl.daysLeft, s.daysLeft, form + " calendar days left unchanged by closures");
+      await db().ref(`tenants/${T}/entry_exceptions/bizA`).set("corrupt");
+      const exc = await SB.buildSnapshotForBiz(T, "bizA", { nowMs: NOW });
+      eq(exc.financials.provenance.exceptionsState, "unreadable", form + " ledger read through the real SDK"); eq(exc.paceRevenue, null, form + " unreadable ledger ⇒ no projection");
+      out[form] = stripSnap(s);
+    }
+    deq(out.v2, out.legacy, "legacy ≡ V2 snapshot");
+    return "D-1 / R-17 / unreadable fixed / ledger / legacy ≡ V2 correct";
+  });
+
   // ─── report ───────────────────────────────────────────────────────────────
   const w = (s, n) => String(s).padEnd(n).slice(0, n);
   console.log("");
   console.log(`${w("case", 8)} ${w("area", 16)} ${w("status", 6)} ${w("ms", 6)} notes`);
   console.log("-".repeat(120));
   for (const r of results) console.log(`${w(r.id, 8)} ${w(r.area, 16)} ${w(r.status, 6)} ${w(r.ms, 6)} ${r.status === "PASS" ? r.notes : r.notes.split("\n")[0]}`);
-  const EXPECTED = 13;
+  const EXPECTED = 14;
   console.log("\n=== TOTALS ===");
   console.log(`total=${results.length} passed=${results.length - failures} failed=${failures}`);
   if (results.length !== EXPECTED) { console.error(`\nINCOMPLETE MATRIX: expected ${EXPECTED}, ran ${results.length}`); process.exitCode = 3; return; }

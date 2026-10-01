@@ -387,7 +387,8 @@
    "file": "src/snapshot/snapshotBuilder.ts",
    "sites": "buildSnapshotForBiz",
    "slice": "B2",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATED (B2)",
+   "servedBy": "src/finance-server/canonicalMetrics.ts (canonicalMonthReport + canonicalMonthProjection); view encoding in src/snapshot/snapshotEmail.ts",
    "presenceImpact": true,
    "purchaseBasisImpact": true
   },
@@ -396,7 +397,8 @@
    "file": "src/snapshot/snapshotEmail.ts",
    "sites": "email presenter",
    "slice": "B2",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATED (B2)",
+   "servedBy": "buildSnapshotView / kpiShares (core ratioOfTotals) + src/presenters/money.ts, src/presenters/percent.ts",
    "presenceImpact": false,
    "purchaseBasisImpact": true
   },
@@ -842,7 +844,8 @@
     "file": "src/snapshot/snapshotBuilder.ts",
     "sites": ":211-237",
     "current": "totalPayroll += hourly; global prorated by monthEntries.length/daysInMonth",
-    "required": "payroll only; global monthly/calendar days through the last completed day"
+    "required": "payroll only; global monthly/calendar days through the last completed day",
+    "migrated_in": "B2"
    },
    {
     "id": "P1",
