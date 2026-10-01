@@ -26,6 +26,8 @@ mkdirSync(join(dir, "api", "analytics"), { recursive: true });
 mkdirSync(join(dir, "lib", "analytics"), { recursive: true });
 mkdirSync(join(dir, "src", "analytics"), { recursive: true });
 copyFileSync(SRC, join(dir, "api", "analytics", "daily-builder.ts"));
+copyFileSync(join(REPO, "lib", "securityContext.js"), join(dir, "lib", "securityContext.js"));
+copyFileSync(join(REPO, "lib", "bizAccess.js"), join(dir, "lib", "bizAccess.js"));
 const w = (p, c) => writeFileSync(join(dir, p), c);
 w("lib/verifyToken.js", `export async function requireAuth(req){ return globalThis.__H.requireAuth(req); }`);
 w("lib/helpers.js", `export async function requireTenantAccess(u,t,r){ return globalThis.__H.requireTenantAccess(u,t,r); }
@@ -70,7 +72,8 @@ await t("handler: remote false -> 200 builder ran", async()=>{ globalThis.__H=ba
 await t("handler: remote true -> 429 builder not run", async()=>{ globalThis.__H=baseH({isRateLimited:async()=>true}); const res=mkRes(); await handler(req(),res); ok("429",res.statusCode===429); ok("no build",!globalThis.__H.calls.includes("buildAnalyticsForBiz")); });
 await t("handler: limiter throws -> fallback -> 200 (no 503)", async()=>{ resetRL(); globalThis.__H=baseH({isRateLimited:async()=>{throw new Error("rate limiter unavailable")}}); const res=mkRes(); await handler(req(),res); ok("200 not 503",res.statusCode===200); ok("built via fallback",globalThis.__H.calls.includes("buildAnalyticsForBiz")); });
 await t("handler: builder error not swallowed -> 500 rebuild_failed", async()=>{ globalThis.__H=baseH({isRateLimited:async()=>false, buildAnalyticsForBiz:async()=>{throw new Error("boom")}}); const res=mkRes(); await handler(req(),res); ok("500",res.statusCode===500); ok("rebuild_failed",res.body&&res.body.error==="rebuild_failed"); });
-await t("handler: cron GET path unchanged", async()=>{ globalThis.__H=baseH(); const res=mkRes(); await handler({method:"GET",headers:{"x-vercel-cron":"1"},query:{},body:{}},res); ok("cron all ran",globalThis.__H.calls.includes("buildAnalyticsForAll")); ok("rebuild not entered",!globalThis.__H.calls.includes("buildAnalyticsForBiz")); });
+await t("handler: cron GET path with strict Bearer CRON_SECRET runs scan", async()=>{ globalThis.__H=baseH(); process.env.CRON_SECRET="rl-test-cron-secret"; const res=mkRes(); await handler({method:"GET",headers:{authorization:"Bearer rl-test-cron-secret"},query:{},body:{}},res); ok("cron all ran",globalThis.__H.calls.includes("buildAnalyticsForAll")); ok("rebuild not entered",!globalThis.__H.calls.includes("buildAnalyticsForBiz")); });
+await t("handler: cron GET with spoofed x-vercel-cron only -> 401, no scan", async()=>{ globalThis.__H=baseH(); process.env.CRON_SECRET="rl-test-cron-secret"; const res=mkRes(); await handler({method:"GET",headers:{"x-vercel-cron":"1"},query:{},body:{}},res); ok("401",res.statusCode===401); ok("no scan",!globalThis.__H.calls.includes("buildAnalyticsForAll")); });
 await t("handler: no forbidden side-effect calls", async()=>{ const bad=(globalThis.__H.calls||[]).filter(c=>/email|sendMail|createUser|delete|provider|azure|ocr/i.test(c)); ok("clean",bad.length===0); });
 
 console.log("Total: "+(pass+fail)+"  Passed: "+pass+"  Failed: "+fail);

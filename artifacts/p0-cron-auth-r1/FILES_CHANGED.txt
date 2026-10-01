@@ -1,0 +1,50 @@
+SYS-P0-001 — Cron Authorization Hardening R1 — Files Changed
+Branch: claude/p0-cron-auth-r1
+Base (R5): 088310c3bd2d597cc9ed0f6e2e8bcf38568f7d10
+Commit subject: fix: secure scheduled job authorization
+
+MODIFIED (runtime, allowed):
+  api/analytics/daily-builder.ts
+    - Removed local verifyAuth (trusted x-vercel-cron). Import requireCron from
+      lib/securityContext.js. GET (cron all-biz) and legacy backfill POST now
+      gated by requireCron. beecomm_diagnose branch now uses requireCron
+      (centralized, constant-time) instead of an inline Bearer string compare.
+      rebuild_after_entry_save (verified-user + server RBAC + biz access)
+      unchanged. Unsupported methods rejected 405 before the cron gate.
+      Doc header Auth section updated.
+  api/daily-snapshot/run.ts
+    - Removed local verifyAuth (trusted x-vercel-cron). Import requireCron +
+      requireBizContext. GET (cron) → requireCron. POST (manual email) →
+      requireBizContext(write) + owner/super_owner gate, using server-authorized
+      tenant/biz. Unsupported methods rejected 405 before authorization.
+  api/proactive/run.ts
+    - Removed x-vercel-cron trust in handleCronScan and the stale module-level
+      const CRON_SECRET. Import requireCron (requireBizContext already imported).
+      GET → requireCron full scan. POST → requireBizContext(write) +
+      owner/super_owner gate single-biz scan. Unsupported methods → 405.
+      Authenticated dashboard read path (?action=...) unchanged.
+
+ADDED (test, allowed):
+  test/security/cron-auth-hardening.test.mjs         (24 executable route-auth cases)
+  test/security/cron-auth-source-invariants.test.mjs (7 regression-guard cases)
+
+MODIFIED (test, allowed):
+  test/analytics/rebuild-rate-limiter.test.mjs
+    - Copies real lib/securityContext.js + lib/bizAccess.js into its compile
+      sandbox (route now imports requireCron). Cron GET case updated to strict
+      Bearer CRON_SECRET; added spoofed-x-vercel-cron -> 401 case. (35 pass.)
+
+ADDED (artifacts, allowed):
+  artifacts/p0-cron-auth-r1/CHANGE_SUMMARY.md
+  artifacts/p0-cron-auth-r1/ROOT_CAUSE_AND_SECURITY_INVARIANTS.md
+  artifacts/p0-cron-auth-r1/ROUTE_AUTHORIZATION_MATRIX.md
+  artifacts/p0-cron-auth-r1/TEST_RESULTS.md
+  artifacts/p0-cron-auth-r1/REVIEW_GUIDE.md
+  artifacts/p0-cron-auth-r1/KNOWN_LIMITATIONS.md
+  artifacts/p0-cron-auth-r1/SCOPE_COMPLIANCE.md
+  artifacts/p0-cron-auth-r1/FILES_CHANGED.txt
+
+NOT MODIFIED (verified): lib/securityContext.js, lib/securityContext.d.ts,
+  lib/bizAccess.js, lib/alertsCore.js, api/alerts/run.ts, package.json,
+  package-lock.json, vercel.json, database.rules.json, index.html, all other
+  api/lib/src files. R5/R6 and canonical worktrees untouched.

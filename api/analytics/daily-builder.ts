@@ -12,8 +12,9 @@
  * POST → user action { action:"rebuild_after_entry_save", tenantId, bizId, date }.
  *
  * Auth:
- * - GET and legacy manual/backfill POST paths use the Vercel cron header OR
- *   `Authorization: Bearer ${CRON_SECRET}`.
+ * - GET (scheduled cron) and legacy manual/backfill POST paths require a
+ *   server-verified `Authorization: Bearer ${CRON_SECRET}` (centralized
+ *   requireCron). The spoofable x-vercel-cron header is NOT accepted.
  * - POST { action:"rebuild_after_entry_save", ... } uses Firebase user auth
  *   plus tenant/business RBAC.
  *
@@ -37,6 +38,7 @@ import { fetchBeecommDaily } from "../../lib/analytics/sources.js";
 import { getAdminDb } from "../../lib/adminSdk.js";
 import { requireAuth } from "../../lib/verifyToken.js";
 import { requireTenantAccess, isRateLimited } from "../../lib/helpers.js";
+import { requireCron } from "../../lib/securityContext.js";
 
 function setCorsHeaders(req: VercelRequest, res: VercelResponse): void {
   const origin = (req.headers.origin as string) || "";
@@ -46,20 +48,6 @@ function setCorsHeaders(req: VercelRequest, res: VercelResponse): void {
   }
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-}
-
-function verifyAuth(req: VercelRequest): boolean {
-  if (req.headers["x-vercel-cron"]) return true;
-
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret) {
-    console.warn("[analytics/daily-builder] CRON_SECRET not configured");
-    return false;
-  }
-
-  const authHeader = (req.headers.authorization as string) || "";
-  const [scheme, token] = authHeader.split(" ");
-  return scheme === "Bearer" && token === cronSecret;
 }
 
 type AppBusiness = {
@@ -247,13 +235,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // RTDB write, no raw/normalized/import-log persistence. Returns before all
   // normal cron/backfill logic below.
   if (req.method === "POST" && (req.body as { action?: string } | undefined)?.action === "beecomm_diagnose") {
-    const cronSecret = process.env.CRON_SECRET;
-    if (!cronSecret) {
-      return res.status(401).json({ error: "unauthorized_cron_secret_not_configured" });
-    }
-    const authHeader = (req.headers.authorization as string) || "";
-    if (authHeader !== `Bearer ${cronSecret}`) {
-      return res.status(401).json({ error: "unauthorized" });
+    // Strict, centralized cron authorization (Bearer CRON_SECRET only; never
+    // x-vercel-cron; fail-closed when the secret is missing; constant-time).
+    try {
+      requireCron(req);
+    } catch (e: any) {
+      return res.status(e?.status ?? 401).json({ error: e?.msg ?? "unauthorized" });
     }
 
     // Config presence only — never expose the value.
@@ -447,7 +434,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
-  if (!verifyAuth(req)) return res.status(401).json({ error: "Unauthorized" });
+  // Scheduled cron (GET, all businesses) and operator backfill
+  // (POST { tenantId, bizId }) are authorized ONLY by a server-verified
+  // `Authorization: Bearer ${CRON_SECRET}` (centralized requireCron).
+  // x-vercel-cron is never accepted. The authenticated user action and the
+  // isolated read-only diagnostic branch have already returned above.
+  if (req.method !== "GET" && req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+  try {
+    requireCron(req);
+  } catch (e: any) {
+    return res.status(e?.status ?? 401).json({ error: e?.msg ?? "unauthorized" });
+  }
 
   try {
     // GET = cron trigger: yesterday's data for every active biz.

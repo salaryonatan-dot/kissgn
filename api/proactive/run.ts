@@ -8,11 +8,9 @@ import { getTopActiveInsights } from "../../src/agent/proactive/getTopActiveInsi
 import { buildWeeklySummary } from "../../src/agent/proactive/digestBuilder.js";
 import { tenantRef } from "../../src/firebase/refs.js";
 import { getDb } from "../../src/firebase/admin.js";
-import { requireBizContext } from "../../lib/securityContext.js";
+import { requireBizContext, requireCron } from "../../lib/securityContext.js";
 import { handleProactiveRead } from "../../lib/proactiveCore.js";
 
-// Shared secret for cron authentication
-const CRON_SECRET = process.env.CRON_SECRET;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // CORS
@@ -78,32 +76,59 @@ async function handleRead(req: VercelRequest, res: VercelResponse) {
  * POST /api/proactive/run { tenantId, bizId } → single-biz scan
  */
 async function handleCronScan(req: VercelRequest, res: VercelResponse) {
-  // Auth: either Vercel cron header or CRON_SECRET
-  const authHeader = req.headers.authorization;
-  const vercelCron = req.headers["x-vercel-cron"];
+  // Reject unsupported methods before any authorization or side effect.
+  if (req.method !== "GET" && req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
 
-  if (vercelCron) {
-    // Vercel cron — allowed
-  } else if (!CRON_SECRET) {
-    // CRON_SECRET not configured — reject all non-cron requests
-    return res.status(401).json({ error: "Unauthorized — CRON_SECRET not configured" });
-  } else if (authHeader !== `Bearer ${CRON_SECRET}`) {
-    return res.status(401).json({ error: "Unauthorized" });
+  // GET = full scan (scheduled cron): authorized ONLY by a server-verified
+  // `Authorization: Bearer ${CRON_SECRET}` (centralized requireCron).
+  // x-vercel-cron is never accepted.
+  if (req.method === "GET") {
+    try {
+      requireCron(req);
+    } catch (e: any) {
+      return res.status(e?.status ?? 401).json({ error: e?.msg ?? "unauthorized" });
+    }
+    try {
+      const summary = await runProactiveJob();
+      return res.status(200).json({ ok: true, summary });
+    } catch (err: any) {
+      console.error("[Marjin AI] Proactive job failed:", err?.message ?? "unknown");
+      return res.status(500).json({
+        ok: false,
+        error: "Proactive job failed",
+        message: err?.message || "Unknown error",
+      });
+    }
+  }
+
+  // POST = single-business manual scan: a VERIFIED owner/super_owner with
+  // canonical server-side tenant + business scope. requireBizContext rejects a
+  // caller-supplied tenant/biz the user does not own (fail-closed); no
+  // client-supplied role or membership can establish authorization.
+  const rawTenantId = (req.body as { tenantId?: unknown } | undefined)?.tenantId;
+  const rawBizId = (req.body as { bizId?: unknown } | undefined)?.bizId;
+  const branchId = (req.body as { branchId?: unknown } | undefined)?.branchId;
+  let ctx;
+  try {
+    ctx = await requireBizContext(req, {
+      tenantId: rawTenantId as string,
+      bizId: rawBizId as string,
+      mode: "write",
+    });
+  } catch (e: any) {
+    return res.status(e?.status ?? 401).json({ error: e?.msg ?? "unauthorized" });
+  }
+  if (ctx.role !== "owner" && ctx.role !== "super_owner") {
+    return res.status(403).json({ error: "owner_role_required" });
   }
 
   try {
-    // Single-biz mode: POST with tenantId + bizId
-    if (req.method === "POST" && req.body?.tenantId && req.body?.bizId) {
-      const { tenantId, bizId, branchId } = req.body;
-      const result = await runForBiz(tenantId, bizId, branchId);
-      return res.status(200).json({ ok: true, result });
-    }
-
-    // Full scan mode: GET (Vercel cron) or POST without body
-    const summary = await runProactiveJob();
-    return res.status(200).json({ ok: true, summary });
+    const result = await runForBiz(ctx.tenantId, ctx.bizId, branchId as string | undefined);
+    return res.status(200).json({ ok: true, result });
   } catch (err: any) {
-    console.error("[Marjin AI] Proactive job failed:", err);
+    console.error("[Marjin AI] Proactive job failed:", err?.message ?? "unknown");
     return res.status(500).json({
       ok: false,
       error: "Proactive job failed",
