@@ -2409,8 +2409,29 @@ window.MarjinSaveLifecycle = Object.freeze({ createSelectionController, schedule
 // CONCURRENCY — each zeroing intent patches ONLY the revenue fields that are not already
 // zero, with the confirmed values as its base: a concurrent revenue change is a remote
 // `conflict` (nothing overwritten), while a concurrent change to any other field of the
-// row (suppliers, payroll, notes, unknown fields) merges untouched. Success is reported
-// only after the committed rows show an explicit zero revenue on the date.
+// row (suppliers, payroll, notes, unknown fields) merges untouched.
+//
+// SUCCESS (CD-M2 R1, finding CDM2-F01) — "closed" is reported ONLY after an AUTHORITATIVE
+// check of both stores, on EVERY path (zeroing intents or none, existing explicit-zero row,
+// created zero row, future date, retry/repair):
+//   T1  the closure is active in the structured ledger at revision R0 (the server's own
+//       set-transaction response, or — when the date was already closed — the revision this
+//       client planned against);
+//   T2  the entries node is read with a SERVER-CONFIRMED compare-and-set of the observed
+//       value (an identity transaction: RTDB must match the client's value against the
+//       server's before it commits, and re-runs on the server value otherwise). The client
+//       SDK's `get()` is NOT used: while the entries listener is attached it returns the
+//       listener cache, and `io.rows` is that same cache. At T2 every row of the date must
+//       show an explicit zero (completed/current) or no revenue (future);
+//   T3  the ledger is re-read through the server list API and must still hold the active
+//       closure at revision R0 — so the closure was continuously active over [T1, T3] ⊇ T2.
+// GUARANTEE: at the server instant T2 the date was simultaneously "closed" and "zero
+// revenue". LIMIT: the two stores are not one transaction and nothing fences them; a write
+// after T2 (revenue) or after T3 (ledger) is not prevented and is not reported by this
+// action — the shared core then classifies the day as the CDA-02 contradiction, visibly.
+// A concurrent change found at T2/T3 is a typed `partial` (never "closed"); a newly
+// discovered revenue amount is NEVER zeroed here — a fresh plan built from the T2 rows is
+// returned and needs the operator's explicit confirmation of exactly those amounts.
 //
 // FUTURE DATES — a scheduled closure is recorded in the ledger only (its forecast revenue
 // becomes zero at once in the shared core); no future entry row is created. Revenue already
@@ -2522,6 +2543,45 @@ async function closureExceptionCall(io, ctx, date, action, loaded) {
   io.exceptionState.applyActive(date, !!(st && st.status === "active"));
   return { status: "ok", response: json };
 }
+// T2 — AUTHORITATIVE entries read: a compare-and-set of the observed value on the WHOLE
+// entries node (legacy blob or V2 collection), through the same remote transaction primitive
+// every entries write uses (io.verifyTransact = window.storage.mutateFor). The function
+// returns the value it was given, so the transaction commits only when the server holds
+// exactly that value (identical data, no content change) and otherwise re-runs on the
+// server's value; the committed snapshot is therefore the server state at the commit
+// instant. io.readNode is the single dual-mode read seam (MarjinStorageV2.readEntriesNode).
+async function readEntriesAuthoritative(io, ctx) {
+  if (!ctx || !ctx.tenantId || !ctx.bizId) return { status: "blocked_no_owner" };
+  if (typeof io.verifyTransact !== "function" || typeof io.readNode !== "function") return { status: "unavailable", reason: "no_authoritative_read" };
+  if (!io.selection.isLive(ctx)) return { status: "stale" };
+  let runs = 0, observed = null, res;
+  try {
+    res = await io.verifyTransact(ctx.tenantId, `biz:${ctx.bizId}:entries`, (raw) => {
+      runs++;
+      observed = raw === undefined ? null : raw;
+      return observed;                          // identity: never undefined (an abort would never consult the server)
+    });
+  } catch (err) { return { status: "failed", reason: (err && err.message) || "verify_transaction_failed", runs }; }
+  if (!res || res.committed !== true) return { status: "failed", reason: (res && res.reason) || "verify_not_committed", runs };
+  const value = res.snapshot && typeof res.snapshot.val === "function" ? res.snapshot.val() : (res.snapshot !== undefined ? res.snapshot : observed);
+  const read = io.readNode(value === undefined ? null : value);
+  if (!read || read.status || !Array.isArray(read.rows)) return { status: "unreadable", reason: (read && (read.reason || read.status)) || "unreadable", runs };
+  return { status: "verified", rows: read.rows, mode: read.mode, runs };
+}
+// T3 — AUTHORITATIVE ledger read for ONE date through the existing server list action
+// (server-side read of the structured ledger; never the client's exception cache).
+async function readClosureAuthoritative(io, ctx, date) {
+  if (!io.selection.isLive(ctx)) return { status: "stale" };
+  let resp, json;
+  try {
+    resp = await io.apiFetch(`/api/admin?action=list-entry-exceptions&tenantId=${encodeURIComponent(ctx.tenantId)}&bizId=${encodeURIComponent(ctx.bizId)}&fromDate=${date}&toDate=${date}`, { method: "GET" });
+    json = await resp.json().catch(() => null);
+  } catch (_) { return { status: "failed", reason: "network_error" }; }
+  if (!io.selection.isLive(ctx)) return { status: "stale" };
+  if (!resp || !resp.ok || !json || json.ok !== true || !json.exceptions || typeof json.exceptions !== "object") return { status: "failed", reason: "list_failed", httpStatus: resp && resp.status };
+  const rec = json.exceptions[date] || null;
+  return { status: "ok", record: rec };
+}
 // The "Business closed" action. Returns a typed outcome; writes only when authorised,
 // confirmed where required, and live.
 async function executeClosureAction(io) {
@@ -2539,13 +2599,15 @@ async function executeClosureAction(io) {
   // 1) closure state (skipped when the structured ledger already holds an active closure — repair / retry)
   const loaded = io.exceptionState.get(plan.date) || null;
   let exResponse = null;
+  // R0: the ledger revision this action relies on (T1)
+  let closureRevision = Number.isSafeInteger(loaded && loaded.revision) ? loaded.revision : null;
   if (!(isActiveClosureState(loaded) && loaded.source === "structured")) {
     const ex = await closureExceptionCall(io, ctx, plan.date, "set", loaded);
     if (ex.status !== "ok") return { ...ex, plan };
     exResponse = ex.response;
+    closureRevision = exResponse && Number.isSafeInteger(exResponse.revision) ? exResponse.revision : null;
   }
   // 2) revenue → explicit zero, one narrow intent per row, through the lane
-  let latestRows = io.rows;
   for (const intent of built.intents) {
     if (!sel.isLive(ctx)) return { status: "stale" };
     const r = await io.persistMutation(intent, ctx);
@@ -2554,12 +2616,40 @@ async function executeClosureAction(io) {
       io.setError(`היום סומן כסגור, אך איפוס ההכנסות לא הושלם: ${describeSaveOutcome(r || "failed", true)} עד להשלמה היום מוצג כלא תקין. נסה שוב.`);
       return { status: "partial", stage: "revenue", outcome: r && r.status, plan };
     }
-    if (Array.isArray(r.canonical)) { latestRows = r.canonical; io.applyRows(r.canonical); }
+    if (Array.isArray(r.canonical)) io.applyRows(r.canonical);   // display only — never the success authority
   }
-  // 3) success only when the committed rows show the explicit zero
-  if (!closureRevenueConverged(latestRows, plan.date, plan.timing)) {
+  // 3) T2 — the AUTHORITATIVE entries state (never io.rows / a transaction's local result /
+  //    the listener cache): success only when every row of the date shows the explicit zero.
+  if (!sel.isLive(ctx)) return { status: "stale" };
+  const verified = await readEntriesAuthoritative(io, ctx);
+  if (verified.status === "stale" || !sel.isLive(ctx)) return { status: "stale" };
+  if (verified.status !== "verified") {
+    io.setError("היום סומן כסגור, אך לא ניתן היה לאמת את ההכנסות מול השרת. עד לאימות היום מוצג כלא תקין — נסה שוב.");
+    return { status: "partial", stage: "verify", reason: "entries_unverified", detail: verified.reason || verified.status, plan };
+  }
+  if (!closureRevenueConverged(verified.rows, plan.date, plan.timing)) {
+    // A revenue amount the operator never confirmed is NOT zeroed: a fresh plan from the
+    // server rows is returned and needs its own explicit confirmation.
+    const replan = planClosure(verified.rows, plan.date, { today: io.today });
     io.setError("היום סומן כסגור, אך נמצאו הכנסות שנרשמו במקביל. עד להשלמה היום מוצג כלא תקין — בדוק ואשר שוב.");
-    return { status: "partial", stage: "verify", reason: "revenue_changed_concurrently", plan };
+    return { status: "partial", stage: "verify", reason: "revenue_changed_concurrently", plan, replan, verifiedRows: verified.rows };
+  }
+  // 4) T3 — the AUTHORITATIVE ledger state: still the active closure at revision R0, so it was
+  //    continuously active from T1 through T2.
+  const ledger = await readClosureAuthoritative(io, ctx, plan.date);
+  if (ledger.status === "stale" || !sel.isLive(ctx)) return { status: "stale" };
+  if (ledger.status !== "ok") {
+    io.setError("לא ניתן היה לאמת את סימון הסגירה מול השרת. עד לאימות היום מוצג כלא תקין — נסה שוב.");
+    await io.reloadExceptions(ctx);
+    return { status: "partial", stage: "verify", reason: "closure_unverified", detail: ledger.reason, plan };
+  }
+  const rec = ledger.record;
+  const stillClosed = !!(rec && rec.source === "structured" && rec.status === "active" && rec.reasonCode === CLOSURE_REASON_CODE
+    && closureRevision !== null && rec.revision === closureRevision);
+  if (!stillClosed) {
+    io.setError("סימון הסגירה של היום שונה במקביל. בדוק את מצב היום ונסה שוב.");
+    await io.reloadExceptions(ctx);
+    return { status: "partial", stage: "verify", reason: "closure_changed_concurrently", plan };
   }
   if (!sel.isLive(ctx)) return { status: "stale" };
   const rebuild = built.intents.length > 0 || (exResponse && exResponse.applied === true && exResponse.rebuildRequired === true);
@@ -2568,7 +2658,8 @@ async function executeClosureAction(io) {
     catch (err) { if (!sel.isLive(ctx)) return { status: "stale" }; if (io.onInsightsFailure) io.onInsightsFailure(err && err.message); }
   }
   if (!sel.isLive(ctx)) return { status: "stale" };
-  return { status: "closed", date: plan.date, timing: plan.timing, closureApplied: exResponse != null, revenueIntents: built.intents.length, rowCreated: plan.createZeroRow };
+  return { status: "closed", date: plan.date, timing: plan.timing, closureApplied: exResponse != null, revenueIntents: built.intents.length, rowCreated: plan.createZeroRow,
+           verified: { closureRevision, entriesRuns: verified.runs, mode: verified.mode } };
 }
 // Reopen: clears the structured closure; the explicit zero revenue stays (never restored).
 async function executeClosureReopen(io) {
@@ -2588,7 +2679,7 @@ async function executeClosureReopen(io) {
   if (!sel.isLive(ctx)) return { status: "stale" };
   return { status: "reopened", date: key };
 }
-window.MarjinClosureLifecycle = Object.freeze({ CLOSURE_REASON_CODE, CLOSURE_REVENUE_FIELDS, closureCellKind, isActiveClosureState, planClosure, closureZeroIntents, closureRevenueConverged, executeClosureAction, executeClosureReopen });
+window.MarjinClosureLifecycle = Object.freeze({ CLOSURE_REASON_CODE, CLOSURE_REVENUE_FIELDS, closureCellKind, isActiveClosureState, planClosure, closureZeroIntents, closureRevenueConverged, readEntriesAuthoritative, readClosureAuthoritative, executeClosureAction, executeClosureReopen });
 // ══ STORAGE V2 — ROW-KEYED ENTRIES ═══════════════════════════════════════════
 // LEGACY storage keeps every row inside one opaque JSON string at
 // `biz:{bizId}:entries/_v`, so RTDB Rules cannot see a row at all: the node has a
@@ -5760,10 +5851,12 @@ function PilotDashboard() {
   // production seam window.MarjinClosureLifecycle (closure state → revenue zero through the
   // ONE lane), bound to the selection captured when the action starts and serialized with
   // every other save by the same save-UI runner.
-  const closureIo = (date, confirmedFingerprint) => ({
+  const closureIo = (date, confirmedFingerprint, rowsOverride) => ({
     selection: selectionCtrlRef.current,
     date,
-    rows: entries,
+    // the rows the operator was shown: the hydrated view, or — when a repair plan came from the
+    // action's authoritative read — exactly those server rows (the dialog showed their amounts)
+    rows: Array.isArray(rowsOverride) ? rowsOverride : entries,
     today: israelDateKey(0),
     role: loggedInUser?.role,
     confirmedFingerprint: confirmedFingerprint || null,
@@ -5788,6 +5881,17 @@ function PilotDashboard() {
         reason: r.reason,
         detail: r.detail || r.reason || r.error || (r.conflictPaths && r.conflictPaths.join(",")),
       })),
+    // CD-M2 R1 (T2): the authoritative entries read — the SAME remote transaction primitive as
+    // every entries write, gated by the SAME storage-policy decision as the lane's dispatch.
+    verifyTransact: (t, k, fn) => {
+      const lane = entriesPolicyRef.current;
+      const m = entriesStorageModeRef.current;
+      const binding = m ? { mode: m.mode, generation: m.generation === undefined ? null : m.generation, policyRevision: lane ? lane.revision() : null } : undefined;
+      const gate = window.MarjinStoragePolicy.gatePolicyDispatch(lane ? lane.decision() : null, binding);
+      if (gate) return Promise.resolve({ committed: false, reason: gate.reason || gate.status });
+      return window.storage.mutateFor(t, k, fn);
+    },
+    readNode: (raw) => window.MarjinStorageV2.readEntriesNode(raw),
     applyRows: setEntries,
     reloadExceptions: (c2) => loadEntryExceptions(c2),
     rebuildInsights: (date2, c2) => rebuildInsightsAfterEntrySave(date2, c2),
@@ -5797,15 +5901,18 @@ function PilotDashboard() {
     },
     setError: setEntrySaveError,
   });
-  const closeBusinessDay = async (confirmedFingerprint) => {
+  const closeBusinessDay = async (confirmedFingerprint, rowsOverride) => {
     const ownCtx = captureSelectionCtx();
     const date = form.date;
     setEntrySaveError("");
     setClosureNotice("");
     await saveUiRunnerRef.current.run(ownCtx, async () => {
-      const res = await window.MarjinClosureLifecycle.executeClosureAction(closureIo(date, confirmedFingerprint));
+      const res = await window.MarjinClosureLifecycle.executeClosureAction(closureIo(date, confirmedFingerprint, rowsOverride));
       if (!selectionCtrlRef.current.isLive(ownCtx) || res.status === "stale") return;
-      if (res.status === "confirmation_required") { setClosureDialog({ date, plan: res.plan }); return; }
+      if (res.status === "confirmation_required") { setClosureDialog({ date, plan: res.plan, rows: Array.isArray(rowsOverride) ? rowsOverride : null }); return; }
+      // CD-M2 R1: revenue found by the authoritative read is never zeroed silently — its amounts
+      // are shown for an explicit confirmation of exactly those server rows.
+      if (res.status === "partial" && res.replan && res.replan.status === "ok" && res.replan.needsConfirmation) { setClosureDialog({ date, plan: res.replan, rows: res.verifiedRows }); return; }
       setClosureDialog(null);
       if (res.status === "closed") {
         setForm(f => (f.date === date ? formWithException({ ...f, sales: "0", deliveries: "0", other_income: "0", includeVat: false }, date) : f));
@@ -7292,6 +7399,7 @@ function PilotDashboard() {
               const __plan = __cl.planClosure(entries, form.date, { today: israelDateKey(0) });
               const __conflict = __closed && __plan.status === "ok" && __plan.needsConfirmation;
               const __dlg = closureDialog && closureDialog.date === form.date ? closureDialog.plan : null;
+              const __dlgRows = closureDialog && closureDialog.date === form.date && Array.isArray(closureDialog.rows) ? closureDialog.rows : null;
               return (
                 <div data-closure-panel="1" style={{marginTop:8,padding:"10px 12px",background:__closed?"#F1F5F9":"#FFFFFF",border:"1px solid #CBD5E1",borderRadius:8}}>
                   {__closed ? (
@@ -7318,7 +7426,7 @@ function PilotDashboard() {
                       ))}
                       <div style={{fontWeight:700,marginTop:6}}>סה״כ הכנסות שיאופסו: {fmt(__dlg.displayTotal)}{__dlg.unreadableCells>0?` (+${__dlg.unreadableCells} ערכים לא תקינים)`:""}</div>
                       <div style={{display:"flex",gap:8,marginTop:8}}>
-                        <button className="btn btn-primary" disabled={entrySaveInFlight} onClick={()=>!entrySaveInFlight && closeBusinessDay(__dlg.fingerprint)}>אשר: העסק היה סגור ואפס הכנסות</button>
+                        <button className="btn btn-primary" disabled={entrySaveInFlight} onClick={()=>!entrySaveInFlight && closeBusinessDay(__dlg.fingerprint, __dlgRows)}>אשר: העסק היה סגור ואפס הכנסות</button>
                         <button className="btn btn-secondary" disabled={entrySaveInFlight} onClick={()=>setClosureDialog(null)}>ביטול</button>
                       </div>
                     </div>

@@ -18,7 +18,7 @@ import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import vm from "node:vm";
 import { html, makeRemote, makeClient, drainLiveRigs, settleAll, tick, mkId, plain } from "../support/cross-writer-harness.mjs";
-import { applyOperation, requestHash, safeStateView, validateSetInput } from "../../lib/entryExceptions.js";
+import { applyOperation, buildEffectiveRecord, requestHash, safeStateView, validateSetInput } from "../../lib/entryExceptions.js";
 import { loadCompiled, loadCommitted } from "../support/fincore-load.mjs";
 
 afterEach(drainLiveRigs);
@@ -26,7 +26,7 @@ afterEach(drainLiveRigs);
 // ── production seams (one sandbox: lifecycle + closure + storage-v2 blocks) ──────────────
 function loadSeams() {
   const start = html.indexOf("// ── P0-DATA-01: canonical daily-entries identity & upsert helpers");
-  const f = html.indexOf("window.MarjinStorageV2 = Object.freeze({", start);
+  const f = html.indexOf("window.MarjinStoragePolicy = Object.freeze({", start);
   assert.ok(start !== -1 && f !== -1, "index.html anchors present");
   const src = html.slice(start, html.indexOf("});", f) + 3);
   assert.ok(src.includes("window.MarjinClosureLifecycle = Object.freeze({"), "the closure block sits inside the lifecycle region");
@@ -42,6 +42,7 @@ const MC = { ...MCraw, planClosure: (...a) => plain(MCraw.planClosure(...a)), cl
   executeClosureAction: async (io) => plain(await MCraw.executeClosureAction(io)), executeClosureReopen: async (io) => plain(await MCraw.executeClosureReopen(io)) };
 const ML = W.MarjinSaveLifecycle;
 const MS = W.MarjinStorageV2;
+const MP = W.MarjinStoragePolicy;
 const BROWSER = await loadCompiled();
 const COMMITTED = await loadCommitted();
 
@@ -68,7 +69,21 @@ function makeExceptionServer({ role = "owner", uid = "u-owner" } = {}) {
     const applied = out.outcome === "applied";
     return { status: 200, json: { ok: true, exception: safeStateView(out.state), revision: out.revision, applied, replayed: out.outcome === "replayed", rebuildRequired: applied } };
   };
+  let listFails = 0;             // the server list read fails (authoritative closure read unavailable)
+  const listed = [];
+  // GET list-entry-exceptions — the server's own effective record (lib/entryExceptions.js
+  // buildEffectiveRecord over the structured envelope), exactly what api/admin.js returns.
+  const list = (url) => {
+    const q = new URL("http://x" + url).searchParams;
+    listed.push({ from: q.get("fromDate"), to: q.get("toDate") });
+    if (listFails > 0) { listFails--; return { ok: false, status: 500, json: async () => ({ error: "list_failed" }) }; }
+    const out = {};
+    const biz = ((ledger[q.get("tenantId")] || {})[q.get("bizId")]) || {};
+    for (const d of Object.keys(biz)) if (d >= q.get("fromDate") && d <= q.get("toDate")) { const rec = buildEffectiveRecord(d, biz[d], null); if (rec.source !== "none") out[d] = rec; }
+    return { ok: true, status: 200, json: async () => ({ ok: true, exceptions: plain(out) }) };
+  };
   const apiFetch = async (url, opts) => {
+    if (/action=list-entry-exceptions/.test(url)) return list(url);
     const action = /set-entry-exception/.test(url) ? "set" : /clear-entry-exception/.test(url) ? "clear" : null;
     const body = JSON.parse(opts.body);
     calls.push({ url, action, body });
@@ -78,7 +93,8 @@ function makeExceptionServer({ role = "owner", uid = "u-owner" } = {}) {
     return { ok: r.status >= 200 && r.status < 300, status: r.status, json: async () => r.json };
   };
   return {
-    apiFetch, calls, ledger,
+    apiFetch, calls, ledger, listed,
+    failNextList: () => { listFails = 1; },
     ledgerOf: (t = "T1", b = "A") => plain((ledger[t] || {})[b] || {}),
     seedEnvelope: (t, b, d, e) => put(t, b, d, e),
     loseNextResponseAfterApply: () => { failAfterApply = 1; },
@@ -105,6 +121,9 @@ function rig(seedRows, opts = {}) {
     emptyEntry: { date: "", sales: "", deliveries: "", food_cost: "", payroll: "", hourly_payroll: "", other_expense: "", other_income: "", supplier_payments: {}, notes: "", is_exception: false, exception_reason: "", exception_note: "" },
     apiFetch: server.apiFetch,
     persistMutation: async (intent) => { spy.persists.push(plain(intent)); const r = await client.submit(intent); return { ok: r.status === "committed" || r.status === "committed_idempotent", canonical: r.rows, status: r.status, reason: r.reason, detail: r.detail }; },
+    // CD-M2 R1: the authoritative entries read uses the SAME remote transaction primitive
+    verifyTransact: (t, k, fn) => { spy.verifies = (spy.verifies || 0) + 1; return remote.transact(t, k, fn); },
+    readNode: (raw) => MS.readEntriesNode(raw),
     applyRows: (rows) => spy.applied.push(plain(rows)),
     reloadExceptions: async () => { spy.reloads++; },
     rebuildInsights: async (d, c) => { spy.rebuilds.push([d, c.tenantId, c.bizId]); },
@@ -401,21 +420,23 @@ function uiEnv(seed) {
   const setters = { setForm: (v) => { state.form = typeof v === "function" ? v(state.form) : v; }, setClosureDialog: (v) => { state.dialog = v; }, setClosureNotice: (v) => { state.notice = v; },
     setEntrySaveError: (v) => { state.error = v; }, setEntries: (v) => { state.entries = v; }, setEntryExceptions: () => {}, setDashboardInsightsWarning: () => {} };
   const runner = ML.createSaveUiRunner({ ownership: ML.createSaveOwnership(), selection: h.client.ctrl, setInFlight: (v) => { state.inFlight = v; }, makeOpId: () => "ui-op" });
+  const policy = MP.createPolicyLane(MP.STORAGE_PROTOCOL); policy.resolve(null, "legacy");
   const deps = {
     ...setters, console, Date,
+    entriesPolicyRef: { current: policy }, entriesStorageModeRef: { current: { mode: "legacy", generation: null } },
     get form() { return state.form; }, get entries() { return h.client.lane._state().desired || []; },
     loggedInUser: { role: "owner" }, selectionCtrlRef: { current: h.client.ctrl }, exceptionOwnershipRef: { current: h.own },
     entriesWriteCoordRef: { current: h.client.lane }, saveUiRunnerRef: { current: runner }, captureSelectionCtx: () => h.client.ctrl.capture(),
     israelDateKey: () => TODAY, newRowId: () => mkId("ui-new"), EMPTY_ENTRY: { date: "", sales: "", deliveries: "", other_income: "", supplier_payments: {} },
     loadEntryExceptions: async () => {}, rebuildInsightsAfterEntrySave: async () => {},
-    window: { MarjinClosureLifecycle: MCraw, apiFetch: h.server.apiFetch, crypto: { randomUUID: (() => { let n = 0; return () => "uuid-op-" + (++n); })() } },
+    window: { MarjinClosureLifecycle: MCraw, MarjinStoragePolicy: MP, MarjinStorageV2: MS, storage: { mutateFor: (t, k, fn) => h.remote.transact(t, k, fn) }, apiFetch: h.server.apiFetch, crypto: { randomUUID: (() => { let n = 0; return () => "uuid-op-" + (++n); })() } },
   };
   const sandbox = { JSON, Math, Number, Object, Array, Promise, Error, String };
   for (const k of Object.keys(deps)) Object.defineProperty(sandbox, k, Object.getOwnPropertyDescriptor(deps, k));
-  const src = [sliceDecl("const formWithException = (base, date) => {"), sliceDecl("const closureIo = (date, confirmedFingerprint) => ({"),
-    sliceDecl("const closeBusinessDay = async (confirmedFingerprint) => {"), sliceDecl("const reopenBusinessDay = async () => {")].join("\n");
+  const src = [sliceDecl("const formWithException = (base, date) => {"), sliceDecl("const closureIo = (date, confirmedFingerprint, rowsOverride) => ({"),
+    sliceDecl("const closeBusinessDay = async (confirmedFingerprint, rowsOverride) => {"), sliceDecl("const reopenBusinessDay = async () => {")].join("\n");
   vm.runInNewContext(src + "\n;__OUT = { closeBusinessDay, reopenBusinessDay };", sandbox);
-  return { h, state, ui: sandbox.__OUT };
+  return { h, state, ui: sandbox.__OUT, win: deps.window };
 }
 
 test("CDM2-19 UI call site: the first click opens the confirmation (no write); Cancel is a no-op; Confirm closes, zeros revenue and syncs the form; Reopen clears", async () => {
@@ -441,10 +462,11 @@ test("CDM2-20 wiring guards: the generic exception control can no longer record 
   assert.ok(html.includes("window.MarjinForecast.EXCEPTION_REASONS.filter(r=>r!==window.MarjinClosureLifecycle.CLOSURE_REASON_CODE)"), "closure is not a generic reason option");
   assert.ok(html.includes("canEditException(loggedInUser?.role) && !window.MarjinClosureLifecycle.isActiveClosureState(exceptionOwnershipRef.current.getState(form.date))"), "generic control hidden on a closed date");
   assert.ok(/type="date" value=\{form\.date\} onChange=\{e=>\{[^}]*isActiveClosureState/.test(html), "date change re-reads the closure state");
-  const close = sliceDecl("const closeBusinessDay = async (confirmedFingerprint) => {");
-  for (const m of ["saveUiRunnerRef.current.run(ownCtx", "executeClosureAction(closureIo(date, confirmedFingerprint))", "isLive(ownCtx)"]) assert.ok(close.includes(m), m);
-  const io = sliceDecl("const closureIo = (date, confirmedFingerprint) => ({");
-  for (const m of ["entriesWriteCoordRef.current.submitIntent(intent2)", "exceptionOwnershipRef.current.ensureOpId", "today: israelDateKey(0)", "rows: entries"]) assert.ok(io.includes(m), m);
+  const close = sliceDecl("const closeBusinessDay = async (confirmedFingerprint, rowsOverride) => {");
+  for (const m of ["saveUiRunnerRef.current.run(ownCtx", "executeClosureAction(closureIo(date, confirmedFingerprint, rowsOverride))", "isLive(ownCtx)"]) assert.ok(close.includes(m), m);
+  const io = sliceDecl("const closureIo = (date, confirmedFingerprint, rowsOverride) => ({");
+  for (const m of ["entriesWriteCoordRef.current.submitIntent(intent2)", "exceptionOwnershipRef.current.ensureOpId", "today: israelDateKey(0)", "rows: Array.isArray(rowsOverride) ? rowsOverride : entries",
+    "window.storage.mutateFor(t, k, fn)", "gatePolicyDispatch(lane ? lane.decision() : null, binding)", "window.MarjinStorageV2.readEntriesNode(raw)"]) assert.ok(io.includes(m), m);
   assert.equal((html.match(/reasonCode: CLOSURE_REASON_CODE/g) || []).length, 1, "exactly one place sends the closure reason");
 });
 
@@ -460,4 +482,174 @@ test("CDM2-21 ORDER JUSTIFICATION (validated against CD-M1): a failure after clo
   const inp = { rows: rows(0), config: { state: "present", value: {} }, fixed: { state: "absent" }, asOfBusinessDate: TODAY, exceptionStates: {}, exceptionLedgerState: "absent" };
   const [day] = BROWSER.product.productDays(inp, { from: D, to: D }).days;
   assert.deepEqual(plain(BROWSER.metrics.revenueForecast.sampleEligibility(day, new Set())), { eligible: true }, "…and would silently enter the six-occurrence weekday baseline");
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// CD-M2 R1 — CDM2-F01: "closed" only after an AUTHORITATIVE check of both stores on EVERY
+// path. The second client writes DIRECTLY to the remote (no listener echo), so this
+// client's hydrated rows (io.rows = the listener cache) are stale — exactly the reviewed race.
+const ZERO_ROW = () => [{ id: R1, date: D, sales: 0, deliveries: 0, other_income: 0, payroll: "100", supplier_payments: { s1: "40" } }];
+const writeRevenue = (h, id, sales, date = D) => { const rows = h.remote.rows(); const x = rows.find((r) => r.id === id); if (x) x.sales = sales; else rows.push({ id, date, sales }); h.remote.setRowsDirect(rows); };
+/** the server applies the closure, THEN another client writes — before this action returns */
+const afterClosurePersisted = (h, fn) => async (url, opts) => { const r = await h.server.apiFetch(url, opts); if (/set-entry-exception/.test(url)) fn(); return r; };
+
+test("CDM2-22 CDM2-F01 exact reproduction: explicit-zero row, NO zeroing intent; another client writes sales 50 after the closure is persisted ⇒ typed partial (never 'closed'); 50 is not zeroed; a fresh plan of exactly 50 needs confirmation", async () => {
+  const h = rig(ZERO_ROW());
+  const res = await MC.executeClosureAction(h.io(D, { apiFetch: afterClosurePersisted(h, () => writeRevenue(h, R1, 50)) }));
+  assert.deepEqual([res.status, res.stage, res.reason], ["partial", "verify", "revenue_changed_concurrently"], JSON.stringify(res));
+  assert.equal(h.spy.persists.length, 0, "no zeroing intent was planned or sent");
+  assert.ok(h.spy.verifies >= 1, "the authoritative read ran");
+  assert.equal(onDate(remoteRows(h), D)[0].sales, 50, "the newly discovered amount is NOT zeroed silently");
+  assert.deepEqual([res.replan.status, res.replan.needsConfirmation, res.replan.displayTotal], ["ok", true, 50], "the repair plan shows exactly the server amount");
+  assert.equal(onDate(res.verifiedRows, D)[0].sales, 50);
+  assert.deepEqual(h.spy.rebuilds, [], "no success side effects");
+  assert.match(h.spy.errors.at(-1), /נמצאו הכנסות שנרשמו במקביל/);
+  const core = coreView(remoteRows(h), h.server.ledgerOf(), TODAY);
+  assert.deepEqual([core.coverage.invalidDays, core.flags.map((f) => f.date)], [[D], [D]], "CD-M1: the visible contradiction the operator is now told about");
+  // repair: confirm exactly the shown server rows ⇒ zeroed under CAS ⇒ verified ⇒ closed
+  const done = await MC.executeClosureAction(h.io(D, { rows: res.verifiedRows, confirmedFingerprint: res.replan.fingerprint }));
+  assert.equal(done.status, "closed", JSON.stringify(done)); assert.equal(done.closureApplied, false);
+  assert.equal(onDate(remoteRows(h), D)[0].sales, 0);
+  assert.equal(h.server.calls.filter((c) => c.action === "set").length, 1, "no second closure operation");
+});
+
+test("CDM2-23 a stale view alone (the second client wrote BEFORE the action; this client was never told) still cannot produce 'closed'", async () => {
+  const h = rig(ZERO_ROW());
+  writeRevenue(h, R1, 50);                                     // remote 50, io.rows still 0
+  assert.equal(h.io(D).rows.find((r) => r.id === R1).sales, 0, "precondition: the hydrated view is stale");
+  const res = await MC.executeClosureAction(h.io(D));
+  assert.deepEqual([res.status, res.reason], ["partial", "revenue_changed_concurrently"]);
+  assert.equal(onDate(remoteRows(h), D)[0].sales, 50);
+});
+
+test("CDM2-24 a revenue write AFTER the final zeroing transaction committed (before verification) is detected: partial, not zeroed, re-confirmation of the new amount", async () => {
+  const h = rig(TWO_ROWS());
+  const ask = await MC.executeClosureAction(h.io(D));
+  let n = 0;
+  const base = h.io(D);
+  const res = await MC.executeClosureAction(h.io(D, { confirmedFingerprint: ask.plan.fingerprint,
+    persistMutation: async (intent) => { const r = await base.persistMutation(intent); if (++n === ask.plan.rows.length) writeRevenue(h, R1, 70); return r; } }));
+  assert.deepEqual([res.status, res.stage, res.reason], ["partial", "verify", "revenue_changed_concurrently"]);
+  assert.equal(n, 2, "both zeroing transactions committed first");
+  assert.equal(remoteRows(h).find((r) => r.id === R1).sales, 70, "the later write survives — never overwritten");
+  assert.deepEqual([res.replan.needsConfirmation, res.replan.displayTotal], [true, 70]);
+  assert.deepEqual(h.spy.rebuilds, []);
+});
+
+test("CDM2-25 a NEW revenue row on a FUTURE closure date (no intents, no row creation) after the closure is persisted ⇒ partial; no future row created by the action", async () => {
+  const F = "2026-09-20", late = mkId("late-future");
+  const h = rig([{ id: R0, date: "2026-09-09", sales: 999 }]);
+  const res = await MC.executeClosureAction(h.io(F, { apiFetch: afterClosurePersisted(h, () => writeRevenue(h, late, 40, F)) }));
+  assert.deepEqual([res.status, res.reason, res.replan.displayTotal], ["partial", "revenue_changed_concurrently", 40]);
+  assert.deepEqual(onDate(remoteRows(h), F).map((r) => [r.id, r.sales]), [[late, 40]], "only the other client's row exists; nothing zeroed");
+  assert.equal(h.spy.persists.length, 0);
+});
+
+test("CDM2-26 valid paths stay 'closed' and verified: explicit-zero row (0 intents, byte-identical rows), no-row completed date (row created), future date without rows (no row), current date", async () => {
+  const z = rig(ZERO_ROW());
+  const before = remoteRows(z);
+  const a = await MC.executeClosureAction(z.io(D));
+  assert.deepEqual([a.status, a.revenueIntents, a.verified.closureRevision], ["closed", 0, 1]);
+  assert.deepEqual(remoteRows(z), before, "the authoritative read changes no stored byte");
+  assert.ok(z.server.listed.some((q) => q.from === D && q.to === D), "the ledger was re-read for exactly this date");
+  const n = rig([]);
+  const b = await MC.executeClosureAction(n.io(D));
+  assert.deepEqual([b.status, b.rowCreated, onDate(remoteRows(n), D).length], ["closed", true, 1]);
+  const f = rig([]);
+  const c = await MC.executeClosureAction(f.io("2026-09-20"));
+  assert.deepEqual([c.status, c.timing, c.rowCreated, onDate(remoteRows(f) || [], "2026-09-20").length], ["closed", "future", false, 0]);
+  const cur = rig([{ id: R1, date: TODAY, sales: 0 }]);
+  assert.equal((await MC.executeClosureAction(cur.io(TODAY))).status, "closed");
+});
+
+test("CDM2-27 authoritative-read failures are never success: transport error, transaction not committed (incl. the policy gate), unreadable node, ledger list failure", async () => {
+  const cases = [
+    ["throws", { verifyTransact: async () => { throw new Error("permission_denied"); } }, "entries_unverified"],
+    ["not committed", { verifyTransact: async () => ({ committed: false, reason: "maintenance_read_only" }) }, "entries_unverified"],
+    ["no port", { verifyTransact: undefined }, "entries_unverified"],
+    ["unreadable", { readNode: () => ({ status: "malformed_storage", reason: "rows_scalar" }) }, "entries_unverified"],
+  ];
+  for (const [name, extra, reason] of cases) {
+    const h = rig(ZERO_ROW());
+    const res = await MC.executeClosureAction(h.io(D, extra));
+    assert.deepEqual([res.status, res.stage, res.reason], ["partial", "verify", reason], name);
+    assert.deepEqual(h.spy.rebuilds, [], name);
+    assert.match(h.spy.errors.at(-1), /לא ניתן היה לאמת את ההכנסות מול השרת/, name);
+  }
+  const k = rig(ZERO_ROW());
+  k.server.failNextList();
+  const res = await MC.executeClosureAction(k.io(D));
+  assert.deepEqual([res.status, res.reason], ["partial", "closure_unverified"]);
+  assert.equal(k.spy.reloads, 1);
+});
+
+test("CDM2-28 the closure itself changed concurrently between its persistence and the final ledger read (cleared, or re-set at a new revision) ⇒ partial 'closure_changed_concurrently'", async () => {
+  const otherClear = (h) => h.server.apiFetch("/api/admin?action=clear-entry-exception", { method: "POST", body: JSON.stringify({ tenantId: "T1", bizId: "A", businessDate: D, expectedRevision: 1, operationId: "other-clear" }) });
+  const h = rig(ZERO_ROW());
+  const res = await MC.executeClosureAction(h.io(D, { apiFetch: async (url, opts) => { const r = await h.server.apiFetch(url, opts); if (/set-entry-exception/.test(url)) await otherClear(h); return r; } }));
+  assert.deepEqual([res.status, res.reason], ["partial", "closure_changed_concurrently"]);
+  assert.equal(h.server.ledgerOf()[D].state.status, "cleared");
+  const k = rig(ZERO_ROW());
+  const res2 = await MC.executeClosureAction(k.io(D, { apiFetch: async (url, opts) => { const r = await k.server.apiFetch(url, opts);
+    if (/set-entry-exception/.test(url)) { await otherClear(k); await k.server.apiFetch("/api/admin?action=set-entry-exception", { method: "POST", body: JSON.stringify({ tenantId: "T1", bizId: "A", businessDate: D, reasonCode: "closure", expectedRevision: 2, operationId: "other-set" }) }); }
+    return r; } }));
+  assert.deepEqual([res2.status, res2.reason], ["partial", "closure_changed_concurrently"], "active again, but at revision 3 ≠ 1: continuity over [T1, T3] is not proven");
+});
+
+test("CDM2-29 STATED LIMIT: a revenue write AFTER the authoritative entries read (T2) is not prevented by the action — it reports 'closed' for the verified instant, and CD-M1 then shows the contradiction visibly", async () => {
+  const h = rig(ZERO_ROW());
+  const res = await MC.executeClosureAction(h.io(D, { apiFetch: async (url, opts) => { if (/list-entry-exceptions/.test(url)) writeRevenue(h, R1, 9); return h.server.apiFetch(url, opts); } }));
+  assert.equal(res.status, "closed", "no cross-store fence exists: the success refers to the verified instant T2");
+  const core = coreView(remoteRows(h), h.server.ledgerOf(), TODAY);
+  assert.deepEqual([core.coverage.invalidDays, core.flags.map((f) => f.date)], [[D], [D]], "the later write is the CD-M1 contradiction, never a silent valid zero");
+  const panelPlan = MC.planClosure(remoteRows(h), D, { today: TODAY });
+  assert.equal(panelPlan.needsConfirmation, true, "once the listener delivers it, the closure panel shows the contradiction and its repair");
+});
+
+test("CDM2-30 the repair confirmation stays bound to the server rows shown: a stale view never matches it; a further change after it was shown is a CAS conflict, never overwritten", async () => {
+  const h = rig(ZERO_ROW());
+  const res = await MC.executeClosureAction(h.io(D, { apiFetch: afterClosurePersisted(h, () => writeRevenue(h, R1, 50)) }));
+  const stale = await MC.executeClosureAction(h.io(D, { rows: ZERO_ROW(), confirmedFingerprint: res.replan.fingerprint }));   // a view still showing 0
+  assert.deepEqual([stale.status, stale.reason], ["partial", "revenue_changed_concurrently"], "a view without the 50 plans no zeroing, and verification refuses success");
+  assert.equal(onDate(remoteRows(h), D)[0].sales, 50, "a fingerprint for 50 never zeroes anything from a view that does not show 50");
+  writeRevenue(h, R1, 80);                                     // changed again after the repair dialog showed 50
+  const r = await MC.executeClosureAction(h.io(D, { rows: res.verifiedRows, confirmedFingerprint: res.replan.fingerprint }));
+  assert.deepEqual([r.status, r.stage, r.outcome], ["partial", "revenue", "conflict"]);
+  assert.equal(onDate(remoteRows(h), D)[0].sales, 80, "80 is never overwritten by a confirmation of 50");
+});
+
+test("CDM2-31 readEntriesAuthoritative: the transaction function is the identity (never an abort), and the result is the COMMITTED server value through the dual-mode seam (legacy, V2, absent, malformed)", async () => {
+  const ctx = { tenantId: "T1", bizId: "A", gen: 1 };
+  const sel = { isLive: () => true };
+  const legacyRaw = { _v: JSON.stringify([{ id: R1, date: D, sales: 0 }]) };
+  const seen = [];
+  const run = (raw, snapshot) => MCraw.readEntriesAuthoritative({ selection: sel, readNode: MS.readEntriesNode,
+    verifyTransact: async (t, k, fn) => { const out = fn(raw); seen.push([t, k, out === raw]); return { committed: true, snapshot: { val: () => (snapshot === undefined ? out : snapshot) } }; } }, ctx);
+  const a = plain(await run(legacyRaw));
+  assert.deepEqual([a.status, a.mode, a.rows.length], ["verified", "legacy", 1]);
+  assert.deepEqual(seen[0], ["T1", "biz:A:entries", true], "identity on the captured destination");
+  const v2 = { schemaVersion: 2, generation: 1, rows: { [R1]: { id: R1, date: D, sales: 5, _gen: 1 } } };
+  const b = plain(await run(v2));
+  assert.deepEqual([b.status, b.mode, b.rows[0].sales], ["verified", "v2", 5]);
+  const c = plain(await run(null));
+  assert.deepEqual([c.status, c.mode, c.rows], ["verified", "absent", []]);
+  assert.equal(seen[2][2], true, "even an absent node is returned as is (null), never undefined");
+  const d = plain(await run(legacyRaw, { schemaVersion: 2, generation: 1, rows: 7 }));
+  assert.equal(d.status, "unreadable", "the COMMITTED value decides, not the first local run");
+  const stale = plain(await MCraw.readEntriesAuthoritative({ selection: { isLive: () => false }, readNode: MS.readEntriesNode, verifyTransact: async () => { throw new Error("must not run"); } }, ctx));
+  assert.equal(stale.status, "stale");
+});
+
+test("CDM2-32 UI call site: the reproduced race opens the confirmation dialog with the SERVER amount; confirming it closes the day; no false success notice", async () => {
+  const e = uiEnv(ZERO_ROW());
+  const orig = e.win.apiFetch;
+  let once = true;
+  e.win.apiFetch = async (url, opts) => { const r = await orig(url, opts); if (once && /set-entry-exception/.test(url)) { once = false; writeRevenue(e.h, R1, 50); } return r; };
+  await e.ui.closeBusinessDay(null);
+  assert.equal(e.state.notice, "", "no 'closed' notice");
+  assert.equal(e.state.dialog.plan.displayTotal, 50); assert.equal(onDate(e.state.dialog.rows, D)[0].sales, 50, "the dialog carries the server rows it shows");
+  assert.match(e.state.error, /נמצאו הכנסות שנרשמו במקביל/);
+  await e.ui.closeBusinessDay(e.state.dialog.plan.fingerprint, e.state.dialog.rows);
+  assert.equal(e.state.dialog, null); assert.match(e.state.notice, /היום סומן כסגור/);
+  assert.equal(onDate(remoteRows(e.h), D)[0].sales, 0);
 });

@@ -23,7 +23,7 @@ import { dirname, join } from "node:path";
 import vm from "node:vm";
 import { validateFirebaseConfig } from "./rtdb-authorization-matrix.mjs";
 import { requestHash, safeStateView, validateSetInput } from "../../lib/entryExceptions.js";
-import { runEntryExceptionTxn } from "../../lib/repositories/entryExceptionsRepo.js";
+import { runEntryExceptionTxn, listEntryExceptions } from "../../lib/repositories/entryExceptionsRepo.js";
 import { compileServer } from "../support/server-reader-harness.mjs";
 
 const PROJECT = "demo-marjin-rules";
@@ -49,14 +49,14 @@ function assertSafeEnvironment() {
 const html = readFileSync(join(ROOT, "index.html"), "utf8");
 function loadSeams() {
   const start = html.indexOf("// ── P0-DATA-01: canonical daily-entries identity & upsert helpers");
-  const f = html.indexOf("window.MarjinClosureLifecycle = Object.freeze({", start);
-  if (start === -1 || f === -1) fail("index.html anchors for the lifecycle/closure blocks not found");
-  const sandbox = { window: {}, Math, Number, Object, Array, JSON, console, Error, Promise, encodeURIComponent, setImmediate };
+  const f = html.indexOf("window.MarjinStorageV2 = Object.freeze({", start);
+  if (start === -1 || f === -1 || html.indexOf("window.MarjinClosureLifecycle = Object.freeze({", start) > f) fail("index.html anchors for the lifecycle/closure/storage-v2 blocks not found");
+  const sandbox = { window: { crypto: globalThis.crypto }, Math, Number, Object, Array, JSON, console, Error, Promise, encodeURIComponent, setImmediate };
   vm.runInNewContext(html.slice(start, html.indexOf("});", f) + 3), sandbox);
   return sandbox.window;
 }
 const W = loadSeams();
-const ME = W.MarjinEntries, ML = W.MarjinSaveLifecycle, MC = W.MarjinClosureLifecycle;
+const ME = W.MarjinEntries, ML = W.MarjinSaveLifecycle, MC = W.MarjinClosureLifecycle, MS = W.MarjinStorageV2;
 if (!html.includes("return await runTransaction(ref(db, path), txnFn, { applyLocally: false });")) fail("production mutateFor transaction call changed — update this harness");
 const plain = (x) => JSON.parse(JSON.stringify(x));
 const entriesPath = (t, b) => `tenants/${t}/${`biz:${b}:entries`.replace(/[.#$[\]]/g, "_")}`;
@@ -103,6 +103,13 @@ let __coldSeq = 0;
 function serverApi(role, uid, { cold = false } = {}) {
   const calls = [];
   const apiFetch = async (url, opts) => {
+    if (/action=list-entry-exceptions/.test(url)) {
+      // api/admin.js handleListEntryExceptions: the PRODUCTION repository read (Admin SDK, server side)
+      const q = new URL("http://x" + url).searchParams;
+      calls.push({ action: "list", from: q.get("fromDate"), to: q.get("toDate") });
+      const exceptions = await listEntryExceptions({ tenantId: q.get("tenantId"), bizId: q.get("bizId"), fromDate: q.get("fromDate"), toDate: q.get("toDate") });
+      return { ok: true, status: 200, json: async () => ({ ok: true, exceptions: JSON.parse(JSON.stringify(exceptions)) }) };
+    }
     const action = /set-entry-exception/.test(url) ? "set" : "clear";
     const body = JSON.parse(opts.body);
     calls.push({ action, body });
@@ -155,6 +162,10 @@ function closureIo(client, api, own, extra = {}) {
     newOpId: () => "emu-op-" + (++__opSeq), newRowId: nextId, emptyEntry: {},
     apiFetch: api.apiFetch,
     persistMutation: (intent) => client.lane.submitIntent(intent).then((r) => ({ ok: r.status === "committed" || r.status === "committed_idempotent", canonical: r.rows, status: r.status, reason: r.reason, detail: r.detail })),
+    // CD-M2 R1 (T2): the production mutateFor contract — runTransaction(ref, fn, {applyLocally:false})
+    // — on THIS client's database handle (its listener cache is the only local state it has)
+    verifyTransact: async (t, key, fn) => { const res = await client.db.ref(`tenants/${t}/${key.replace(/[.#$[\]]/g, "_")}`).transaction(fn, undefined, false); return { committed: res.committed, snapshot: res.snapshot }; },
+    readNode: (raw) => MS.readEntriesNode(raw),
     applyRows: () => {}, reloadExceptions: async () => {}, rebuildInsights: async () => {}, onInsightsFailure: () => {}, setError: () => {},
     ...extra };
 }
@@ -283,10 +294,96 @@ async function main() {
     const led = await readLedger(); eq([led[D].state.status, led[D].state.revision, Object.keys(led[D].operations).length], ["active", 3, 3], "ledger: three operations, rev 3");
   });
 
+
+  // ══ CD-M2 R1 — CDM2-F01 on a REAL RTDB: success only after the authoritative T2/T3 check ══
+  const zeroFixture = async () => { await reseed(); await seedDb().ref(entriesPath(T, B)).set({ _v: JSON.stringify([{ id: R1, date: D, sales: 0, deliveries: 0, other_income: 0, payroll: "100", unknown_field: "keep" }]) }); };
+  const otherClientSales = async (id, sales) => { const rows = await readRows(); rows.find((r) => r.id === id).sales = sales; await seedDb().ref(entriesPath(T, B)).set({ _v: JSON.stringify(rows) }); };
+
+  await run("CDM2-EMU-07", "CDM2-F01 exact race: explicit-zero row (no zeroing intent); another client writes sales 50 after the ledger committed ⇒ partial, 50 kept, fresh plan of 50; confirming exactly those server rows closes", async () => {
+    await zeroFixture();
+    const A = await makeClient("owner").attach();
+    const api = serverApi("owner", "u_owner"); const own = ML.createExceptionOwnership();
+    const view = A.rows();
+    const apiRace = async (url, opts) => { const r = await api.apiFetch(url, opts); if (/set-entry-exception/.test(url)) await otherClientSales(R1, 50); return r; };
+    const res = plain(await MC.executeClosureAction(closureIo(A, api, own, { rows: view, apiFetch: apiRace })));
+    eq([res.status, res.stage, res.reason], ["partial", "verify", "revenue_changed_concurrently"], "never closed");
+    eq((await readRows()).find((r) => r.id === R1).sales, 50, "50 not zeroed");
+    eq([res.replan.needsConfirmation, res.replan.displayTotal], [true, 50], "fresh plan from the server rows");
+    let c = await canonical(); eq([c.cov.invalidDays, c.contradiction], [[D], [D]], "CD-M1 contradiction (what the operator is told)");
+    const done = plain(await MC.executeClosureAction(closureIo(A, api, own, { rows: res.verifiedRows, confirmedFingerprint: res.replan.fingerprint })));
+    eq([done.status, done.closureApplied], ["closed", false], "repair closes after the explicit confirmation");
+    const rows = await readRows(); eq([rows[0].sales, rows[0].unknown_field], [0, "keep"], "zeroed, unrelated field kept");
+    c = await canonical(); eq([c.cov.invalidDays, c.cov.closedDays, c.contradiction], [[], [D], []], "valid closed day");
+  });
+
+  await run("CDM2-EMU-08", "a revenue write after the FINAL zeroing transaction committed (before verification) ⇒ partial, never overwritten", async () => {
+    await reseed();
+    const A = await makeClient("owner").attach();
+    const api = serverApi("owner", "u_owner"); const own = ML.createExceptionOwnership();
+    const ask = plain(await MC.executeClosureAction(closureIo(A, api, own)));
+    let n = 0;
+    const base = closureIo(A, api, own);
+    const res = plain(await MC.executeClosureAction(closureIo(A, api, own, { confirmedFingerprint: ask.plan.fingerprint,
+      persistMutation: async (intent) => { const r = await base.persistMutation(intent); if (++n === ask.plan.rows.length) await otherClientSales(R1, 70); return r; } })));
+    eq([res.status, res.stage, res.reason, n], ["partial", "verify", "revenue_changed_concurrently", 2], "never closed");
+    eq((await readRows()).find((r) => r.id === R1).sales, 70, "70 kept");
+  });
+
+  await run("CDM2-EMU-09", "valid explicit-zero path on real Rules: the identity compare-and-set is ACCEPTED for a manager, changes no stored byte, and the ledger is re-read; result closed", async () => {
+    await zeroFixture();
+    const before = JSON.stringify(await readRows());
+    const A = await makeClient("manager").attach();
+    const api = serverApi("manager", "u_manager");
+    const res = plain(await MC.executeClosureAction(closureIo(A, api, ML.createExceptionOwnership(), { role: "manager" })));
+    eq([res.status, res.revenueIntents, res.verified.closureRevision, res.verified.mode], ["closed", 0, 1, "legacy"], "closed and verified");
+    eq(JSON.stringify(await readRows()), before, "entries byte-identical");
+    expect(api.calls.some((c2) => c2.action === "list" && c2.from === D && c2.to === D), "ledger re-read for the date");
+  });
+
+  await run("CDM2-EMU-10", "Storage V2 node (v2_active policy): the identity compare-and-set is accepted by the V2 Rules; a valid zero row closes; a concurrent revenue write after the ledger commit is detected", async () => {
+    await reseed();
+    await seedDb().ref(`storage_v2_control/${T}/${B}`).set({ contractVersion: 1, phase: "v2_active", policyRevision: 1, allowV2Initialization: false, minStorageProtocol: 2 });
+    const v2 = { schemaVersion: 2, generation: 1, rows: { [R1]: { id: R1, date: D, sales: 0, deliveries: 0, other_income: 0, _gen: 1, unknown_field: "keep" } } };
+    await seedDb().ref(entriesPath(T, B)).set(v2);
+    const A = makeClient("owner");
+    const h = A.db.ref(entriesPath(T, B)).on("value", () => {}); await settle();           // a live listener: the client has a local cache
+    const view = [{ id: R1, date: D, sales: 0, deliveries: 0, other_income: 0, unknown_field: "keep" }];
+    const api = serverApi("owner", "u_owner");
+    const before = JSON.stringify((await seedDb().ref(entriesPath(T, B)).once("value")).val());
+    const ok = plain(await MC.executeClosureAction(closureIo(A, api, ML.createExceptionOwnership(), { rows: view })));
+    eq([ok.status, ok.verified.mode], ["closed", "v2"], "V2 verified closed");
+    eq(JSON.stringify((await seedDb().ref(entriesPath(T, B)).once("value")).val()), before, "V2 node byte-identical (as stored)");
+    // race on a V2 row
+    await seedDb().ref(ledgerPath(T, B)).remove();
+    const apiRace = async (url, opts) => { const r = await api.apiFetch(url, opts); if (/set-entry-exception/.test(url)) await seedDb().ref(`${entriesPath(T, B)}/rows/${R1}/sales`).set(50); return r; };
+    const race = plain(await MC.executeClosureAction(closureIo(A, api, ML.createExceptionOwnership(), { rows: view, apiFetch: apiRace })));
+    eq([race.status, race.reason, race.replan.displayTotal], ["partial", "revenue_changed_concurrently", 50], "V2 race detected");
+    A.db.ref(entriesPath(T, B)).off("value", h);
+  });
+
+  await run("CDM2-EMU-11", "AUTHORITY of the T2 read on a real RTDB: the client's listener cache is provably STALE (offline during another client's write); the identity compare-and-set is rejected by the server and re-runs on the server value", async () => {
+    await zeroFixture();
+    const A = await makeClient("owner").attach();
+    eq(A.rows()[0].sales, 0, "cache shows 0");
+    A.db.goOffline();
+    await otherClientSales(R1, 50);                                  // the server now holds 50; A cannot know
+    const seenFirst = [];
+    const io = closureIo(A, serverApi("owner", "u_owner"), ML.createExceptionOwnership(), {
+      verifyTransact: async (t, key, fn) => { const ref = A.db.ref(`tenants/${t}/${key.replace(/[.#$[\]]/g, "_")}`);
+        const p = ref.transaction((raw) => { seenFirst.push(raw && raw._v ? JSON.parse(raw._v)[0].sales : raw); return fn(raw); }, undefined, false);
+        A.db.goOnline();
+        const res = await p; return { committed: res.committed, snapshot: res.snapshot }; } });
+    const r = plain(await MC.readEntriesAuthoritative(io, A.ctrl.capture()));
+    eq(r.status, "verified", "verified");
+    eq(seenFirst[0], 0, "the first run saw the STALE local cache (the reviewed situation)");
+    eq(r.rows[0].sales, 50, "the committed result is the SERVER value");
+    expect(r.runs >= 2, "the server rejected the stale hash and the function re-ran (runs=" + r.runs + ")");
+  });
+
   const w = (s, n) => String(s).padEnd(n).slice(0, n);
   console.log("");
   for (const r of results) console.log(`${w(r.id, 14)} ${w(r.status, 5)} ${w(r.ms, 6)} ${r.description}${r.notes ? " — " + r.notes : ""}`);
-  const EXPECTED = 6;
+  const EXPECTED = 11;
   console.log(`\n=== TOTALS ===\ntotal=${results.length} passed=${results.filter((r) => r.status === "PASS").length} failed=${failures}`);
   if (results.length !== EXPECTED) { console.error(`INCOMPLETE MATRIX: expected ${EXPECTED}`); process.exitCode = 3; return; }
   if (failures) { process.exitCode = 1; return; }

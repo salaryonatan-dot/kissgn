@@ -457,10 +457,15 @@ PRODUCTION `lib/repositories/entryExceptionsRepo.js` `runEntryExceptionTxn` (opt
 fresh Admin app per request — a cold instance cache), and the result is read back by the approved
 CD-M1 canonical report / closure calendar compiled from `src/finance-server/*`. Cases: cancel
 writes nothing; unrelated concurrent edit survives; revenue conflict → visible contradiction →
-repair; reopen; future-date closure; close/reopen/re-close on cold instances.
+repair; reopen; future-date closure; close/reopen/re-close on cold instances. CD-M2 R1 (CDM2-F01)
+adds the authoritative success check: the exact no-intent race (another client writes revenue
+after the ledger committed), a write after the final zeroing transaction, the valid explicit-zero
+path under the real legacy Rules, the same on a Storage V2 node under a `v2_active` policy, and a
+proof that the T2 identity compare-and-set re-runs on the SERVER value when the client's listener
+cache is stale.
 
 ```
 ... "node test/emulator/closure-action-emulator.mjs"
 ```
 
-Expected: `total=6 passed=6 failed=0` — `ALL CASES PASSED`.
+Expected: `total=11 passed=11 failed=0` — `ALL CASES PASSED`.
