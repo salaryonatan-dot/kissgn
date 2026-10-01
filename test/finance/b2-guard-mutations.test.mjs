@@ -5,8 +5,10 @@
 // Layer A and the four B1 reader pins are unchanged.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { importerVerdict, loadConsumerFiles, repoKindOf, validateConsumerFiles } from "../support/b1-fixtures.mjs";
@@ -72,17 +74,24 @@ test("B2G-04 pins: the reviewed builder/e-mail bytes pass; stale (pre-B2, checkp
   assert.equal(serverReaderScopeVerdict(altered).reason, "approved_content_mismatch");
 });
 
-test("B2G-05 Layer A / Rules / delivery surface unchanged relative to the approved CD-M1 predecessor; B2 edits no core, fincore, productFinance or server API (B2-G27/G28)", () => {
-  const BASE = "6d54e36752a5e04891127e2f62c8ea2571c61511";
-  const B2 = "3fd28e7c6b7001004ebd25b0dd92eb3ffe1cddac";
-  const PROTECTED = /^(src\/(finance|metrics|policy|presenters|browser|finance-server)\/|fincore\/|api\/|lib\/|database\.rules\.json$|test\/support\/rules-authorized-delta\.mjs$|index\.html$)/;
-  const names = (args) => gitIn(REPO, args).stdout.trim().split("\n").filter(Boolean);
+const BASE = "6d54e36752a5e04891127e2f62c8ea2571c61511";
+const B2 = "3fd28e7c6b7001004ebd25b0dd92eb3ffe1cddac";
+const CDM2R1 = "38af03c207010de2045b101c7d012d8de78a8b5a";
+const PROTECTED = /^(src\/(finance|metrics|policy|presenters|browser|finance-server)\/|fincore\/|api\/|lib\/|database\.rules\.json$|test\/support\/rules-authorized-delta\.mjs$|index\.html$)/;
+/** git object bytes (exact, no text decoding) */
+const blobBytes = (root, spec) => { const r = gitIn(root, ["cat-file", "blob", spec], { encoding: "buffer" }); assert.equal(r.status, 0, "git object " + spec); return r.stdout; };
+/**
+ * The B2G-05 scope contract for the tree at `root` (committed history AND the checked-out files).
+ * Throws an AssertionError on any violation. Used on the real repository and on disposable clones.
+ */
+function assertB2Scope(root) {
+  const names = (args) => gitIn(root, args).stdout.trim().split("\n").filter(Boolean);
   const untracked = names(["ls-files", "--others", "--exclude-standard"]);
   // RC 1.0 integration: when the approved B2 commit is an ANCESTOR of HEAD (an integrated tree),
   // B2's own scope is checked on B2's exact approved commit delta, and the rest of the tree may
   // carry ONLY the separately approved CD-M2 R1 runtime surface. On a standalone B2 tree (B2 not
   // an ancestor, or B2 itself) the original whole-tree check below applies unchanged.
-  const integrated = gitIn(REPO, ["merge-base", "--is-ancestor", B2, "HEAD"]).status === 0 && names(["rev-parse", "HEAD"])[0] !== B2;
+  const integrated = gitIn(root, ["merge-base", "--is-ancestor", B2, "HEAD"]).status === 0 && names(["rev-parse", "HEAD"])[0] !== B2;
   const b2Delta = integrated ? names(["diff", "--name-only", BASE, B2, "--"]) : [...names(["diff", "--name-only", BASE, "--"]), ...untracked];
   for (const f of b2Delta) assert.doesNotMatch(f, PROTECTED, "B2 must not touch " + f);
   const runtime = b2Delta.filter((f) => /^src\//.test(f));
@@ -92,7 +101,80 @@ test("B2G-05 Layer A / Rules / delivery surface unchanged relative to the approv
     const CDM2_APPROVED = ["index.html", "lib/repositories/entryExceptionsRepo.js"];
     const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f));
     assert.deepEqual([...new Set(whole)].sort(), CDM2_APPROVED, "integrated tree: protected changes are exactly CD-M2 R1's approved runtime files");
-    assert.equal(gitIn(REPO, ["merge-base", "--is-ancestor", "38af03c207010de2045b101c7d012d8de78a8b5a", "HEAD"]).status, 0, "…and they come from the approved CD-M2 R1 lineage");
-    for (const f of CDM2_APPROVED) assert.equal(gitIn(REPO, ["rev-parse", "HEAD:" + f]).stdout.trim(), gitIn(REPO, ["rev-parse", "38af03c207010de2045b101c7d012d8de78a8b5a:" + f]).stdout.trim(), f + " is byte-identical to approved CD-M2 R1");
+    assert.equal(gitIn(root, ["merge-base", "--is-ancestor", CDM2R1, "HEAD"]).status, 0, "…and they come from the approved CD-M2 R1 lineage");
+    for (const f of CDM2_APPROVED) assert.equal(gitIn(root, ["rev-parse", "HEAD:" + f]).stdout.trim(), gitIn(root, ["rev-parse", CDM2R1 + ":" + f]).stdout.trim(), f + " is byte-identical to approved CD-M2 R1");
+    // RC hardening (independent RC review, B2G-05 checkout-content finding): the committed blob is
+    // not enough — the CHECKED-OUT bytes and the staged (index) entry of every approved runtime file
+    // must equal the approved commit's blob exactly, so an unstaged or staged local edit fails here.
+    const APPROVED_SOURCES = [...CDM2_APPROVED.map((f) => [f, CDM2R1]), [SB, B2], [SE, B2]];
+    for (const [f, src] of APPROVED_SOURCES) {
+      const approved = blobBytes(root, src + ":" + f);
+      assert.ok(readFileSync(join(root, f)).equals(approved), f + ": checked-out bytes differ from the approved blob " + src.slice(0, 8) + ":" + f);
+      assert.equal(gitIn(root, ["rev-parse", ":" + f]).stdout.trim(), gitIn(root, ["rev-parse", src + ":" + f]).stdout.trim(), f + ": staged (index) blob differs from the approved blob");
+    }
   }
+}
+
+test("B2G-05 Layer A / Rules / delivery surface unchanged relative to the approved CD-M1 predecessor; B2 edits no core, fincore, productFinance or server API (B2-G27/G28)", () => {
+  assertB2Scope(REPO);
+});
+
+// ── B2G-05 regression: the guard sees the CHECKED-OUT tree, not only git metadata ───────────
+// Each case runs on a disposable checkout: a fresh `git init` whose object store borrows this
+// repository's objects read-only (objects/info/alternates) — no refs are copied, and nothing here
+// touches this checkout, its index, refs, locks or worktrees — detached at an exact commit.
+function withClone(commit, fn) {
+  const objects = gitIn(REPO, ["rev-parse", "--path-format=absolute", "--git-path", "objects"]).stdout.trim();
+  const common = gitIn(REPO, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).stdout.trim();
+  const alt = existsSync(objects) ? objects : join(common, "objects");
+  const dir = mkdtempSync(join(tmpdir(), "b2g05-"));
+  try {
+    const c = spawnSync("git", ["init", "-q", dir], { encoding: "utf8" });
+    assert.equal(c.status, 0, c.stderr);
+    writeFileSync(join(dir, ".git", "objects", "info", "alternates"), alt + "\n");
+    const co = spawnSync("git", ["-C", dir, "-c", "advice.detachedHead=false", "checkout", "-q", "--detach", commit], { encoding: "utf8" });
+    assert.equal(co.status, 0, co.stderr);
+    return fn(dir);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+const HEAD_SHA = gitIn(REPO, ["rev-parse", "HEAD"]).stdout.trim();
+const isIntegratedRepo = gitIn(REPO, ["merge-base", "--is-ancestor", B2, "HEAD"]).status === 0 && HEAD_SHA !== B2;
+const appendTo = (dir, f, text) => { writeFileSync(join(dir, f), readFileSync(join(dir, f), "utf8") + text); };
+
+test("B2G-05-M1 integrated tree: a WORKING-TREE-ONLY edit of an approved CD-M2 runtime file (history unchanged) fails the guard; the clean clone passes", { skip: !isIntegratedRepo && "standalone tree: the integrated exception does not apply" }, () => {
+  withClone(HEAD_SHA, (dir) => {
+    assertB2Scope(dir);                                                 // positive control on the exact commit
+    for (const f of ["index.html", "lib/repositories/entryExceptionsRepo.js"]) {
+      const before = readFileSync(join(dir, f));
+      appendTo(dir, f, "\n// local edit\n");
+      assert.equal(gitIn(dir, ["rev-parse", "HEAD"]).stdout.trim(), HEAD_SHA, "history unchanged");
+      assert.equal(gitIn(dir, ["rev-parse", "HEAD:" + f]).stdout.trim(), gitIn(dir, ["rev-parse", CDM2R1 + ":" + f]).stdout.trim(), "committed blob still the approved one");
+      assert.throws(() => assertB2Scope(dir), new RegExp(f.replace(/[.\/]/g, "\\$&") + ": checked-out bytes differ"), f + " unstaged edit must fail");
+      // a STAGED edit with the checked-out file restored also fails (index ≠ approved)
+      assert.equal(spawnSync("git", ["-C", dir, "add", f]).status, 0);
+      writeFileSync(join(dir, f), before);
+      assert.throws(() => assertB2Scope(dir), /staged \(index\) blob differs/, f + " staged edit must fail");
+      assert.equal(spawnSync("git", ["-C", dir, "reset", "-q", "--", f]).status, 0);
+      assertB2Scope(dir);                                               // restored ⇒ passes again
+    }
+    // the B2 runtime files are covered the same way
+    appendTo(dir, SE, "\n// local edit\n");
+    assert.throws(() => assertB2Scope(dir), /snapshotEmail\.ts: checked-out bytes differ/);
+  });
+});
+
+test("B2G-05-M2 integrated tree: editing an unrelated NON-protected file in the working tree is not a false failure", { skip: !isIntegratedRepo && "standalone tree" }, () => {
+  withClone(HEAD_SHA, (dir) => {
+    appendTo(dir, "test/emulator/README.md", "\nlocal note\n");
+    writeFileSync(join(dir, "scratch-note.txt"), "untracked, not protected\n");
+    assertB2Scope(dir);
+  });
+});
+
+test("B2G-05-M3 standalone approved B2 tree: unchanged behaviour — the exact B2 commit passes; a working-tree edit of index.html fails as before", () => {
+  withClone(B2, (dir) => {
+    assertB2Scope(dir);
+    appendTo(dir, "index.html", "\n<!-- local edit -->\n");
+    assert.throws(() => assertB2Scope(dir), /B2 must not touch index\.html/);
+  });
 });
