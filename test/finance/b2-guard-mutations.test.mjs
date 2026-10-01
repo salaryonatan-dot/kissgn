@@ -74,11 +74,25 @@ test("B2G-04 pins: the reviewed builder/e-mail bytes pass; stale (pre-B2, checkp
 
 test("B2G-05 Layer A / Rules / delivery surface unchanged relative to the approved CD-M1 predecessor; B2 edits no core, fincore, productFinance or server API (B2-G27/G28)", () => {
   const BASE = "6d54e36752a5e04891127e2f62c8ea2571c61511";
-  const changed = gitIn(REPO, ["diff", "--name-only", BASE, "--"]).stdout.trim().split("\n").filter(Boolean);
-  const untracked = gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]).stdout.trim().split("\n").filter(Boolean);
-  for (const f of [...changed, ...untracked]) {
-    assert.doesNotMatch(f, /^(src\/(finance|metrics|policy|presenters|browser|finance-server)\/|fincore\/|api\/|lib\/|database\.rules\.json$|test\/support\/rules-authorized-delta\.mjs$|index\.html$)/, "B2 must not touch " + f);
-  }
-  const runtime = [...changed, ...untracked].filter((f) => /^src\//.test(f));
+  const B2 = "3fd28e7c6b7001004ebd25b0dd92eb3ffe1cddac";
+  const PROTECTED = /^(src\/(finance|metrics|policy|presenters|browser|finance-server)\/|fincore\/|api\/|lib\/|database\.rules\.json$|test\/support\/rules-authorized-delta\.mjs$|index\.html$)/;
+  const names = (args) => gitIn(REPO, args).stdout.trim().split("\n").filter(Boolean);
+  const untracked = names(["ls-files", "--others", "--exclude-standard"]);
+  // RC 1.0 integration: when the approved B2 commit is an ANCESTOR of HEAD (an integrated tree),
+  // B2's own scope is checked on B2's exact approved commit delta, and the rest of the tree may
+  // carry ONLY the separately approved CD-M2 R1 runtime surface. On a standalone B2 tree (B2 not
+  // an ancestor, or B2 itself) the original whole-tree check below applies unchanged.
+  const integrated = gitIn(REPO, ["merge-base", "--is-ancestor", B2, "HEAD"]).status === 0 && names(["rev-parse", "HEAD"])[0] !== B2;
+  const b2Delta = integrated ? names(["diff", "--name-only", BASE, B2, "--"]) : [...names(["diff", "--name-only", BASE, "--"]), ...untracked];
+  for (const f of b2Delta) assert.doesNotMatch(f, PROTECTED, "B2 must not touch " + f);
+  const runtime = b2Delta.filter((f) => /^src\//.test(f));
   assert.deepEqual(runtime.sort(), [SB, SE], "B2 runtime edits: exactly the two snapshot files");
+  if (integrated) {
+    // the ONLY protected paths the integrated tree may change: CD-M2 R1's approved client + repository fix
+    const CDM2_APPROVED = ["index.html", "lib/repositories/entryExceptionsRepo.js"];
+    const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f));
+    assert.deepEqual([...new Set(whole)].sort(), CDM2_APPROVED, "integrated tree: protected changes are exactly CD-M2 R1's approved runtime files");
+    assert.equal(gitIn(REPO, ["merge-base", "--is-ancestor", "38af03c207010de2045b101c7d012d8de78a8b5a", "HEAD"]).status, 0, "…and they come from the approved CD-M2 R1 lineage");
+    for (const f of CDM2_APPROVED) assert.equal(gitIn(REPO, ["rev-parse", "HEAD:" + f]).stdout.trim(), gitIn(REPO, ["rev-parse", "38af03c207010de2045b101c7d012d8de78a8b5a:" + f]).stdout.trim(), f + " is byte-identical to approved CD-M2 R1");
+  }
 });

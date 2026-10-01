@@ -469,3 +469,16 @@ cache is stale.
 ```
 
 Expected: `total=11 passed=11 failed=0` — `ALL CASES PASSED`.
+
+## Run the Marjin 1.0 RC cross-lineage proof
+
+`rc-closure-snapshot-e2e.mjs` runs the CD-M2 R1 closure action (production seam, real lane and
+mutator over a Rules-evaluated client, production ledger transaction and list read) and then the
+B2 morning snapshot (compiled production builder over the real Admin SDK) on the SAME database:
+closed day, the post-ledger revenue race (partial + contradiction), reopen, future closure.
+
+```
+... "node test/emulator/rc-closure-snapshot-e2e.mjs"
+```
+
+Expected: `total=4 passed=4 failed=0` — `ALL CASES PASSED`.
