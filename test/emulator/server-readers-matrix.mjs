@@ -86,6 +86,8 @@ const { upgradeBusinessToV2 } = createStorageV2Upgrader({
 // ─── real server modules (compiled once; only the admin/email seams replaced) ──
 const srv = compileServer();
 const DBLD = await srv.import("src/analytics/dailyBuilder.js");
+// The production business-date utilities (the SAME functions the readers' D−1 window uses).
+const BD = await srv.import("src/finance/businessDate.js");
 const SB = await srv.import("src/snapshot/snapshotBuilder.js");
 const DM = await srv.import("src/repositories/analytics/dailyMetricsRepo.js");
 const LR = await srv.import("src/repositories/analytics/laborRepo.js");
@@ -112,7 +114,20 @@ const readPath = async (p) => { const s = await db().ref(p).once("value"); retur
 const israel = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
 const MONTH = `${israel.getFullYear()}-${String(israel.getMonth() + 1).padStart(2, "0")}`;
 const md = (n) => `${MONTH}-${String(n).padStart(2, "0")}`;
-const monthRows = (n = 6, seed = "m") => Array.from({ length: n }, (_, i) => row(seed + i, md(i + 1), { sales: String(1000 + i * 10), deliveries: String(i), other_income: i % 3 ? "0" : "7", supplier_payments: { s1: String(100 + i), s2: i % 2 ? "skip" : "5" }, hourly_payroll: { e1: 40 + i }, payroll: "10", other_expense: "3" }));
+const monthRowFields = (i) => ({ sales: String(1000 + i * 10), deliveries: String(i), other_income: i % 3 ? "0" : "7", supplier_payments: { s1: String(100 + i), s2: i % 2 ? "skip" : "5" }, hourly_payroll: { e1: 40 + i }, payroll: "10", other_expense: "3" });
+const monthRows = (n = 6, seed = "m") => Array.from({ length: n }, (_, i) => row(seed + i, md(i + 1), monthRowFields(i)));
+/**
+ * The same rows dated on the n most recent COMPLETED Israel business days (D−n … D−1), from the
+ * production business-date utilities at fixture time. Every such date is already completed when the
+ * readers run (their own clock read is later, and the D−1 boundary only moves forward), so the rows
+ * are Actual on ANY run date — including the 1st of a month, where they fall in the previous month.
+ * (`monthRows` dates the current month's days 1…n, which are current/future on the first days of a
+ * month and are rightly excluded by D−1.)
+ */
+const completedRows = (n = 6, seed = "m") => {
+  const asOf = BD.israelBusinessDate(Date.now());
+  return Array.from({ length: n }, (_, i) => row(seed + i, BD.addDays(asOf, -(n - i)), monthRowFields(i)));
+};
 // region_ids/subregion_ids are present-but-empty: the Admin SDK rejects `undefined` inside a
 // `set()` payload, and dailyBuilder copies both config fields verbatim into meta.location.
 const CONFIG = { region_ids: [], subregion_ids: [], rentType: "pct", rentPct: 8, hasRoyalty: true, royaltyPct: 4, targetSales: 500000, targetFoodCost: 30, targetLabor: 25, employees: [{ type: "global", monthlySalary: 9000 }] };
@@ -204,7 +219,10 @@ async function main() {
 
   // ══ 3. NATIVE V2 without `_v` ═══════════════════════════════════════════════
   await run("SR-03", "native-v2", "a business that never had `_v` (new after cutover) builds analytics, repos, snapshot and exceptions", async () => {
-    const rows = [...FIXTURES.F1_one, ...FIXTURES.F7_exceptions.map((r) => ({ ...r, id: uuid("y" + r.id), date: r.date.replace("2026-08", "2026-07") })), ...monthRows(4)];
+    // D−1-stable fixture: the four rows are completed days on every run date (was monthRows(4): days
+    // 1–4 of the current month, which failed on the 1st–4th because D−1 correctly excludes them).
+    const rows = [...FIXTURES.F1_one, ...FIXTURES.F7_exceptions.map((r) => ({ ...r, id: uuid("y" + r.id), date: r.date.replace("2026-08", "2026-07") })), ...completedRows(4)];
+    expect(new Set(rows.map((x) => x.date)).size === rows.length, "fixture dates are distinct (one daily record per row)");
     await reseed({ bizA: asV2(rows, { generation: 3 }) });
     const node = await readNode("bizA");
     expect(!("_v" in node), "no `_v` stored"); eq(node.generation, 3, "generation");
