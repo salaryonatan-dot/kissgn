@@ -230,8 +230,24 @@ test("B2-T13 targets: food/labor goals from config.targets.*; absent ⇒ compat 
 });
 
 // ── B2-T14 ────────────────────────────────────────────────────────────────────
-test("B2-T14 run.ts compatibility: the endpoint file is byte-identical and its manual POST fields are number | null", async () => {
-  assert.equal(gitIn(REPO, ["diff", "--name-only", "4675eb20a97e8750429fad3e2ebda94f42f187b5", "--", "api/daily-snapshot/run.ts"]).stdout.trim(), "");
+test("B2-T14 run.ts compatibility: the endpoint file is byte-identical (pre-B2, or the approved P0 Scheduled Auth bytes when that lineage is integrated) and its manual POST fields are number | null", async () => {
+  // B2 itself never edits run.ts. RC 1.0 release assembly: the separately approved P0 Scheduled
+  // Auth commit 05bf5a59 changes ONLY its authorization; when that commit is an ancestor, run.ts
+  // must be byte-identical to P0's approved blob (never any other edit) and still consume the B2
+  // builder/e-mail through the same three calls.
+  const P0 = "05bf5a59cd62bcfde2bc74f3ab0b9d38ba619661", RUN = "api/daily-snapshot/run.ts";
+  const p0In = gitIn(REPO, ["merge-base", "--is-ancestor", P0, "HEAD"]).status === 0;
+  if (p0In) {
+    const want = gitIn(REPO, ["rev-parse", `${P0}:${RUN}`]).stdout.trim();
+    assert.equal(gitIn(REPO, ["rev-parse", `HEAD:${RUN}`]).stdout.trim(), want, "committed run.ts = approved P0 blob");
+    assert.equal(gitIn(REPO, ["hash-object", RUN]).stdout.trim(), want, "checked-out run.ts = approved P0 blob");
+    const src = readFileSync(join(REPO, RUN), "utf8");
+    assert.match(src, /import \{ buildSnapshotForBiz, buildSnapshotForAll \} from "\.\.\/\.\.\/src\/snapshot\/snapshotBuilder\.js";/);
+    assert.match(src, /import \{ sendSnapshotEmail \} from "\.\.\/\.\.\/src\/snapshot\/snapshotEmail\.js";/);
+    assert.match(src, /await buildSnapshotForBiz\(tenantId, bizId\)/); assert.match(src, /await buildSnapshotForAll\(\)/);
+  } else {
+    assert.equal(gitIn(REPO, ["diff", "--name-only", "4675eb20a97e8750429fad3e2ebda94f42f187b5", "--", RUN]).stdout.trim(), "");
+  }
   const s = await snapOf({ rows: completeSeptember() });
   for (const k of ["tenantId", "bizId", "bizName", "date"]) assert.equal(typeof s[k], "string", k);
   assert.equal(typeof s.netProfit, "number"); assert.equal(typeof s.totalSales, "number");

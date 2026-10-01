@@ -64,8 +64,34 @@ const hash = (s) => { let h = 2166136261; for (let i = 0; i < String(s).length; 
 const uuid = (seed) => { const a = hash("a" + seed), b = hash("b" + seed); return `${hx(a,8)}-${hx(b,4)}-4${hx(a,3)}-8${hx(b,3)}-${hx(a,6)}${hx(b,6)}`; };
 const pad = (n) => String(n).padStart(2, "0");
 const localKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;   // the page computes its month from the local clock
-function thisMonthDates(n) { const out = []; const now = new Date(); for (let i = 0; i < n; i++) { const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i); if (d.getMonth() !== now.getMonth()) break; out.push(localKey(d)); } return out; }
-const DATES = thisMonthDates(3);
+// FIXTURE DATE CONTROL (RC 1.0 release assembly). The page's history screen lists ONLY the
+// current month's dates 1…today (one row per date), so the three fixture rows must be three
+// distinct current-month dates on or before the PAGE's today. On the 1st/2nd of a month the real
+// clock cannot offer three, HP-02 consumed the only row and HP-03/HP-04 found nothing to click.
+// The fixture therefore runs the page on ONE test clock shared by both realms: the run date when
+// it already offers three dates, otherwise the same local time on day 3 of the same month. The
+// page realm gets it through the harness's isolated Date shim (never the machine clock); every
+// assertion and the production/historical code are unchanged. HP_FIXTURE_RUN_AT (local
+// "YYYY-MM-DDTHH:MM:SS", verification only) simulates the run date the rule is applied to, so the
+// month-start behaviour can be proven on any day.
+const MIN_ROWS = 3;
+function runAtMs(realNow) {
+  const v = process.env.HP_FIXTURE_RUN_AT;
+  if (!v) return realNow;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(v)) fail(`HP_FIXTURE_RUN_AT must be local YYYY-MM-DDTHH:MM:SS, got ${v}`);
+  const t = new Date(v).getTime(); if (!Number.isFinite(t)) fail(`HP_FIXTURE_RUN_AT unparseable: ${v}`);
+  return t;
+}
+function fixtureClockOffsetMs(realNow = Date.now()) {
+  const runAt = runAtMs(realNow), d = new Date(runAt);
+  const target = d.getDate() >= MIN_ROWS ? runAt : new Date(d.getFullYear(), d.getMonth(), MIN_ROWS, d.getHours(), d.getMinutes(), d.getSeconds(), d.getMilliseconds()).getTime();
+  return target - realNow;
+}
+const CLOCK_OFFSET_MS = fixtureClockOffsetMs();
+const fixtureNow = () => new Date(Date.now() + CLOCK_OFFSET_MS);
+function thisMonthDates(n) { const out = []; const now = fixtureNow(); for (let i = 0; i < n; i++) { const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i); if (d.getMonth() !== now.getMonth()) break; out.push(localKey(d)); } return out; }
+const DATES = thisMonthDates(MIN_ROWS);
+if (DATES.length !== MIN_ROWS) fail(`fixture clock offers ${DATES.length} current-month dates, need ${MIN_ROWS}`);
 const row = (i, date) => ({ id: uuid("hp" + i), date, sales: 1000 + i, deliveries: 10 + i, other_income: 0, food_cost: 0, payroll: 0, other_expense: 0, notes: "" });
 const ROWS = () => DATES.map((d, i) => row(i + 1, d));
 const envelope = (rows) => ({ _v: JSON.stringify(rows) });
@@ -157,18 +183,22 @@ async function main() {
   const session = { ["marjin_tid_" + USER.uid]: "tenantA", ["marjin_biz_" + USER.uid]: "bizA" };
 
   await run("HP-01", `boot the ACTUAL historical page (index.html@${HISTORICAL_SHA.slice(0, 8)}) in jsdom: real React render, retained-session auto-login, legacy business hydrated`, async () => {
-    page = await bootHistoricalPage({ adminApp: apps.manager, user: USER, session, signedIn: true });
+    page = await bootHistoricalPage({ adminApp: apps.manager, user: USER, session, signedIn: true, clockOffsetMs: CLOCK_OFFSET_MS });
     await page.until(() => page.document.querySelector(".kpi-card-link") !== null, 15000);
     const body = textOf(page.document.body);
     expect(body.includes("סניף בדיקה") || body.length > 500, "dashboard rendered with content");
     expect(page.document.querySelectorAll("*").length > 80, "a real component tree is mounted (" + page.document.querySelectorAll("*").length + " nodes)");
     const fatal = page.console.errors.filter((e) => /ReferenceError|TypeError|is not defined/.test(e));
     expect(fatal.length === 0, "no fatal runtime errors: " + fatal.slice(0, 3).join(" | "));
-    return `${page.document.querySelectorAll("*").length} DOM nodes, ${DATES.length} legacy rows for ${DATES.join(",")}`;
+    const pageToday = localKey(new page.window.Date());
+    eq(pageToday, localKey(fixtureNow()), "page realm and fixture share ONE test clock");
+    return `${page.document.querySelectorAll("*").length} DOM nodes, ${DATES.length} legacy rows for ${DATES.join(",")}; page today ${pageToday} (clock offset ${CLOCK_OFFSET_MS} ms)`;
   });
 
   await run("HP-02", "legacy (no control record): a per-row delete clicked in the page's history screen COMMITS through the page's own {_v} CAS transport", async () => {
     await openHistory(page);
+    await page.until(() => deleteButtons(page.document).length >= DATES.length, 8000).catch(() => {});
+    eq(deleteButtons(page.document).length, DATES.length, "the history screen lists every fixture row as deletable (fixture clock sanity)");
     const before = await legacyRows();
     await clickDelete(page, 0);
     await page.until(async () => false, 0).catch(() => {});
@@ -219,7 +249,7 @@ async function main() {
     await loadRules(coreRules);
     await seedDb().ref("/").set(fixtures());
     await seedDb().ref(CTRL).set({ contractVersion: 1, phase: "quiesced", policyRevision: 2, allowV2Initialization: false, minStorageProtocol: 1, operation: { id: "hp-op", kind: "cutover", owner: "operator", startedAt: 1 } });
-    const p2 = await bootHistoricalPage({ adminApp: apps.manager, user: USER, session, signedIn: true });
+    const p2 = await bootHistoricalPage({ adminApp: apps.manager, user: USER, session, signedIn: true, clockOffsetMs: CLOCK_OFFSET_MS });
     try {
       await p2.until(() => p2.document.querySelector(".kpi-card-link") !== null, 15000);
       await openHistory(p2);

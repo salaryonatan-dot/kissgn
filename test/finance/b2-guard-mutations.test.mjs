@@ -78,6 +78,23 @@ const BASE = "6d54e36752a5e04891127e2f62c8ea2571c61511";
 const B2 = "3fd28e7c6b7001004ebd25b0dd92eb3ffe1cddac";
 const CDM2R1 = "38af03c207010de2045b101c7d012d8de78a8b5a";
 const PROTECTED = /^(src\/(finance|metrics|policy|presenters|browser|finance-server)\/|fincore\/|api\/|lib\/|database\.rules\.json$|test\/support\/rules-authorized-delta\.mjs$|index\.html$)/;
+// RC 1.0 release assembly — the separately approved sources (exact commits; see the assembly handoff)
+const P0 = "05bf5a59cd62bcfde2bc74f3ab0b9d38ba619661";      // P0 Scheduled Auth (codex-p0-scheduled-auth-review: APPROVED)
+const HF1R1 = "9dea13f5d15af96699cbc91a34d0af841fe2e5af";   // HF-1 R1 (hf1-remediation-r1 independent review: APPROVED)
+const HF1_BASE = "f5d0a8edffc216f0b6ad342f8bd1bb0d630276ab"; // merge base of the RC lineage and HF-1 R1
+const P0_APPROVED = ["api/analytics/daily-builder.ts", "api/daily-snapshot/run.ts", "api/proactive/run.ts"];
+const hashBytes = (bytes) => { const r = spawnSync("git", ["hash-object", "--stdin"], { input: bytes, encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+/** The ONE approved index.html of the assembled tree: the clean (conflict-free) 3-way merge of the approved CD-M2 R1 and HF-1 R1 blobs over their merge base, computed from the git objects. */
+function approvedIndexMerge(root, theirs = HF1R1) {
+  const dir = mkdtempSync(join(tmpdir(), "rca-index-"));
+  try {
+    const put = (n, spec) => { const p = join(dir, n); writeFileSync(p, blobBytes(root, spec)); return p; };
+    const ours = put("ours", CDM2R1 + ":index.html"), base = put("base", HF1_BASE + ":index.html"), other = put("theirs", theirs + ":index.html");
+    const r = spawnSync("git", ["merge-file", "-p", ours, base, other], { encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
+    assert.equal(r.status, 0, "the approved index.html sources must merge without conflict");
+    return r.stdout;
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
 /** git object bytes (exact, no text decoding) */
 const blobBytes = (root, spec) => { const r = gitIn(root, ["cat-file", "blob", spec], { encoding: "buffer" }); assert.equal(r.status, 0, "git object " + spec); return r.stdout; };
 /**
@@ -99,18 +116,37 @@ function assertB2Scope(root) {
   if (integrated) {
     // the ONLY protected paths the integrated tree may change: CD-M2 R1's approved client + repository fix
     const CDM2_APPROVED = ["index.html", "lib/repositories/entryExceptionsRepo.js"];
+    // RC 1.0 release assembly: when the approved HF-1 R1 commit (which carries the approved P0
+    // Scheduled Auth commit as its ancestor) is integrated, the protected set grows by EXACTLY P0's
+    // three API routes, pinned to P0's approved blobs, and index.html must be EXACTLY the clean
+    // 3-way merge of the two approved index.html blobs (CD-M2 R1 ⊕ HF-1 R1 over their merge base).
+    const assembled = gitIn(root, ["merge-base", "--is-ancestor", HF1R1, "HEAD"]).status === 0;
+    const allowed = assembled ? [...CDM2_APPROVED, ...P0_APPROVED] : CDM2_APPROVED;
     const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f));
-    assert.deepEqual([...new Set(whole)].sort(), CDM2_APPROVED, "integrated tree: protected changes are exactly CD-M2 R1's approved runtime files");
+    assert.deepEqual([...new Set(whole)].sort(), [...allowed].sort(), assembled
+      ? "assembled tree: protected changes are exactly CD-M2 R1's approved runtime files + P0 Scheduled Auth's three API routes"
+      : "integrated tree: protected changes are exactly CD-M2 R1's approved runtime files");
     assert.equal(gitIn(root, ["merge-base", "--is-ancestor", CDM2R1, "HEAD"]).status, 0, "…and they come from the approved CD-M2 R1 lineage");
-    for (const f of CDM2_APPROVED) assert.equal(gitIn(root, ["rev-parse", "HEAD:" + f]).stdout.trim(), gitIn(root, ["rev-parse", CDM2R1 + ":" + f]).stdout.trim(), f + " is byte-identical to approved CD-M2 R1");
+    if (assembled) assert.equal(gitIn(root, ["merge-base", "--is-ancestor", P0, "HEAD"]).status, 0, "…and the approved P0 Scheduled Auth lineage");
+    // the approved content of each runtime file: [file, expected blob bytes, label]
+    const expected = [
+      ...(assembled ? [] : [["index.html", blobBytes(root, CDM2R1 + ":index.html"), CDM2R1.slice(0, 8) + ":index.html"]]),
+      ["lib/repositories/entryExceptionsRepo.js", blobBytes(root, CDM2R1 + ":lib/repositories/entryExceptionsRepo.js"), CDM2R1.slice(0, 8) + ":lib/repositories/entryExceptionsRepo.js"],
+      [SB, blobBytes(root, B2 + ":" + SB), B2.slice(0, 8) + ":" + SB],
+      [SE, blobBytes(root, B2 + ":" + SE), B2.slice(0, 8) + ":" + SE],
+      ...(assembled ? [
+        ["index.html", approvedIndexMerge(root), "merge(" + CDM2R1.slice(0, 8) + ", " + HF1R1.slice(0, 8) + ")"],
+        ...P0_APPROVED.map((f) => [f, blobBytes(root, P0 + ":" + f), P0.slice(0, 8) + ":" + f]),
+      ] : []),
+    ];
     // RC hardening (independent RC review, B2G-05 checkout-content finding): the committed blob is
-    // not enough — the CHECKED-OUT bytes and the staged (index) entry of every approved runtime file
-    // must equal the approved commit's blob exactly, so an unstaged or staged local edit fails here.
-    const APPROVED_SOURCES = [...CDM2_APPROVED.map((f) => [f, CDM2R1]), [SB, B2], [SE, B2]];
-    for (const [f, src] of APPROVED_SOURCES) {
-      const approved = blobBytes(root, src + ":" + f);
-      assert.ok(readFileSync(join(root, f)).equals(approved), f + ": checked-out bytes differ from the approved blob " + src.slice(0, 8) + ":" + f);
-      assert.equal(gitIn(root, ["rev-parse", ":" + f]).stdout.trim(), gitIn(root, ["rev-parse", src + ":" + f]).stdout.trim(), f + ": staged (index) blob differs from the approved blob");
+    // not enough — the COMMITTED blob, the CHECKED-OUT bytes and the staged (index) entry of every
+    // approved runtime file must equal the approved content exactly, so a local edit fails here.
+    for (const [f, bytes, label] of expected) {
+      const sha = hashBytes(bytes);
+      assert.equal(gitIn(root, ["rev-parse", "HEAD:" + f]).stdout.trim(), sha, f + " is byte-identical to the approved " + label);
+      assert.ok(readFileSync(join(root, f)).equals(bytes), f + ": checked-out bytes differ from the approved blob " + label);
+      assert.equal(gitIn(root, ["rev-parse", ":" + f]).stdout.trim(), sha, f + ": staged (index) blob differs from the approved blob");
     }
   }
 }
@@ -139,16 +175,17 @@ function withClone(commit, fn) {
 }
 const HEAD_SHA = gitIn(REPO, ["rev-parse", "HEAD"]).stdout.trim();
 const isIntegratedRepo = gitIn(REPO, ["merge-base", "--is-ancestor", B2, "HEAD"]).status === 0 && HEAD_SHA !== B2;
+const isAssembledRepo = isIntegratedRepo && gitIn(REPO, ["merge-base", "--is-ancestor", HF1R1, "HEAD"]).status === 0;
 const appendTo = (dir, f, text) => { writeFileSync(join(dir, f), readFileSync(join(dir, f), "utf8") + text); };
 
 test("B2G-05-M1 integrated tree: a WORKING-TREE-ONLY edit of an approved CD-M2 runtime file (history unchanged) fails the guard; the clean clone passes", { skip: !isIntegratedRepo && "standalone tree: the integrated exception does not apply" }, () => {
   withClone(HEAD_SHA, (dir) => {
     assertB2Scope(dir);                                                 // positive control on the exact commit
-    for (const f of ["index.html", "lib/repositories/entryExceptionsRepo.js"]) {
+    for (const f of ["index.html", "lib/repositories/entryExceptionsRepo.js", ...(isAssembledRepo ? P0_APPROVED : [])]) {
       const before = readFileSync(join(dir, f));
       appendTo(dir, f, "\n// local edit\n");
       assert.equal(gitIn(dir, ["rev-parse", "HEAD"]).stdout.trim(), HEAD_SHA, "history unchanged");
-      assert.equal(gitIn(dir, ["rev-parse", "HEAD:" + f]).stdout.trim(), gitIn(dir, ["rev-parse", CDM2R1 + ":" + f]).stdout.trim(), "committed blob still the approved one");
+      assert.equal(gitIn(dir, ["rev-parse", "HEAD:" + f]).stdout.trim(), gitIn(REPO, ["rev-parse", HEAD_SHA + ":" + f]).stdout.trim(), "committed blob still the approved one");
       assert.throws(() => assertB2Scope(dir), new RegExp(f.replace(/[.\/]/g, "\\$&") + ": checked-out bytes differ"), f + " unstaged edit must fail");
       // a STAGED edit with the checked-out file restored also fails (index ≠ approved)
       assert.equal(spawnSync("git", ["-C", dir, "add", f]).status, 0);
@@ -177,4 +214,25 @@ test("B2G-05-M3 standalone approved B2 tree: unchanged behaviour — the exact B
     appendTo(dir, "index.html", "\n<!-- local edit -->\n");
     assert.throws(() => assertB2Scope(dir), /B2 must not touch index\.html/);
   });
+});
+
+// ── RC 1.0 release assembly: committed (history-level) substitutions of the approved sources fail ──
+const commitIn = (dir, msg) => { assert.equal(spawnSync("git", ["-C", dir, "add", "-A"]).status, 0); const c = spawnSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg], { encoding: "utf8" }); assert.equal(c.status, 0, c.stderr); };
+test("B2G-05-M4 assembled tree: committing a non-approved index.html (CD-M2 R1 alone, HF-1 alone, or the merge with the REJECTED HF-1 95d20d86), pre-P0 API bytes, or a stray API file fails; the exact assembled commit passes", { skip: !isAssembledRepo && "HF-1 R1 / P0 not integrated in this tree" }, () => {
+  const REJECTED_HF1 = "95d20d8646736fe1c80c949924fa7875fbda90d2";
+  const cases = [
+    ["index.html = CD-M2 R1 only (HF-1 dropped)", (dir) => writeFileSync(join(dir, "index.html"), blobBytes(dir, CDM2R1 + ":index.html")), /index\.html is byte-identical to the approved merge/],
+    ["index.html = HF-1 R1 only (CD-M2 dropped)", (dir) => writeFileSync(join(dir, "index.html"), blobBytes(dir, HF1R1 + ":index.html")), /index\.html is byte-identical to the approved merge/],
+    ["index.html = CD-M2 R1 ⊕ REJECTED HF-1 95d20d86", (dir) => writeFileSync(join(dir, "index.html"), approvedIndexMerge(dir, REJECTED_HF1)), /index\.html is byte-identical to the approved merge/],
+    ...P0_APPROVED.map((f) => ["pre-P0 bytes of " + f, (dir) => writeFileSync(join(dir, f), blobBytes(dir, HF1_BASE + ":" + f)), /protected changes are exactly CD-M2 R1's approved runtime files \+ P0 Scheduled Auth's three API routes/]), // pre-P0 bytes = the base bytes ⇒ the route drops out of the exact set
+    ["a committed edit of the P0 run.ts", (dir) => appendTo(dir, "api/daily-snapshot/run.ts", "\n// edit\n"), /api\/daily-snapshot\/run\.ts is byte-identical to the approved 05bf5a59/],
+    ["a stray API route", (dir) => writeFileSync(join(dir, "api", "stray.ts"), "export default function h() {}\n"), /protected changes are exactly/],
+  ];
+  withClone(HEAD_SHA, (dir) => assertB2Scope(dir));                     // positive control
+  for (const [label, mut, re] of cases) {
+    withClone(HEAD_SHA, (dir) => {
+      mut(dir); commitIn(dir, label);
+      assert.throws(() => assertB2Scope(dir), re, label);
+    });
+  }
 });

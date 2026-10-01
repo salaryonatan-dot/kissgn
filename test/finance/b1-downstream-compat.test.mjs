@@ -183,7 +183,7 @@ test("COMPAT-07 alerts runner on B1 docs: no false alert from an omitted field; 
   assert.deepEqual(c.res.errors, []); assert.equal(c.res.alertsFired, 0, "no alert manufactured from an omitted field");
 });
 
-test("COMPAT-08 the unchanged API wrapper (api/analytics/daily-builder.ts): GET summary, manual POST and rebuild_after_entry_save work with B1 docs", async () => {
+test("COMPAT-08 the API wrapper (api/analytics/daily-builder.ts — B1 leaves it unchanged; the approved P0 Scheduled Auth bytes when integrated): GET summary, manual POST and rebuild_after_entry_save work with B1 docs", async () => {
   const dir = mkdtempSync(join(tmpdir(), "b1-api-"));
   cpSync(srv.dir, dir, { recursive: true });
   cpSync(join(ROOT, "api", "analytics", "daily-builder.ts"), join(dir, "api", "analytics", "daily-builder.ts"), { recursive: true });
@@ -198,13 +198,35 @@ test("COMPAT-08 the unchanged API wrapper (api/analytics/daily-builder.ts): GET 
   const db = seed([entry(uid(1), yesterday, { sales: "700", supplier_payments: { s1: "100" }, payroll: "50" })]);
   db.seed("proactive_biz_index", { [`${T}_${B}`]: { tenantId: T, bizId: B, active: true } });
   db.seed(`tenants/${T}/app/users`, env([{ firebaseUid: "u1", role: "owner", allowedBizIds: [B] }]));
-  const get = mkRes(); await API.default({ method: "GET", headers: { "x-vercel-cron": "1" }, query: {}, body: {} }, get);
+  // RC 1.0 release assembly: the approved P0 Scheduled Auth commit (05bf5a59) authorizes the cron
+  // GET and the operator backfill POST ONLY by `Authorization: Bearer ${CRON_SECRET}` (requireCron)
+  // and never by x-vercel-cron. When that lineage is integrated the wrapper bytes must be P0's
+  // approved blob, the B1 data path is exercised through the P0 auth (a test-only secret), and the
+  // spoofable header alone is proven rejected. Pre-P0 trees keep the original header path.
+  const P0 = "05bf5a59cd62bcfde2bc74f3ab0b9d38ba619661", WRAP = "api/analytics/daily-builder.ts";
+  const p0In = gitIn(ROOT, ["merge-base", "--is-ancestor", P0, "HEAD"]).status === 0;
+  const cronHeaders = p0In ? { authorization: "Bearer compat08-test-cron-secret" } : { "x-vercel-cron": "1" };
+  const prevSecret = process.env.CRON_SECRET;
+  if (p0In) {
+    assert.equal(gitIn(ROOT, ["hash-object", WRAP]).stdout.trim(), gitIn(ROOT, ["rev-parse", `${P0}:${WRAP}`]).stdout.trim(), "wrapper = approved P0 blob");
+    process.env.CRON_SECRET = "compat08-test-cron-secret";
+  }
+  try {
+  if (p0In) {
+    const spoof = mkRes(); await API.default({ method: "GET", headers: { "x-vercel-cron": "1" }, query: {}, body: {} }, spoof);
+    assert.equal(spoof.statusCode, 401, "P0: x-vercel-cron alone is never authorization");
+    const spoofPost = mkRes(); await API.default({ method: "POST", headers: { "x-vercel-cron": "1" }, query: {}, body: { tenantId: T, bizId: B, date: yesterday } }, spoofPost);
+    assert.equal(spoofPost.statusCode, 401, "P0: x-vercel-cron alone never authorizes a backfill");
+    assert.equal(db.read(`tenants/${T}/biz:${B}:analytics:daily:${yesterday}`), null, "…and nothing was written");
+  }
+  const get = mkRes(); await API.default({ method: "GET", headers: cronHeaders, query: {}, body: {} }, get);
   assert.equal(get.statusCode, 200); assert.equal(get.body.successCount, 1); assert.equal(get.body.summary[0].revenue_total, 700); assert.equal(get.body.summary[0].had_entry, true);
-  const post = mkRes(); await API.default({ method: "POST", headers: { "x-vercel-cron": "1" }, query: {}, body: { tenantId: T, bizId: B, date: yesterday } }, post);
+  const post = mkRes(); await API.default({ method: "POST", headers: cronHeaders, query: {}, body: { tenantId: T, bizId: B, date: yesterday } }, post);
   assert.equal(post.statusCode, 200); assert.equal(post.body.doc.revenue.total, 700); assert.equal(post.body.doc.fin.inActual, true);
   // the post-save rebuild of TODAY (the current day): a non-Actual doc + the empty insights path; readback confirmed
   const asOfToday = (await srv.import("src/finance/businessDate.js")).israelBusinessDate(Date.now());
   const rb = mkRes(); await API.default({ method: "POST", headers: { authorization: "Bearer x" }, query: {}, body: { action: "rebuild_after_entry_save", tenantId: T, bizId: B, date: asOfToday } }, rb);
   assert.equal(rb.statusCode, 200, JSON.stringify(rb.body)); assert.equal(rb.body.ok, true); assert.equal(rb.body.insightCount, 0);
   assert.equal(db.read(`tenants/${T}/biz:${B}:analytics:daily:${asOfToday}`).fin.inActual, false);
+  } finally { if (prevSecret === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = prevSecret; }
 });

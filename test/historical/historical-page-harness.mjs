@@ -110,8 +110,29 @@ function firebaseShim({ adminApp, user }) {
  *  - `user`: { uid, email, displayName }.
  *  - `session`: sessionStorage entries pre-seeded (a retained browser session: `marjin_tid_<uid>`, `marjin_biz_<uid>`).
  *  - `signedIn`: true → the page boots with an existing Firebase Auth session (auto-login path of the page).
+ *  - `clockOffsetMs`: test-only page-realm clock shift (see installPageClock); 0 = the real clock.
  */
-export async function bootHistoricalPage({ sha = HISTORICAL_SHA, adminApp, user, session = {}, signedIn = true, fetchImpl = null, log = () => {} } = {}) {
+/**
+ * Test-only page clock: replaces the jsdom realm's `Date` with a TICKING clock shifted by
+ * `offsetMs` (`new Date()` / `Date()` / `Date.now()`; every explicit-argument form, `parse`,
+ * `UTC`, the prototype and `instanceof` are the realm's own). Installed before any page script
+ * runs, so the page's module-level `_NOW` / `YEAR` / `MONTH` / `DAY_OF_MONTH` read it. The
+ * node realm, timers, the machine clock and the emulator are untouched. offsetMs = 0 ⇒ no-op.
+ */
+export function installPageClock(w, offsetMs) {
+  if (!offsetMs) return;
+  const RealDate = w.Date;
+  const now = () => RealDate.now() + offsetMs;
+  function ShiftedDate(...a) {
+    if (!new.target) return new RealDate(now()).toString();
+    return a.length === 0 ? new RealDate(now()) : new RealDate(...a);
+  }
+  ShiftedDate.prototype = RealDate.prototype;
+  ShiftedDate.now = now; ShiftedDate.parse = RealDate.parse; ShiftedDate.UTC = RealDate.UTC;
+  Object.defineProperty(w, "Date", { value: ShiftedDate, configurable: true, writable: true });
+}
+
+export async function bootHistoricalPage({ sha = HISTORICAL_SHA, adminApp, user, session = {}, signedIn = true, fetchImpl = null, log = () => {}, clockOffsetMs = 0 } = {}) {
   const st = depsStatus(); if (!st.ok) throw new Error("historical page deps missing: " + st.missing.join(", ") + " — run test/historical/install-deps.sh");
   const req = createRequire(join(DEPS_DIR, "package.json"));
   const { JSDOM } = req("jsdom");
@@ -121,6 +142,7 @@ export async function bootHistoricalPage({ sha = HISTORICAL_SHA, adminApp, user,
 
   const dom = new JSDOM(html, { url: "http://localhost/", runScripts: "outside-only", pretendToBeVisual: true });
   const w = dom.window;
+  installPageClock(w, clockOffsetMs);                                 // test-only date control (default: the real clock)
   const errors = [], warns = [];
   w.console = { ...console, error: (...a) => { errors.push(a.map(String).join(" ")); }, warn: (...a) => { warns.push(a.map(String).join(" ")); }, log: () => {}, info: () => {}, debug: () => {} };
   // browser surface the page touches that jsdom does not provide
