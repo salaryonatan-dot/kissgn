@@ -1,11 +1,17 @@
 // MARJIN_COSTH/1 — strict, pure F1 history reader, ported from the reviewed R2 experiment.
 import { israelBusinessDate, parseBusinessDate } from "./businessDate.js";
 
-export const COST_HISTORY_CAPABILITY = "MARJIN_COSTH/1";
+// MARJIN_COSTH/2 (F1 R1): the node carries a per-version AUTHORIZATION REVIEW map written in the SAME
+// transaction as the version. A version whose review is unresolved (pending / flagged) makes the whole
+// history non-authoritative (unreadable), so a DEC-AUTH-1 in-window commit can never silently become
+// ordinary history when its post-commit audit fails. A /1 reader sees a /2 node as malformed (fail closed).
+export const COST_HISTORY_CAPABILITY = "MARJIN_COSTH/2";
 export type CostHistoryDecision =
   | { readonly state: "absent" }
   | { readonly state: "present"; readonly head: { readonly revision: number; readonly headVersionId: string }; readonly versions: readonly any[]; readonly activationDate: string | null }
   | { readonly state: "unreadable"; readonly reason: string; readonly detail?: unknown };
+/** Authorization-review states (MARJIN_COSTR/1). Only `cleared` and `acknowledged` are authoritative. */
+export type CostReviewState = "pending" | "cleared" | "flagged" | "acknowledged";
 //
 // PURE and browser-safe: no imports, no clock, no I/O. The approved core date functions are INJECTED
 // (server: fincore/v1/finance/businessDate.js; browser: window.MarjinFinance.finance.businessDate),
@@ -19,6 +25,12 @@ export type CostHistoryDecision =
 // A failed or denied read is never "absent".
 export const HISTORY_KEY_RE = /^biz:[^:]+:cost_history$/;          // the ONE storage key (R2)
 export const RECORD_SCHEMA = "MARJIN_COSTV/1";
+export const REVIEW_SCHEMA = "MARJIN_COSTR/1";
+export const REVIEW_RESOLUTIONS = Object.freeze({
+  cleared: ["post_commit_authorized", "reconciled_authorized"],
+  flagged: ["revoked_during_commit", "reconciled_unauthorized"],
+});
+const DIGEST = /^[0-9a-f]{64}$/;
 export const UUID4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const DEC = /^(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$/;
 const MAX_INSTANT_MS = 8640000000000000;                             // ECMAScript Date range
@@ -95,14 +107,50 @@ export function createHistoryCodec(core: { israelBusinessDate(ms: number): strin
       Number.isSafeInteger(h.revision) && h.revision >= 1 && typeof h.headVersionId === "string" && UUID4.test(h.headVersionId);
   }
 
-  /** read = { exists, value } from ONE snapshot of the node, or { failed: error }. */
+  /**
+   * One review entry, bound to its version: the actor and commit instant must be the version's own
+   * recordedBy / recordedAt (a review cannot be re-pointed at another version or payload).
+   */
+  function decodeReview(key: string, e: unknown, v: any): any {
+    if (!isObj(e)) return { error: "review_not_object" };
+    if (e.schema !== REVIEW_SCHEMA) return { error: "review_schema_invalid" };
+    if (typeof e.intentDigest !== "string" || !DIGEST.test(e.intentDigest)) return { error: "review_digest_invalid" };
+    if (e.actor !== v.recordedBy || e.committedAt !== v.recordedAt) return { error: "review_binding_mismatch" };
+    const base = ["schema", "state", "intentDigest", "actor", "committedAt"];
+    if (e.state === "pending") return only(e, base) ? { review: { state: "pending", intentDigest: e.intentDigest } } : { error: "review_extra_field" };
+    if (e.state !== "cleared" && e.state !== "flagged" && e.state !== "acknowledged") return { error: "review_state_invalid" };
+    const resolved = [...base, "resolvedAt", "resolution"];
+    const fields = e.state === "acknowledged" ? [...resolved, "acknowledgedAt", "acknowledgedBy"] : resolved;
+    if (!only(e, fields) || !fields.every((f) => e[f] !== undefined)) return { error: "review_fields_invalid" };
+    if (!validInstant(e.resolvedAt) || e.resolvedAt < e.committedAt) return { error: "review_resolved_at_invalid" };
+    const allowed = e.state === "cleared" ? REVIEW_RESOLUTIONS.cleared : REVIEW_RESOLUTIONS.flagged;
+    if (!allowed.includes(e.resolution)) return { error: "review_resolution_invalid" };
+    if (e.state === "acknowledged" && (!validInstant(e.acknowledgedAt) || e.acknowledgedAt < e.resolvedAt || typeof e.acknowledgedBy !== "string" || e.acknowledgedBy === "")) return { error: "review_ack_invalid" };
+    return { review: { state: e.state, intentDigest: e.intentDigest, resolution: e.resolution } };
+  }
+
+  /** read = { exists, value } from ONE snapshot of the node, or { failed: error }. Authoritative decision. */
   function decodeHistory(read: { exists?: boolean; value?: unknown; failed?: unknown } | null): any {
+    const h = decodeHistoryStructure(read);
+    if (h.state !== "present") return h;
+    // F1 R1: an unresolved authorization review (DEC-AUTH-1 window) withholds the WHOLE history.
+    if (h.unresolved.pending.length) return { state: "unreadable", reason: "authorization_review_pending", detail: h.unresolved.pending };
+    if (h.unresolved.flagged.length) return { state: "unreadable", reason: "authorization_review_flagged", detail: h.unresolved.flagged };
+    return { state: "present", head: h.head, versions: h.versions, activationDate: h.activationDate };
+  }
+
+  /**
+   * Structural decision only (TRUSTED WRITERS / REVIEW RESOLUTION): the same strict validation, but an
+   * unresolved review is reported in `unresolved` instead of withholding the history. Never used to
+   * compute financial outputs.
+   */
+  function decodeHistoryStructure(read: { exists?: boolean; value?: unknown; failed?: unknown } | null): any {
     if (!read || read.failed !== undefined) {
       return { state: "unreadable", reason: "read_failed", detail: String((read && read.failed && typeof read.failed === "object" && "message" in read.failed && read.failed.message) || (read && read.failed) || "no_read") };
     }
     const raw = read.value;
     if (!read.exists || raw === null || raw === undefined) return { state: "absent" };
-    if (!isObj(raw) || Object.keys(raw).length !== 2 || !only(raw, ["head", "versions"])) return { state: "unreadable", reason: "envelope_shape" };
+    if (!isObj(raw) || Object.keys(raw).length !== 3 || !only(raw, ["head", "versions", "review"])) return { state: "unreadable", reason: "envelope_shape" };
     if (!validHead(raw.head)) return { state: "unreadable", reason: "head_shape" };
     const vs = raw.versions;
     if (!isObj(vs) || Object.keys(vs).length === 0) return { state: "unreadable", reason: "versions_shape" };
@@ -130,9 +178,20 @@ export function createHistoryCodec(core: { israelBusinessDate(ms: number): strin
       chain.reverse();                                                   // oldest → newest
         for (let i = 1; i < chain.length; i++) if (!(chain[i].recordedAt > chain[i - 1].recordedAt)) return { state: "unreadable", reason: "chain_not_monotonic", detail: chain[i].versionId };
 
-    return { state: "present", head: { revision: raw.head.revision, headVersionId: raw.head.headVersionId }, versions: chain, activationDate: activationDate(chain) };
+    // review map: exactly one valid entry per version (keys equal), bound to that version
+    const rv = raw.review;
+    if (!isObj(rv) || Object.keys(rv).length !== chain.length || !Object.keys(rv).every((k) => byId[k] !== undefined)) return { state: "unreadable", reason: "review_shape" };
+    const review: Record<string, any> = {}, pending: string[] = [], flagged: string[] = [];
+    for (const v of chain) {
+      const r = decodeReview(v.versionId, rv[v.versionId], v);
+      if (r.error) return { state: "unreadable", reason: "review_invalid", detail: { versionId: v.versionId, error: r.error } };
+      review[v.versionId] = r.review;
+      if (r.review.state === "pending") pending.push(v.versionId);
+      if (r.review.state === "flagged") flagged.push(v.versionId);
+    }
+    return { state: "present", head: { revision: raw.head.revision, headVersionId: raw.head.headVersionId }, versions: chain, activationDate: activationDate(chain), review, unresolved: { pending, flagged } };
   }
-  return { decodeRecord, decodeHistory, validHead };
+  return { decodeRecord, decodeHistory, decodeHistoryStructure, decodeReview, validHead };
 }
 
 /** First RECORDED version's effectiveFrom (attested versions never move activation). Unchanged from F1. */

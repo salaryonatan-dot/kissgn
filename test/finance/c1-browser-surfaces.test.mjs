@@ -8,6 +8,7 @@
 //  • module readiness (version check) and the guarded "unavailable" state;
 //  • VD-50 isolated; D-15 today context outside Actual; labor placement; supplier sources.
 import { test } from "node:test";
+import { reviewFor } from "../support/f1-history-fixtures.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -79,6 +80,7 @@ test("F1-P03 C1 browser and server use the same persisted cost-history snapshot"
     globalEmployees: [{ employeeKey: "g1", monthlyEmployerCost: "3000" }], fixedItemsCount: 0,
     rent: { mode: "none" }, royalty: { mode: "none" },
   } } };
+  rawHistory.review = reviewFor(rawHistory.versions);   // F1 R1: MARJIN_COSTH/2 resolved review entry
   const db = seed({ rows });
   db.seed(`tenants/${T}/biz:${B}:cost_history`, rawHistory);
   const server = await coreOf(INV_NOW_MS);

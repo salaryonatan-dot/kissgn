@@ -13,7 +13,13 @@ export { ROOT, row, uuid, asLegacy, asV2 };
 export function headSha() { try { const r = gitIn(ROOT, ["rev-parse", "HEAD"]); return r.status === 0 && /^[0-9a-f]{40}/.test(r.stdout.trim()) ? r.stdout.trim() : APPROVED_SHA; } catch (_) { return APPROVED_SHA; } }
 
 export const APPROVED_SHA = "5afb27543cb3d81c2ff23905af5b4ceeff706203";
-export const APPROVED_RULES_BLOB = "1e5dea2f9b1eac037c766b325b927c20285c0eec";
+// F1 R1 (independent core/F1 review, CANARY_FINDINGS.md): the Rules the Storage V2 canary must find
+// deployed follow the release Rules. The F1 delta (one scoped cost_history read branch + an explicit
+// client-write denial; RULES_DELTA_REVIEW.md, emulator matrix + 6 mutation controls) changes the release
+// Rules from the P0 fenced blob 1e5dea2f9b1eac037c766b325b927c20285c0eec to the F1 candidate below.
+// CANDIDATE — pending independent Codex review; NOT a publication approval. Kept equal to
+// F1_RULES_CANDIDATE_BLOB (test/support/rules-authorized-delta.mjs) by test/finance/f1-r1-review-state.test.mjs.
+export const APPROVED_RULES_BLOB = "32ea32bfc9b70c16c06b1acf87d045c5e28ff1d8";
 export const EMU_NS = "demo-marjin-rules-default-rtdb", EMU_PROJECT = "demo-marjin-rules", EMU_HOST = "127.0.0.1:9000";
 export const EMU_URL = `http://${EMU_HOST}?ns=${EMU_NS}`;
 export const EMU_ENV = Object.freeze({ FIREBASE_DATABASE_EMULATOR_HOST: EMU_HOST, GCLOUD_PROJECT: EMU_PROJECT, GOOGLE_CLOUD_PROJECT: EMU_PROJECT, PATH: process.env.PATH });

@@ -882,7 +882,7 @@
       const api = mod && mod.default;
       const v = api && api.versions;
       if (!api || api !== window.MarjinFinance || !v || v.product !== "MARJIN_PRODUCT/2" || v.forecast !== "REV_FORECAST/v2" ||
-          v.costHistory !== "MARJIN_COSTH/1" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") {
+          v.costHistory !== "MARJIN_COSTH/2" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") {
         throw new Error("fincore_version_mismatch");
       }
       window.__marjinFinance = { state: "ready", error: null };
@@ -1099,7 +1099,7 @@
       if (!api || typeof api !== "object" || !api.versions || !api.product || !api.presenters) return { ok: false, reason: "fincore_shape" };
       if (api.versions.product !== EXPECT.product) return { ok: false, reason: "fincore_version_mismatch" };
       if (api.versions.forecast !== EXPECT.forecast) return { ok: false, reason: "fincore_version_mismatch" };
-      if (api.versions.costHistory !== "MARJIN_COSTH/1" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") return { ok: false, reason: "fincore_cost_history_incompatible" };
+      if (api.versions.costHistory !== "MARJIN_COSTH/2" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") return { ok: false, reason: "fincore_cost_history_incompatible" };
       return { ok: true };
     }
 
@@ -1295,7 +1295,7 @@
       if (!src || !src.rowsReady) return { status: "loading", reason: "entries" };
       if (!src.config || src.config.state === "loading" || !src.fixed || src.fixed.state === "loading") return { status: "loading", reason: "settings" };
       if (src.costHistory && src.costHistory.state === "loading") return { status: "loading", reason: "cost_history" };
-      if (src.costHistory && src.costHistory.state === "unreadable") return { status: "unavailable", reason: "cost_history_unreadable" };
+      if (src.costHistory && src.costHistory.state === "unreadable") return { status: "unavailable", reason: /^authorization_review_/.test(String(src.costHistory.reason)) ? "cost_history_" + src.costHistory.reason : "cost_history_unreadable" };
       var L = src.ledger;
       if (!L || L.state === "loading") return { status: "loading", reason: "ledger" };
       if (L.state === "unreadable") return { status: "unavailable", reason: "closure_calendar_unknown" };
@@ -10529,10 +10529,11 @@ function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[], f
           <SectionHeader label="עלויות" />
           <PnLRow c1="pnl-purchases" label="קניות (פוד קוסט)" text={pv.rows.purchases.text} shareText={pv.rows.purchases.shareText} delta={deltaOf("purchases")} isNegative />
           <PnLRow c1="pnl-labor" label="עלות עובדים (לייבור)" text={pv.rows.labor.text} shareText={pv.rows.labor.shareText} delta={deltaOf("labor")} isNegative />
-          {pv.showOther && <PnLRow c1="pnl-other" label="הוצאות אחרות" text={pv.rows.other.text} shareText={pv.rows.other.shareText} isNegative />}
-
           {/* VD-50 — revenue less food and full employer labor; fixed costs follow below. */}
           <PnLRow c1="pnl-vd50" label="רווח גולמי (לפני הוצאות קבועות)" text={pv.gross.text} shareText={"—"} delta={{text:"—",delta:null}} isBold />
+          {/* F1 R1 (VD-50 presentation): other expenses are not part of gross profit — shown BELOW it, so the
+              gross line equals the rows above it and gross − other − fixed (− royalty) = net profit. */}
+          {pv.showOther && <PnLRow c1="pnl-other" label="הוצאות אחרות" text={pv.rows.other.text} shareText={pv.rows.other.shareText} isNegative />}
 
           {/* Fixed */}
           <SectionHeader label="הוצאות קבועות" />

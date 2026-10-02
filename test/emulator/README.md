@@ -482,3 +482,33 @@ closed day, the post-ledger revenue race (partial + contradiction), reopen, futu
 ```
 
 Expected: `total=4 passed=4 failed=0` — `ALL CASES PASSED`.
+
+## Run the F1 cost-history Rules matrix and writer proof (F1 R1 — pending independent review)
+
+`f1-cost-history-rules-matrix.mjs` evaluates the F1 Rules delta (`biz:{b}:cost_history`) with
+real client principals: read scope (member + owner/super_owner or explicit business access),
+client-write denial on the node, every child and multi-path update, legacy layouts
+(`cost_versions` / `cost_head`) denied, ancestor protection, and six Rules MUTANTS (membership,
+business access, read scope, client-write denial, ancestor protection, legacy layout) — each
+mutant must be caught by a targeted case.
+
+```
+... "node test/emulator/f1-cost-history-rules-matrix.mjs"
+```
+
+Expected: `total=7 passed=7 failed=0` (the baseline matrix + M1…M6).
+
+`f1-cost-history-writer-emulator.mjs` runs the ACTUAL `lib/finance/costHistoryWriter.js` (with the
+real `lib/securityContext.js` / `lib/helpers.js`; only the token verifier and Admin-app seam are
+replaced) over the real Admin transport, and decodes as Rules-evaluated clients with the committed
+codec: cleared, flagged (+ audit record), audit/review write failure ⇒ pending, verification
+unavailable ⇒ pending → later version refused → reconciliation → next save, parallel saves,
+parallel reconciliations, lost acknowledgement ⇒ readback, and client forge/clear/overwrite denial.
+
+```
+... "node test/emulator/f1-cost-history-writer-emulator.mjs"
+```
+
+Expected: `total=8 passed=8 failed=0` — `ALL CASES PASSED — F1 review state is fail-closed over the real transport`.
+
+There are now SIXTEEN emulator scripts; all reseed the database root, so they must run one at a time.

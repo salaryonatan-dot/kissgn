@@ -301,8 +301,11 @@ async function main() {
       await nav(p, "P&L");
       await p.until(() => q(p, "pnl-net") !== null, 8000);
       expect(textOf(q(p, "pnl-net")).includes(pnl.rows.net.text), "P&L net " + textOf(q(p, "pnl-net")));
-      expect(!/₪/.test(textOf(q(p, "pnl-vd50"))), "VD-50 still — with complete data");
-      return `revenue ${dash.revenue.text} · labor ${dash.labor.text} (${dash.laborPct.text}) · fixed ${dash.fixedRent.text} · forecast ${dash.forecast.text} · proj. profit ${dash.projectedProfit.text} · P&L net ${pnl.rows.net.text}`;
+      // F1 R1 (CF-03): VD-50 is DECIDED (owner: revenue − food − full employer labor, before fixed costs) — with
+      // complete data the gross line renders the node core's typed figure, never the pre-decision "—".
+      expect(pnl.gross && /₪/.test(pnl.gross.text), "node: VD-50 gross is a typed amount " + JSON.stringify(pnl.gross));
+      expect(textOf(q(p, "pnl-vd50")).includes(pnl.gross.text), "VD-50 gross equals the node core " + textOf(q(p, "pnl-vd50")));
+      return `revenue ${dash.revenue.text} · labor ${dash.labor.text} (${dash.laborPct.text}) · fixed ${dash.fixedRent.text} · forecast ${dash.forecast.text} · proj. profit ${dash.projectedProfit.text} · P&L net ${pnl.rows.net.text} · VD-50 gross ${pnl.gross.text}`;
     } finally { p.detach(); await apps.seed.database().ref("tenants/tenantA/biz:bizA:entries").set(env(ROWS)); }
   });
 

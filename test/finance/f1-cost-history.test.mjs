@@ -4,6 +4,7 @@ import { loadCommitted, loadCompiled } from "../support/fincore-load.mjs";
 import { seed, coreOf, SB } from "../support/b2-email-harness.mjs";
 import { T, B } from "../support/b1-fixtures.mjs";
 import { SEP_COMPLETED, fullDay, INV_NOW_MS } from "../support/financial-invariants.mjs";
+import { reviewFor } from "../support/f1-history-fixtures.mjs";
 
 const a = "00000000-0000-4000-8000-000000000001";
 const b = "00000000-0000-4000-8000-000000000002";
@@ -17,12 +18,13 @@ const second = {
   ...first, versionId: b, predecessorVersionId: a, recordedAt: now + 1,
   fixedItemsCount: 1, fixedItems: [{ itemKey: "rent", monthlyAmount: "1000" }],
 };
-const history = (versions = { [a]: first, [b]: second }, head = { revision: 2, headVersionId: b }) => ({ head, versions });
+// F1 R1: MARJIN_COSTH/2 — every version carries a resolved (cleared) authorization review.
+const history = (versions = { [a]: first, [b]: second }, head = { revision: 2, headVersionId: b }) => ({ head, versions, review: reviewFor(versions) });
 const read = (codec, value) => codec.decodeHistory({ exists: value !== null, value });
 
 test("F1-01 generated browser and fresh server core decode one coherent history identically", async () => {
   const server = await loadCompiled(), browser = await loadCommitted();
-  assert.equal(browser.versions.costHistory, "MARJIN_COSTH/1");
+  assert.equal(browser.versions.costHistory, "MARJIN_COSTH/2");
   for (const value of [null, history(), history({ [a]: first }, { revision: 1, headVersionId: a }),
     history({ [a]: first, [b]: { ...second, predecessorVersionId: "none" } }),
     history({ [a]: first, [b]: { ...second, fixedItemsCount: 0 } }),
