@@ -123,12 +123,12 @@ test("GUARD-07 the B1 diff adds no line matching the vat-invariant forbidden-wor
   assert.deepEqual(added.filter((l) => re.test(l)), []);
 });
 
-test("GUARD-08 fincore/v1 regenerates byte-identically; the browser closure is the BASE closure plus src/policy/productFinance.ts (+ CD-M1 src/metrics/revenueForecast.ts)", () => {
+test("GUARD-08 fincore/v1 regenerates byte-identically; the browser closure is the BASE closure plus src/policy/productFinance.ts (+ CD-M1 src/metrics/revenueForecast.ts, + P1 src/finance/supplierCredits.ts)", () => {
   const tmp = mkdtempSync(join(tmpdir(), "b1-fincore-"));
   const m = generate({ repo: REPO, outDir: tmp });
-  for (const rel of ["MANIFEST.json", "browser/marjinFinanceGlobal.js", "policy/productFinance.js"]) assert.ok(readFileSync(join(tmp, rel)).equals(readFileSync(join(REPO, "fincore/v1", rel))), rel);
+  for (const rel of ["MANIFEST.json", "browser/marjinFinanceGlobal.js", "policy/productFinance.js", "finance/supplierCredits.js", "metrics/report.js"]) assert.ok(readFileSync(join(tmp, rel)).equals(readFileSync(join(REPO, "fincore/v1", rel))), rel);
   const baseManifest = JSON.parse(gitIn(REPO, ["show", `${B1_BASE}:fincore/v1/MANIFEST.json`]).stdout);
-  assert.deepEqual([...closureSources(REPO)].sort(), [...baseManifest.sources, "src/policy/productFinance.ts", "src/metrics/revenueForecast.ts"].sort());
+  assert.deepEqual([...closureSources(REPO)].sort(), [...baseManifest.sources, "src/policy/productFinance.ts", "src/metrics/revenueForecast.ts", "src/finance/supplierCredits.ts"].sort());
   assert.deepEqual(m.sources, closureSources(REPO));
   assert.equal(m.typescript, "5.9.3");
 });

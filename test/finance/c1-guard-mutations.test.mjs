@@ -12,9 +12,17 @@ import { gitIn } from "../support/git-context.mjs";
 import { importerVerdict, loadConsumerFiles, repoKindOf, validateConsumerFiles } from "../support/b1-fixtures.mjs";
 import { C1_ASSEMBLY, C1_PROTECTED, C1_ZONES, c1IndexVerdict, diffHunks } from "../support/c1-index-scope.mjs";
 import { C1_INDEX_PIN } from "../support/c1-candidate-pin.mjs";
+import { P1_BASE } from "../support/p1-index-scope.mjs";
 
 const approved = (() => { const r = gitIn(REPO, ["cat-file", "blob", C1_ASSEMBLY + ":index.html"], { encoding: "buffer" }); assert.equal(r.status, 0); return r.stdout.toString("utf8"); })();
-const candidate = readFileSync(join(REPO, "index.html"), "utf8");
+// P1 Supplier Credits: on a tree descending from the reviewed C1 R2 commit (P1_BASE), the C1 page
+// under test is that commit's index.html read from git objects — the page the P1 layer of B2G-05
+// builds on — while the working-tree page is held to the P1 contract (test/finance/
+// p1-guard-mutations.test.mjs, B2G-05-P1*). On a C1 tree it is the working-tree page, as before.
+const onP1 = gitIn(REPO, ["merge-base", "--is-ancestor", P1_BASE, "HEAD"]).status === 0 && gitIn(REPO, ["rev-parse", "HEAD"]).stdout.trim() !== P1_BASE;
+const candidate = onP1
+  ? (() => { const r = gitIn(REPO, ["cat-file", "blob", P1_BASE + ":index.html"], { encoding: "buffer" }); assert.equal(r.status, 0); return r.stdout.toString("utf8"); })()
+  : readFileSync(join(REPO, "index.html"), "utf8");
 const once = (src, from, to) => { assert.equal(src.split(from).length, 2, "mutation anchor unique: " + from.slice(0, 70)); return src.replace(from, to); };
 const reason = (b) => c1IndexVerdict(approved, b).reason;
 

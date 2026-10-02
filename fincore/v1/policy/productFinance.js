@@ -9,8 +9,16 @@ import { applyProjection } from "../metrics/projected.js";
 import { computeRevenueForecastV2, REV_FORECAST_V2_FORMULA_ID } from "../metrics/revenueForecast.js";
 import { decIsZero } from "../finance/decimal.js";
 import { productPurchaseBasis } from "./purchaseBasis.js";
+import { applySupplierCreditsToDay, creditsByDate, decodeSupplierCredits, SUPPLIER_CREDITS_CONTRACT_VERSION } from "../finance/supplierCredits.js";
+export { decodeSupplierCredits, SUPPLIER_CREDITS_CONTRACT_VERSION };
 import { productLaborSource } from "./laborSource.js";
-export const PRODUCT_FINANCE_VERSION = "MARJIN_PRODUCT/2";
+/**
+ * MARJIN_PRODUCT/3 (P1 supplier credits): the composition applies the supplier credits issued on
+ * each date (MARJIN_CREDITS/1, `ProductInputs.supplierCredits`) to that date's purchases, so the
+ * report, the daily metrics, the day record and the projection are all NET of credits.
+ * MARJIN_PRODUCT/2 (closed-days amendment) is otherwise unchanged.
+ */
+export const PRODUCT_FINANCE_VERSION = "MARJIN_PRODUCT/3";
 /** The one forecast formula the month projection is bound to (REV_FORECAST/v2; re-exported for the server wrappers). */
 export const REV_FORECAST_FORMULA_ID = REV_FORECAST_V2_FORMULA_ID;
 /** Source label of the product closure calendar (derived from the entry-exception domain). */
@@ -186,12 +194,19 @@ export function productTimeline(inputs) {
     const flag = { code: "invalid_fixed_amount", key: FIXED_LIST_UNREADABLE_KEY, reason: "wrong_type" };
     return { ...base, flags: [...(base.flags || []), flag] };
 }
+/** P1: the supplier credits issued on each day (by issue date), applied to its purchases. No credit source ⇒ unchanged days. */
+function credited(days, inputs) {
+    if (inputs.supplierCredits === undefined || inputs.supplierCredits.state === "absent")
+        return days;
+    const byDate = creditsByDate(inputs.supplierCredits, days.map((d) => d.date));
+    return days.map((d) => applySupplierCreditsToDay(d, byDate.get(d.date)));
+}
 function daysOf(n, inputs, range) {
     requireRange(range);
     const completedThrough = addDays(inputs.asOfBusinessDate, -1);
     const to = range.to < completedThrough ? range.to : completedThrough;
     const effective = range.from <= to ? { from: range.from, to } : null;
-    const days = effective ? groupByDate(n.rows, { from: effective.from, to: effective.to, exceptionsByDate: exceptionsOf(inputs) }) : [];
+    const days = effective ? credited(groupByDate(n.rows, { from: effective.from, to: effective.to, exceptionsByDate: exceptionsOf(inputs) }), inputs) : [];
     return {
         window: { requested: { from: range.from, to: range.to }, effective, asOfBusinessDate: inputs.asOfBusinessDate, completedThrough },
         days,
@@ -251,7 +266,7 @@ export function productMonthReport(inputs, sel) {
         throw new FinanceContractError("closure_calendar_not_loaded", "productMonthReport");
     const n = normalized(inputs);
     const { first, last } = monthBounds(sel && sel.month);
-    const days = groupByDate(n.rows, { from: first, to: last, exceptionsByDate: exceptionsOf(inputs) });
+    const days = credited(groupByDate(n.rows, { from: first, to: last, exceptionsByDate: exceptionsOf(inputs) }), inputs);
     const inMonth = new Set(n.rows.filter((r) => r.date >= first && r.date <= last).map((r) => r.id));
     const flags = n.flags.filter((f) => f.code !== "row_without_id" || (f.rowId !== undefined && inMonth.has(f.rowId)));
     const quarantine = n.quarantine;

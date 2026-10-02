@@ -28,6 +28,12 @@ import { isValidBusinessDate, isValidOperationId, isValidExpectedRevision,
   validateSetInput, requestHash as eeRequestHash, safeStateView,
   dateRangeDays, MAX_LIST_RANGE_DAYS } from "../lib/entryExceptions.js";
 import { runEntryExceptionTxn, listEntryExceptions } from "../lib/repositories/entryExceptionsRepo.js";
+import { READ_ROLES, WRITE_ROLES, isValidId as scIsValidId } from "../lib/securityContext.js";
+import {
+  isValidCreditId, isValidRecordRevision, validateCreditInput, requestHash as scRequestHash, affectedIssueDates,
+  MAX_NOTE_LENGTH as SC_MAX_NOTE_LENGTH,
+} from "../lib/supplierCredits.js";
+import { runSupplierCreditTxn, readSupplierCredits } from "../lib/repositories/supplierCreditsRepo.js";
 import { parsePolicyRecord, decideAdminAdmission } from "../lib/storagePolicy.js";
 import { readBizDoc, writeBizDoc, readBizDailyRange, getBizDocWithToken, setBizDocGuarded } from "../lib/repositories/bizDataRepo.js";
 import { canonicalizeChecklistDocument } from "../lib/checklistVersion.js";
@@ -108,6 +114,11 @@ export default async function handler(req, res) {
   if (action === "list-entry-exceptions")  return handleListEntryExceptions(req, res);
   if (action === "set-entry-exception")    return handleSetEntryException(req, res);
   if (action === "clear-entry-exception")  return handleClearEntryException(req, res);
+  // P1 Supplier Credits — server-mediated documents (client Rules deny biz:*:supplier_credits)
+  if (action === "list-supplier-credits")    return handleListSupplierCredits(req, res);
+  if (action === "create-supplier-credit")   return handleCreateSupplierCredit(req, res);
+  if (action === "void-supplier-credit")     return handleVoidSupplierCredit(req, res);
+  if (action === "replace-supplier-credit")  return handleReplaceSupplierCredit(req, res);
   if (action === "get-checklist-template-items") return handleGetChecklistTemplateItems(req, res);
   if (action === "set-checklist-template-items") return handleSetChecklistTemplateItems(req, res);
   if (action === "get-checklist-run")            return handleGetChecklistRun(req, res);
@@ -1948,6 +1959,150 @@ async function handleClearEntryException(req, res) {
   cmd.requestHash = eeRequestHash(cmd);
   const outcome = await runEntryExceptionTxn(cmd);
   eeRespond(res, outcome);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// P1 SUPPLIER CREDITS (MARJIN_CREDITS/1). A credit is its own document — never a negative
+// purchase — attributed to its issue date. Authorization follows the accepted structured
+// document writes (CD-M2): verified identity → tenant role (write: manager/owner/super_owner,
+// explicit set) → business access → version-fence admission; then ONE transaction on the
+// per-business node; then a post-commit re-check (owner DEC-AUTH-1 bounded window: a
+// revocation committed before the check denies the write; one landing between check and
+// commit leaves the immutable, flagged record — reported, never claimed as denied).
+// ─────────────────────────────────────────────────────────────────────────────
+/** Non-empty, bounded, RTDB-safe ids; a business id never contains ":" (it is embedded in the `biz:{b}:supplier_credits` key). */
+function scValidIds(tenantId, bizId) {
+  return scIsValidId(tenantId) && scIsValidId(bizId) && !bizId.includes(":");
+}
+
+async function scAccess(claims, tenantId, bizId, mode) {
+  const role = await requireTenantAccess(claims.uid, tenantId, mode === "write" ? "manager" : "viewer");
+  if (mode === "write" && !WRITE_ROLES.includes(role)) throw { status: 403, msg: "role_not_allowed" };
+  if (mode === "read" && !READ_ROLES.includes(role)) throw { status: 403, msg: "role_not_allowed" };
+  const db = getAdminDb();
+  await requireBizAccess(db, tenantId, bizId, claims.uid, role);
+  return { role, db };
+}
+
+async function handleListSupplierCredits(req, res) {
+  if (req.method !== "GET") { res.status(405).json({ error: "Method not allowed" }); return; }
+  let claims;
+  try { claims = await requireAuth(req); } catch { res.status(401).json({ error: "unauthorized" }); return; }
+  const tenantId = req.query.tenantId, bizId = req.query.bizId;
+  if (!scValidIds(tenantId, bizId)) { res.status(400).json({ error: "invalid tenantId or bizId" }); return; }
+  try { await scAccess(claims, tenantId, bizId, "read"); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "forbidden" }); return; }
+  try {
+    // The stored node WITHOUT the operations ledger; the browser decodes it with the SAME core
+    // decoder the server loader uses (a malformed node is reported unreadable, never "none").
+    const node = await readSupplierCredits({ tenantId, bizId });
+    res.status(200).json({ ok: true, tenantId, bizId, node });
+  } catch (e) {
+    console.error("[list-supplier-credits]", e?.message);
+    res.status(500).json({ error: "list_failed" });
+  }
+}
+
+async function scAuthorizeWrite(req, res) {
+  let claims;
+  try { claims = await requireAuth(req); } catch { res.status(401).json({ error: "unauthorized" }); return null; }
+  let body = req.body; if (typeof body === "string") { try { body = JSON.parse(body); } catch { res.status(400).json({ error: "invalid json" }); return null; } }
+  body = body || {};
+  const { tenantId, bizId, creditId, operationId } = body;
+  if (!scValidIds(tenantId, bizId)) { res.status(400).json({ error: "invalid tenantId or bizId" }); return null; }
+  if (!isValidCreditId(creditId)) { res.status(400).json({ error: "invalid_credit_id" }); return null; }
+  if (!isValidOperationId(operationId)) { res.status(400).json({ error: "invalid_operation_id" }); return null; }
+  let access;
+  try { access = await scAccess(claims, tenantId, bizId, "write"); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "forbidden" }); return null; }
+  // VERSION FENCE (same admission as the CD-M2 ledger writes): a quiesced / recovery-held /
+  // unreadable business refuses every Admin-SDK business-data mutation with a typed 423.
+  let policyRaw;
+  try { const snap = await access.db.ref(`storage_v2_control/${tenantId}/${bizId}`).once("value"); policyRaw = snap.exists() ? snap.val() : null; }
+  catch { res.status(423).json({ error: "maintenance", reason: "policy_unavailable" }); return null; }
+  const admission = decideAdminAdmission(parsePolicyRecord(policyRaw));
+  if (!admission.admitted) { res.status(423).json({ error: "maintenance", reason: admission.reason, ...(admission.phase ? { phase: admission.phase } : {}) }); return null; }
+  return { claims, role: access.role, db: access.db, body, tenantId, bizId, creditId, operationId };
+}
+
+/** A credit must name a supplier of the business (fresh read; an unreadable list refuses the write). */
+async function scRequireSupplier(res, db, tenantId, bizId, supplierId) {
+  let list;
+  try {
+    const snap = await db.ref(`tenants/${tenantId}/biz:${bizId}:suppliers`).once("value");
+    const raw = snap.val();
+    list = raw && typeof raw === "object" && typeof raw._v === "string" ? JSON.parse(raw._v) : null;
+  } catch { list = null; }
+  if (!Array.isArray(list)) { res.status(503).json({ error: "suppliers_unavailable" }); return false; }
+  if (!list.some((x) => x && x.id !== undefined && x.id !== null && String(x.id) === supplierId)) { res.status(400).json({ error: "unknown_supplier" }); return false; }
+  return true;
+}
+
+function scValidatedInput(res, body) {
+  try { return validateCreditInput({ supplierId: body.supplierId, issueDate: body.issueDate, amount: body.amount, documentNumber: body.documentNumber, note: body.note }); }
+  catch (e) { res.status(400).json({ error: e?.code || "invalid_input" }); return null; }
+}
+
+async function scRespond(res, ctx, outcome) {
+  if (outcome.outcome === "conflict") {
+    const map = { credit_not_found: 404, txn_failed: 502 };
+    res.status(map[outcome.code] || 409).json({ ok: false, error: outcome.code });
+    return;
+  }
+  const applied = outcome.outcome === "applied";
+  let postCommitAccess = "unchanged";
+  if (applied) {
+    try { await scAccess(ctx.claims, ctx.tenantId, ctx.bizId, "write"); }
+    catch { postCommitAccess = "revoked_during_commit"; console.error("[supplier-credits] access revoked during commit", ctx.tenantId, ctx.bizId, outcome.result && outcome.result.creditId); }
+  }
+  res.status(200).json({
+    ok: true, applied, replayed: !applied, result: outcome.result,
+    revision: outcome.result ? outcome.result.revision : undefined,
+    affectedDates: applied ? affectedIssueDates(outcome.before, outcome.after, outcome.result) : [],
+    rebuildRequired: applied,
+    postCommitAccess,
+  });
+}
+
+async function handleCreateSupplierCredit(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const ctx = await scAuthorizeWrite(req, res); if (!ctx) return;
+  const input = scValidatedInput(res, ctx.body); if (!input) return;
+  if (!(await scRequireSupplier(res, ctx.db, ctx.tenantId, ctx.bizId, input.supplierId))) return;
+  const cmd = { action: "create", tenantId: ctx.tenantId, bizId: ctx.bizId, creditId: ctx.creditId, input, operationId: ctx.operationId, actorUid: ctx.claims.uid, actorRole: ctx.role, now: Date.now() };
+  cmd.requestHash = scRequestHash(cmd);
+  await scRespond(res, ctx, await runSupplierCreditTxn(cmd));
+}
+
+async function handleVoidSupplierCredit(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const ctx = await scAuthorizeWrite(req, res); if (!ctx) return;
+  const rev = ctx.body.expectedRecordRevision;
+  if (!isValidRecordRevision(rev)) { res.status(400).json({ error: "invalid_expected_record_revision" }); return; }
+  let voidReason;
+  const vr = ctx.body.voidReason;
+  if (vr !== undefined && vr !== null) {
+    if (typeof vr !== "string" || /[\u0000-\u001f]/.test(vr)) { res.status(400).json({ error: "invalid_void_reason" }); return; }
+    if (vr.trim().length > SC_MAX_NOTE_LENGTH) { res.status(400).json({ error: "invalid_void_reason_too_long" }); return; }
+    voidReason = vr.trim() || undefined;
+  }
+  const cmd = { action: "void", tenantId: ctx.tenantId, bizId: ctx.bizId, creditId: ctx.creditId, expectedRecordRevision: rev, ...(voidReason ? { voidReason } : {}), operationId: ctx.operationId, actorUid: ctx.claims.uid, actorRole: ctx.role, now: Date.now() };
+  cmd.requestHash = scRequestHash(cmd);
+  await scRespond(res, ctx, await runSupplierCreditTxn(cmd));
+}
+
+async function handleReplaceSupplierCredit(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const ctx = await scAuthorizeWrite(req, res); if (!ctx) return;
+  const rev = ctx.body.expectedRecordRevision;
+  if (!isValidRecordRevision(rev)) { res.status(400).json({ error: "invalid_expected_record_revision" }); return; }
+  const newCreditId = ctx.body.newCreditId;
+  if (!isValidCreditId(newCreditId) || newCreditId === ctx.creditId) { res.status(400).json({ error: "invalid_new_credit_id" }); return; }
+  const input = scValidatedInput(res, ctx.body); if (!input) return;
+  if (!(await scRequireSupplier(res, ctx.db, ctx.tenantId, ctx.bizId, input.supplierId))) return;
+  const cmd = { action: "replace", tenantId: ctx.tenantId, bizId: ctx.bizId, creditId: ctx.creditId, newCreditId, expectedRecordRevision: rev, input, operationId: ctx.operationId, actorUid: ctx.claims.uid, actorRole: ctx.role, now: Date.now() };
+  cmd.requestHash = scRequestHash(cmd);
+  await scRespond(res, ctx, await runSupplierCreditTxn(cmd));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

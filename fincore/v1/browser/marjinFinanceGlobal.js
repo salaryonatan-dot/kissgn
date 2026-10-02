@@ -5,6 +5,7 @@ import * as cells from "../finance/cells.js";
 import * as businessDate from "../finance/businessDate.js";
 import * as normalize from "../finance/normalize.js";
 import * as purchaseBasis from "../finance/purchaseBasis.js";
+import * as supplierCredits from "../finance/supplierCredits.js";
 import * as labor from "../finance/labor.js";
 import * as costTimeline from "../metrics/costTimeline.js";
 import * as report from "../metrics/report.js";
@@ -30,6 +31,7 @@ const api = Object.freeze({
         norm: normalize.NORMALIZATION_VERSION,
         dec: decimal.DECIMAL_CONTRACT_VERSION,
         pb: purchaseBasis.PURCHASE_BASIS_CONTRACT_VERSION,
+        credits: supplierCredits.SUPPLIER_CREDITS_CONTRACT_VERSION,
         labor: labor.LABOR_CONTRACT_VERSION,
         policy: policyRegistry.POLICY_VERSION,
         projection: projected.PROJECTION_FORMULA_VERSION,
@@ -38,7 +40,7 @@ const api = Object.freeze({
         forecastLegacy: forecast.REV_FORECAST_FORMULA_ID,
         product: product.PRODUCT_FINANCE_VERSION,
     }),
-    finance: Object.freeze({ decimal, cells, businessDate, normalize, purchaseBasis, labor }),
+    finance: Object.freeze({ decimal, cells, businessDate, normalize, purchaseBasis, labor, supplierCredits }),
     metrics: Object.freeze({ costTimeline, report, projected, revenueForecast, adapters: Object.freeze({ legacyNumber, configCompat }) }),
     policy: Object.freeze({ registry: policyRegistry, evaluate: policyEvaluate, purchaseBasis: productPurchaseBasis, laborSource: productLaborSource }),
     presenters: Object.freeze({ money, percent, labels }),

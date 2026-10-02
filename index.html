@@ -873,7 +873,7 @@
       const mod = await import("/fincore/v1/browser/marjinFinanceGlobal.js");
       const api = mod && mod.default;
       const v = api && api.versions;
-      if (!api || api !== window.MarjinFinance || !v || v.product !== "MARJIN_PRODUCT/2" || v.forecast !== "REV_FORECAST/v2") {
+      if (!api || api !== window.MarjinFinance || !v || v.product !== "MARJIN_PRODUCT/3" || v.forecast !== "REV_FORECAST/v2") {
         throw new Error("fincore_version_mismatch");
       }
       window.__marjinFinance = { state: "ready", error: null };
@@ -1047,6 +1047,213 @@
     };
   })();
   </script>
+  <!-- ═══ P1: Supplier Credits browser seam (MARJIN_P1/1 over MARJIN_CREDITS/1) ═══
+       A supplier credit is its own document (never a negative purchase), attributed to the
+       credit document's ISSUE DATE, net of VAT and strictly positive. The browser never reads or
+       writes the node itself (client Rules deny it): it lists it through
+       the admin API list action and mutates it only through the create / void /
+       replace actions. The stored node is decoded with the SAME Financial Core decoder the server
+       loader uses (F.finance.supplierCredits.decodeSupplierCredits) — the browser adds no amount
+       or date rule of its own. Every function takes the core `F` explicitly (no globals), so the
+       block is vm-testable (test/finance/p1-browser-credits.test.mjs). -->
+  <script>
+  // ── P1 supplier credits browser seam ───────────────────────────────────────
+  (function () {
+    "use strict";
+    var P1_VERSION = "MARJIN_P1/1";
+    /** One deadline for the whole list read (same policy as the C1 closure-history read). */
+    var CREDITS_DEADLINE_MS = 30000;
+    var TXT = Object.freeze({
+      tab: "זיכויי ספקים",
+      loading: "טוען זיכויי ספקים…",
+      unavailable: "לא ניתן לטעון את זיכויי הספקים כעת. הקניות ועלות המזון אינן מוצגות כסופיות.",
+      retry: "נסה שוב",
+      empty: "לא הונפקו זיכויים בחודש זה.",
+      invalid: "נמצאו רשומות זיכוי לא תקינות. הקניות ועלות המזון אינן סופיות עד לתיקון.",
+      purchasesIncomplete: "זיכויי הספקים לא נטענו או אינם תקינים — הקניות ועלות המזון אינן סופיות.",
+      negativeNet: "הקניות נטו לאחר זיכויים שליליות בתקופה — מומלץ לבדוק את הזיכויים.",
+      voided: "בוטל",
+      replaced: "הוחלף בעריכה",
+      saved: "הזיכוי נשמר.",
+      voidedOk: "הזיכוי בוטל.",
+      rebuildWarning: "הזיכוי נשמר, אך עדכון התובנות היומיות נכשל. הנתונים יתעדכנו בהרצה הבאה.",
+      revokedWarning: "הזיכוי נשמר, אך ההרשאה שלך לעסק בוטלה במהלך השמירה. הרשומה סומנה לבדיקה.",
+    });
+    var ERRORS = Object.freeze({
+      invalid_supplier_id: "יש לבחור ספק.",
+      unknown_supplier: "הספק אינו קיים ברשימת הספקים של העסק.",
+      suppliers_unavailable: "רשימת הספקים אינה זמינה כעת. נסה שוב.",
+      invalid_issue_date: "יש להזין תאריך הנפקה תקין של מסמך הזיכוי.",
+      invalid_amount: "יש להזין סכום זיכוי חיובי לפני מע״מ (עד שתי ספרות אחרי הנקודה).",
+      invalid_document_number: "מספר המסמך אינו תקין.",
+      invalid_document_number_too_long: "מספר המסמך ארוך מדי.",
+      invalid_note: "ההערה אינה תקינה.",
+      invalid_note_too_long: "ההערה ארוכה מדי.",
+      credit_id_exists: "הזיכוי כבר נשמר.",
+      credit_not_found: "הזיכוי לא נמצא. רענן ונסה שוב.",
+      credit_not_active: "הזיכוי כבר בוטל או הוחלף.",
+      revision_conflict: "הזיכוי עודכן במקביל על ידי משתמש אחר. רענן ונסה שוב.",
+      idempotency_conflict: "הפעולה כבר נשלחה עם נתונים אחרים. רענן ונסה שוב.",
+      record_limit_reached: "הגעת למספר הזיכויים המרבי לעסק. פנה לתמיכה.",
+      operation_limit_reached: "הגעת למספר הפעולות המרבי לעסק. פנה לתמיכה.",
+      node_unreadable: "רשומות הזיכויים של העסק אינן תקינות. לא בוצע שינוי. פנה לתמיכה.",
+      role_not_allowed: "אין לך הרשאה להזין זיכויים.",
+      business_access_denied: "אין לך הרשאה לעסק זה.",
+      maintenance: "העסק בתחזוקה זמנית. נסה שוב מאוחר יותר.",
+      network: "שמירת הזיכוי נכשלה (שגיאת רשת). הזיכוי לא נשמר.",
+      failed: "שמירת הזיכוי נכשלה. הזיכוי לא נשמר.",
+      no_uuid: "הדפדפן אינו תומך ביצירת מזהה מאובטח. עדכן את הדפדפן.",
+    });
+    function errorText(code) { return ERRORS[code] || ERRORS.failed; }
+
+    /**
+     * Ordered list session (same guarantees as the C1 ledger session): one deadline bounds the
+     * whole attempt; a timeout resolves an explicit unreadable state (manual retry); only the
+     * LATEST requested key resolves; an older or cancelled request resolves `stale`, is aborted,
+     * and can never overwrite a newer result.
+     */
+    function createCreditsSession(timing) {
+      timing = timing || {};
+      var latest = null, active = null;
+      function finish(a, result, abort) {
+        if (a.done) return;
+        a.done = true;
+        if (a.timer !== null) { a.clearTimer(a.timer); a.timer = null; }
+        if (active === a) active = null;
+        if (abort && a.controller) a.controller.abort();
+        a.resolve(result);
+      }
+      function invalidate() { if (active) finish(active, { state: "stale", key: active.key }, true); }
+      return {
+        latest: function () { return latest; },
+        cancel: function () { invalidate(); latest = null; },
+        request: function (key, fetchNode, isLive) {
+          invalidate();
+          latest = key;
+          var setTimer = timing.setTimeout || setTimeout, clearTimer = timing.clearTimeout || clearTimeout;
+          var deadline = timing.deadlineMs === undefined ? CREDITS_DEADLINE_MS : timing.deadlineMs;
+          var controller = typeof AbortController === "function" ? new AbortController() : null;
+          var a = { key: key, done: false, timer: null, clearTimer: clearTimer, controller: controller, resolve: null };
+          var outcome = new Promise(function (resolve) { a.resolve = resolve; });
+          active = a;
+          var current = function () { return active === a && !a.done && latest === key && (!isLive || isLive()); };
+          a.timer = setTimer(function () {
+            finish(a, current() ? { state: "unreadable", reason: "deadline_exceeded", key: key } : { state: "stale", key: key }, true);
+          }, deadline);
+          Promise.resolve().then(function () { return fetchNode(controller && controller.signal); }).then(function (body) {
+            if (!current()) { finish(a, { state: "stale", key: key }, false); return; }
+            if (!body || body.ok !== true || !Object.prototype.hasOwnProperty.call(body, "node")) { finish(a, { state: "unreadable", reason: "response_shape", key: key }, false); return; }
+            finish(a, { state: "ready", node: body.node, key: key }, false);
+          }, function () {
+            finish(a, current() ? { state: "unreadable", reason: "read_failed", key: key } : { state: "stale", key: key }, false);
+          });
+          return outcome;
+        },
+      };
+    }
+
+    /**
+     * The credit source of the finance inputs (`src.credits`): loading until the CURRENT key's list
+     * read is held; then the core-decoded node; a failed read is `not_loaded` — purchases are never
+     * complete, never "no credits".
+     */
+    function sourceFor(F, held, key) {
+      if (key === null || !held || held.key !== key || held.state === "loading") return { state: "loading" };
+      if (held.state !== "ready") return { state: "not_loaded" };
+      return F.finance.supplierCredits.decodeSupplierCredits(held.node);
+    }
+
+    /** Client validation = the core's own rules (no third definition): supplier, issue date, amount. */
+    function validateForm(F, form, supplierList) {
+      var errors = {};
+      var f = form || {};
+      var known = (supplierList || []).some(function (s) { return s && s.id !== undefined && s.id !== null && String(s.id) === f.supplierId; });
+      if (!F.finance.supplierCredits.isValidSupplierId(f.supplierId) || !known) errors.supplierId = ERRORS.invalid_supplier_id;
+      if (!F.finance.businessDate.isBusinessDate(f.issueDate)) errors.issueDate = ERRORS.invalid_issue_date;
+      var amount = F.finance.supplierCredits.canonicalCreditAmount(typeof f.amount === "string" ? f.amount.trim() : f.amount);
+      if (amount === null) errors.amount = ERRORS.invalid_amount;
+      var doc = typeof f.documentNumber === "string" ? f.documentNumber.trim() : "";
+      if (doc.length > 64) errors.documentNumber = ERRORS.invalid_document_number_too_long;
+      var note = typeof f.note === "string" ? f.note.trim() : "";
+      if (note.length > 500) errors.note = ERRORS.invalid_note_too_long;
+      if (Object.keys(errors).length) return { ok: false, errors: errors };
+      var input = { supplierId: f.supplierId, issueDate: f.issueDate, amount: amount };
+      if (doc) input.documentNumber = doc;
+      if (note) input.note = note;
+      return { ok: true, input: input };
+    }
+
+    function newId(cryptoObj) {
+      var c = cryptoObj || (typeof crypto !== "undefined" ? crypto : null);
+      if (!c || typeof c.randomUUID !== "function") return null; // never a Math.random identity
+      return c.randomUUID();
+    }
+    function createBody(ctx, input, creditId, operationId) {
+      return Object.assign({ tenantId: ctx.tenantId, bizId: ctx.bizId, creditId: creditId, operationId: operationId }, input);
+    }
+    function voidBody(ctx, record, operationId, reason) {
+      var b = { tenantId: ctx.tenantId, bizId: ctx.bizId, creditId: record.creditId, operationId: operationId, expectedRecordRevision: record.revision };
+      if (reason) b.voidReason = reason;
+      return b;
+    }
+    function replaceBody(ctx, record, input, newCreditId, operationId) {
+      return Object.assign({ tenantId: ctx.tenantId, bizId: ctx.bizId, creditId: record.creditId, newCreditId: newCreditId, operationId: operationId, expectedRecordRevision: record.revision }, input);
+    }
+
+    function names(supplierList) {
+      var out = {};
+      (supplierList || []).forEach(function (s) { if (s && s.id !== undefined) out[String(s.id)] = s.name; });
+      return out;
+    }
+
+    /**
+     * The Supplier Credits tab of one month: every record ISSUED in the month (active and voided),
+     * newest issue date first, and the month's active total. Loading / unavailable / invalid are
+     * explicit states; an empty month is "ready" with no row.
+     */
+    function monthView(F, credits, month, supplierList) {
+      if (!credits || credits.state === "loading") return { status: "loading", text: TXT.loading };
+      if (credits.state === "not_loaded" || credits.state === "unreadable") return { status: "unavailable", text: TXT.unavailable, reason: credits.reason || credits.state };
+      var nm = names(supplierList), bd = F.finance.businessDate, dec = F.finance.decimal;
+      var recs = credits.state === "present" ? credits.records : [];
+      var inMonth = recs.filter(function (r) { return bd.monthOf(r.issueDate) === month; });
+      inMonth.sort(function (a, b) { return a.issueDate < b.issueDate ? 1 : a.issueDate > b.issueDate ? -1 : a.creditId < b.creditId ? -1 : 1; });
+      var total = null, count = 0;
+      var rows = inMonth.map(function (r) {
+        if (r.status === "active") { total = total === null ? dec.decFromPlainString(r.amount) : dec.decAdd(total, dec.decFromPlainString(r.amount)); count++; }
+        return {
+          creditId: r.creditId, revision: r.revision, supplierId: r.supplierId,
+          supplierName: nm[r.supplierId] || ("ספק " + r.supplierId), issueDate: r.issueDate,
+          amount: r.amount, amountText: F.presenters.money.formatShekel(r.amount), documentNumber: r.documentNumber, note: r.note,
+          status: r.status, statusText: r.status === "voided" ? (r.replacedByCreditId ? TXT.replaced : TXT.voided) : "",
+          replacesCreditId: r.replacesCreditId, replacedByCreditId: r.replacedByCreditId,
+        };
+      });
+      var issues = credits.state === "present" ? credits.issues.filter(function (i) { return i.issueDate === null || bd.monthOf(i.issueDate) === month; }) : [];
+      return {
+        status: "ready", rows: rows, empty: rows.length === 0, emptyText: TXT.empty,
+        activeCount: count, total: total === null ? null : dec.serializeDec(total),
+        totalText: F.presenters.money.formatShekel(total === null ? null : dec.serializeDec(total)),
+        invalidCount: issues.length, invalidText: issues.length ? TXT.invalid : null,
+      };
+    }
+
+    /** Disclosure lines for a report whose purchases are affected by credits (net-negative / incomplete credit source). */
+    function purchasesDisclosure(report) {
+      var p = report && report.actual && report.actual.purchases;
+      if (!p || !p.credits) return { incomplete: null, negative: null };
+      var neg = (report.flags || []).some(function (f) { return f.code === "negative_net_purchases"; });
+      return { incomplete: p.credits.state === "invalid" ? TXT.purchasesIncomplete : null, negative: neg ? TXT.negativeNet : null };
+    }
+
+    window.MarjinP1 = Object.freeze({
+      P1_VERSION: P1_VERSION, CREDITS_DEADLINE_MS: CREDITS_DEADLINE_MS, TXT: TXT, ERRORS: ERRORS,
+      errorText: errorText, createCreditsSession: createCreditsSession, sourceFor: sourceFor, validateForm: validateForm,
+      newId: newId, createBody: createBody, voidBody: voidBody, replaceBody: replaceBody, monthView: monthView,
+      purchasesDisclosure: purchasesDisclosure,
+    });
+  })();
+  </script>
   <!-- ═══ C1: browser financial view models (MARJIN_C1/1) ═══
        PURE presenters over the shared Financial Core (window.MarjinFinance, generated
        fincore/v1). Every money value, ratio, allocation, coverage state, closure state and
@@ -1064,7 +1271,7 @@
     var C1_VERSION = "MARJIN_C1/1";
     // The approved browser contract (B1 AMEND-01, closed-days amendment): a bundle with
     // other identifiers is refused (stale or wrong file), never used.
-    var EXPECT = Object.freeze({ product: "MARJIN_PRODUCT/2", forecast: "REV_FORECAST/v2" });
+    var EXPECT = Object.freeze({ product: "MARJIN_PRODUCT/3", forecast: "REV_FORECAST/v2" });
     // list-entry-exceptions accepts ranges of at most MAX_LIST_RANGE_DAYS = 400 days.
     var LEDGER_CHUNK_DAYS = 366;
     // One deadline for the WHOLE sequential closure-history read, not one per chunk. Existing
@@ -1082,6 +1289,8 @@
       closedDays: " (הכנסה 0, לא חסר): ",
       forecastPartial: "תחזית חלקית — חסרות או לא תקינות הכנסות בימים: ",
       forecastInsufficient: "אין מספיק היסטוריה לתחזית",
+      creditsIncomplete: "זיכויי הספקים לא נטענו או אינם תקינים — הקניות ועלות המזון אינן סופיות.",
+      negativeNetPurchases: "הקניות נטו לאחר זיכויים שליליות בתקופה — מומלץ לבדוק את הזיכויים.",
     });
 
     // ── module readiness ─────────────────────────────────────────────────────
@@ -1277,9 +1486,12 @@
 
     // ── inputs ────────────────────────────────────────────────────────────────
     /**
-     * src = { rows, config, fixed, asOf, ledger:{state, states, from, to}, rowsReady }
+     * src = { rows, config, fixed, asOf, ledger:{state, states, from, to}, rowsReady, credits }
      * Returns the ProductInputs, or a non-ready status. A ledger that does not cover
      * `need` is NOT LOADED for that calculation (the core refuses it; never "no closures").
+     * P1: `credits` is the core-decoded supplier-credit node (window.MarjinP1.sourceFor): while
+     * it loads nothing is shown; a failed read is passed as `not_loaded` (purchases incomplete,
+     * never "no credits"). The page always supplies it.
      */
     function inputsFor(F, src, need) {
       if (!src || !src.rowsReady) return { status: "loading", reason: "entries" };
@@ -1289,14 +1501,15 @@
       if (L.state === "unreadable") return { status: "unavailable", reason: "closure_calendar_unknown" };
       if (need && !ledgerCovers(L, need.from, need.to)) return { status: "loading", reason: "ledger_range" };
       var states = L.states || {};
-      return {
-        status: "ready",
-        inputs: {
-          rows: src.rows, config: src.config, fixed: src.fixed, asOfBusinessDate: src.asOf,
-          exceptionStates: states, exceptionsByDate: F.product.exceptionsByDateOf(states),
-          exceptionLedgerState: L.state,
-        },
+      var C = src.credits;
+      if (C && C.state === "loading") return { status: "loading", reason: "supplier_credits" };
+      var inputs = {
+        rows: src.rows, config: src.config, fixed: src.fixed, asOfBusinessDate: src.asOf,
+        exceptionStates: states, exceptionsByDate: F.product.exceptionsByDateOf(states),
+        exceptionLedgerState: L.state,
       };
+      if (C) inputs.supplierCredits = C;
+      return { status: "ready", inputs: inputs };
     }
     function guarded(fn) {
       try { return fn(); }
@@ -1760,19 +1973,33 @@
     }
 
     // ── suppliers / food cost (S-01…S-05, S-08, U-05) ─────────────────────────────
+    /** P1: purchases incomplete because of the credit source, or a net-negative period (kept, flagged — never hidden). */
+    function creditsDisclosure(report) {
+      var p = report.actual.purchases, neg = report.flags.some(function (f) { return f.code === "negative_net_purchases"; });
+      return {
+        incomplete: p.credits && p.credits.state === "invalid" ? TXT.creditsIncomplete : null,
+        negative: neg ? TXT.negativeNetPurchases : null,
+      };
+    }
     function suppliers(F, src, month, supplierList) {
       var cur = monthReport(F, src, month);
       if (cur.status !== "ready") return cur;
       return guarded(function () {
         var A = cur.report.actual, pol = policyOf(F, src);
         var rev = A.revenue.complete ? A.revenue.value : null;
+        // P1: bySource is NET of the month's supplier credits (issue-date attribution, MARJIN_FIN/4);
+        // gross and credits come from the same report so a row reconciles: gross − credits = net.
         var bySource = A.purchases.bySource || {};
+        var grossBy = A.purchases.grossBySource || bySource;
+        var creditBy = (A.purchases.credits && A.purchases.credits.bySupplier) || {};
         var names = {};
         (supplierList || []).forEach(function (s) { if (s && s.id !== undefined) names["supplier:" + s.id] = s.name; });
         var keys = Object.keys(bySource).sort();
         var rows = keys.map(function (k) {
           var label = names[k] || (k === "legacy_food_cost" ? "עלות מזון (רשומה ישנה)" : "ספק " + k.replace(/^supplier:/, ""));
-          return { key: k, name: label, amount: bySource[k], text: money(F, bySource[k]), pctText: rev === null ? "—" : pctText(F, ratio(F, bySource[k], rev)) };
+          var g = grossBy[k] === undefined ? null : grossBy[k], c = creditBy[k] === undefined ? null : creditBy[k];
+          return { key: k, name: label, amount: bySource[k], text: money(F, bySource[k]), pctText: rev === null ? "—" : pctText(F, ratio(F, bySource[k], rev)),
+            gross: g, grossText: money(F, g === null ? "0" : g), credits: c, creditsText: c === null ? null : money(F, c), negative: D(F).ratIsNegative(amt(F, bySource[k])) };
         });
         var top = rows.slice().sort(function (a, b) { return D(F).ratCmp(amt(F, b.amount), amt(F, a.amount)); })[0] || null;
         var bySupplierId = {};
@@ -1783,6 +2010,9 @@
           revenue: totalView(F, A.revenue, cur.report.coverage.revenue),
           purchasesPct: { text: pctText(F, A.purchasesPct), band: band(F, A.purchasesPct, pol.values["goal.foodCostPct"].value), num: toNum(F, ratioValue(A.purchasesPct)), goal: pol.values["goal.foodCostPct"] },
           rows: rows, bySupplierId: bySupplierId, top: top,
+          gross: totalView(F, A.purchases.gross || A.purchases, cur.report.coverage.purchases),
+          credits: A.purchases.credits ? { state: A.purchases.credits.state, amount: A.purchases.credits.value, text: money(F, A.purchases.credits.value), count: A.purchases.credits.count } : null,
+          disclosure: creditsDisclosure(cur.report),
         };
       });
     }
@@ -6303,6 +6533,110 @@ function PilotDashboard() {
     }, () => isSelectionLive(ctx), { tenantId: ctx.tenantId, bizId: ctx.bizId }).then((res) => { if (res.state !== "stale") setFinLedger(res); });
     return () => { session.cancel(); };
   }, [finF, finLedgerKey]);
+  // P1 (MARJIN_CREDITS/1): the supplier-credit node, listed through the server API (client Rules
+  // deny the key). Keyed by the exact selection + attempt (retry, foreground, applied mutation):
+  // only the latest request resolves; a failed read is an explicit unavailable state.
+  const [creditsAttempt, setCreditsAttempt] = useState(0);
+  const [creditsHeld, setCreditsHeld] = useState({ state: "loading", key: null });
+  const creditsSessionRef = useRef(null);
+  if (!creditsSessionRef.current && window.MarjinP1) creditsSessionRef.current = window.MarjinP1.createCreditsSession();
+  const creditsKey = finSel && finSel.tenantId && finSel.bizId ? [finSel.tenantId, finSel.bizId, finSel.gen, creditsAttempt].join("|") : null;
+  useEffect(() => {
+    const onVis = () => { if (!document.visibilityState || document.visibilityState === "visible") setCreditsAttempt((n) => n + 1); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+  const retrySupplierCredits = () => setCreditsAttempt((n) => n + 1);
+  useEffect(() => {
+    const session = creditsSessionRef.current;
+    if (!session || !creditsKey) { if (session) session.cancel(); return; }
+    const ctx = captureSelectionCtx();
+    if (!ctx || !ctx.tenantId || !ctx.bizId) { session.cancel(); return; }
+    const key = creditsKey;
+    session.request(key, async (signal) => {
+      if (!isSelectionLive(ctx)) throw new Error("stale");
+      const resp = await window.apiFetch(`/api/admin?action=list-supplier-credits&tenantId=${encodeURIComponent(ctx.tenantId)}&bizId=${encodeURIComponent(ctx.bizId)}`, { method: "GET", signal });
+      if (!resp || !resp.ok) throw new Error("http_error");
+      return await resp.json();
+    }, () => isSelectionLive(ctx)).then((res) => { if (res.state !== "stale") setCreditsHeld(res); });
+    return () => { session.cancel(); };
+  }, [creditsKey]);
+  // P1 Supplier Credits tab: a credit is entered ONLY here, as its own document (never a negative
+  // purchase). Create = new record; edit = server-side void + replace (history kept); delete =
+  // void (the record stays, marked "בוטל"). Every write goes through the server API; an applied
+  // write re-reads the list and rebuilds the completed affected issue dates' daily analytics.
+  const EMPTY_CREDIT_FORM = { supplierId: "", issueDate: "", amount: "", documentNumber: "", note: "" };
+  const [creditForm, setCreditForm] = useState(EMPTY_CREDIT_FORM);
+  const [creditEditing, setCreditEditing] = useState(null);
+  const [creditErrors, setCreditErrors] = useState({});
+  const [creditMsg, setCreditMsg] = useState(null);
+  const [creditBusy, setCreditBusy] = useState(false);
+  const canWriteCredits = !!loggedInUser && ["super_owner", "owner", "manager"].includes(loggedInUser.role);
+  const creditMutation = async (action, body, ctx) => {
+    let resp, json;
+    try {
+      resp = await window.apiFetch(`/api/admin?action=${action}`, { method: "POST", body: JSON.stringify(body) });
+      json = await resp.json().catch(() => ({}));
+    } catch (_) { return { ok: false, code: "network" }; }
+    if (!isSelectionLive(ctx)) return { ok: false, stale: true };
+    if (!resp.ok) return { ok: false, code: (json && json.error) || "failed" };
+    return { ok: true, json };
+  };
+  const afterCreditApplied = async (json, ctx, okText) => {
+    setCreditsAttempt((n) => n + 1);
+    let warn = json.postCommitAccess === "revoked_during_commit" ? window.MarjinP1.TXT.revokedWarning : null;
+    if (json.applied) {
+      const yesterday = israelDateKey(-1);
+      for (const d of (json.affectedDates || [])) {
+        if (d > yesterday) continue; // the current / a future day is outside Actual; the nightly build covers it
+        try { await rebuildInsightsAfterEntrySave(d, ctx); } catch (_) { warn = warn || window.MarjinP1.TXT.rebuildWarning; }
+        if (!isSelectionLive(ctx)) return;
+      }
+    }
+    setCreditMsg(warn ? { kind: "warn", text: warn } : { kind: "ok", text: okText });
+  };
+  const submitCreditForm = async () => {
+    if (creditBusy || !canWriteCredits) return;
+    const P1 = window.MarjinP1;
+    if (!finF || !P1) { setCreditMsg({ kind: "error", text: "הנתונים הכספיים אינם זמינים כעת. הזיכוי לא נשמר." }); return; }
+    const v = P1.validateForm(finF, creditForm, suppliers);
+    setCreditErrors(v.ok ? {} : v.errors);
+    if (!v.ok) return;
+    const ctx = captureSelectionCtx();
+    if (!ctx || !ctx.tenantId || !ctx.bizId) return;
+    const creditId = P1.newId(), operationId = P1.newId();
+    if (!creditId || !operationId) { setCreditMsg({ kind: "error", text: P1.errorText("no_uuid") }); return; }
+    setCreditBusy(true); setCreditMsg(null);
+    try {
+      const r = creditEditing
+        ? await creditMutation("replace-supplier-credit", P1.replaceBody(ctx, creditEditing, v.input, creditId, operationId), ctx)
+        : await creditMutation("create-supplier-credit", P1.createBody(ctx, v.input, creditId, operationId), ctx);
+      if (r.stale) return;
+      if (!r.ok) { setCreditMsg({ kind: "error", text: P1.errorText(r.code) }); if (r.code === "revision_conflict" || r.code === "credit_not_active") setCreditsAttempt((n) => n + 1); return; }
+      setCreditForm(EMPTY_CREDIT_FORM); setCreditEditing(null);
+      await afterCreditApplied(r.json, ctx, P1.TXT.saved);
+    } finally { setCreditBusy(false); }
+  };
+  const voidSupplierCredit = async (row) => {
+    if (creditBusy || !canWriteCredits) return;
+    const P1 = window.MarjinP1;
+    if (!window.confirm(`לבטל את הזיכוי של ${row.supplierName} מתאריך ${row.issueDate} (${row.amountText})? הזיכוי יישאר ברשימה כמבוטל ולא ייספר.`)) return;
+    const ctx = captureSelectionCtx();
+    if (!ctx || !ctx.tenantId || !ctx.bizId) return;
+    const operationId = P1.newId();
+    if (!operationId) { setCreditMsg({ kind: "error", text: P1.errorText("no_uuid") }); return; }
+    setCreditBusy(true); setCreditMsg(null);
+    try {
+      const r = await creditMutation("void-supplier-credit", P1.voidBody(ctx, row, operationId), ctx);
+      if (r.stale) return;
+      if (!r.ok) { setCreditMsg({ kind: "error", text: P1.errorText(r.code) }); if (r.code === "revision_conflict" || r.code === "credit_not_active") setCreditsAttempt((n) => n + 1); return; }
+      await afterCreditApplied(r.json, ctx, P1.TXT.voidedOk);
+    } finally { setCreditBusy(false); }
+  };
+  const startEditCredit = (row) => {
+    setCreditEditing(row); setCreditErrors({}); setCreditMsg(null);
+    setCreditForm({ supplierId: row.supplierId, issueDate: row.issueDate, amount: row.amount, documentNumber: row.documentNumber || "", note: row.note || "" });
+  };
   const finSrc = React.useMemo(() => {
     if (!finF || !finAsOf) return null;
     const C1 = window.MarjinC1;
@@ -6312,8 +6646,11 @@ function PilotDashboard() {
       : C1.nodeState(finF, n.raw, expect);
     const ledger = C1.ledgerFor(finLedger, finLedgerKey);
     const raw = finRaw.bizId === (currentBizId || null) ? finRaw : { config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING };
-    return { rows: entries, config: nodeOf(raw.config, "object"), fixed: nodeOf(raw.fixed, "array"), asOf: finAsOf, ledger, rowsReady: finRowsReady };
-  }, [finF, finAsOf, entries, finRaw, finLedger, finLedgerKey, finRowsReady, currentBizId]);
+    const credits = window.MarjinP1 ? window.MarjinP1.sourceFor(finF, creditsHeld, creditsKey) : { state: "not_loaded" };
+    return { rows: entries, config: nodeOf(raw.config, "object"), fixed: nodeOf(raw.fixed, "array"), asOf: finAsOf, ledger, rowsReady: finRowsReady, credits };
+  }, [finF, finAsOf, entries, finRaw, finLedger, finLedgerKey, finRowsReady, currentBizId, creditsHeld, creditsKey]);
+  /** P1: the Supplier Credits tab of the selected month (records by ISSUE month; loading / unavailable / empty explicit). */
+  const finCredits = React.useMemo(() => (finF && finSrc && window.MarjinP1) ? window.MarjinP1.monthView(finF, finSrc.credits, supMonth, suppliers) : { status: "loading", text: "טוען זיכויי ספקים…" }, [finF, finSrc, supMonth, suppliers]);
   const finStatus = finCoreState === "failed" ? "unavailable" : (finCoreState !== "ready" ? "loading" : null);
   /** Guarded view model: {status:"loading"|"unavailable"} unless the core and every input are ready. */
   const finView = (fn) => finStatus ? { status: finStatus, reason: "fincore_" + finCoreState } : (!finSrc ? { status: "loading" } : fn(finF, finSrc));
@@ -7899,7 +8236,7 @@ function PilotDashboard() {
       {screen==="foodcost" && (
         <div className="screen">
           <div style={{display:"flex",gap:6,marginBottom:16}}>
-            {[["summary","סיכום"],["by_supplier","הזנת ספקים"],["alerts","התראות"]].map(([t,l])=>(
+            {[["summary","סיכום"],["by_supplier","הזנת ספקים"],["credits","זיכויי ספקים"],["alerts","התראות"]].map(([t,l])=>(
               <button key={t} className="btn btn-ghost btn-sm" style={{...(fcTab===t?S.subBtnActive:{}),position:"relative"}} onClick={()=>{ setFcTab(t); setSupManageMode(false); }}>
                 {l}
                 {t==="alerts"&&supplierAlerts.length>0&&<span className="badge-dot">{supplierAlerts.length}</span>}
@@ -8023,6 +8360,13 @@ function PilotDashboard() {
                         </div>
                       )}
                     </div>
+                    {sv.credits&&sv.credits.count>0&&(
+                      <div data-c1="sup-gross-credits" style={{fontSize:11,color:"#475569",marginTop:6}}>
+                        קניות {sv.gross.text} · זיכויים שהונפקו בחודש −{sv.credits.text} · נטו {sv.total.text}
+                      </div>
+                    )}
+                    {sv.disclosure.incomplete&&<div data-c1="sup-credits-incomplete" style={{fontSize:11,color:"#DC2626",marginTop:6}}>{sv.disclosure.incomplete}</div>}
+                    {sv.disclosure.negative&&<div data-c1="sup-net-negative" style={{fontSize:11,color:"#B45309",marginTop:6}}>{sv.disclosure.negative}</div>}
                     {sv.revenue.partial&&<div style={{fontSize:11,color:"#DC2626",marginTop:6}}>{window.MarjinC1.revenueDisclosure(sv.report).warning}</div>}
                   </div>
                 )}
@@ -8113,7 +8457,8 @@ function PilotDashboard() {
                         <div style={{display:"flex",alignItems:"center",gap:10}}>
                           {supRow && (
                             <>
-                              <span data-c1={"sup-row-"+sup.id} style={{fontWeight:700,color:"#111827",fontSize:14}}>{supRow.text}</span>
+                              {supRow.credits!==null&&<span data-c1={"sup-row-credits-"+sup.id} style={{fontSize:11,color:"#64748B"}}>{supRow.grossText} − זיכויים {supRow.creditsText} =</span>}
+                              <span data-c1={"sup-row-"+sup.id} style={{fontWeight:700,color:supRow.negative?"#B45309":"#111827",fontSize:14}}>{supRow.text}</span>
                               {supRow.pctText!=="—"&&<span style={{fontSize:11,fontWeight:600,color:"#818CF8",background:"#EEF2FF",padding:"2px 7px",borderRadius:999}}>{supRow.pctText}</span>}
                             </>
                           )}
@@ -8184,6 +8529,110 @@ function PilotDashboard() {
                   <span data-c1="sup-footer-total" style={{fontWeight:700,color:"#111827",fontSize:13}}>{svReady ? sv.total.text : "—"}</span>
                 </div>
                 </>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* ═══ P1: SUPPLIER CREDITS (זיכויי ספקים) — a credit is its own document, never a negative purchase ═══ */}
+          {fcTab==="credits" && (()=>{
+            const cv = finCredits;
+            const [cY, cM] = supMonth.split("-").map(Number);
+            const cLabel = new Date(cY, cM-1, 1).toLocaleDateString("he-IL",{month:"long",year:"numeric"});
+            const cPrev = () => { const d=new Date(cY,cM-2,1); setSupMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); };
+            const cNext = () => { const d=new Date(cY,cM,1); setSupMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); };
+            const cCanNext = supMonth < finTodayStr.slice(0, 7);
+            const field = (k) => ({ value: creditForm[k], onChange: (e) => { const val = e.target.value; setCreditForm((f) => ({ ...f, [k]: val })); } });
+            const inp = {width:"100%",border:"1px solid #D1D5DB",borderRadius:8,padding:"9px 11px",fontSize:13,fontFamily:"inherit",color:"#111827",boxSizing:"border-box"};
+            const err = (k) => creditErrors[k] ? <div data-p1={"err-"+k} style={{fontSize:11,color:"#DC2626",marginTop:3}}>{creditErrors[k]}</div> : null;
+            return (
+              <div data-p1="credits-tab">
+                <div className="card card-p" style={{marginBottom:12,background:"#F8FAFC"}}>
+                  <div style={{fontSize:12,color:"#475569",lineHeight:1.6}}>
+                    זיכוי ספק נרשם כאן בלבד, כמסמך זיכוי — לא כקנייה שלילית. הזיכוי משויך לחודש של <strong>תאריך ההנפקה של מסמך הזיכוי</strong> ומקטין את הקניות נטו של הספק ואת עלות המזון באותו חודש, גם אם הוא מתייחס לחשבונית מחודש קודם. כל הסכומים לפני מע״מ.
+                  </div>
+                </div>
+                {canWriteCredits && (
+                  <div className="card card-p" data-p1="credit-form" style={{marginBottom:12}}>
+                    <h3 className="sec-head" style={{margin:"0 0 10px"}}>{creditEditing ? "עריכת זיכוי (הזיכוי הקודם יסומן כמוחלף)" : "הוספת זיכוי ספק"}</h3>
+                    {suppliers.length===0 ? <p style={{color:"#9CA3AF",fontSize:13,margin:0}}>אין ספקים מוגדרים</p> : (
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10}}>
+                        <label style={{fontSize:12,color:"#374151"}}>ספק
+                          <select data-p1="credit-supplier" {...field("supplierId")} style={inp}>
+                            <option value="">בחר ספק</option>
+                            {suppliers.map(sp => <option key={sp.id} value={String(sp.id)}>{sp.name}</option>)}
+                          </select>{err("supplierId")}
+                        </label>
+                        <label style={{fontSize:12,color:"#374151"}}>תאריך הנפקת מסמך הזיכוי
+                          <input data-p1="credit-date" type="date" {...field("issueDate")} style={inp}/>{err("issueDate")}
+                        </label>
+                        <label style={{fontSize:12,color:"#374151"}}>סכום הזיכוי לפני מע״מ (₪)
+                          <input data-p1="credit-amount" type="text" inputMode="decimal" placeholder="0.00" {...field("amount")} style={inp}/>{err("amount")}
+                        </label>
+                        <label style={{fontSize:12,color:"#374151"}}>מספר מסמך (לא חובה)
+                          <input data-p1="credit-doc" type="text" {...field("documentNumber")} style={inp}/>{err("documentNumber")}
+                        </label>
+                        <label style={{fontSize:12,color:"#374151"}}>הערה (לא חובה)
+                          <input data-p1="credit-note" type="text" {...field("note")} style={inp}/>{err("note")}
+                        </label>
+                      </div>
+                    )}
+                    <div style={{display:"flex",gap:8,marginTop:12}}>
+                      <button data-p1="credit-save" className="btn" disabled={creditBusy||suppliers.length===0} onClick={submitCreditForm}
+                        style={{background:"#111827",color:"#fff",border:"none",borderRadius:8,padding:"9px 16px",fontWeight:700,cursor:creditBusy?"default":"pointer",fontFamily:"inherit"}}>
+                        {creditBusy ? "שומר…" : creditEditing ? "שמור שינוי" : "שמור זיכוי"}
+                      </button>
+                      {creditEditing && <button data-p1="credit-cancel-edit" className="btn btn-ghost btn-sm" onClick={()=>{ setCreditEditing(null); setCreditForm(EMPTY_CREDIT_FORM); setCreditErrors({}); }}>ביטול עריכה</button>}
+                    </div>
+                  </div>
+                )}
+                {creditMsg && (
+                  <div role={creditMsg.kind==="error"?"alert":"status"} data-p1={"credit-msg-"+creditMsg.kind}
+                    style={{background:creditMsg.kind==="error"?"#FEF2F2":creditMsg.kind==="warn"?"#FFFBEB":"#F0FDF4",border:`1px solid ${creditMsg.kind==="error"?"#FECACA":creditMsg.kind==="warn"?"#FDE68A":"#BBF7D0"}`,color:creditMsg.kind==="error"?"#B91C1C":creditMsg.kind==="warn"?"#92400E":"#166534",borderRadius:10,padding:"9px 13px",marginBottom:12,fontSize:13,fontWeight:600}}>
+                    {creditMsg.text}
+                  </div>
+                )}
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12,background:"#FFFFFF",borderRadius:8,padding:"10px 16px",border:"1px solid #E5E7EB"}}>
+                  <button onClick={cPrev} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:"#6B7280",padding:"0 8px",lineHeight:1}}>‹</button>
+                  <span style={{fontWeight:700,color:"#111827",fontSize:15}}>זיכויים שהונפקו ב{cLabel}</span>
+                  <button onClick={cNext} disabled={!cCanNext} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:cCanNext?"#6B7280":"#D1D5DB",padding:"0 8px",lineHeight:1}}>›</button>
+                </div>
+                {cv.status==="loading" && <div data-p1="credits-loading" className="card card-p" style={{textAlign:"center",fontSize:13,color:"#9CA3AF"}}>{cv.text}</div>}
+                {cv.status==="unavailable" && (
+                  <div data-p1="credits-unavailable" className="card card-p" style={{textAlign:"center",fontSize:13,color:"#92400E"}}>
+                    {cv.text}
+                    <div style={{marginTop:8}}><button data-p1="credits-retry" className="btn btn-ghost btn-sm" onClick={retrySupplierCredits}>{window.MarjinP1.TXT.retry}</button></div>
+                  </div>
+                )}
+                {cv.status==="ready" && (
+                  <div>
+                    {cv.invalidText && <div data-p1="credits-invalid" role="alert" style={{background:"#FEF2F2",border:"1px solid #FECACA",color:"#B91C1C",borderRadius:10,padding:"9px 13px",marginBottom:10,fontSize:12,fontWeight:600}}>{cv.invalidText} ({cv.invalidCount})</div>}
+                    {cv.empty ? <div data-p1="credits-empty" className="empty"><p style={{color:"#9CA3AF"}}>{cv.emptyText}</p></div> : (
+                      <div>
+                        {cv.rows.map(r => (
+                          <div key={r.creditId} data-p1={"credit-row-"+r.creditId} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,padding:"10px 14px",marginBottom:6,background:r.status==="active"?"#FFFFFF":"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8,opacity:r.status==="active"?1:0.7}}>
+                            <div style={{minWidth:0}}>
+                              <div style={{fontSize:13,fontWeight:700,color:"#111827"}}>{r.supplierName}{r.statusText && <span data-p1="credit-status" style={{marginInlineStart:8,fontSize:10,fontWeight:700,color:"#6B7280",background:"#F3F4F6",borderRadius:99,padding:"1px 7px"}}>{r.statusText}</span>}</div>
+                              <div style={{fontSize:11,color:"#6B7280",marginTop:2}}>הונפק {r.issueDate.split("-").reverse().join("/")}{r.documentNumber ? ` · מסמך ${r.documentNumber}` : ""}</div>
+                            </div>
+                            <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+                              <span data-p1="credit-amount-text" style={{fontWeight:700,color:r.status==="active"?"#047857":"#9CA3AF",fontSize:14,textDecoration:r.status==="active"?"none":"line-through"}}>{r.amountText}</span>
+                              {canWriteCredits && r.status==="active" && (
+                                <>
+                                  <button data-p1="credit-edit" className="btn btn-ghost btn-sm" disabled={creditBusy} onClick={()=>startEditCredit(r)}>עריכה</button>
+                                  <button data-p1="credit-void" className="btn btn-ghost btn-sm" disabled={creditBusy} onClick={()=>voidSupplierCredit(r)}>ביטול</button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                        <div style={{background:"#F9FAFB",borderRadius:7,padding:"11px 14px",display:"flex",justifyContent:"space-between",marginTop:4,border:"1px solid #E5E7EB"}}>
+                          <span style={{fontWeight:500,color:"#6B7280",fontSize:12}}>סה״כ זיכויים פעילים ({cv.activeCount})</span>
+                          <span data-p1="credits-total" style={{fontWeight:700,color:"#111827",fontSize:13}}>{cv.totalText}</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             );

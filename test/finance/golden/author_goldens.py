@@ -2,7 +2,7 @@
 # Every expected value below is written literally by hand (R1.2/R1.3 golden contract,
 # revised by the R1.4 owner decisions and the FINAL owner contract of 2026-09-29:
 # MARJIN_FIN/2 + MARJIN_LABOR/2 + MARJIN_NORM/3; amended by the owner-approved closed-days
-# decision of 2026-09-30 => MARJIN_FIN/3 + MARJIN_LABOR/3); nothing here calls the Financial Core.
+# decision of 2026-09-30 => MARJIN_FIN/3 + MARJIN_LABOR/3; P1 supplier credits 2026-10-02 => MARJIN_FIN/4, identical values without credits); nothing here calls the Financial Core.
 # Closed-days amendment (CD-M1): monthly global/fixed entitlement is placed on eligible dates —
 # every date except a declared closure already COMPLETED (< asOf). Without closures this equals
 # the previous calendar-day placement, so only the closed-day cases O-02/O-15/O-20 and the two
@@ -344,7 +344,7 @@ case(id="R1-G",desc="canonical labor = hourly (ShiftOrganizer, manual) + global 
  "report.actual.labor.source.ingestionMethod":"manual","report.actual.labor.source.meaning":"authoritative_employer_cost",
  "report.actual.labor.source.coverage":"hourly_employees_only","report.actual.labor.source.fields":["payroll"],
  "report.actual.labor.employerCostPct.value":"125","report.actual.labor.legacyHourlyPayroll":{"counted":False,"dates":["2026-09-01"]},
- "report.actual.operatingProfit":{"state":"complete","value":"-550","issues":[]},"report.versions.labor":"MARJIN_LABOR/3","report.versions.fin":"MARJIN_FIN/3"},
+ "report.actual.operatingProfit":{"state":"complete","value":"-550","issues":[]},"report.versions.labor":"MARJIN_LABOR/3","report.versions.fin":"MARJIN_FIN/4"},
  expectFlags=[{"code":"legacy_hourly_payroll_not_counted","rowId":"a","field":"hourly_payroll"}])
 case(id="R1-H",desc="listed global employee without an amount => global employer cost missing (never zero)",asOf=D2,window=ONE,
  config={"employees":[{"id":"e1","type":"global","monthlySalary":""}]},
@@ -502,6 +502,6 @@ case(id="O-20",desc="daily adapter (closed-days amendment): a completed declared
  "dm.2026-09-01.laborCost":1134.4827586207,"dm.2026-09-01.globalLaborCost":1034.4827586207,"report.actual.labor.employerCost.value":"32900/29"})
 case(id="O-16",type="error",desc="malformed operating calendar is a contract error",asOf=D2,window=ONE,rows=[],closedDates=["2026-9-1"],expectError="invalid_operating_calendar")
 
-json.dump({"contract":"MARJIN_FIN/3 + MARJIN_LABOR/3 + MARJIN_NORM/3 + MARJIN_DEC/1 + MARJIN_PB/1","authoredBy":"hand (R1.3/R1.4 goldens + final owner contract 2026-09-29)","cases":C},
+json.dump({"contract":"MARJIN_FIN/4 + MARJIN_LABOR/3 + MARJIN_NORM/3 + MARJIN_DEC/1 + MARJIN_PB/1","authoredBy":"hand (R1.3/R1.4 goldens + final owner contract 2026-09-29)","cases":C},
  open(os.path.join(os.path.dirname(os.path.abspath(__file__)),"financial-core-goldens.json"),"w"),ensure_ascii=False,indent=1)
 print(len(C))

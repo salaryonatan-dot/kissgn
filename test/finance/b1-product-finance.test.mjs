@@ -89,8 +89,8 @@ test("PFN-04 productFinance.ts is pure and binds the product policies (no clock,
   // no exported function takes a basis / labor source / calendar parameter
   for (const m of code.matchAll(/export function (\w+)\(([^)]*)\)/g)) assert.doesNotMatch(m[2], /basis|laborSource|calendar|closure/i, m[1] + " exposes a policy parameter");
   assert.match(code, /productPurchaseBasis\(\)/); assert.match(code, /productLaborSource\(\)/); assert.match(code, /productClosureCalendar\(inputs, n\)/);
-  assert.equal(SERVER.PRODUCT_FINANCE_VERSION, "MARJIN_PRODUCT/2");
-  assert.equal(BROWSER.versions.product, "MARJIN_PRODUCT/2"); assert.equal(COMMITTED.versions.product, "MARJIN_PRODUCT/2");
+  assert.equal(SERVER.PRODUCT_FINANCE_VERSION, "MARJIN_PRODUCT/3"); // P1: supplier credits (MARJIN_CREDITS/1) applied by the composition
+  assert.equal(BROWSER.versions.product, "MARJIN_PRODUCT/3"); assert.equal(COMMITTED.versions.product, "MARJIN_PRODUCT/3");
 });
 
 // ── AMEND-03 / R-17 ───────────────────────────────────────────────────────────

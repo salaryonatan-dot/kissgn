@@ -1,5 +1,5 @@
 {
- "contract": "MARJIN_FIN/3 + MARJIN_LABOR/3 + MARJIN_NORM/3 + MARJIN_DEC/1 + MARJIN_PB/1",
+ "contract": "MARJIN_FIN/4 + MARJIN_LABOR/3 + MARJIN_NORM/3 + MARJIN_DEC/1 + MARJIN_PB/1",
  "authoredBy": "hand (R1.3/R1.4 goldens + final owner contract 2026-09-29)",
  "cases": [
   {
@@ -3503,7 +3503,7 @@
      "issues": []
     },
     "report.versions.labor": "MARJIN_LABOR/3",
-    "report.versions.fin": "MARJIN_FIN/3"
+    "report.versions.fin": "MARJIN_FIN/4"
    },
    "expectFlags": [
     {

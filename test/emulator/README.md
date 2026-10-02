@@ -482,3 +482,21 @@ closed day, the post-ledger revenue race (partial + contradiction), reopen, futu
 ```
 
 Expected: `total=4 passed=4 failed=0` — `ALL CASES PASSED`.
+
+## Run the P1 Supplier Credits proofs (Marjin 1.0 pilot scope)
+
+`p1-supplier-credits-emulator.mjs` proves, on the real Rules engine and the real Admin transport,
+that the credit node `tenants/{t}/biz:{b}:supplier_credits` (and every child) is client-DENIED for
+owner, manager, viewer, a cross-tenant owner and the unauthenticated principal (no Rules change —
+the existing `biz:*` catch-all denies it), and that the ACTUAL `api/admin.js` credit actions are
+append-safe for parallel creates, single-winner for parallel void / replace of one revision and
+exactly-once for a duplicated operation. `p1-rendered-credits.mjs` boots the working-tree page in
+jsdom and drives the Supplier Credits tab (list, create, validation, void, edit = replace,
+unavailable + retry) through the real handler.
+
+```
+... "node test/emulator/p1-supplier-credits-emulator.mjs"
+... "node test/emulator/p1-rendered-credits.mjs"
+```
+
+Expected: `total=8 passed=8 failed=0` for each — `ALL CASES PASSED`.

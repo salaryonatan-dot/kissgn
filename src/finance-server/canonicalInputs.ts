@@ -12,13 +12,13 @@
 // propagates (it is never treated as "absent"). No write.
 import { readEntriesNode, requireEntriesRows } from "../../lib/analytics/entriesReader.js";
 import { israelBusinessDate } from "../finance/businessDate.js";
-import { decodeEnvelope, decodeExceptionLedger, exceptionsByDateOf } from "../policy/productFinance.js";
-import type { EnvelopeState, ExceptionLedgerState, ProductInputs } from "../policy/productFinance.js";
+import { decodeEnvelope, decodeExceptionLedger, decodeSupplierCredits, exceptionsByDateOf } from "../policy/productFinance.js";
+import type { EnvelopeState, ExceptionLedgerState, ProductInputs, SupplierCreditsState } from "../policy/productFinance.js";
 
 export const CANONICAL_SERVER_API_VERSION = "MARJIN_FIN_SERVER/1";
 
 export type InputState = EnvelopeState<unknown>["state"] | "not_loaded";
-export type InputIssue = "config_unreadable" | "fixed_unreadable" | "exceptions_unreadable";
+export type InputIssue = "config_unreadable" | "fixed_unreadable" | "exceptions_unreadable" | "supplier_credits_unreadable" | "supplier_credits_invalid";
 
 export interface ServerInputs extends ProductInputs {
   readonly tenantId: string;
@@ -29,6 +29,8 @@ export interface ServerInputs extends ProductInputs {
   /** Structured exception ledger: not_loaded unless `need.exceptions`. */
   readonly exceptionsState: ExceptionLedgerState["state"] | "not_loaded";
   readonly inputIssues: readonly InputIssue[];
+  /** P1 (MARJIN_CREDITS/1): state of the supplier-credit node, ALWAYS read (purchases are net of credits). */
+  readonly supplierCreditsState: SupplierCreditsState["state"];
 }
 
 interface DbLike {
@@ -42,11 +44,14 @@ export async function loadCanonicalInputs(
   opts: { readonly site: string; readonly nowMs?: number; readonly need: { readonly config: boolean; readonly fixed: boolean; readonly exceptions: boolean } },
 ): Promise<ServerInputs> {
   const base = `tenants/${tenantId}/biz:${bizId}`;
-  const [entriesSnap, configSnap, fixedSnap, exceptionsSnap] = await Promise.all([
+  // P1: the supplier-credit node is read on EVERY call — every financial output is net of credits,
+  // so no caller can obtain gross purchases presented as net by forgetting to ask for credits.
+  const [entriesSnap, configSnap, fixedSnap, exceptionsSnap, creditsSnap] = await Promise.all([
     db.ref(`${base}:entries`).once("value"),
     opts.need.config ? db.ref(`${base}:config`).once("value") : Promise.resolve(null),
     opts.need.fixed ? db.ref(`${base}:fixed`).once("value") : Promise.resolve(null),
     opts.need.exceptions || opts.need.config || opts.need.fixed ? db.ref(`tenants/${tenantId}/entry_exceptions/${bizId}`).once("value") : Promise.resolve(null),
+    db.ref(`${base}:supplier_credits`).once("value"),
   ]);
   const raw = entriesSnap.val();
   const rows = requireEntriesRows(raw, { tenantId, bizId, site: opts.site }) as unknown[];
@@ -58,6 +63,9 @@ export async function loadCanonicalInputs(
   if (fixed.state === "unreadable") inputIssues.push("fixed_unreadable");
   const ledger: ExceptionLedgerState | null = exceptionsSnap ? decodeExceptionLedger(exceptionsSnap.val()) : null;
   if (ledger && ledger.state === "unreadable") inputIssues.push("exceptions_unreadable");
+  const supplierCredits: SupplierCreditsState = decodeSupplierCredits(creditsSnap.val());
+  if (supplierCredits.state === "unreadable") inputIssues.push("supplier_credits_unreadable");
+  if (supplierCredits.state === "present" && supplierCredits.issues.length >= 1) inputIssues.push("supplier_credits_invalid");
   const nowMs = opts.nowMs === undefined ? Date.now() : opts.nowMs;
   return {
     tenantId,
@@ -72,6 +80,8 @@ export async function loadCanonicalInputs(
     ...(ledger && ledger.state === "present" ? { exceptionStates: ledger.value, exceptionsByDate: exceptionsByDateOf(ledger.value) } : {}),
     exceptionLedgerState: ledger ? ledger.state : "not_loaded",
     inputIssues,
+    supplierCredits,
+    supplierCreditsState: supplierCredits.state,
     asOfBusinessDate: israelBusinessDate(nowMs),
   };
 }

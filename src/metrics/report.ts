@@ -1,4 +1,12 @@
-// MARJIN_FIN/3 — actual financial report over canonical days.
+// MARJIN_FIN/4 — actual financial report over canonical days.
+//
+// MARJIN_FIN/4 (P1 supplier credits, owner direction): purchases are NET of the supplier credits
+// issued in the window (credit attribution = the credit document's issue date; an earlier month is
+// never restated). `actual.purchases` (value, bySource, purchasesPct, contribution, profit) is net;
+// `actual.purchases.gross` / `grossBySource` are the recorded purchases and `actual.purchases.credits`
+// the credits. An invalid or unreadable credit source makes purchases incomplete (never zero). A
+// negative net is kept and flagged (`negative_net_purchases`, `negative_supplier_net`). Days built
+// without a credit source (no `supplierCredits` on the day) behave exactly as MARJIN_FIN/3.
 //
 // Owner decisions (R1.4; FINAL owner contract 2026-09-29; closed-days amendment 2026-09-30):
 // BD-1 net-of-VAT basis for revenue, purchases and fixed expenses. MARJIN_LABOR/3: canonical
@@ -29,10 +37,11 @@ import { FIXED_COST_ALLOCATION, GLOBAL_COST_ALLOCATION, LABOR_CONTRACT_VERSION, 
 import type { LaborSourceInput } from "../finance/labor.js";
 import type { BusinessDate, CanonicalDay, Flag, MetricValue, Presence, Quarantine } from "../finance/types.js";
 import { FinanceContractError } from "../finance/types.js";
+import { SUPPLIER_CREDITS_CONTRACT_VERSION } from "../finance/supplierCredits.js";
 import type { CostTimeline, CostVersionBasis } from "./costTimeline.js";
 import { accrueWindow } from "./costTimeline.js";
 
-export const FINANCIAL_FORMULA_VERSION = "MARJIN_FIN/3";
+export const FINANCIAL_FORMULA_VERSION = "MARJIN_FIN/4";
 /** Manual-operation Actual window rule. A future live/same-day model is deferred and would be a new rule. */
 export const ACTUAL_WINDOW_RULE = "completed_days_through_d_minus_1";
 
@@ -130,7 +139,15 @@ export interface FinancialReport {
   readonly coverage: { readonly day: Coverage; readonly revenue: Coverage; readonly purchases: Coverage; readonly hourlyLabor: Coverage; readonly otherExpense: Coverage };
   readonly actual: {
     readonly revenue: MetricTotal;
-    readonly purchases: MetricTotal & { readonly bySource: Readonly<Record<string, AmountString>>; readonly basis: PurchaseBasisResolution };
+    /** NET purchases (gross − supplier credits issued in the window; MARJIN_FIN/4). */
+    readonly purchases: MetricTotal & {
+      readonly bySource: Readonly<Record<string, AmountString>>;
+      readonly basis: PurchaseBasisResolution;
+      /** purchases recorded in entries (before credits) */
+      readonly gross: MetricTotal;
+      readonly grossBySource: Readonly<Record<string, AmountString>>;
+      readonly credits: SupplierCreditsTotal;
+    };
     readonly hourlyLabor: MetricTotal;
     readonly otherExpense: MetricTotal;
     readonly labor: LaborReport;
@@ -161,6 +178,19 @@ export interface FinancialReport {
   };
   readonly quarantine: Quarantine;
   readonly flags: readonly Flag[];
+}
+
+/** Supplier credits issued in the window (MARJIN_CREDITS/1, active records, keyed by issue date). */
+export interface SupplierCreditsTotal {
+  readonly contract: string;
+  /** absent: none issued (zero, complete) · present: counted · invalid: at least one window date has an invalid / unreadable credit fact */
+  readonly state: "absent" | "present" | "invalid";
+  /** sum of the valid credits counted; null when none */
+  readonly value: AmountString | null;
+  readonly count: number;
+  readonly bySupplier: Readonly<Record<string, AmountString>>;
+  readonly dates: readonly BusinessDate[];
+  readonly invalidDates: readonly BusinessDate[];
 }
 
 export interface ReportContext {
@@ -375,15 +405,55 @@ export function computePeriodReport(
   const contradictedSet = new Set(contradicted);
   const revenueTotal = totalOf(inWindow, closed, (d) => d.revenue);
   const revenue = contradicted.length >= 1 ? { ...revenueTotal, total: { ...revenueTotal.total, complete: false } } : revenueTotal;
-  const purchases = totalOf(inWindow, closed, (d) => d.purchases);
+  // MARJIN_FIN/4: d.purchases is already NET on dates whose gross purchases are present
+  // (applySupplierCreditsToDay); credits issued on a date WITHOUT present gross purchases are
+  // subtracted here, so the total is exactly Σ gross − Σ credits of the window.
+  const grossTotal = totalOf(inWindow, closed, (d) => d.purchasesGross || d.purchases);
+  const netOnPresent = totalOf(inWindow, closed, (d) => d.purchases);
+  let creditsOffGross: Dec | null = null;
+  const creditBy = new Map<string, Rat>();
+  const offGrossBy = new Map<string, Rat>();
+  let creditsSum: Dec | null = null;
+  let creditCount = 0;
+  const creditDates: BusinessDate[] = [];
+  const creditInvalidDates: BusinessDate[] = [];
+  for (const d of inWindow) {
+    const c = d.supplierCredits;
+    if (!c) continue;
+    if (c.presence === "invalid" || c.partial) creditInvalidDates.push(d.date);
+    if (c.presence !== "present" || c.value === null) continue;
+    creditDates.push(d.date);
+    creditCount += c.count;
+    creditsSum = creditsSum === null ? c.value : decAdd(creditsSum, c.value);
+    const grossPresent = d.purchases.presence === "present" && d.purchases.value !== null;
+    if (!grossPresent) creditsOffGross = creditsOffGross === null ? c.value : decAdd(creditsOffGross, c.value);
+    for (const [k, v] of Object.entries(c.bySupplier)) {
+      const r = parseAmountString(v);
+      creditBy.set(k, creditBy.has(k) ? ratAdd(creditBy.get(k) as Rat, r) : r);
+      if (!grossPresent) offGrossBy.set(k, offGrossBy.has(k) ? ratAdd(offGrossBy.get(k) as Rat, r) : r);
+    }
+  }
+  const netRat: Rat | null = creditsOffGross === null ? netOnPresent.rat : ratSub(netOnPresent.rat === null ? RAT_ZERO : netOnPresent.rat, ratFromDec(creditsOffGross));
+  const purchases = {
+    total: { value: netRat === null ? null : serializeRat(netRat), presentDays: netOnPresent.total.presentDays, complete: netOnPresent.total.complete && creditInvalidDates.length < 1 },
+    rat: netRat,
+    operatingPresent: netOnPresent.operatingPresent,
+  };
   const hourly = totalOf(inWindow, closed, (d) => d.hourlyLabor);
   const other = totalOf(inWindow, closed, (d) => d.otherExpense);
 
   const bySource = new Map<string, Rat>();
+  const grossBySource = new Map<string, Rat>();
   for (const d of inWindow) for (const [k, v] of Object.entries(d.purchases.bySource)) {
     const r = parseAmountString(v);
     bySource.set(k, bySource.has(k) ? ratAdd(bySource.get(k) as Rat, r) : r);
   }
+  for (const [k, r] of offGrossBy) bySource.set(k, bySource.has(k) ? ratSub(bySource.get(k) as Rat, r) : ratSub(RAT_ZERO, r));
+  for (const d of inWindow) for (const [k, v] of Object.entries((d.purchasesGross || d.purchases).bySource)) {
+    const r = parseAmountString(v);
+    grossBySource.set(k, grossBySource.has(k) ? ratAdd(grossBySource.get(k) as Rat, r) : r);
+  }
+  const sortedOut = (m: Map<string, Rat>) => Object.fromEntries([...m.keys()].sort().map((k) => [k, serializeRat(m.get(k) as Rat)]));
   const purchaseDates = inWindow.filter((d) => d.purchases.presence === "present").map((d) => d.date);
   const basis = resolvePurchaseBasis(purchaseDates, purchaseBasis);
 
@@ -417,6 +487,13 @@ export function computePeriodReport(
   const revenueIssues = metricIssues(inWindow, closed, "revenue", (d) => d.revenue, true);
   if (contradicted.length >= 1) revenueIssues.push({ component: "revenue", kind: "invalid", reason: "closed_day_has_recorded_values", dates: contradicted });
   const purchaseIssues = metricIssues(inWindow, closed, "purchases", (d) => d.purchases, true);
+  // MARJIN_CREDITS/1: an invalid / unreadable credit fact on ANY recognised date (closed dates
+  // included — a credit's period is its issue date, not the operating calendar) is an invalid
+  // purchases component: purchases, Food Cost and every dependent figure are never complete.
+  const creditOnlyInvalid = creditInvalidDates.filter((dt) => !purchaseIssues.some((i) => i.kind === "invalid" && i.dates.includes(dt)));
+  if (creditOnlyInvalid.length >= 1) purchaseIssues.push({ component: "purchases", kind: "invalid", reason: "supplier_credit_invalid_or_unreadable", dates: creditOnlyInvalid });
+  if (netRat !== null && ratIsNegative(netRat)) flags.push({ code: "negative_net_purchases", key: "window" });
+  for (const [k, r] of bySource) if (ratIsNegative(r)) flags.push({ code: "negative_supplier_net", key: k });
   const hourlyIssues = metricIssues(inWindow, closed, "hourly_employer_cost", (d) => d.hourlyLabor, true);
   const otherIssues = metricIssues(inWindow, closed, "other_expense", (d) => d.otherExpense, false);
   for (const d of contradicted) flags.push({ code: "closed_day_has_recorded_values", date: d });
@@ -509,7 +586,19 @@ export function computePeriodReport(
     },
     actual: {
       revenue: revenue.total,
-      purchases: { ...purchases.total, bySource: Object.fromEntries([...bySource.keys()].sort().map((k) => [k, serializeRat(bySource.get(k) as Rat)])), basis },
+      purchases: {
+        ...purchases.total, bySource: sortedOut(bySource), basis,
+        gross: grossTotal.total, grossBySource: sortedOut(grossBySource),
+        credits: {
+          contract: SUPPLIER_CREDITS_CONTRACT_VERSION,
+          state: creditInvalidDates.length >= 1 ? "invalid" : creditCount >= 1 ? "present" : "absent",
+          value: creditsSum === null ? null : serializeDec(creditsSum),
+          count: creditCount,
+          bySupplier: sortedOut(creditBy),
+          dates: creditDates,
+          invalidDates: creditInvalidDates,
+        },
+      },
       hourlyLabor: hourly.total,
       otherExpense: other.total,
       labor: {

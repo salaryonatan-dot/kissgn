@@ -15,6 +15,8 @@ import { importerVerdict, loadConsumerFiles, repoKindOf, validateConsumerFiles }
 import { SERVER_READER_APPROVED_BLOBS, collectServerReaderScopeInputs, serverReaderScopeVerdict } from "../support/server-reader-authorized-delta.mjs";
 import { C1_ASSEMBLY, c1IndexVerdict } from "../support/c1-index-scope.mjs";
 import { C1_INDEX_PIN } from "../support/c1-candidate-pin.mjs";
+import { P1_BASE, p1IndexVerdict } from "../support/p1-index-scope.mjs";
+import { P1_PINS } from "../support/p1-candidate-pin.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -131,11 +133,25 @@ function assertB2Scope(root) {
     // (test/support/c1-index-scope.mjs: fixed zones anchored in the APPROVED bytes, protected
     // write sub-regions byte-identical, no write call changed) — never a blanket bypass.
     const c1 = assembled && gitIn(root, ["merge-base", "--is-ancestor", C1_ASSEMBLY, "HEAD"]).status === 0 && names(["rev-parse", "HEAD"])[0] !== C1_ASSEMBLY;
-    const allowed = assembled ? [...CDM2_APPROVED, ...P0_APPROVED] : CDM2_APPROVED;
+    // P1 Supplier Credits: when the reviewed C1 R2 commit (P1_BASE) is a STRICT ancestor of HEAD, the
+    // tree carries the P1 candidate. Its protected changes are EXACTLY the files listed in the P1
+    // identity pin (test/support/p1-candidate-pin.mjs — fixed blob literals, pending independent
+    // review): each must be byte-identical (committed, staged, checked out) to its pinned blob, and
+    // index.html must additionally satisfy the P1 scope contract over the C1-pinned base page.
+    const p1 = c1 && gitIn(root, ["merge-base", "--is-ancestor", P1_BASE, "HEAD"]).status === 0 && names(["rev-parse", "HEAD"])[0] !== P1_BASE;
+    const P1_FILES = p1 ? Object.keys(P1_PINS.blobs).filter((f) => f !== "index.html") : [];
+    const allowed = assembled ? [...CDM2_APPROVED, ...P0_APPROVED, ...P1_FILES] : CDM2_APPROVED;
     const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f));
     assert.deepEqual([...new Set(whole)].sort(), [...allowed].sort(), assembled
-      ? "assembled tree: protected changes are exactly CD-M2 R1's approved runtime files + P0 Scheduled Auth's three API routes"
+      ? "assembled tree: protected changes are exactly CD-M2 R1's approved runtime files + P0 Scheduled Auth's three API routes" + (p1 ? " + the pinned P1 Supplier Credits candidate files" : "")
       : "integrated tree: protected changes are exactly CD-M2 R1's approved runtime files");
+    for (const f of P1_FILES) {
+      const pin = P1_PINS.blobs[f];
+      assert.match(pin, /^[0-9a-f]{40}$/, "the P1 pin of " + f + " must be a literal blob id");
+      assert.equal(gitIn(root, ["rev-parse", "HEAD:" + f]).stdout.trim(), pin, f + " (committed) is not the pinned P1 candidate blob " + pin.slice(0, 8));
+      assert.equal(gitIn(root, ["rev-parse", ":" + f]).stdout.trim(), pin, f + ": staged (index) blob differs from the pinned P1 candidate blob");
+      assert.equal(hashBytes(readFileSync(join(root, f))), pin, f + ": checked-out bytes differ from the pinned P1 candidate blob");
+    }
     assert.equal(gitIn(root, ["merge-base", "--is-ancestor", CDM2R1, "HEAD"]).status, 0, "…and they come from the approved CD-M2 R1 lineage");
     if (assembled) assert.equal(gitIn(root, ["merge-base", "--is-ancestor", P0, "HEAD"]).status, 0, "…and the approved P0 Scheduled Auth lineage");
     // the approved content of each runtime file: [file, expected blob bytes, label]
@@ -166,6 +182,24 @@ function assertB2Scope(root) {
       const committed = blobBytes(root, "HEAD:index.html"), staged = blobBytes(root, ":index.html"), checkedOut = readFileSync(join(root, "index.html"));
       assert.ok(checkedOut.equals(committed), "index.html: checked-out bytes differ from the committed C1 blob");
       assert.ok(staged.equals(committed), "index.html: staged (index) blob differs from the committed C1 blob");
+      if (p1) {
+        // P1 layer. The base page is recomputed from git objects (never the working tree) and must
+        // be exactly the C1 identity-pinned blob AND satisfy the C1 contract; the candidate must then
+        // satisfy the P1 contract against it and be exactly the P1 identity-pinned blob.
+        const base = blobBytes(root, P1_BASE + ":index.html");
+        assert.equal(hashBytes(base), C1_INDEX_PIN.blob, "P1 base index.html is the C1 identity-pinned blob " + C1_INDEX_PIN.blob.slice(0, 8));
+        assert.deepEqual(c1IndexVerdict(approved, base), { ok: true }, "the P1 base index.html satisfies the C1 contract");
+        for (const [label, bytes] of [["committed", committed], ["staged (index)", staged], ["checked-out", checkedOut]]) {
+          const v = p1IndexVerdict(base, bytes);
+          assert.ok(v.ok, "index.html (" + label + ") violates the P1 contract: " + JSON.stringify(v));
+        }
+        const pin = P1_PINS.blobs["index.html"];
+        assert.match(pin, /^[0-9a-f]{40}$/, "the P1 identity pin must be a literal blob id");
+        assert.equal(gitIn(root, ["rev-parse", "HEAD:index.html"]).stdout.trim(), pin, "index.html (committed) is not the pinned P1 candidate blob " + pin.slice(0, 8));
+        assert.equal(gitIn(root, ["rev-parse", ":index.html"]).stdout.trim(), pin, "index.html: staged (index) blob differs from the pinned P1 candidate blob");
+        assert.equal(hashBytes(checkedOut), pin, "index.html: checked-out bytes differ from the pinned P1 candidate blob");
+        return;
+      }
       for (const [label, bytes] of [["committed", committed], ["staged (index)", staged], ["checked-out", checkedOut]]) {
         const v = c1IndexVerdict(approved, bytes);
         assert.ok(v.ok, "index.html (" + label + ") violates the C1 contract: " + JSON.stringify(v));
@@ -208,8 +242,20 @@ const HEAD_SHA = gitIn(REPO, ["rev-parse", "HEAD"]).stdout.trim();
 const isIntegratedRepo = gitIn(REPO, ["merge-base", "--is-ancestor", B2, "HEAD"]).status === 0 && HEAD_SHA !== B2;
 const isAssembledRepo = isIntegratedRepo && gitIn(REPO, ["merge-base", "--is-ancestor", HF1R1, "HEAD"]).status === 0;
 const isC1Repo = isAssembledRepo && gitIn(REPO, ["merge-base", "--is-ancestor", C1_ASSEMBLY, "HEAD"]).status === 0 && HEAD_SHA !== C1_ASSEMBLY;
-// On a C1 tree a non-approved index.html is refused by the C1 contract instead of the byte pin.
-const INDEX_REFUSED = isC1Repo ? /index\.html \(committed\) violates the C1 contract|index\.html \(committed\) is not the pinned C1 candidate blob/ : /index\.html is byte-identical to the approved merge/;
+const isP1Repo = isC1Repo && gitIn(REPO, ["merge-base", "--is-ancestor", P1_BASE, "HEAD"]).status === 0 && HEAD_SHA !== P1_BASE;
+// On a C1 tree a non-approved index.html is refused by the C1 contract instead of the byte pin;
+// on a P1 tree by the P1 contract (the C1 surfaces outside the P1 zones are frozen at C1 R2 bytes).
+const INDEX_REFUSED = isP1Repo ? /index\.html \(committed\) violates the P1 contract|index\.html \(committed\) is not the pinned P1 candidate blob/
+  : isC1Repo ? /index\.html \(committed\) violates the C1 contract|index\.html \(committed\) is not the pinned C1 candidate blob/ : /index\.html is byte-identical to the approved merge/;
+// On a P1 tree a C1-zone mutation outside the P1 zones is refused by the P1 scope first.
+const C1_REASON = (re) => (isP1Repo ? /change_outside_p1_zones|protected_region_changed|write_path_lines_changed|p1_|bundle_identity/ : re);
+const PIN_REFUSED = isP1Repo ? /index\.html \(committed\) violates the P1 contract|index\.html \(committed\) is not the pinned P1 candidate blob/ : /index\.html \(committed\) is not the pinned C1 candidate blob/;
+const p1BaseOf = (dir) => blobBytes(dir, P1_BASE + ":index.html");
+/** The scope layer that applies to this tree: on a C1 tree a C1-zone edit is ACCEPTED by scope (why identity is required); on a P1 tree it is outside the P1 zones and REFUSED. */
+function assertScopeLayer(dir, bytes, what) {
+  if (isP1Repo) assert.equal(p1IndexVerdict(p1BaseOf(dir), bytes).reason, "change_outside_p1_zones", what + ": on a P1 tree the P1 scope refuses a C1-zone edit");
+  else assert.deepEqual(c1IndexVerdict(approvedIndexMerge(dir), bytes), { ok: true }, what);
+}
 const appendTo = (dir, f, text) => { writeFileSync(join(dir, f), readFileSync(join(dir, f), "utf8") + text); };
 
 test("B2G-05-M1 integrated tree: a WORKING-TREE-ONLY edit of an approved CD-M2 runtime file (history unchanged) fails the guard; the clean clone passes", { skip: !isIntegratedRepo && "standalone tree: the integrated exception does not apply" }, () => {
@@ -307,7 +353,7 @@ test("B2G-05-M5 C1 tree: committed index.html changes outside the C1 zones, in a
   for (const [label, mut, re] of cases) {
     withWritableClone(HEAD_SHA, (dir) => {
       mut(dir); commitIn(dir, label);
-      assert.throws(() => assertB2Scope(dir), re, label);
+      assert.throws(() => assertB2Scope(dir), C1_REASON(re), label);
     });
   }
 });
@@ -322,9 +368,9 @@ test("B2G-05-M6 C1 tree: an in-zone edit (a label) fails dirty, staged AND commi
   withWritableClone(HEAD_SHA, (dir) => {
     const p = join(dir, "index.html"), src = readFileSync(p, "utf8");
     const changed = src.replace(label, edited);
-    assert.deepEqual(c1IndexVerdict(approvedIndexMerge(dir), Buffer.from(changed)), { ok: true }, "the scope layer alone accepts this in-zone edit");
+    assertScopeLayer(dir, Buffer.from(changed), "the scope layer alone accepts this in-zone edit");
     writeFileSync(p, changed); commitIn(dir, "in-zone label edit");
-    assert.throws(() => assertB2Scope(dir), /index\.html \(committed\) is not the pinned C1 candidate blob/);
+    assert.throws(() => assertB2Scope(dir), PIN_REFUSED);
   });
 });
 
@@ -335,7 +381,7 @@ test("B2G-05-M7 C1 tree: an in-zone FINANCIAL calculation mutation passes the sc
   const mutate = (dir) => { const p = join(dir, "index.html"), src = readFileSync(p, "utf8"); assert.equal(src.split(FIN_OLD).length, 2, "probe anchor unique"); writeFileSync(p, src.replace(FIN_OLD, FIN_NEW)); return readFileSync(p); };
   withClone(HEAD_SHA, (dir) => {
     const bytes = mutate(dir);
-    assert.deepEqual(c1IndexVerdict(approvedIndexMerge(dir), bytes), { ok: true }, "scope layer accepts the financial mutation (why identity is required)");
+    assertScopeLayer(dir, bytes, "scope layer accepts the financial mutation (why identity is required)");
     assert.throws(() => assertB2Scope(dir), /checked-out bytes differ/, "dirty");
     assert.equal(spawnSync("git", ["-C", dir, "add", "index.html"]).status, 0);
     assert.throws(() => assertB2Scope(dir), /staged \(index\) blob differs|checked-out bytes differ/, "staged");
@@ -344,10 +390,52 @@ test("B2G-05-M7 C1 tree: an in-zone FINANCIAL calculation mutation passes the sc
   });
   withWritableClone(HEAD_SHA, (dir) => {
     mutate(dir); commitIn(dir, "in-zone financial mutation");
-    assert.throws(() => assertB2Scope(dir), /index\.html \(committed\) is not the pinned C1 candidate blob/, "committed");
+    assert.throws(() => assertB2Scope(dir), PIN_REFUSED, "committed");
   });
   withWritableClone(HEAD_SHA, (dir) => {                               // unrelated non-protected file: not a false failure
     writeFileSync(join(dir, "scratch-note.txt"), "x\n"); commitIn(dir, "unrelated");
     assertB2Scope(dir);
   });
+});
+
+// ── P1 Supplier Credits: the P1 layer of B2G-05 (disposable clones) ─────────────────────────────
+// Every pinned P1 runtime file fails dirty / staged / committed when edited; an in-zone index.html
+// mutation (the credits tab amount label) passes the P1 scope but fails the identity pin; committed
+// changes that put a credit on the purchase path, duplicate the net formula, touch a C1 surface,
+// add an unpinned protected file or revert a pinned file fail; the exact P1 commit passes.
+test("B2G-05-P1a P1 tree: each pinned runtime file (core, fincore, server API, lib, admin API, page) fails when edited dirty or staged; the exact commit passes", { skip: !isP1Repo && "P1 not integrated in this tree" }, () => {
+  withClone(HEAD_SHA, (dir) => {
+    assertB2Scope(dir);                                                 // positive control: the exact P1 commit
+    for (const f of Object.keys(P1_PINS.blobs)) {
+      const before = readFileSync(join(dir, f));
+      appendTo(dir, f, f.endsWith(".json") ? " " : "\n// local edit\n");
+      assert.throws(() => assertB2Scope(dir), new RegExp(f.replace(/[.\/]/g, "\\$&") + ": checked-out bytes differ"), f + " unstaged edit must fail");
+      assert.equal(spawnSync("git", ["-C", dir, "add", f]).status, 0);
+      writeFileSync(join(dir, f), before);
+      assert.throws(() => assertB2Scope(dir), /staged \(index\) blob differs/, f + " staged edit must fail");
+      assert.equal(spawnSync("git", ["-C", dir, "reset", "-q", "--", f]).status, 0);
+      assertB2Scope(dir);
+    }
+  });
+});
+
+test("B2G-05-P1b P1 tree: committed negative-purchase substitution, formula duplication, C1-surface edits, an in-zone label edit, an unpinned protected file and a reverted pinned file all fail", { skip: !isP1Repo && "P1 not integrated in this tree" }, () => {
+  const edit = (dir, f, from, to) => { const p = join(dir, f), src = readFileSync(p, "utf8"); assert.equal(src.split(from).length, 2, "mutation anchor unique: " + from.slice(0, 60)); writeFileSync(p, src.replace(from, to)); };
+  const TAB = '          {fcTab==="credits" && (()=>{';
+  const cases = [
+    ["credit written as a negative supplier payment", (dir) => edit(dir, "index.html", TAB, TAB + "\n            const __neg = () => setSupPayDate(creditForm.supplierId, creditForm.issueDate, \"-\" + creditForm.amount);"), /write_path_lines_changed/],
+    ["net formula duplicated in the page", (dir) => edit(dir, "index.html", "    function errorText(code) { return ERRORS[code] || ERRORS.failed; }", "    function errorText(code) { return ERRORS[code] || ERRORS.failed; }\n    function net(F, g, c) { return F.finance.decimal.decSub(g, c); }"), /formula_duplication/],
+    ["C1 dashboard calculation edited", (dir) => edit(dir, "index.html", FIN_OLD, FIN_NEW), /change_outside_p1_zones/],
+    ["in-zone label edit", (dir) => edit(dir, "index.html", "הוספת זיכוי ספק", "הוספת זיכוי ספק (edited)"), /index\.html \(committed\) is not the pinned P1 candidate blob/],
+    ["core credit attribution edited", (dir) => edit(dir, "src/finance/supplierCredits.ts", "if (r.status !== \"active\" || !wanted.has(r.issueDate)) continue;", "if (r.status !== \"active\") continue;"), /src\/finance\/supplierCredits\.ts \(committed\) is not the pinned P1 candidate blob/],
+    ["an unpinned protected file", (dir) => writeFileSync(join(dir, "lib", "creditsExtra.js"), "export const x = 1;\n"), /protected changes are exactly/],
+    ["a pinned file reverted to the base", (dir) => writeFileSync(join(dir, "api", "admin.js"), blobBytes(dir, P1_BASE + ":api/admin.js")), /protected changes are exactly/],
+    ["Rules changed", (dir) => appendTo(dir, "database.rules.json", " "), /protected changes are exactly/],
+  ];
+  for (const [label, mut, re] of cases) {
+    withWritableClone(HEAD_SHA, (dir) => {
+      mut(dir); commitIn(dir, label);
+      assert.throws(() => assertB2Scope(dir), re, label);
+    });
+  }
 });

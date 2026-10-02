@@ -52,7 +52,7 @@ test("C1-P01 parity: the browser month report and projection equal the server ca
   assert.equal(dv.status, "ready", JSON.stringify(dv).slice(0, 300));
   assert.deepEqual(strip(dv.report), strip(server.report), "report: browser == server");
   const { provenance, ...serverProjection } = strip(server.projection);
-  assert.equal(provenance.product, "MARJIN_PRODUCT/2");
+  assert.equal(provenance.product, "MARJIN_PRODUCT/3");
   assert.deepEqual(strip(dv.projection), serverProjection, "projection: browser == server (the server adds only its provenance block)");
   assert.equal(dv.formulaIds.forecast, "REV_FORECAST/v2");
 });
@@ -83,7 +83,7 @@ test("C1-M02 the page bootstrap imports the generated bundle, checks identity + 
   const block = HTML.slice(i, HTML.indexOf("</script>", i));
   assert.match(block, /await import\("\/fincore\/v1\/browser\/marjinFinanceGlobal\.js"\)/);
   assert.match(block, /api !== window\.MarjinFinance/);
-  assert.match(block, /v\.product !== "MARJIN_PRODUCT\/2"/);
+  assert.match(block, /v\.product !== "MARJIN_PRODUCT\/3"/); // P1: supplier credits (MARJIN_PRODUCT/3)
   assert.match(block, /v\.forecast !== "REV_FORECAST\/v2"/);
   assert.match(block, /state: "failed"/);
   assert.doesNotMatch(HTML, /function calcMetrics\b|function buildChart\b|window\.calcMetrics\s*=|window\.buildChart\s*=/, "legacy page formulas removed (U-09 / C1-T16)");
