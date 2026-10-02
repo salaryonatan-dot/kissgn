@@ -73,7 +73,7 @@ test("API-03 loader I/O: entries read once; config/fixed only when asked (CD-M1:
     // CD-M1 (TD-CDM1-2): monthly-cost placement depends on declared closures ⇒ a cost-reading call also reads the ledger once
     const ledgerRead = need.config || need.fixed;
     assert.equal(db.reads.some((p) => p === `tenants/${T}/entry_exceptions/${B}`), ledgerRead, JSON.stringify(need) + " ledger");
-    assert.equal(db.reads.some((p) => p === `tenants/${T}/${B}:cost_history`), ledgerRead, JSON.stringify(need) + " cost history");
+    assert.equal(db.reads.some((p) => p === `tenants/${T}/biz:${B}:cost_history`), ledgerRead, JSON.stringify(need) + " cost history");
     assert.equal(db.reads.length, 1 + (need.config ? 1 : 0) + (need.fixed ? 1 : 0) + (ledgerRead ? 1 : 0) + (ledgerRead ? 1 : 0));
     assert.equal(i.configState, need.config ? "present" : "not_loaded"); assert.equal(i.fixedState, need.fixed ? "present" : "not_loaded");
     assert.equal(i.storageMode, "legacy"); assert.equal(i.asOfBusinessDate, AS_OF);

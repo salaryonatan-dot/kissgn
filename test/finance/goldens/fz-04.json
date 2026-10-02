@@ -289,6 +289,25 @@
        "string"
       ]
      }
+    },
+    "grossProfitBeforeFixed": {
+     "issues": [
+      {
+       "component": "string",
+       "dates": [
+        "string"
+       ],
+       "kind": "string",
+       "reason": "string"
+      }
+     ],
+     "state": "string",
+     "value": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     }
     }
    },
    "configurationBasis": [

@@ -1,0 +1,7 @@
+{
+  "slice": "F1",
+  "consumers": [
+    "lib/finance/costHistoryWriter.js"
+  ],
+  "serverApiConsumers": []
+}
