@@ -28,90 +28,109 @@
    "file": "index.html",
    "sites": ":7026-7031 entry preview netInc",
    "slice": "C1",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATED (C1)",
    "presenceImpact": false,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "c1Note": "E-01: entry preview = page VAT normalisation (U01) + core revenue fold (MarjinC1.entryRevenuePreview)",
+   "servedBy": "window.MarjinC1 (index.html) over fincore/v1"
   },
   {
    "id": "U03",
    "file": "index.html",
    "sites": ":4339-4397 calcMetrics",
    "slice": "C1",
-   "disposition": "RETIRE",
+   "disposition": "RETIRED (C1)",
    "presenceImpact": true,
-   "purchaseBasisImpact": true
+   "purchaseBasisImpact": true,
+   "c1Note": "calcMetrics removed with its window export (U-09); every C1 figure comes from MarjinC1 view models over fincore/v1",
+   "servedBy": "window.MarjinC1 (index.html) over fincore/v1"
   },
   {
    "id": "U04",
    "file": "index.html",
    "sites": ":6186-6206 dashboard KPI block",
    "slice": "C1+E",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATED (C1)",
    "presenceImpact": true,
-   "purchaseBasisImpact": true
+   "purchaseBasisImpact": true,
+   "c1Note": "D-01..D-16: dashboard KPI/hero/forecast from MarjinC1.dashboard (productMonthReport + productMonthProjection REV_FORECAST/v2); 'תחזית קופה' retired (D-10)",
+   "servedBy": "window.MarjinC1 (index.html) over fincore/v1"
   },
   {
    "id": "U05",
    "file": "index.html",
    "sites": ":6462-6465 expense breakdown",
    "slice": "C1",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATED (C1)",
    "presenceImpact": false,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "c1Note": "D-13: breakdown from report components, rent counted once, exact shares only when every component is complete",
+   "servedBy": "window.MarjinC1 (index.html) over fincore/v1"
   },
   {
    "id": "U06",
    "file": "index.html",
    "sites": ":6510-6530 purchases KPI/gauge, fcColor :1091",
    "slice": "C1+D",
-   "disposition": "MIGRATE/POLICY",
+   "disposition": "MIGRATED (C1)",
    "presenceImpact": false,
-   "purchaseBasisImpact": true
+   "purchaseBasisImpact": true,
+   "c1Note": "S-01/S-02/D-03: purchasesPct typed; goals via policy.registry.resolvePolicy; ±3 bands retained (D-owned) on complete values only",
+   "servedBy": "window.MarjinC1 (index.html) over fincore/v1"
   },
   {
    "id": "U07",
    "file": "index.html",
    "sites": ":4400-4414 buildChart",
    "slice": "C1",
-   "disposition": "MIGRATE",
+   "disposition": "RETIRED (C1)",
    "presenceImpact": true,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "c1Note": "buildChart removed; D-20 chart = completed present days of productDailyMetrics, gaps for missing/partial, label 'הכנסות יומיות'",
+   "servedBy": "window.MarjinC1 (index.html) over fincore/v1"
   },
   {
    "id": "U08",
    "file": "index.html",
    "sites": ":7110-7160 history list/day card",
    "slice": "C1",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATED (C1)",
    "presenceImpact": true,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "c1Note": "H-01..H-06: MarjinC1.history (canonical days, closure calendar, contradiction, today as context); edit identity and write paths unchanged",
+   "servedBy": "window.MarjinC1 (index.html) over fincore/v1"
   },
   {
    "id": "U09",
    "file": "index.html",
    "sites": ":7257 duplicate-row panel",
    "slice": "C1",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATED (C1)",
    "presenceImpact": true,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "c1Note": "H-05/U-23: duplicate panel header corrected; per-row diagnostic labelled 'שורה' via the core",
+   "servedBy": "window.MarjinC1 (index.html) over fincore/v1"
   },
   {
    "id": "U10",
    "file": "index.html",
    "sites": ":8832-9015 PnLScreen",
    "slice": "C1",
-   "disposition": "MIGRATE/POLICY",
+   "disposition": "MIGRATED (C1) except VD-50",
    "presenceImpact": true,
-   "purchaseBasisImpact": true
+   "purchaseBasisImpact": true,
+   "c1Note": "P-01..P-10: MarjinC1.pnl (open/closed month + prior-year closed month); P-05 VD-50 'רווח גולמי' isolated as '—' (owner decision pending)",
+   "servedBy": "window.MarjinC1 (index.html) over fincore/v1"
   },
   {
    "id": "U11",
    "file": "index.html",
    "sites": ":10780-10996 ForecastScreen",
    "slice": "E+C1",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATE (E-owned engine; C1 prop only)",
    "presenceImpact": true,
-   "purchaseBasisImpact": true
+   "purchaseBasisImpact": true,
+   "c1Note": "X-01: ForecastScreen (unreachable) receives a numeric view of the SAME report (complete values or null), not calcMetrics; its v1 engine is E-owned"
   },
   {
    "id": "U12",
@@ -127,36 +146,43 @@
    "file": "index.html",
    "sites": ":6768-6776 weather impact",
    "slice": "C1",
-   "disposition": "DERIVE",
+   "disposition": "MIGRATED (C1)",
    "presenceImpact": true,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "c1Note": "S-08: MarjinC1.impactStats over canonical completed operating days (closures, missing, partial excluded)",
+   "servedBy": "window.MarjinC1 (index.html) over fincore/v1"
   },
   {
    "id": "U14",
    "file": "index.html",
    "sites": ":6925-6934, :7793-7955 employee screens",
    "slice": "C1(+F)",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATED (C1)",
    "presenceImpact": false,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "c1Note": "M-01..M-07 / E-02 / E-03: employer cost from the report; closure-aware dayPlacement; relabel 'עלות מעביד חודשית (כולל כל העלויות)'",
+   "servedBy": "window.MarjinC1 (index.html) over fincore/v1"
   },
   {
    "id": "U15",
    "file": "index.html",
    "sites": ":5705-5733 supplier missing-days",
    "slice": "C1",
-   "disposition": "MIGRATE",
+   "disposition": "RETIRED (C1)",
    "presenceImpact": true,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "c1Note": "D-19 supplierMissingDays (dead) removed; D-17/S-09 reminders use core cell presence (recorded 0/skip = entered)",
+   "servedBy": "window.MarjinC1 (index.html) over fincore/v1"
   },
   {
    "id": "U16",
    "file": "index.html",
    "sites": ":6680-6700 unplanned supplier payments",
    "slice": "C1",
-   "disposition": "MIGRATE",
+   "disposition": "RETAIN (operational, WP-B.1)",
    "presenceImpact": true,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "c1Note": "U-06 unplanned-day surfacing in the supplier grid: operational grid UX, unchanged by C1"
   },
   {
    "id": "U17",
@@ -190,36 +216,40 @@
    "file": "index.html",
    "sites": ":2844-2848 TARGETS, wizard :3907-3997, defaults :4698,:4873,:5940, cfgTarget :1090",
    "slice": "D+C1",
-   "disposition": "POLICY",
+   "disposition": "POLICY (C1 reads resolvePolicy)",
    "presenceImpact": false,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "c1Note": "C1 surfaces read goals only through policy.registry.resolvePolicy(config); TARGETS / wizard defaults remain (D-owned)"
   },
   {
    "id": "U21",
    "file": "index.html",
    "sites": ":1085-1089 fmt/fmtPct",
    "slice": "C1",
-   "disposition": "RETIRE",
+   "disposition": "RETIRE (C1 surfaces done)",
    "presenceImpact": false,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "c1Note": "C1 financial surfaces format only through presenters.money/percent; fmt/fmtPct remain for non-C1 screens"
   },
   {
    "id": "U22",
    "file": "index.html",
    "sites": ":1095-1099 frozen dates",
    "slice": "C1+WP-B.1",
-   "disposition": "RETIRE",
+   "disposition": "RETIRE (C1 surfaces done)",
    "presenceImpact": false,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "c1Note": "C1 surfaces use one live israelBusinessDate per render; the frozen constants remain for non-C1 screens"
   },
   {
    "id": "U23",
    "file": "index.html",
    "sites": ":10537 DailyInsightsScreen",
    "slice": "D",
-   "disposition": "RETAIN",
+   "disposition": "RETAIN (D) + C1 presentation",
    "presenceImpact": false,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "c1Note": "I-01..I-03: revenue average/table/chart only from documents that record revenue.total; absent = '—'"
   },
   {
    "id": "U24",
@@ -253,18 +283,22 @@
    "file": "index.html",
    "sites": ":6541-6600, :6668-6672 supplier month screen",
    "slice": "C1",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATED (C1)",
    "presenceImpact": true,
-   "purchaseBasisImpact": true
+   "purchaseBasisImpact": true,
+   "c1Note": "S-03/S-04/S-05/U-05: supplier month totals/shares/top from report purchases.bySource (incl. deleted suppliers, legacy food_cost)",
+   "servedBy": "window.MarjinC1 (index.html) over fincore/v1"
   },
   {
    "id": "U28",
    "file": "index.html",
    "sites": ":7865 employees month labor %",
    "slice": "C1",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATED (C1)",
    "presenceImpact": true,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "c1Note": "M-02: employees month labor % = report labor.employerCostPct",
+   "servedBy": "window.MarjinC1 (index.html) over fincore/v1"
   },
   {
    "id": "S01",

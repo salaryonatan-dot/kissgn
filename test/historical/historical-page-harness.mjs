@@ -67,6 +67,30 @@ export function rewriteFirebaseModule(body) {
   return `(async () => {\n${rewritten}\n})()`;
 }
 
+/**
+ * C1: rewrite ONLY the dynamic import of the generated Financial Core in the page's fincore
+ * bootstrap module so it resolves through `window.__histFincoreImport` (the test decides
+ * whether the real bundle loads, fails, or is a mismatched build). Every other byte is kept.
+ */
+export function rewriteFincoreModule(body) {
+  let n = 0;
+  const rewritten = body.replace(/await import\("(\/fincore\/v1\/[^"]+)"\)/g, (_, path) => { n++; return `await window.__histFincoreImport(${JSON.stringify(path)})`; });
+  if (n === 0) throw new Error("fincore module block: no fincore import found (page shape changed?)");
+  return `(async () => {\n${rewritten}\n})()`;
+}
+
+/** C1: the module loader the rewritten bootstrap calls. mode: "ok" | "missing" | "mismatch". */
+export function fincoreLoader(w, mode, loadReal) {
+  return async (path) => {
+    if (path !== "/fincore/v1/browser/marjinFinanceGlobal.js") throw new Error("unexpected fincore path " + path);
+    if (mode === "missing") throw new TypeError("Failed to fetch dynamically imported module: " + path);
+    const real = await loadReal();
+    const api = mode === "mismatch" ? Object.freeze({ ...real, versions: Object.freeze({ ...real.versions, product: "MARJIN_PRODUCT/1" }) }) : real;
+    w.MarjinFinance = api;                       // the bundle's own side effect (globalThis.MarjinFinance = api)
+    return { default: api };
+  };
+}
+
 // ── the Firebase modular-API shim over an Admin SDK app (ordinary-member auth override) ──
 function firebaseShim({ adminApp, user }) {
   const db = adminApp.database();
@@ -132,12 +156,12 @@ export function installPageClock(w, offsetMs) {
   Object.defineProperty(w, "Date", { value: ShiftedDate, configurable: true, writable: true });
 }
 
-export async function bootHistoricalPage({ sha = HISTORICAL_SHA, adminApp, user, session = {}, signedIn = true, fetchImpl = null, log = () => {}, clockOffsetMs = 0 } = {}) {
+export async function bootHistoricalPage({ sha = HISTORICAL_SHA, html: htmlOverride = null, fincore = "ok", loadFincore = null, adminApp, user, session = {}, signedIn = true, fetchImpl = null, log = () => {}, clockOffsetMs = 0 } = {}) {
   const st = depsStatus(); if (!st.ok) throw new Error("historical page deps missing: " + st.missing.join(", ") + " — run test/historical/install-deps.sh");
   const req = createRequire(join(DEPS_DIR, "package.json"));
   const { JSDOM } = req("jsdom");
   const Babel = req("@babel/standalone");
-  const html = historicalHtml(sha);
+  const html = htmlOverride !== null ? htmlOverride : historicalHtml(sha);
   const blocks = scriptBlocks(html);
 
   const dom = new JSDOM(html, { url: "http://localhost/", runScripts: "outside-only", pretendToBeVisual: true });
@@ -161,6 +185,7 @@ export async function bootHistoricalPage({ sha = HISTORICAL_SHA, adminApp, user,
   const shim = firebaseShim({ adminApp, user });
   if (signedIn) shim.auth.__signInSilently();
   w.__histFirebase = shim;
+  if (loadFincore) w.__histFincoreImport = fincoreLoader(w, fincore, loadFincore);
   // CDN globals: React/ReactDOM/PropTypes/Babel are the pinned real builds; charts, xlsx and leaflet are inert stand-ins
   const umd = (p) => w.eval(readFileSync(join(DEPS_DIR, "node_modules", p), "utf8"));
   umd("react/umd/react.production.min.js"); umd("react-dom/umd/react-dom.production.min.js"); umd("prop-types/prop-types.min.js");
@@ -171,6 +196,10 @@ export async function bootHistoricalPage({ sha = HISTORICAL_SHA, adminApp, user,
   let firebaseReady = null;
   for (const b of blocks) {
     if (b.src) continue;                                              // CDN tags are provided above
+    if (b.type === "module" && /\/fincore\/v1\//.test(b.body) && !/gstatic\.com\/firebasejs/.test(b.body)) {
+      if (!loadFincore) throw new Error("page loads the Financial Core: pass loadFincore");
+      await w.eval(rewriteFincoreModule(b.body)); continue;
+    }
     if (b.type === "module") { firebaseReady = w.eval(rewriteFirebaseModule(b.body)); await firebaseReady; continue; }
     if (b.type === "text/babel") {
       const t0 = Date.now();

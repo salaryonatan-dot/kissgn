@@ -13,6 +13,7 @@ import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { importerVerdict, loadConsumerFiles, repoKindOf, validateConsumerFiles } from "../support/b1-fixtures.mjs";
 import { SERVER_READER_APPROVED_BLOBS, collectServerReaderScopeInputs, serverReaderScopeVerdict } from "../support/server-reader-authorized-delta.mjs";
+import { C1_ASSEMBLY, c1IndexVerdict } from "../support/c1-index-scope.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -123,6 +124,12 @@ function assertB2Scope(root) {
     // three API routes, pinned to P0's approved blobs, and index.html must be EXACTLY the clean
     // 3-way merge of the two approved index.html blobs (CD-M2 R1 ⊕ HF-1 R1 over their merge base).
     const assembled = gitIn(root, ["merge-base", "--is-ancestor", HF1R1, "HEAD"]).status === 0;
+    // WP-C1: when the approved release assembly (239602c9) is a STRICT ancestor of HEAD, the tree
+    // carries the C1 browser-surface migration. Every other protected file keeps its exact pin;
+    // index.html may differ from the approved merge ONLY as the C1 index contract allows
+    // (test/support/c1-index-scope.mjs: fixed zones anchored in the APPROVED bytes, protected
+    // write sub-regions byte-identical, no write call changed) — never a blanket bypass.
+    const c1 = assembled && gitIn(root, ["merge-base", "--is-ancestor", C1_ASSEMBLY, "HEAD"]).status === 0 && names(["rev-parse", "HEAD"])[0] !== C1_ASSEMBLY;
     const allowed = assembled ? [...CDM2_APPROVED, ...P0_APPROVED] : CDM2_APPROVED;
     const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f));
     assert.deepEqual([...new Set(whole)].sort(), [...allowed].sort(), assembled
@@ -137,7 +144,7 @@ function assertB2Scope(root) {
       [SB, blobBytes(root, B2 + ":" + SB), B2.slice(0, 8) + ":" + SB],
       [SE, blobBytes(root, B2 + ":" + SE), B2.slice(0, 8) + ":" + SE],
       ...(assembled ? [
-        ["index.html", approvedIndexMerge(root), "merge(" + CDM2R1.slice(0, 8) + ", " + HF1R1.slice(0, 8) + ")"],
+        ...(c1 ? [] : [["index.html", approvedIndexMerge(root), "merge(" + CDM2R1.slice(0, 8) + ", " + HF1R1.slice(0, 8) + ")"]]),
         ...P0_APPROVED.map((f) => [f, blobBytes(root, P0 + ":" + f), P0.slice(0, 8) + ":" + f]),
       ] : []),
     ];
@@ -149,6 +156,19 @@ function assertB2Scope(root) {
       assert.equal(gitIn(root, ["rev-parse", "HEAD:" + f]).stdout.trim(), sha, f + " is byte-identical to the approved " + label);
       assert.ok(readFileSync(join(root, f)).equals(bytes), f + ": checked-out bytes differ from the approved blob " + label);
       assert.equal(gitIn(root, ["rev-parse", ":" + f]).stdout.trim(), sha, f + ": staged (index) blob differs from the approved blob");
+    }
+    if (c1) {
+      // The approved bytes are recomputed from git objects (never the working tree); the
+      // COMMITTED, STAGED and CHECKED-OUT index.html must each satisfy the C1 contract, and
+      // must be one and the same content (a local edit, even inside a zone, fails).
+      const approved = approvedIndexMerge(root);
+      const committed = blobBytes(root, "HEAD:index.html"), staged = blobBytes(root, ":index.html"), checkedOut = readFileSync(join(root, "index.html"));
+      assert.ok(checkedOut.equals(committed), "index.html: checked-out bytes differ from the committed C1 blob");
+      assert.ok(staged.equals(committed), "index.html: staged (index) blob differs from the committed C1 blob");
+      for (const [label, bytes] of [["committed", committed], ["staged (index)", staged], ["checked-out", checkedOut]]) {
+        const v = c1IndexVerdict(approved, bytes);
+        assert.ok(v.ok, "index.html (" + label + ") violates the C1 contract: " + JSON.stringify(v));
+      }
     }
   }
 }
@@ -178,6 +198,9 @@ function withClone(commit, fn) {
 const HEAD_SHA = gitIn(REPO, ["rev-parse", "HEAD"]).stdout.trim();
 const isIntegratedRepo = gitIn(REPO, ["merge-base", "--is-ancestor", B2, "HEAD"]).status === 0 && HEAD_SHA !== B2;
 const isAssembledRepo = isIntegratedRepo && gitIn(REPO, ["merge-base", "--is-ancestor", HF1R1, "HEAD"]).status === 0;
+const isC1Repo = isAssembledRepo && gitIn(REPO, ["merge-base", "--is-ancestor", C1_ASSEMBLY, "HEAD"]).status === 0 && HEAD_SHA !== C1_ASSEMBLY;
+// On a C1 tree a non-approved index.html is refused by the C1 contract instead of the byte pin.
+const INDEX_REFUSED = isC1Repo ? /index\.html \(committed\) violates the C1 contract/ : /index\.html is byte-identical to the approved merge/;
 const appendTo = (dir, f, text) => { writeFileSync(join(dir, f), readFileSync(join(dir, f), "utf8") + text); };
 
 test("B2G-05-M1 integrated tree: a WORKING-TREE-ONLY edit of an approved CD-M2 runtime file (history unchanged) fails the guard; the clean clone passes", { skip: !isIntegratedRepo && "standalone tree: the integrated exception does not apply" }, () => {
@@ -241,9 +264,9 @@ const commitIn = (dir, msg) => { assert.equal(spawnSync("git", ["-C", dir, "add"
 test("B2G-05-M4 assembled tree: committing a non-approved index.html (CD-M2 R1 alone, HF-1 alone, or the merge with the REJECTED HF-1 95d20d86), pre-P0 API bytes, or a stray API file fails; the exact assembled commit passes", { skip: !isAssembledRepo && "HF-1 R1 / P0 not integrated in this tree" }, () => {
   const REJECTED_HF1 = "95d20d8646736fe1c80c949924fa7875fbda90d2";
   const cases = [
-    ["index.html = CD-M2 R1 only (HF-1 dropped)", (dir) => writeFileSync(join(dir, "index.html"), blobBytes(dir, CDM2R1 + ":index.html")), /index\.html is byte-identical to the approved merge/],
-    ["index.html = HF-1 R1 only (CD-M2 dropped)", (dir) => writeFileSync(join(dir, "index.html"), blobBytes(dir, HF1R1 + ":index.html")), /index\.html is byte-identical to the approved merge/],
-    ["index.html = CD-M2 R1 ⊕ REJECTED HF-1 95d20d86", (dir) => writeFileSync(join(dir, "index.html"), approvedIndexMerge(dir, REJECTED_HF1)), /index\.html is byte-identical to the approved merge/],
+    ["index.html = CD-M2 R1 only (HF-1 dropped)", (dir) => writeFileSync(join(dir, "index.html"), blobBytes(dir, CDM2R1 + ":index.html")), INDEX_REFUSED],
+    ["index.html = HF-1 R1 only (CD-M2 dropped)", (dir) => writeFileSync(join(dir, "index.html"), blobBytes(dir, HF1R1 + ":index.html")), INDEX_REFUSED],
+    ["index.html = CD-M2 R1 ⊕ REJECTED HF-1 95d20d86", (dir) => writeFileSync(join(dir, "index.html"), approvedIndexMerge(dir, REJECTED_HF1)), INDEX_REFUSED],
     ...P0_APPROVED.map((f) => ["pre-P0 bytes of " + f, (dir) => writeFileSync(join(dir, f), blobBytes(dir, HF1_BASE + ":" + f)), /protected changes are exactly CD-M2 R1's approved runtime files \+ P0 Scheduled Auth's three API routes/]), // pre-P0 bytes = the base bytes ⇒ the route drops out of the exact set
     ["a committed edit of the P0 run.ts", (dir) => appendTo(dir, "api/daily-snapshot/run.ts", "\n// edit\n"), /api\/daily-snapshot\/run\.ts is byte-identical to the approved 05bf5a59/],
     ["a stray API route", (dir) => writeFileSync(join(dir, "api", "stray.ts"), "export default function h() {}\n"), /protected changes are exactly/],
@@ -255,4 +278,41 @@ test("B2G-05-M4 assembled tree: committing a non-approved index.html (CD-M2 R1 a
       assert.throws(() => assertB2Scope(dir), re, label);
     });
   }
+});
+
+// ── WP-C1: the C1 branch of B2G-05 (committed substitutions on a disposable writable clone) ──
+test("B2G-05-M5 C1 tree: committed index.html changes outside the C1 zones, in a protected write region, adding a write call, or dropping the fincore bootstrap fail; a reverted (pre-C1) page fails; the exact C1 commit passes", { skip: !isC1Repo && "C1 not integrated in this tree" }, () => {
+  const edit = (dir, from, to) => { const p = join(dir, "index.html"), src = readFileSync(p, "utf8"); assert.equal(src.split(from).length, 2, "mutation anchor unique: " + from.slice(0, 60)); writeFileSync(p, src.replace(from, to)); };
+  const cases = [
+    ["HF-1 setup-config block edited", (dir) => edit(dir, "// ── HF-1: Setup Wizard config preservation", "// ── HF-1: Setup Wizard config preservation (edited)"), /change_outside_c1_zones/],
+    ["CD-M2 closure panel edited", (dir) => edit(dir, '{/* CD-M2: explicit "Business closed" action', '{/* CD-M2 (edited): explicit "Business closed" action'), /change_outside_c1_zones/],
+    ["unrelated screen (petty cash) edited", (dir) => edit(dir, "  const fmtPetty = (n) => '₪' + (Number(n) || 0)", "  const fmtPetty = (n) => '₪ ' + (Number(n) || 0)"), /change_outside_c1_zones/],
+    ["storage transport edited", (dir) => edit(dir, '        if (!snap.exists()) throw new Error("not found");', '        if (!snap.exists()) throw new Error("missing");'), /change_outside_c1_zones/],
+    ["supplier write lane edited (inside the food-cost zone)", (dir) => edit(dir, "              const token = supplierResultOwnershipRef.current.begin(captureSelectionCtx());", "              const token = supplierResultOwnershipRef.current.begin(null);"), /protected_region_changed/],
+    ["history clear-all edited (inside the history zone)", (dir) => edit(dir, '                  if(!window.confirm("למחוק את כל הרשומות?")) return;', '                  if(false) return;'), /protected_region_changed|protected_anchor/],
+    ["write call added inside the dashboard zone", (dir) => edit(dir, "            const dv = finDash;", "            const dv = finDash; saveBusinessConfig({ ...businessConfig });"), /write_path_lines_changed/],
+    ["fincore bootstrap removed", (dir) => edit(dir, '      const mod = await import("/fincore/v1/browser/marjinFinanceGlobal.js");', "      const mod = null;"), /fincore_import_shape/],
+    ["page reverted to the approved assembly (no C1)", (dir) => writeFileSync(join(dir, "index.html"), approvedIndexMerge(dir)), /fincore_bootstrap_shape/],
+  ];
+  withWritableClone(HEAD_SHA, (dir) => assertB2Scope(dir));             // positive control: the exact C1 commit
+  for (const [label, mut, re] of cases) {
+    withWritableClone(HEAD_SHA, (dir) => {
+      mut(dir); commitIn(dir, label);
+      assert.throws(() => assertB2Scope(dir), re, label);
+    });
+  }
+});
+
+test("B2G-05-M6 C1 tree: a WORKING-TREE-ONLY edit INSIDE a C1 zone (history unchanged) fails; the documented limitation — the same edit COMMITTED, touching no protected region or write call — is accepted by the contract", { skip: !isC1Repo && "C1 not integrated in this tree" }, () => {
+  const label = '<div className="chart-label">הכנסות יומיות</div>';
+  withClone(HEAD_SHA, (dir) => {
+    const p = join(dir, "index.html"), src = readFileSync(p, "utf8");
+    writeFileSync(p, src.replace(label, '<div className="chart-label">הכנסות יומיות (edited)</div>'));
+    assert.throws(() => assertB2Scope(dir), /index\.html: checked-out bytes differ from the committed C1 blob/);
+  });
+  withWritableClone(HEAD_SHA, (dir) => {
+    const p = join(dir, "index.html"), src = readFileSync(p, "utf8");
+    writeFileSync(p, src.replace(label, '<div className="chart-label">הכנסות יומיות (edited)</div>')); commitIn(dir, "in-zone label edit");
+    assertB2Scope(dir);                                                 // LIMITATION: bounded by the zones; independent review covers zone contents
+  });
 });

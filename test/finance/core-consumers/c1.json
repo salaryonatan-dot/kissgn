@@ -1,0 +1,6 @@
+{
+  "slice": "C1",
+  "consumers": [
+    "index.html"
+  ]
+}

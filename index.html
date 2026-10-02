@@ -334,7 +334,7 @@
     .prog-labels { display:flex; justify-content:space-between; font-size:10px; color:#94A3B8; margin-top:8px; line-height:1.4; }
 
     /* Hero forecast footer */
-    .hm-row  { display:grid; grid-template-columns:repeat(3,1fr); padding-top:26px; margin-top:26px; border-top:1px solid rgba(99,102,241,.1); position:relative; z-index:1; }
+    .hm-row  { display:grid; grid-template-columns:repeat(2,1fr); padding-top:26px; margin-top:26px; border-top:1px solid rgba(99,102,241,.1); position:relative; z-index:1; }
     .hm-cell { }
     .hm-cell:not(:last-child) { padding-left:28px; border-left:1px solid rgba(99,102,241,.1); margin-left:28px; }
     .hm-label { font-size:11px; font-weight:600; color:#64748B; letter-spacing:.2px; margin-bottom:7px; line-height:1.4; }
@@ -862,6 +862,26 @@
     window._firebaseReady = true;
     window.dispatchEvent(new Event("firebase-ready"));
   </script>
+  <!-- ═══ C1: shared Financial Core loader (fincore/v1, same-origin, script-src 'self') ═══
+       The browser runs the SAME generated core as the server. A missing file, a load error or a
+       bundle with other identifiers leaves window.__marjinFinance.state = "failed": every
+       financial view then shows an explicit unavailable state — there is no old-formula fallback. -->
+  <script type="module">
+    // ── C1 fincore bootstrap ──
+    window.__marjinFinance = { state: "loading", error: null };
+    try {
+      const mod = await import("/fincore/v1/browser/marjinFinanceGlobal.js");
+      const api = mod && mod.default;
+      const v = api && api.versions;
+      if (!api || api !== window.MarjinFinance || !v || v.product !== "MARJIN_PRODUCT/2" || v.forecast !== "REV_FORECAST/v2") {
+        throw new Error("fincore_version_mismatch");
+      }
+      window.__marjinFinance = { state: "ready", error: null };
+    } catch (e) {
+      window.__marjinFinance = { state: "failed", error: String((e && e.message) || e) };
+    }
+    window.dispatchEvent(new Event("marjin-finance-settled"));
+  </script>
   <!-- ═══ REV_FORECAST/v1 — mirrored from src/forecast/revenueForecast.ts ═══
        Canonical, deterministic revenue month-end forecast + exception-day helpers.
        This inline block is the SINGLE active forecast implementation in the UI.
@@ -1025,6 +1045,650 @@
       EXCEPTION_REASONS:EXCEPTION_REASONS, REASON_HE:REASON_HE, loadExceptionForForm:loadExceptionForForm,
       sanitizeExceptionOnSave:sanitizeExceptionOnSave, FORMULA_ID:"REV_FORECAST/v1"
     };
+  })();
+  </script>
+  <!-- ═══ C1: browser financial view models (MARJIN_C1/1) ═══
+       PURE presenters over the shared Financial Core (window.MarjinFinance, generated
+       fincore/v1). Every money value, ratio, allocation, coverage state, closure state and
+       forecast below is a field returned by the core. This block only selects fields,
+       formats them with the core presenters and adds exact sums of core amounts where a
+       screen shows a total the report does not carry. There is no fallback formula: when
+       the core module is not ready, failed, or refuses its inputs, a view model is
+       {status:"loading"|"unavailable"} and the screens render no numbers.
+       Every function takes the core `F` explicitly (no globals), so the block is
+       vm-testable on its own (test/finance/c1-browser-surfaces.test.mjs). -->
+  <script>
+  // ── C1 browser financial view models ─────────────────────────────────────────
+  (function () {
+    "use strict";
+    var C1_VERSION = "MARJIN_C1/1";
+    // The approved browser contract (B1 AMEND-01, closed-days amendment): a bundle with
+    // other identifiers is refused (stale or wrong file), never used.
+    var EXPECT = Object.freeze({ product: "MARJIN_PRODUCT/2", forecast: "REV_FORECAST/v2" });
+    // list-entry-exceptions accepts ranges of at most MAX_LIST_RANGE_DAYS = 400 days.
+    var LEDGER_CHUNK_DAYS = 366;
+    // Approved disclosure wording (identical to the accepted B2 e-mail presenter).
+    var TXT = Object.freeze({
+      partial: "חלקי",
+      missingRevenue: "חסרות הכנסות בימים: ",
+      invalidRevenue: "ערך הכנסה לא תקין בימים: ",
+      partialRevenue: "הכנסה חלקית (תא לא תקין) בימים: ",
+      closedWithRevenue: "סומנו כסגורים אך נרשמו בהם הכנסות: ",
+      revenueSuffix: " — סכום ההכנסות אינו מלא; רווח ואחוזים שתלויים בו אינם מוצגים",
+      closedDays: " (הכנסה 0, לא חסר): ",
+      forecastPartial: "תחזית חלקית — חסרות או לא תקינות הכנסות בימים: ",
+      forecastInsufficient: "אין מספיק היסטוריה לתחזית",
+    });
+
+    // ── module readiness ─────────────────────────────────────────────────────
+    /** Validate a loaded bundle against the approved identifiers. */
+    function checkBundle(api) {
+      if (!api || typeof api !== "object" || !api.versions || !api.product || !api.presenters) return { ok: false, reason: "fincore_shape" };
+      if (api.versions.product !== EXPECT.product) return { ok: false, reason: "fincore_version_mismatch" };
+      if (api.versions.forecast !== EXPECT.forecast) return { ok: false, reason: "fincore_version_mismatch" };
+      return { ok: true };
+    }
+
+    // ── small exact helpers over core values (no binary arithmetic on money) ──
+    function D(F) { return F.finance.decimal; }
+    function amt(F, a) { return a === null || a === undefined ? null : D(F).parseAmountString(a); }
+    function decStr(F, dec) { return dec === null || dec === undefined ? null : D(F).serializeDec(dec); }
+    /** Exact sum of amount strings; null when any operand is null. */
+    function sumAmounts(F, list) {
+      var acc = D(F).ratFromInt(0);
+      for (var i = 0; i < list.length; i++) { if (list[i] === null || list[i] === undefined) return null; acc = D(F).ratAdd(acc, amt(F, list[i])); }
+      return D(F).serializeRat(acc);
+    }
+    function subAmounts(F, a, b) { return a === null || b === null ? null : D(F).serializeRat(D(F).ratSub(amt(F, a), amt(F, b))); }
+    function money(F, a) { return F.presenters.money.formatShekel(a === undefined ? null : a); }
+    function typedMoney(F, t) { return F.presenters.money.formatTypedAmount(t); }
+    function pctText(F, r) { return F.presenters.percent.formatPercent(r); }
+    function ratio(F, num, den) { return F.metrics.report.ratioOfTotals(amt(F, num), amt(F, den)); }
+    /** Presentation-only conversion (bar widths, chart points) through the core's single conversion site. */
+    function toNum(F, a) { return a === null || a === undefined ? null : F.metrics.adapters.legacyNumber.amountToNumber(a); }
+    function typedValue(t) { return t && t.state === "complete" ? t.value : null; }
+    function ratioValue(r) { return r && r.state === "value" ? r.value : null; }
+    function shortDate(d) { var p = String(d).split("-"); return p[2] + "." + p[1]; }
+    function dateList(list) { return list.map(shortDate).join(", "); }
+
+    // ── settings nodes and the structured exception ledger ───────────────────
+    /** Raw RTDB node → the core envelope state (present / absent / unreadable), never a default. */
+    function nodeState(F, raw, expect) { return F.product.decodeEnvelope(raw, expect); }
+    /** A failed read is never "absent": the core treats it as an unreadable input (unavailable). */
+    var READ_FAILED = Object.freeze({ state: "unreadable", reason: "read_failed" });
+
+    /** Inclusive [from,to] → consecutive ranges of at most LEDGER_CHUNK_DAYS days. */
+    function ledgerChunks(F, from, to) {
+      var bd = F.finance.businessDate, out = [], cur = from;
+      while (cur <= to) {
+        var end = bd.addDays(cur, LEDGER_CHUNK_DAYS - 1);
+        if (end > to) end = to;
+        out.push({ from: cur, to: end });
+        cur = bd.addDays(end, 1);
+      }
+      return out;
+    }
+    /**
+     * list-entry-exceptions effective records → the STRUCTURED states the core expects
+     * (same meaning as decodeExceptionLedger on the server: structured cleared wins, the
+     * reason is kept only while active). Legacy / ambiguous records are dropped: the core
+     * derives the narrow legacy closure fallback from the rows itself.
+     */
+    function structuredStates(records) {
+      var out = {};
+      Object.keys(records || {}).sort().forEach(function (d) {
+        var r = records[d];
+        if (!r || r.source !== "structured") return;
+        var active = r.status === "active";
+        out[d] = { status: active ? "active" : "cleared", reasonCode: active && typeof r.reasonCode === "string" && r.reasonCode ? r.reasonCode : null };
+      });
+      return out;
+    }
+    /** Earliest canonical row date ≤ asOf (the projection's history start); null when none. Rows
+     *  are read through the core's own field read-back and normalization (same as the server). */
+    function earliestRowDate(F, rows, asOf) {
+      var n;
+      try { n = F.finance.normalize.normalizeRows(F.product.mapFieldReadback(rows || []), { asOfBusinessDate: asOf }); }
+      catch (e) { return null; }
+      var first = null;
+      n.rows.forEach(function (r) { if (first === null || r.date < first) first = r.date; });
+      return first;
+    }
+    /** The ledger window the screens need: earliest row (or the month) → end of the current month. */
+    function ledgerWindow(F, rows, asOf, extraFrom) {
+      var bd = F.finance.businessDate;
+      var monthFirst = asOf.slice(0, 7) + "-01";
+      var first = earliestRowDate(F, rows, asOf);
+      var from = first !== null && first < monthFirst ? first : monthFirst;
+      if (extraFrom && extraFrom < from) from = extraFrom;
+      return { from: from, to: bd.monthBounds(asOf.slice(0, 7)).last };
+    }
+    /**
+     * Read-only, bounded load of the structured exception ledger over [from,to] through the
+     * existing list-entry-exceptions API (io.fetchChunk(from,to) → the API JSON body). Every
+     * chunk must succeed: one failed / malformed / stale chunk ⇒ the whole window is
+     * "unreadable" (never a partial calendar, never "no closures").
+     */
+    function loadLedger(F, io, from, to) {
+      var chunks = ledgerChunks(F, from, to), states = {}, i = 0;
+      function next() {
+        if (i >= chunks.length) {
+          return { state: Object.keys(states).length ? "present" : "absent", states: states, from: from, to: to, chunks: chunks.length };
+        }
+        var c = chunks[i++];
+        return Promise.resolve(io.fetchChunk(c.from, c.to)).then(function (body) {
+          if (io.isLive && !io.isLive()) return { state: "stale" };
+          if (!body || body.ok !== true || !body.exceptions || typeof body.exceptions !== "object") return { state: "unreadable", reason: "ledger_shape", from: from, to: to };
+          var got = structuredStates(body.exceptions);
+          Object.keys(got).forEach(function (d) { if (d >= c.from && d <= c.to) states[d] = got[d]; });
+          return next();
+        });
+      }
+      return Promise.resolve().then(next).catch(function () { return { state: "unreadable", reason: "read_failed", from: from, to: to }; });
+    }
+    function ledgerCovers(ledger, from, to) {
+      return !!ledger && (ledger.state === "present" || ledger.state === "absent") && ledger.from <= from && ledger.to >= to;
+    }
+
+    // ── inputs ────────────────────────────────────────────────────────────────
+    /**
+     * src = { rows, config, fixed, asOf, ledger:{state, states, from, to}, rowsReady }
+     * Returns the ProductInputs, or a non-ready status. A ledger that does not cover
+     * `need` is NOT LOADED for that calculation (the core refuses it; never "no closures").
+     */
+    function inputsFor(F, src, need) {
+      if (!src || !src.rowsReady) return { status: "loading", reason: "entries" };
+      if (!src.config || src.config.state === "loading" || !src.fixed || src.fixed.state === "loading") return { status: "loading", reason: "settings" };
+      var L = src.ledger;
+      if (!L || L.state === "loading") return { status: "loading", reason: "ledger" };
+      if (L.state === "unreadable") return { status: "unavailable", reason: "closure_calendar_unknown" };
+      if (need && !ledgerCovers(L, need.from, need.to)) return { status: "loading", reason: "ledger_range" };
+      var states = L.states || {};
+      return {
+        status: "ready",
+        inputs: {
+          rows: src.rows, config: src.config, fixed: src.fixed, asOfBusinessDate: src.asOf,
+          exceptionStates: states, exceptionsByDate: F.product.exceptionsByDateOf(states),
+          exceptionLedgerState: L.state,
+        },
+      };
+    }
+    function guarded(fn) {
+      try { return fn(); }
+      catch (e) { return { status: "unavailable", reason: (e && (e.code || e.name)) || "error", message: String((e && e.message) || e) }; }
+    }
+
+    // ── shared typed pieces ───────────────────────────────────────────────────
+    function totalView(F, total, coverage) {
+      var partial = !total.complete;
+      return {
+        amount: total.value, complete: total.complete, partial: partial,
+        text: money(F, total.value) + (partial && total.value !== null ? " · " + TXT.partial : ""),
+        missingDays: coverage ? coverage.missingDays.slice() : [], invalidDays: coverage ? coverage.invalidDays.slice() : [],
+        partialDays: coverage ? coverage.partialDays.slice() : [], closedDays: coverage ? coverage.closedDays.slice() : [],
+      };
+    }
+    function contradictions(report) {
+      return report.flags.filter(function (f) { return f.code === "closed_day_has_recorded_values"; }).map(function (f) { return f.date; }).sort();
+    }
+    /** CDA-18: the text directly below MTD revenue (exact dates, never colour only). Same wording as B2. */
+    function revenueDisclosure(report) {
+      var c = report.coverage.revenue, contra = contradictions(report), parts = [];
+      if (c.missingDays.length) parts.push(TXT.missingRevenue + dateList(c.missingDays));
+      var invalid = c.invalidDays.filter(function (d) { return contra.indexOf(d) === -1; });
+      if (invalid.length) parts.push(TXT.invalidRevenue + dateList(invalid));
+      if (c.partialDays.length) parts.push(TXT.partialRevenue + dateList(c.partialDays));
+      if (contra.length) parts.push(TXT.closedWithRevenue + dateList(contra));
+      return {
+        warning: parts.length ? "⚠ " + parts.join(" · ") + TXT.revenueSuffix : "",
+        closures: c.closedDays.length ? "יום סגור" + TXT.closedDays + dateList(c.closedDays) : "",
+        missingDays: c.missingDays.slice(), contradictions: contra,
+      };
+    }
+    /** D-owned compatibility bands (±3 points over the goal), applied to a complete ratio only. */
+    function band(F, ratioResult, goalValue) {
+      var v = ratioValue(ratioResult);
+      if (v === null || goalValue === null || goalValue === undefined) return "none";
+      var r = amt(F, v), g = amt(F, goalValue);
+      if (D(F).ratCmp(r, D(F).ratAdd(g, D(F).ratFromInt(3))) > 0) return "bad";
+      if (D(F).ratCmp(r, g) > 0) return "warn";
+      return "ok";
+    }
+    function policyOf(F, src) {
+      var cfg = src.config && src.config.state === "present" ? src.config.value : null;
+      return F.policy.registry.resolvePolicy(cfg);
+    }
+
+    // ── month report ──────────────────────────────────────────────────────────
+    function monthKind(asOf, month) { return month === asOf.slice(0, 7) ? "open_month" : "closed_month"; }
+    function monthReport(F, src, month) {
+      var b = F.finance.businessDate.monthBounds(month);
+      var got = inputsFor(F, src, { from: b.first, to: b.last });
+      if (got.status !== "ready") return got;
+      return guarded(function () {
+        return { status: "ready", inputs: got.inputs, report: F.product.productMonthReport(got.inputs, { kind: monthKind(src.asOf, month), month: month }) };
+      });
+    }
+
+    // ── dashboard (D-01…D-21, U-01…U-03, U-09 removal, VD-33/35/36/39/40) ─────
+    /**
+     * opts = { nowMs, lastYearSales (number|null, legacy manual import), dow, suppliers }
+     */
+    function dashboard(F, src, opts) {
+      var asOf = src.asOf, month = asOf.slice(0, 7), bd = F.finance.businessDate;
+      var mb = bd.monthBounds(month);
+      var first = earliestRowDate(F, src.rows, asOf);
+      var histFrom = first !== null && first < mb.first ? first : mb.first;
+      var got = inputsFor(F, src, { from: histFrom, to: mb.last });
+      if (got.status !== "ready") return got;
+      return guarded(function () {
+        var inputs = got.inputs, P = F.product;
+        var R = P.productMonthReport(inputs, { kind: "open_month", month: month });
+        var A = R.actual;
+        var proj = P.productMonthProjection(inputs, R, { nowMs: opts.nowMs });
+        var pol = policyOf(F, src);
+        var goals = { food: pol.values["goal.foodCostPct"], labor: pol.values["goal.laborCostPct"], growth: pol.values["goal.salesGrowthPct"] };
+        // D-16 sales target: (last-year month sales || 650 000) × (1 + growth %). The 650 000
+        // fallback and the formula are D-owned and retained unchanged; growth comes from the policy.
+        var lySales = typeof opts.lastYearSales === "number" && isFinite(opts.lastYearSales) && opts.lastYearSales > 0
+          ? D(F).serializeDec(D(F).decFromNumber(opts.lastYearSales)) : "650000";
+        var growthFactor = D(F).ratAdd(D(F).ratFromInt(1), D(F).ratDiv(amt(F, goals.growth.value), D(F).ratFromInt(100)));
+        var target = D(F).serializeRat(D(F).ratMul(amt(F, lySales), growthFactor));
+        var revenue = totalView(F, A.revenue, R.coverage.revenue);
+        var salesPct = ratioValue(ratio(F, revenue.complete ? A.revenue.value : null, target));
+        var fx = A.fixedAccrual;
+        var fixedRent = fx.state === "complete" ? sumAmounts(F, [fx.regular, fx.rentFixed, fx.rentPct]) : null;
+        var royalty = fx.state === "complete" ? fx.royaltyPct : null;
+        var pp = proj.projection;
+        var fRev = proj.forecast.projectedRevenue;
+        var projectedLabor = pp ? sumAmounts(F, [pp.hourlyLabor, pp.globalEmployerCost]) : null;
+        var forecastNotes = [];
+        var fdates = proj.forecast.missingRevenueDates.concat(proj.forecast.invalidRevenueDates).sort();
+        if (fdates.length) forecastNotes.push(TXT.forecastPartial + dateList(fdates));
+        if (fRev === null) forecastNotes.push(TXT.forecastInsufficient);
+        // D-13 breakdown: one row per canonical component, rent counted once (VD-35); shares
+        // only when every component is complete, as exact ratios over their exact total.
+        var comps = [
+          { key: "purchases", lbl: "רכש ספקים", amount: A.purchases.complete ? A.purchases.value : null, color: "#3B82F6" },
+          { key: "labor", lbl: "עלות עובדים (עלות מעסיק)", amount: typedValue(A.labor.employerCost), color: "#818CF8" },
+          { key: "royalty", lbl: "תמלוגים", amount: fx.state === "complete" ? fx.royaltyPct : null, color: "#A5B4FC" },
+          { key: "rentPct", lbl: "שכ״ד (אחוזים)", amount: fx.state === "complete" ? fx.rentPct : null, color: "#BAC8F3" },
+          { key: "rentFixed", lbl: "שכ״ד קבוע", amount: fx.state === "complete" ? fx.rentFixed : null, color: "#CBD5E1" },
+          { key: "fixed", lbl: "קבועות", amount: fx.state === "complete" ? fx.regular : null, color: "#D1D5DB" },
+          { key: "other", lbl: "שונות", amount: A.otherExpense.value === null ? "0" : (A.otherExpense.complete ? A.otherExpense.value : null), color: "#E5E7EB" },
+        ];
+        var compTotal = sumAmounts(F, comps.map(function (c) { return c.amount; }));
+        var breakdown = comps.filter(function (c) { return c.amount === null || toNum(F, c.amount) !== 0; }).map(function (c) {
+          var share = compTotal === null || c.amount === null ? null : ratioValue(ratio(F, c.amount, compTotal));
+          return { key: c.key, lbl: c.lbl, text: money(F, c.amount), shareText: share === null ? "—" : pctText(F, share), width: share === null ? 0 : Math.min(toNum(F, share), 100), color: c.color };
+        });
+        // D-20 chart: completed days of the month; a missing or partial day is a gap, never 0.
+        var dm = P.productDailyMetrics(inputs, { from: mb.first, to: asOf });
+        var byDate = {};
+        dm.forEach(function (m) { byDate[m.date] = m; });
+        var chartDays = asOf > mb.first ? bd.datesInRange(mb.first, bd.addDays(asOf, -1)) : [];
+        var chart = chartDays.map(function (d) {
+          var m = byDate[d];
+          var ok = m && m.presence.revenue === "present" && !m.partial.revenue;
+          return { day: d.slice(8), "הכנסות": ok ? m.revenue : null };
+        });
+        // D-15 today strip: the current day's canonical record as CONTEXT (never Actual).
+        var today = todayContext(F, inputs);
+        var e = F.policy.evaluate.evaluatePolicy(R, pol);
+        var day = Number(asOf.slice(8)), dim = mb.days;
+        return {
+          status: "ready", report: R, projection: proj, asOf: asOf, month: month,
+          formulaIds: { forecast: proj.forecast.formulaId, report: R.versions.fin },
+          configurationBasis: R.configurationBasis.slice(), timelineSource: R.timelineSource,
+          revenue: revenue, disclosure: revenueDisclosure(R),
+          purchases: totalView(F, A.purchases, R.coverage.purchases),
+          purchasesPct: { text: pctText(F, A.purchasesPct), band: band(F, A.purchasesPct, goals.food.value), goal: goals.food, num: toNum(F, ratioValue(A.purchasesPct)),
+            belowGoalText: ratioValue(A.purchasesPct) === null ? null : pctText(F, D(F).serializeRat(D(F).ratSub(amt(F, goals.food.value), amt(F, ratioValue(A.purchasesPct))))),
+            aboveGoalText: ratioValue(A.purchasesPct) === null ? null : pctText(F, D(F).serializeRat(D(F).ratSub(amt(F, ratioValue(A.purchasesPct)), amt(F, goals.food.value)))),
+            empty: R.window.state !== "actual" || A.purchases.value === null },
+          labor: { text: typedMoney(F, A.labor.employerCost), state: A.labor.employerCost.state, meaning: F.presenters.labels.LABELS.labor.meaning },
+          laborPct: { text: pctText(F, A.labor.employerCostPct), band: band(F, A.labor.employerCostPct, goals.labor.value), goal: goals.labor },
+          fixedRent: { text: money(F, fixedRent), rentText: fx.state === "complete" ? money(F, sumAmounts(F, [fx.rentFixed, fx.rentPct])) : "—", hasRent: fx.state === "complete" && toNum(F, sumAmounts(F, [fx.rentFixed, fx.rentPct])) !== 0, pctText: pctText(F, revenue.complete ? ratio(F, fixedRent, A.revenue.value) : null), state: fx.state },
+          royalty: { text: money(F, royalty), show: royalty !== null && toNum(F, royalty) !== 0, pctText: pctText(F, revenue.complete ? ratio(F, royalty, A.revenue.value) : null) },
+          forecast: { text: money(F, fRev), amount: fRev, state: proj.forecast.state, notes: forecastNotes, formulaId: proj.forecast.formulaId },
+          projectedPurchases: money(F, pp ? pp.purchases : null),
+          projectedLabor: money(F, projectedLabor),
+          projectedProfit: { text: money(F, pp ? pp.operatingProfit : null), amount: pp ? pp.operatingProfit : null, negative: pp && pp.operatingProfit !== null && toNum(F, pp.operatingProfit) < 0,
+            marginText: pp && pp.operatingProfit !== null && pp.revenue !== null ? pctText(F, ratio(F, pp.operatingProfit, pp.revenue)) + " מהמחזור" : "—" },
+          target: { text: money(F, target), amount: target },
+          salesPct: { text: salesPct === null ? "—" : pctText(F, salesPct), width: salesPct === null ? 0 : Math.max(0, Math.min(toNum(F, salesPct), 100)), value: salesPct },
+          gap: fRev === null ? { text: "—" } : (function () { var g = subAmounts(F, fRev, target); var neg = toNum(F, g) < 0; return { text: neg ? money(F, D(F).serializeRat(D(F).ratSub(D(F).ratFromInt(0), amt(F, g)))) + " מתחת ליעד" : "+" + money(F, g) + " מעל יעד", negative: neg }; })(),
+          calendar: { day: day, daysInMonth: dim, daysLeft: dim - day, dayPctWidth: Math.round(day / dim * 100) },
+          policy: e, breakdown: breakdown, chart: chart, today: today,
+          quarantine: { futureRows: R.quarantine.futureRows.length, invalidDateRows: R.quarantine.invalidDateRows.length },
+        };
+      });
+    }
+
+    /** The current business day as context (D-15): recorded revenue of today, outside Actual. */
+    function todayContext(F, inputs) {
+      var N = F.finance.normalize, asOf = inputs.asOfBusinessDate;
+      var n = N.normalizeRows(F.product.mapFieldReadback(inputs.rows), { asOfBusinessDate: asOf });
+      var day = N.groupByDate(n.rows, { from: asOf, to: asOf, exceptionsByDate: inputs.exceptionsByDate })[0];
+      var closed = F.product.productClosureCalendar(inputs, n).closedDates.indexOf(asOf) !== -1;
+      var rev = day.revenue;
+      return {
+        date: asOf, present: day.presence.day === "present", closed: closed,
+        revenuePresence: rev.presence, revenueText: rev.presence === "present" && !rev.partial ? money(F, decStr(F, rev.value)) : "—",
+        label: F.presenters.labels.LABELS.presence.currentDay,
+      };
+    }
+
+    // ── P&L (P-01…P-10, U-4…U-11) ───────────────────────────────────────────────
+    function pnlColumn(F, R) {
+      var A = R.actual, fx = A.fixedAccrual;
+      return {
+        revenue: A.revenue.complete ? A.revenue.value : null, revenuePartial: !A.revenue.complete, revenueRecorded: A.revenue.value,
+        purchases: A.purchases.complete ? A.purchases.value : null,
+        labor: typedValue(A.labor.employerCost),
+        other: A.otherExpense.complete ? (A.otherExpense.value === null ? "0" : A.otherExpense.value) : null,
+        otherRecorded: A.otherExpense.value,
+        fixedRent: fx.state === "complete" ? sumAmounts(F, [fx.regular, fx.rentFixed, fx.rentPct]) : null,
+        royalty: fx.state === "complete" ? fx.royaltyPct : null,
+        net: typedValue(A.operatingProfit), netState: A.operatingProfit.state,
+        purchasesPct: A.purchasesPct, laborPct: A.labor.employerCostPct,
+        avgPerDay: ratioValue(A.averages.revenuePerPresentDay),
+        window: R.window, coverage: R.coverage,
+      };
+    }
+    /** Month deliveries (P-04): exact sum of the canonical delivery parts of the completed days. */
+    function deliveriesOf(F, inputs, month) {
+      var b = F.finance.businessDate.monthBounds(month);
+      var days = F.product.productDays(inputs, { from: b.first, to: b.last }).days;
+      var list = [];
+      for (var i = 0; i < days.length; i++) {
+        var p = days[i].revenue.parts.deliveries;
+        if (p.presence === "invalid" || p.partial) return null;
+        if (p.presence === "present") list.push(decStr(F, p.value));
+      }
+      return list.length ? sumAmounts(F, list) : null;
+    }
+    /**
+     * VD-50 (P&L "רווח גולמי") — OWNER DECISION PENDING. The line has no approved definition, so
+     * it is reported unavailable. No variant formula and no legacy formula is computed for it.
+     */
+    function pnlGrossLineVD50() { return Object.freeze({ status: "VD50_PENDING", value: null, text: "—" }); }
+    function pnl(F, src, month, priorMonth) {
+      var cur = monthReport(F, src, month);
+      if (cur.status !== "ready") return cur;
+      return guarded(function () {
+        var c = pnlColumn(F, cur.report);
+        var prev = null;
+        if (priorMonth) {
+          var pr = monthReport(F, src, priorMonth);
+          if (pr.status === "ready") {
+            var hasData = pr.report.window.state === "actual" && (pr.report.coverage.day.presentDays > 0 || pr.report.coverage.day.closedDays.length > 0);
+            prev = hasData ? pnlColumn(F, pr.report) : null;
+          } else if (pr.status === "loading") prev = { loading: true };
+        }
+        var rev = c.revenue;
+        var share = function (a) { return rev === null || a === null ? "—" : pctText(F, ratio(F, a, rev)); };
+        var delta = function (a, p) { return a === null || p === null || p === undefined ? null : subAmounts(F, a, p); };
+        var rows = {};
+        ["revenue", "purchases", "labor", "other", "fixedRent", "royalty", "net"].forEach(function (k) {
+          var p = prev && !prev.loading ? prev[k] : null;
+          var d = delta(c[k], p);
+          rows[k] = { text: money(F, c[k]), amount: c[k], shareText: share(c[k]), deltaText: d === null ? "—" : (toNum(F, d) > 0 ? "+" : "") + money(F, d), delta: d, negative: c[k] !== null && toNum(F, c[k]) < 0 };
+        });
+        rows.revenue.text = c.revenueRecorded === null ? "—" : money(F, c.revenueRecorded) + (c.revenuePartial ? " · " + TXT.partial : "");
+        var deliveries = deliveriesOf(F, cur.inputs, month);
+        var w = cur.report.window;
+        return {
+          status: "ready", report: cur.report, rows: rows, gross: pnlGrossLineVD50(),
+          deliveries: { text: money(F, deliveries), show: deliveries !== null && toNum(F, deliveries) !== 0 },
+          showOther: c.otherRecorded !== null && toNum(F, c.otherRecorded) !== 0,
+          showRoyalty: c.royalty !== null && toNum(F, c.royalty) !== 0,
+          hasPrev: !!(prev && !prev.loading), prevLoading: !!(prev && prev.loading),
+          netPct: c.net === null || rev === null ? { text: "—", negative: false } : { text: pctText(F, ratio(F, c.net, rev)), negative: toNum(F, c.net) < 0 },
+          purchasesPct: { text: pctText(F, c.purchasesPct), num: toNum(F, ratioValue(c.purchasesPct)) },
+          laborPct: { text: pctText(F, c.laborPct), num: toNum(F, ratioValue(c.laborPct)) },
+          avgPerDay: money(F, c.avgPerDay),
+          days: { recognized: w.recognizedDays, inMonth: F.finance.businessDate.monthBounds(month).days, present: cur.report.coverage.day.presentDays, closed: cur.report.coverage.day.closedDays.length, state: w.state },
+          configurationBasis: cur.report.configurationBasis.slice(),
+          disclosure: revenueDisclosure(cur.report),
+          empty: w.state !== "actual" || (cur.report.coverage.day.presentDays === 0 && cur.report.coverage.day.closedDays.length === 0 && cur.report.coverage.day.missingDays.length === 0),
+        };
+      });
+    }
+
+    // ── placement of the monthly employer cost on one date (E-02/E-03, M-03/M-04) ─
+    function placement(F, inputs, date) {
+      var P = F.product, ct = F.metrics.costTimeline;
+      var tl = P.productTimeline(inputs);
+      var cal = P.productClosureCalendar(inputs);
+      var pl = ct.dayPlacement(tl, date, { asOfBusinessDate: inputs.asOfBusinessDate, closedDates: cal.closedDates });
+      var globalBad = (tl.flags || []).some(function (f) { return f.code === "invalid_global_amount" || f.code === "missing_global_amount"; });
+      if (pl.state !== "placed" || globalBad) return { state: pl.state === "placed" ? "invalid_configuration" : pl.state, global: null, text: "—" };
+      var g = D(F).serializeRat(pl.global);
+      return { state: "placed", global: g, text: money(F, g), completedClosure: pl.completedClosure };
+    }
+    /** Version in force on a date (configured monthly amounts; a configuration view, not Actual). */
+    function versionOn(F, inputs, date) {
+      var ct = F.metrics.costTimeline;
+      return ct.versionForDay(ct.resolveTimeline(F.product.productTimeline(inputs)), date);
+    }
+
+    // ── entry form preview (E-02/E-03) ─────────────────────────────────────────
+    function entryLabor(F, src, date, payrollInput) {
+      var got = inputsFor(F, src, { from: date, to: date });
+      if (got.status !== "ready") return got;
+      return guarded(function () {
+        var pl = placement(F, got.inputs, date);
+        var v = versionOn(F, got.inputs, date);
+        var emps = v ? v.globalEmployees : [];
+        var cell = F.finance.cells.parseAmount(payrollInput, { allowSkip: false });
+        var payroll = cell.state === "present" ? D(F).serializeDec(cell.value) : (cell.state === "absent" ? "0" : null);
+        var total = pl.global === null ? null : sumAmounts(F, [pl.global, payroll]);
+        return { status: "ready", globalCount: emps.length, global: pl, totalText: money(F, total), show: emps.length > 0 || (payroll !== null && toNum(F, payroll) !== 0) };
+      });
+    }
+
+    /**
+     * E-01: the revenue the save will store (the page's VAT normalisation of the form, applied
+     * by the caller), folded by the core's own row normalisation — same presence/invalid rules.
+     */
+    function entryRevenuePreview(F, netFields, date) {
+      return guarded(function () {
+        var N = F.finance.normalize;
+        var row = { id: "c1-preview", date: date, sales: netFields.sales, deliveries: netFields.deliveries, other_income: netFields.other_income };
+        var n = N.normalizeRows([row], { asOfBusinessDate: date });
+        var day = N.groupByDate(n.rows, { from: date, to: date })[0];
+        var r = day.revenue;
+        return { status: "ready", presence: r.presence, partial: r.partial, text: r.presence === "present" && !r.partial ? money(F, decStr(F, r.value)) : (r.presence === "invalid" ? F.presenters.labels.LABELS.presence.invalid : null) };
+      });
+    }
+
+    /** H-05: per-ROW diagnostic of a preserved duplicate (labelled "שורה"; never a day total). */
+    function rowDiagnostic(F, row) {
+      return guarded(function () {
+        var rev = entryRevenuePreview(F, row, row.date);
+        var c = F.finance.cells.parseAmount(row.payroll, { allowSkip: false });
+        return { status: "ready", revenueText: rev.status === "ready" && rev.text !== null ? rev.text : "—",
+          payrollText: c.state === "present" ? money(F, decStr(F, c.value)) : (c.state === "absent" ? "—" : F.presenters.labels.LABELS.presence.invalid) };
+      });
+    }
+
+    // ── employees screen (M-01…M-07) ───────────────────────────────────────────
+    function employees(F, src, month) {
+      var cur = monthReport(F, src, month);
+      if (cur.status !== "ready") return cur;
+      return guarded(function () {
+        var inputs = cur.inputs, A = cur.report.actual, bd = F.finance.businessDate, b = bd.monthBounds(month);
+        var asOf = src.asOf;
+        var cdays = F.product.productDays(inputs, { from: b.first, to: b.last }).days;
+        var byDate = {};
+        cdays.forEach(function (c) { byDate[c.date] = c; });
+        var days = bd.datesInRange(b.first, b.last).map(function (d) {
+          var pl = placement(F, inputs, d);
+          var c = byDate[d];
+          var completed = d < asOf;
+          var hourly = c && c.hourlyLabor.presence === "present" && !c.hourlyLabor.partial ? decStr(F, c.hourlyLabor.value)
+            : (c && c.presence.day === "present" && c.hourlyLabor.presence === "absent" ? "0" : null);
+          // Completed day: hourly employer cost entered on the day + the core's placement of the
+          // monthly employer cost (MARJIN_LABOR/3 daily labor). Current day and later: only the
+          // placement is known, shown as expected ("צפוי"), never as Actual.
+          var totalAmt = completed ? (c && c.presence.day === "present" && hourly !== null ? sumAmounts(F, [hourly, pl.global]) : null) : pl.global;
+          var rev = c && c.revenue.presence === "present" && !c.revenue.partial ? decStr(F, c.revenue.value) : null;
+          var pctR = completed && totalAmt !== null && rev !== null ? ratio(F, totalAmt, rev) : null;
+          return { date: d, completed: completed, placement: pl, totalText: money(F, totalAmt), expected: !completed, pctText: pctR === null || ratioValue(pctR) === null ? null : pctText(F, pctR), hourlyText: money(F, hourly) };
+        });
+        var v = versionOn(F, inputs, asOf.slice(0, 7) === month ? asOf : b.last);
+        return {
+          status: "ready", report: cur.report,
+          monthTotal: { text: typedMoney(F, A.labor.employerCost), state: A.labor.employerCost.state },
+          monthPct: pctText(F, A.labor.employerCostPct),
+          globalPerDay: placement(F, inputs, asOf.slice(0, 7) === month ? asOf : b.first),
+          globalEmployees: v ? v.globalEmployees.map(function (g) { return { key: g.employeeKey, monthlyText: money(F, g.monthlyAmount) }; }) : [],
+          days: days, meaning: F.presenters.labels.LABELS.labor.meaning,
+          configurationBasis: cur.report.configurationBasis.slice(),
+        };
+      });
+    }
+
+    // ── history (H-01…H-06, U-1, U-19, U-20, U-23) ─────────────────────────────
+    function history(F, src, month) {
+      var cur = monthReport(F, src, month);
+      if (cur.status !== "ready") return cur;
+      return guarded(function () {
+        var inputs = cur.inputs, R = cur.report, bd = F.finance.businessDate, P = F.product;
+        var b = bd.monthBounds(month), asOf = src.asOf, L = F.presenters.labels.LABELS;
+        var to = asOf < b.last ? (asOf < b.first ? null : asOf) : b.last;
+        if (to === null) return { status: "ready", report: R, days: [], counts: { complete: 0, incomplete: 0, closed: 0 } };
+        var completed = P.productDays(inputs, { from: b.first, to: to }).days;
+        var closed = R.operatingCalendar.closedDates;
+        var byDate = {};
+        completed.forEach(function (d) { byDate[d.date] = d; });
+        var N = F.finance.normalize;
+        var n = N.normalizeRows(P.mapFieldReadback(inputs.rows), { asOfBusinessDate: asOf });
+        var todayDay = to === asOf ? N.groupByDate(n.rows, { from: asOf, to: asOf, exceptionsByDate: inputs.exceptionsByDate })[0] : null;
+        var dates = bd.datesInRange(b.first, to);
+        var out = dates.map(function (d) {
+          var day = d === asOf ? todayDay : byDate[d];
+          var isClosed = closed.indexOf(d) !== -1 || (d === asOf && P.productClosureCalendar(inputs, n).closedDates.indexOf(d) !== -1);
+          var contradiction = isClosed && day && P.closedDayRevenueConflict(day);
+          var p = day ? day.presence : null;
+          var status;
+          if (contradiction) status = "contradiction";
+          else if (isClosed) status = "closed";
+          else if (!day || p.day === "missing") status = "missing";
+          else if (p.revenue === "invalid" || p.purchases === "invalid" || p.hourlyLabor === "invalid" || day.revenue.partial || day.purchases.partial || day.hourlyLabor.partial) status = "invalid";
+          else if (p.revenue === "present" && p.purchases === "present" && p.hourlyLabor === "present") status = "complete";
+          else status = "partial";
+          var rev = day && day.revenue.presence === "present" && !day.revenue.partial ? decStr(F, day.revenue.value) : null;
+          var pur = day && day.purchases.presence === "present" && !day.purchases.partial ? decStr(F, day.purchases.value) : null;
+          var hl = day && day.hourlyLabor.presence === "present" && !day.hourlyLabor.partial ? decStr(F, day.hourlyLabor.value) : null;
+          var oe = day ? (day.otherExpense.presence === "absent" ? "0" : (day.otherExpense.presence === "present" && !day.otherExpense.partial ? decStr(F, day.otherExpense.value) : null)) : null;
+          var exp = sumAmounts(F, [pur, hl, oe]);
+          var contribution = rev === null || exp === null || contradiction ? null
+            : D(F).serializeRat(F.metrics.report.contributionOf(amt(F, rev), amt(F, pur), amt(F, hl), amt(F, oe)));
+          return {
+            date: d, isToday: d === asOf, status: status, rowCount: day ? day.rowCount : 0,
+            revenueText: isClosed && !contradiction ? money(F, "0") : money(F, rev),
+            expensesText: money(F, exp), netText: money(F, contribution), netNegative: contribution !== null && toNum(F, contribution) < 0,
+            label: status === "closed" ? L.presence.closedDay : status === "contradiction" ? "סגור — נרשמו הכנסות" : status === "missing" ? L.presence.missingDay : status === "invalid" ? L.presence.invalid : status === "complete" ? "הוזן מלא" : "חסר נתונים",
+          };
+        }).reverse();
+        var counts = { complete: 0, incomplete: 0, closed: 0 };
+        out.forEach(function (x) { if (x.isToday) return; if (x.status === "complete") counts.complete++; else if (x.status === "closed") counts.closed++; else counts.incomplete++; });
+        return { status: "ready", report: R, days: out, counts: counts, presentDays: R.coverage.day.presentDays, disclosure: revenueDisclosure(R) };
+      });
+    }
+
+    // ── suppliers / food cost (S-01…S-05, S-08, U-05) ─────────────────────────────
+    function suppliers(F, src, month, supplierList) {
+      var cur = monthReport(F, src, month);
+      if (cur.status !== "ready") return cur;
+      return guarded(function () {
+        var A = cur.report.actual, pol = policyOf(F, src);
+        var rev = A.revenue.complete ? A.revenue.value : null;
+        var bySource = A.purchases.bySource || {};
+        var names = {};
+        (supplierList || []).forEach(function (s) { if (s && s.id !== undefined) names["supplier:" + s.id] = s.name; });
+        var keys = Object.keys(bySource).sort();
+        var rows = keys.map(function (k) {
+          var label = names[k] || (k === "legacy_food_cost" ? "עלות מזון (רשומה ישנה)" : "ספק " + k.replace(/^supplier:/, ""));
+          return { key: k, name: label, amount: bySource[k], text: money(F, bySource[k]), pctText: rev === null ? "—" : pctText(F, ratio(F, bySource[k], rev)) };
+        });
+        var top = rows.slice().sort(function (a, b) { return D(F).ratCmp(amt(F, b.amount), amt(F, a.amount)); })[0] || null;
+        var bySupplierId = {};
+        rows.forEach(function (r) { if (r.key.indexOf("supplier:") === 0) bySupplierId[r.key.slice(9)] = r; });
+        return {
+          status: "ready", report: cur.report,
+          total: totalView(F, A.purchases, cur.report.coverage.purchases),
+          revenue: totalView(F, A.revenue, cur.report.coverage.revenue),
+          purchasesPct: { text: pctText(F, A.purchasesPct), band: band(F, A.purchasesPct, pol.values["goal.foodCostPct"].value), num: toNum(F, ratioValue(A.purchasesPct)), goal: pol.values["goal.foodCostPct"] },
+          rows: rows, bySupplierId: bySupplierId, top: top,
+        };
+      });
+    }
+    /** S-08: mean revenue of completed present days with vs without an external-impact tag (statistic over canonical facts). */
+    function impactStats(F, src, rowsAll) {
+      var got = inputsFor(F, src, null);
+      if (got.status !== "ready") return got;
+      return guarded(function () {
+        var inputs = got.inputs, first = earliestRowDate(F, src.rows, src.asOf);
+        if (first === null || first >= src.asOf) return { status: "ready", show: false };
+        var days = F.product.productDays(inputs, { from: first, to: src.asOf }).days;
+        var closed = F.product.productClosureCalendar(inputs).closedDates;
+        var tagged = {};
+        (rowsAll || []).forEach(function (r) { if (r && (r.weather_impact || r.security_event)) tagged[r.date] = true; });
+        var impact = [], normal = [];
+        days.forEach(function (c) {
+          // operating days with complete recorded revenue only: closures and missing days are not "0 revenue" days
+          if (closed.indexOf(c.date) !== -1 || c.revenue.presence !== "present" || c.revenue.partial) return;
+          (tagged[c.date] ? impact : normal).push(decStr(F, c.revenue.value));
+        });
+        if (!impact.length) return { status: "ready", show: false };
+        var mean = function (l) { return l.length ? D(F).serializeRat(D(F).ratDiv(amt(F, sumAmounts(F, l)), D(F).ratFromInt(l.length))) : null; };
+        var im = mean(impact), nm = mean(normal);
+        var diff = im !== null && nm !== null ? ratioValue(F.metrics.report.ratioOfTotals(D(F).ratSub(amt(F, im), amt(F, nm)), amt(F, nm))) : null;
+        return { status: "ready", show: true, impactText: money(F, im), impactDays: impact.length, normalText: money(F, nm), normalDays: normal.length,
+          diffText: diff === null ? null : pctText(F, diff.replace(/^-/, "")), diffNegative: diff !== null && toNum(F, diff) < 0 };
+      });
+    }
+
+    // ── daily insights (I-01…I-03) — B1 analytics documents ─────────────────────
+    function insightsKeys(F, asOf, days) {
+      var bd = F.finance.businessDate, keys = [];
+      for (var i = 1; i <= days; i++) keys.push(bd.addDays(asOf, -i));
+      return keys;
+    }
+    function insightTotal(doc) {
+      var t = doc && doc.revenue ? doc.revenue.total : undefined;
+      return typeof t === "number" && isFinite(t) ? t : null;
+    }
+    /** I-01: mean of the documents' recorded revenue totals (server B1 values), exact; absent totals excluded. */
+    function insightsStats(F, docs) {
+      return guarded(function () {
+        var list = [];
+        (docs || []).forEach(function (d) { var t = insightTotal(d); if (t !== null) list.push(D(F).serializeDec(D(F).decFromNumber(t))); });
+        var avg = list.length ? D(F).serializeRat(D(F).ratDiv(amt(F, sumAmounts(F, list)), D(F).ratFromInt(list.length))) : null;
+        return { status: "ready", revenueDays: list.length, avgText: money(F, avg) };
+      });
+    }
+    function insightMoney(F, doc) { var t = insightTotal(doc); return t === null ? "—" : money(F, D(F).serializeDec(D(F).decFromNumber(t))); }
+
+    // ── supplier reminders (D-17 / S-09; VD-39): a recorded 0 / "skip" is entered ─
+    function supplierCellEntered(F, value) {
+      var c = F.finance.cells.parseAmount(value, { allowSkip: true });
+      return c.state === "present" || c.state === "skip";
+    }
+
+    window.MarjinC1 = Object.freeze({
+      C1_VERSION: C1_VERSION, EXPECT: EXPECT, LEDGER_CHUNK_DAYS: LEDGER_CHUNK_DAYS, TXT: TXT, READ_FAILED: READ_FAILED,
+      checkBundle: checkBundle, nodeState: nodeState, ledgerChunks: ledgerChunks, structuredStates: structuredStates,
+      earliestRowDate: earliestRowDate, ledgerWindow: ledgerWindow, ledgerCovers: ledgerCovers, loadLedger: loadLedger, inputsFor: inputsFor,
+      monthReport: monthReport, dashboard: dashboard, todayContext: todayContext, pnl: pnl, pnlGrossLineVD50: pnlGrossLineVD50,
+      placement: placement, versionOn: versionOn, entryLabor: entryLabor, entryRevenuePreview: entryRevenuePreview, rowDiagnostic: rowDiagnostic, employees: employees, history: history,
+      suppliers: suppliers, impactStats: impactStats, insightsKeys: insightsKeys, insightTotal: insightTotal, insightsStats: insightsStats, insightMoney: insightMoney,
+      supplierCellEntered: supplierCellEntered, revenueDisclosure: revenueDisclosure, band: band,
+      money: money, pctText: pctText,
+    });
   })();
   </script>
 
@@ -4771,113 +5435,16 @@ function suppliersOnDay(dow, suppliers) {
   });
 }
 
-// ─── Helper: compute monthly metrics from entries ────────────────────────────
-function calcMetrics(entries, fixedList, cfg) {
-  const { rentPct=0, rentType='fixed', rentFixed=0, hasRoyalty=false, royaltyPct=0,
-          suppliers=[], employees=[] } = cfg || {};
-
-  let totalSales=0, totalFood=0, totalPayroll=0, totalOtherExpense=0,
-      totalOtherIncome=0, totalNetworkDelivery=0;
-
-  entries.forEach(e => {
-    const sales        = Number(e.sales)        || 0;
-    const deliveries   = Number(e.deliveries)   || 0;
-    const food         = Number(e.food_cost)    || 0;
-    const payroll      = Number(e.payroll)      || 0;
-    const hourly       = Object.values(e.hourly_payroll || {}).reduce((a,v)=>a+(Number(v)||0),0);
-    const otherExp     = Number(e.other_expense) || 0;
-    const otherInc     = Number(e.other_income)  || 0;
-    const supPayments  = Object.values(e.supplier_payments || {}).reduce((a,v)=>a+(Number(v)||0),0);
-
-    totalSales           += sales + deliveries + otherInc;
-    totalNetworkDelivery += deliveries;
-    totalFood            += supPayments > 0 ? supPayments : food;
-    totalPayroll         += payroll + hourly;
-    totalOtherExpense    += otherExp;
-    totalOtherIncome     += otherInc;
-  });
-
-  // Add global employees (monthly salary) prorated to days elapsed
-  const daysPassed = entries.length;
-  const daysInMonth = DAYS_IN_MONTH || 30;
-  const globalEmps = (employees || []).filter(e => e.type === "global" && Number(e.monthlySalary) > 0);
-  const globalMonthlyTotal = globalEmps.reduce((a, e) => a + Number(e.monthlySalary), 0);
-  const globalProratedPayroll = daysInMonth > 0
-    ? Math.round(globalMonthlyTotal * (daysPassed / daysInMonth))
-    : 0;
-  totalPayroll += globalProratedPayroll;
-  // Split fixed expenses: regular monthly amounts vs rent/royalty (percentage-based)
-  const fixedRegular = fixedList.reduce((a,f) => {
-    if (f.rentPct || f.royaltyPct || f.disabled) return a;
-    return a + (Number(f.amount) || 0);
-  }, 0);
-  const rentAmount = rentType === 'pct' ? Math.round(totalSales * (rentPct/100)) : rentFixed;
-  const royaltyAmount = hasRoyalty ? Math.round(totalSales * (royaltyPct/100)) : 0;
-  const TOTAL_FIXED = fixedRegular + rentAmount;  // KPI: regular fixed + rent together
-  const fixedSoFar  = fixedRegular + rentAmount;
-  const allExpensesFixed = TOTAL_FIXED + royaltyAmount; // full total for expense calc
-
-  const totalExpenses = totalFood + totalPayroll + totalOtherExpense + allExpensesFixed;
-  const lc            = totalSales - totalExpenses;
-  const foodCostPct   = totalSales > 0 ? (totalFood / totalSales) * 100 : 0;
-  const dailyAvg      = daysPassed > 0 ? lc / daysPassed : 0;
-  const daysLeft      = Math.max(daysInMonth - daysPassed, 0);
-  const forecast      = lc + (dailyAvg * daysLeft);
-
-  return {
-    totalSales, totalFood, totalPayroll, totalOtherExpense,
-    totalNetworkDelivery, fixedSoFar, totalExpenses,
-    lc, foodCostPct, dailyAvg, forecast, TOTAL_FIXED,
-    fixedRegular, rentAmount, royaltyAmount,
-  };
-}
-
-// ─── Helper: build daily LC cumulative chart data ────────────────────────────
-function buildChart(entries) {
-  if (!Array.isArray(entries) || entries.length === 0) return [];
-  let cum = 0;
-  return entries
-    .slice()
-    .sort((a, b) => (a.date||'').localeCompare(b.date||''))
-    .map(e => {
-      const sales = (Number(e.sales)||0) + (Number(e.deliveries)||0) + (Number(e.other_income)||0);
-      const food  = Object.values(e.supplier_payments||{}).reduce((a,v)=>a+(Number(v)||0),0) || (Number(e.food_cost)||0);
-      const pay   = (Number(e.payroll)||0) + Object.values(e.hourly_payroll||{}).reduce((a,v)=>a+(Number(v)||0),0);
-      const exp   = food + pay + (Number(e.other_expense)||0);
-      cum += sales - exp;
-      return { day: (e.date||'').slice(8), יתרה: Math.round(cum), הכנסות: Math.round(sales), הוצאות: Math.round(exp) };
-    });
-}
+// C1 (U-09 / C1-T16): the legacy page finance formulas (month metrics, cumulative chart) are
+// retired. Every browser financial figure comes from the shared Financial Core through the
+// window.MarjinC1 view models; there is no page-local fallback formula.
 
 // Expose helpers globally as safety net
-window.calcMetrics    = calcMetrics;
-window.buildChart     = buildChart;
 window.suppliersOnDay = suppliersOnDay;
 window.getDateDOW     = getDateDOW;
 window.fcColor        = fcColor;
 
 // ─── Count-up hook for hero number ────────────────────────────────────────────
-function useCountUp(target, duration=900) {
-  const [val, setVal] = React.useState(0);
-  const prev = React.useRef(0);
-  React.useEffect(() => {
-    if (!target) return;
-    const start = prev.current;
-    const diff = target - start;
-    const startTime = performance.now();
-    const tick = (now) => {
-      const elapsed = now - startTime;
-      const progress = Math.min(elapsed / duration, 1);
-      // Ease-out cubic
-      const eased = 1 - Math.pow(1 - progress, 3);
-      setVal(Math.round(start + diff * eased));
-      if (progress < 1) requestAnimationFrame(tick);
-      else prev.current = target;
-    };
-    requestAnimationFrame(tick);
-  }, [target]);
-  return val;
-}
 
 function PilotDashboard() {
   const [entries, setEntries] = useState([]);
@@ -5475,6 +6042,114 @@ function PilotDashboard() {
     return () => { live = false; unsubs.forEach(u => typeof u==="function" && u()); clearInterval(orefInterval); };
   },[currentBizId]);
 
+  // ── C1: Financial Core inputs (READ-ONLY; no write path is touched) ─────────────
+  // Module readiness: "loading" | "ready" | "failed" (window.__marjinFinance, set by the
+  // fincore bootstrap). There is no fallback engine: not ready ⇒ financial views unavailable.
+  const [finCoreState, setFinCoreState] = useState(() => (window.__marjinFinance && window.__marjinFinance.state) || "loading");
+  useEffect(() => {
+    const onSettled = () => setFinCoreState((window.__marjinFinance && window.__marjinFinance.state) || "failed");
+    window.addEventListener("marjin-finance-settled", onSettled);
+    onSettled();
+    return () => window.removeEventListener("marjin-finance-settled", onSettled);
+  }, []);
+  // One live clock per render (Israel business date). Refreshed every minute and when the
+  // page returns to the foreground, so Actual (≤ D-1) rolls over at Israel midnight.
+  const [finNowMs, setFinNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const tick = () => setFinNowMs(Date.now());
+    const t = setInterval(tick, 60000);
+    const onVis = () => { if (!document.visibilityState || document.visibilityState === "visible") tick(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVis); };
+  }, []);
+  // Raw settings nodes exactly as stored (server parity: decodeEnvelope on the raw node).
+  // {kind:"loading"} | {kind:"raw", raw} | {kind:"absent"} | {kind:"failed"} — a failed read is
+  // never "absent" and an unreadable node is never replaced by defaults.
+  const FIN_NODE_LOADING = { kind: "loading" };
+  const [finRaw, setFinRaw] = useState({ config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING, bizId: null });
+  useEffect(() => {
+    setFinRaw({ config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING, bizId: currentBizId || null });
+    if (!currentBizId || !window.storage || !window.storage.subscribeNode) return;
+    let live = true;
+    const ctx = captureSelectionCtx();
+    const ok = () => live && isSelectionLive(ctx);
+    const put = (name, v) => { if (ok()) setFinRaw(prev => (prev.bizId === currentBizId ? { ...prev, [name]: v } : prev)); };
+    const unsubs = [];
+    ["config", "fixed"].forEach((name) => {
+      const key = `biz:${currentBizId}:${name}`;
+      unsubs.push(window.storage.subscribeNode(key, (raw) => put(name, { kind: "raw", raw }), () => put(name, { kind: "failed" })));
+      (async () => {
+        try { await window.storage.get(key); }
+        catch (err) {
+          const msg = (err && err.message) || "";
+          // ONLY "not found" means absent; the listener stays the authority for an existing node.
+          put(name, msg === "not found" ? { kind: "absent" } : { kind: "failed" });
+          return;
+        }
+      })();
+    });
+    return () => { live = false; unsubs.forEach(u => typeof u === "function" && u()); };
+  }, [currentBizId]);
+  // Months a screen asked for that lie before the default ledger window (e.g. an old P&L month).
+  const [finLedgerFloor, setFinLedgerFloor] = useState(null);
+  useEffect(() => { setFinLedgerFloor(null); }, [currentBizId]);
+  const requestFinanceFrom = (date) => { if (typeof date === "string") setFinLedgerFloor(prev => (prev === null || date < prev ? date : prev)); };
+  const finF = finCoreState === "ready" ? window.MarjinFinance : null;
+  const finAsOf = finF ? finF.finance.businessDate.israelBusinessDate(finNowMs) : null;
+  // Entries are usable only once the coordinator hydrated them (or confirmed the node absent)
+  // and the lane is not degraded / failed — never an empty pre-hydration array.
+  const finRowsReady = !!(entriesWriteCoordRef.current && entriesWriteCoordRef.current.isReady());
+  // The structured ledger window: earliest stored row (projection history) / 13 months back
+  // (prior-year P&L) / supplier month / requested floor → end of the current month.
+  const finLedgerWindow = React.useMemo(() => {
+    if (!finF || !finAsOf || !finRowsReady) return null;
+    const bd = finF.finance.businessDate;
+    const back13 = bd.monthBounds(bd.monthOf(bd.addDays(bd.monthBounds(finAsOf.slice(0, 7)).first, -366))).first;
+    let extra = back13;
+    if (typeof supMonth === "string" && /^\d{4}-\d{2}$/.test(supMonth) && supMonth + "-01" < extra) extra = supMonth + "-01";
+    if (finLedgerFloor && finLedgerFloor < extra) extra = finLedgerFloor;
+    return window.MarjinC1.ledgerWindow(finF, entries, finAsOf, extra);
+  }, [finF, finAsOf, finRowsReady, entries, supMonth, finLedgerFloor]);
+  const [finLedger, setFinLedger] = useState({ state: "loading" });
+  const finLedgerKey = finLedgerWindow ? `${currentBizId}|${finLedgerWindow.from}|${finLedgerWindow.to}` : null;
+  useEffect(() => {
+    if (!finF || !finLedgerWindow || !currentBizId) { setFinLedger({ state: "loading" }); return; }
+    let live = true;
+    const ctx = captureSelectionCtx();
+    const ok = () => live && isSelectionLive(ctx);
+    // Any reload invalidates the previous calendar first: results are never computed from a
+    // ledger that is being replaced (no stale or partially loaded closure history).
+    setFinLedger({ state: "loading" });
+    if (!ctx || !ctx.tenantId || !ctx.bizId) { setFinLedger({ state: "unreadable", reason: "no_selection" }); return; }
+    window.MarjinC1.loadLedger(finF, {
+      isLive: ok,
+      fetchChunk: async (from, to) => {
+        if (!ok()) throw new Error("stale");
+        const resp = await window.apiFetch(`/api/admin?action=list-entry-exceptions&tenantId=${encodeURIComponent(ctx.tenantId)}&bizId=${encodeURIComponent(ctx.bizId)}&fromDate=${from}&toDate=${to}`, { method: "GET" });
+        if (!resp || !resp.ok) throw new Error("http_error");
+        return await resp.json();
+      },
+    }, finLedgerWindow.from, finLedgerWindow.to).then((res) => {
+      if (!ok() || res.state === "stale") return;
+      setFinLedger({ ...res, bizId: currentBizId });
+    });
+    return () => { live = false; };
+    // entryExceptions: every reload of the effective exception list (including after a
+    // CD-M2 closure write) reloads the structured ledger too.
+  }, [finF, finLedgerKey, entryExceptions]);
+  const finSrc = React.useMemo(() => {
+    if (!finF || !finAsOf) return null;
+    const C1 = window.MarjinC1;
+    const nodeOf = (n, expect) => n.kind === "loading" ? { state: "loading" }
+      : n.kind === "absent" ? { state: "absent" }
+      : n.kind === "failed" ? C1.READ_FAILED
+      : C1.nodeState(finF, n.raw, expect);
+    const ledger = finLedger && finLedger.bizId === currentBizId ? finLedger : { state: "loading" };
+    return { rows: entries, config: nodeOf(finRaw.config, "object"), fixed: nodeOf(finRaw.fixed, "array"), asOf: finAsOf, ledger, rowsReady: finRowsReady };
+  }, [finF, finAsOf, entries, finRaw, finLedger, finRowsReady, currentBizId]);
+  const finStatus = finCoreState === "failed" ? "unavailable" : (finCoreState !== "ready" ? "loading" : null);
+  /** Guarded view model: {status:"loading"|"unavailable"} unless the core and every input are ready. */
+  const finView = (fn) => finStatus ? { status: finStatus, reason: "fincore_" + finCoreState } : (!finSrc ? { status: "loading" } : fn(finF, finSrc));
   const israelDateKey = (offsetDays=0) => {
     const todayIL = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
     const [yy, mm, dd] = todayIL.split("-").map(Number);
@@ -6144,12 +6819,30 @@ function PilotDashboard() {
     ? businesses
     : businesses.filter(b => (loggedInUser?.allowedBizIds || []).includes(b.id));
 
-  const monthPrefix = `${YEAR}-${MONTH_STR}-`;
-  const monthEntries = entries.filter(e => e.date && e.date.startsWith(monthPrefix));
-  const metrics = calcMetrics(monthEntries, fixedList, {...businessConfig, suppliers, employees: businessConfig.employees || []});
-  const animatedSales = useCountUp(metrics.totalSales, 900);
-  const chart = buildChart(monthEntries);
-  const todayEntry = entries.find(e=>e.date===TODAY_STR);
+  // C1: every financial figure of the dashboard / food-cost summary is a field of ONE
+  // view model over the shared core (window.MarjinC1.dashboard). Not ready ⇒ no numbers.
+  const finDash = React.useMemo(() => finView((F, S) => window.MarjinC1.dashboard(F, S, {
+    nowMs: finNowMs,
+    lastYearSales: (lastYear && S.asOf && lastYear[Number(S.asOf.slice(5, 7)) - 1]) ? lastYear[Number(S.asOf.slice(5, 7)) - 1].sales : null,
+  })), [finSrc, finCoreState, lastYear]);
+  const finSup = React.useMemo(() => finView((F, S) => window.MarjinC1.suppliers(F, S, supMonth, suppliers)), [finSrc, finCoreState, supMonth, suppliers]);
+  const finImpact = React.useMemo(() => finView((F, S) => window.MarjinC1.impactStats(F, S, entries)), [finSrc, finCoreState]);
+  const finEntryDate = (typeof form.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(form.date)) ? form.date : finAsOf;
+  const finEntry = React.useMemo(() => finEntryDate ? finView((F, S) => window.MarjinC1.entryLabor(F, S, finEntryDate, form.payroll)) : { status: "loading" }, [finSrc, finCoreState, finEntryDate, form.payroll]);
+  // X-01 (unreachable ForecastScreen, E-owned): numeric legacy-shaped view of the SAME report —
+  // complete values only, otherwise null (never a 0 that was not computed).
+  const finForecastScreenMetrics = (() => {
+    if (finDash.status !== "ready") return { totalSales: null, totalFood: null, totalPayroll: null, fixedRegular: null, source: finDash.status };
+    const F = window.MarjinFinance, A = finDash.report.actual, n = (a) => F.metrics.adapters.legacyNumber.amountToNumber(a);
+    return { totalSales: A.revenue.complete ? n(A.revenue.value) : null, totalFood: A.purchases.complete ? n(A.purchases.value) : null,
+      totalPayroll: A.labor.employerCost.state === "complete" ? n(A.labor.employerCost.value) : null,
+      fixedRegular: A.fixedAccrual.state === "complete" ? n(A.fixedAccrual.regular) : null, source: "MarjinFinance" };
+  })();
+  // Live business-date context for operational (non-financial) surfaces.
+  const finTodayStr = finAsOf || israelDateKey(0);
+  const monthPrefix = `${finTodayStr.slice(0, 7)}-`; // live business month (W-03 / H-06)
+  const finHist = React.useMemo(() => finView((F, S) => window.MarjinC1.history(F, S, S.asOf.slice(0, 7))), [finSrc, finCoreState]);
+  const finTodayDow = (finF ? finF.finance.businessDate.dowOf(finTodayStr) : new Date(finTodayStr + "T12:00:00Z").getUTCDay());
 
   const sendAI = React.useCallback(async (query) => {
     const q = (typeof query === "string" ? query : aiQuery).trim();
@@ -6232,38 +6925,26 @@ function PilotDashboard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiQuery, aiLoading, currentBizId]);
 
-  // Calculate missing supplier data per supplier this month
-  const supplierMissingDays = {};
-  if(suppliers.length > 0) {
-    for(let d=1; d<DAY_OF_MONTH; d++){
-      const ds=`${YEAR}-${MONTH_STR}-${String(d).padStart(2,"0")}`;
-      const dow=getDateDOW(ds);
-      if(dow===6) continue;
-      const entry=entries.find(e=>e.date===ds);
-      const expected=suppliersOnDay(dow, suppliers);
-      expected.forEach(sup=>{
-        if(!entry || entry.supplier_payments?.[sup.id] === undefined) {
-          supplierMissingDays[sup.id] = (supplierMissingDays[sup.id]||0) + 1;
-        }
+  const monthLabel = _NOW.toLocaleDateString("he-IL",{month:"long",year:"numeric"});
+
+  // Supplier alerts (D-17 / S-09, operational). C1 / VD-39: a supplier cell is "entered" when
+  // ANY row of the date records it — a recorded 0 or "skip" is entered, not missing (presence
+  // through the core's cell parser). Live Israel business date; the Saturday rule is unchanged.
+  // Without the core (module unavailable) no reminder is derived.
+  const supplierAlerts = [];
+  const supEntered = (date, supId) => !!finF && entries.some(e => e && e.date === date && window.MarjinC1.supplierCellEntered(finF, e.supplier_payments ? e.supplier_payments[supId] : undefined));
+  if (finF) {
+    const bd = finF.finance.businessDate;
+    for (const ds of bd.datesInRange(finTodayStr.slice(0, 7) + "-01", finTodayStr)) {
+      const dow = bd.dowOf(ds);
+      if (dow === 6) continue; // שבת -- לא עובדים
+      suppliersOnDay(dow, suppliers).forEach(sup => {
+        if (!supEntered(ds, sup.id)) supplierAlerts.push({ date: ds, day: Number(ds.slice(8)), dow, supplier: sup });
       });
     }
   }
-  const monthLabel = _NOW.toLocaleDateString("he-IL",{month:"long",year:"numeric"});
-
-  // Supplier alerts
-  const supplierAlerts = [];
-  for(let d=1; d<=DAY_OF_MONTH; d++){
-    const ds=`${YEAR}-${MONTH_STR}-${String(d).padStart(2,"0")}`;
-    const entry=entries.find(e=>e.date===ds);
-    const dow=getDateDOW(ds);
-    if(dow===6) continue; // שבת -- לא עובדים
-    suppliersOnDay(dow, suppliers).forEach(sup=>{
-      const paid=Number(entry?.supplier_payments?.[sup.id]||0);
-      if(!paid) supplierAlerts.push({date:ds,day:d,dow,supplier:sup});
-    });
-  }
-  const todayExpected = suppliersOnDay(TODAY_DOW, suppliers);
-  const todayMissing = todayExpected.filter(s=>!Number(todayEntry?.supplier_payments?.[s.id]||0));
+  const todayExpected = suppliersOnDay(finTodayDow, suppliers);
+  const todayMissing = finF ? todayExpected.filter(s => !supEntered(finTodayStr, s.id)) : [];
 
   if(!loaded) return <div style={{minHeight:"100vh",background:"#F9FAFB",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:10}}><div style={{width:32,height:32,background:"#111827",borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{color:"#fff",fontSize:14,fontWeight:700}}>M</span></div><div style={{fontSize:13,color:"#9CA3AF",fontWeight:400}}>מתחבר...</div></div>;
 
@@ -6608,7 +7289,7 @@ function PilotDashboard() {
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
                     <div>
                       <div style={{fontSize:16,fontWeight:700,color:"#0F172A",letterSpacing:"-.3px"}}>הוצאות קבועות</div>
-                      <div style={{fontSize:12,color:"#94A3B8",marginTop:3}}>קבועות + שכ״ד: <strong style={{color:"#1E293B"}}>{fmt(metrics.TOTAL_FIXED)}</strong>{metrics.royaltyAmount>0&&<span> · תמלוגים: <strong style={{color:"#1E293B"}}>{fmt(metrics.royaltyAmount)}</strong></span>}</div>
+                      <div data-c1="fixed-modal-total" style={{fontSize:12,color:"#94A3B8",marginTop:3}}>קבועות + שכ״ד (מצטבר החודש, בפועל עד אתמול): <strong style={{color:"#1E293B"}}>{finDash.status==="ready"?finDash.fixedRent.text:"—"}</strong>{finDash.status==="ready"&&finDash.royalty.show&&<span> · תמלוגים: <strong style={{color:"#1E293B"}}>{finDash.royalty.text}</strong></span>}</div>
                     </div>
                     <button onClick={()=>setShowFixed(false)} style={{width:30,height:30,background:"#F1F5F9",border:"none",borderRadius:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#64748B"}}>
                       <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -6738,42 +7419,44 @@ function PilotDashboard() {
       {screen==="dashboard" && (
         <div className="dash">
           {(()=>{
-            const tSales   = Math.round((lastYear[MONTH]?.sales||650000)*(1+(cfgTarget(businessConfig,"salesGrowthPct",TARGETS.salesGrowthPct)/100)));
-            const tFood    = cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct);
-            const tLabor   = cfgTarget(businessConfig,"laborCostPct",TARGETS.laborCostPct);
-            const laborPct = metrics.totalSales>0 ? (metrics.totalPayroll/metrics.totalSales)*100 : 0;
-            const salesPct = tSales>0 ? Math.min(Math.round((metrics.totalSales/tSales)*100),100) : 0;
-            const dayPct   = DAYS_IN_MONTH>0 ? Math.round((DAY_OF_MONTH/DAYS_IN_MONTH)*100) : 0;
-            const daysLeft = DAYS_IN_MONTH - DAY_OF_MONTH;
-            // REV_FORECAST/v1 (mirrored from src/forecast/revenueForecast.ts).
-            // Replaces the DEPRECATED naive MTD run-rate. Single active revenue
-            // forecast across the app.
-            const __mfToday = new Date().toLocaleDateString("en-CA",{timeZone:"Asia/Jerusalem"});
-            const __mfDash = window.MarjinForecast.computeRevenueForecast({tenantId:(window._currentTenantId||null),bizId:(currentBizId||null),today:__mfToday,targetMonth:__mfToday.slice(0,7),history:window.MarjinForecast.entriesToForecastDays(entries, entryExceptions)});
-            const fSales   = __mfDash.monthEndForecastRevenue!=null ? __mfDash.monthEndForecastRevenue : metrics.totalSales;
-            const fProfit  = fSales*(1-tFood/100-tLabor/100-((businessConfig.rentType==="pct"?(businessConfig.rentPct||0):0)+(businessConfig.hasRoyalty?(businessConfig.royaltyPct||0):0))/100)-metrics.fixedRegular-(businessConfig.rentType==="fixed"?(businessConfig.rentFixed||0):0);
-            const gap      = Math.round(fSales - tSales);
-
-            const foodBad  = metrics.foodCostPct > tFood + 3;
-            const foodWarn = !foodBad && metrics.foodCostPct > tFood;
-            const lbrBad   = laborPct > tLabor + 3;
-            const lbrWarn  = !lbrBad && laborPct > tLabor;
-            const salesWarn= salesPct < 80 && salesPct >= 60;
-            const salesBad = salesPct < 60 && salesPct > 0;
-            const badgeCls = salesPct < 60 ? "warn" : "ok";
+            // C1: no figure below is computed here — every amount, ratio and state is a field of
+            // the dashboard view model (shared Financial Core); bands are the retained D-owned
+            // ±3-point / 60-80 % presentation rules applied to complete values only.
+            const dv = finDash;
             const hasAlerts = todayMissing.length>0 || orefAlert || weather?.alert;
-            const revChart  = chart.map(p=>({...p}));
+            if (dv.status !== "ready") {
+              return (
+                <div className="dash-wrap">
+                  <div className="dash-section">
+                    <div data-c1="fin-unavailable" style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:12,padding:"18px",textAlign:"center",fontSize:13,color:dv.status==="loading"?"#9CA3AF":"#92400E"}}>
+                      {dv.status==="loading" ? "טוען נתונים כספיים…" : "הנתונים הכספיים אינם זמינים כעת — לא מוצגים סכומים, אחוזים ותחזיות."}
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+            const salesV   = dv.salesPct.value === null ? null : dv.salesPct.width;
+            const salesWarn= salesV !== null && salesV < 80 && salesV >= 60;
+            const salesBad = salesV !== null && salesV < 60 && salesV > 0;
+            const badgeCls = salesV !== null && salesV < 60 ? "warn" : "ok";
+            const foodBad  = dv.purchasesPct.band === "bad", foodWarn = dv.purchasesPct.band === "warn";
+            const lbrBad   = dv.laborPct.band === "bad",     lbrWarn  = dv.laborPct.band === "warn";
+            const revChart = dv.chart;
+            const chartHasData = revChart.some(p => p["הכנסות"] !== null);
+            const asOfMonthIdx = Number(dv.month.slice(5, 7)) - 1;
 
             return (
               <div className="dash-wrap">
 
                 {/* Status strip */}
                 <div className="dash-status">
-                  <div className="dash-dot" style={{background:todayEntry?"#D1D5DB":"#F59E0B"}}/>
-                  <span style={{color:todayEntry?"#9CA3AF":"#F59E0B"}}>
-                    {todayEntry
-                      ? `הוזן — ${fmt((Number(todayEntry.sales)||0)+(Number(todayEntry.deliveries)||0))}`
-                      : `נתוני ${DOW_NAMES[TODAY_DOW]} טרם הוזנו`}
+                  <div className="dash-dot" style={{background:(dv.today.present||dv.today.closed)?"#D1D5DB":"#F59E0B"}}/>
+                  <span data-c1="today-strip" title={dv.today.label} style={{color:(dv.today.present||dv.today.closed)?"#9CA3AF":"#F59E0B"}}>
+                    {dv.today.closed
+                      ? `${window.MarjinFinance.presenters.labels.LABELS.presence.closedDay} — היום`
+                      : dv.today.present
+                        ? `הוזן — ${dv.today.revenueText} · היום, מחוץ לבפועל (עד אתמול)`
+                        : `נתוני ${DOW_NAMES[finTodayDow]} טרם הוזנו`}
                   </span>
                   {weather&&!weather.alert&&(
                     <span style={{marginRight:"auto",color:"#D1D5DB"}}>{weather.temp}° · {weather.desc}</span>
@@ -6792,50 +7475,52 @@ function PilotDashboard() {
                   {/* הכנסות */}
                   <div className="kpi-card kpi-card-link" onClick={()=>setScreen("history")} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" ")setScreen("history");}}>
                     <div className="kpi-label">הכנסות</div>
-                    <div className={`kpi-val${salesBad?" s-bad":salesWarn?" s-warn":""}`}>{fmt(metrics.totalSales)}</div>
-                    <div className="kpi-forecast">חזוי: {fmt(Math.round(fSales))}</div>
-                    {salesPct>0&&<div className="kpi-pct-bar"><div className="kpi-pct-fill" style={{width:`${salesPct}%`,background:salesBad?"#EF4444":salesWarn?"#F59E0B":"#6366F1"}}/></div>}
+                    <div data-c1="mtd-revenue" className={`kpi-val${salesBad?" s-bad":salesWarn?" s-warn":""}`}>{dv.revenue.text}</div>
+                    {dv.disclosure.warning&&<div data-c1="revenue-warning" style={{fontSize:11,color:"#DC2626",lineHeight:1.45,marginTop:2}}>{dv.disclosure.warning}</div>}
+                    {dv.disclosure.closures&&<div data-c1="closures" style={{fontSize:11,color:"#64748B",lineHeight:1.45,marginTop:2}}>{dv.disclosure.closures}</div>}
+                    <div className="kpi-forecast">חזוי: {dv.forecast.text}</div>
+                    {salesV!==null&&salesV>0&&<div className="kpi-pct-bar"><div className="kpi-pct-fill" style={{width:`${salesV}%`,background:salesBad?"#EF4444":salesWarn?"#F59E0B":"#6366F1"}}/></div>}
                   </div>
 
                   {/* קניות — פוד קוסט % */}
                   <div className="kpi-card kpi-card-link" onClick={()=>setScreen("foodcost")} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" ")setScreen("foodcost");}}>
                     <div className="kpi-label">קניות</div>
-                    <div className={`kpi-val${foodBad?" s-bad":foodWarn?" s-warn":""}`}>{fmt(metrics.totalFood)}</div>
+                    <div data-c1="mtd-purchases" className={`kpi-val${foodBad?" s-bad":foodWarn?" s-warn":""}`}>{dv.purchases.text}</div>
                     <div className="kpi-pct-badge" style={{color:foodBad?"#EF4444":foodWarn?"#F59E0B":"#64748B"}}>
-                      פוד קוסט: {metrics.foodCostPct>0?fmtPct(metrics.foodCostPct):"—"}
-                      <span style={{color:"#CBD5E1",marginRight:4}}>יעד {tFood}%</span>
+                      פוד קוסט: <span data-c1="purchases-pct">{dv.purchasesPct.text}</span>
+                      <span style={{color:"#CBD5E1",marginRight:4}}>יעד {dv.purchasesPct.goal.value}%</span>
                     </div>
-                    <div className="kpi-forecast">חזוי: {fmt(Math.round((metrics.totalFood/Math.max(metrics.totalSales,1))*fSales))}</div>
+                    <div className="kpi-forecast">חזוי: {dv.projectedPurchases}</div>
                   </div>
 
                   {/* עלות עובדים — לייבור % */}
                   <div className="kpi-card kpi-card-link" onClick={()=>setScreen("employees")} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" ")setScreen("employees");}}>
                     <div className="kpi-label">עלות עובדים</div>
-                    <div className={`kpi-val${lbrBad?" s-bad":lbrWarn?" s-warn":""}`}>{fmt(metrics.totalPayroll)}</div>
+                    <div data-c1="mtd-labor" title={dv.labor.meaning} className={`kpi-val${lbrBad?" s-bad":lbrWarn?" s-warn":""}`}>{dv.labor.text}</div>
                     <div className="kpi-pct-badge" style={{color:lbrBad?"#EF4444":lbrWarn?"#F59E0B":"#64748B"}}>
-                      לייבור: {laborPct>0?fmtPct(laborPct):"—"}
-                      <span style={{color:"#CBD5E1",marginRight:4}}>יעד {tLabor}%</span>
+                      לייבור: <span data-c1="labor-pct">{dv.laborPct.text}</span>
+                      <span style={{color:"#CBD5E1",marginRight:4}}>יעד {dv.laborPct.goal.value}%</span>
                     </div>
-                    <div className="kpi-forecast">חזוי: {fmt(Math.round((metrics.totalPayroll/Math.max(metrics.totalSales,1))*fSales))}</div>
+                    <div className="kpi-forecast">חזוי: {dv.projectedLabor}</div>
                   </div>
 
                   {/* הוצאות קבועות + שכ״ד */}
                   <div className="kpi-card kpi-card-link" onClick={()=>setShowFixed(true)} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" ")setShowFixed(true);}}>
                     <div className="kpi-label">קבועות + שכ״ד</div>
-                    <div className="kpi-val">{fmt(metrics.TOTAL_FIXED)}</div>
+                    <div data-c1="mtd-fixed" className="kpi-val">{dv.fixedRent.text}</div>
                     <div className="kpi-forecast">
-                      {metrics.rentAmount>0&&<span>שכ״ד: {fmt(metrics.rentAmount)}</span>}
-                      {metrics.totalSales>0&&<span style={{marginRight:6,color:"#94A3B8"}}>{fmtPct(metrics.TOTAL_FIXED/metrics.totalSales*100)}</span>}
+                      {dv.fixedRent.hasRent&&<span>שכ״ד: {dv.fixedRent.rentText}</span>}
+                      {dv.fixedRent.pctText!=="—"&&<span style={{marginRight:6,color:"#94A3B8"}}>{dv.fixedRent.pctText}</span>}
                     </div>
                   </div>
 
                   {/* תמלוגים — קוביה נפרדת */}
-                  {metrics.royaltyAmount>0&&(
+                  {dv.royalty.show&&(
                   <div className="kpi-card">
                     <div className="kpi-label">תמלוגים</div>
-                    <div className="kpi-val">{fmt(metrics.royaltyAmount)}</div>
+                    <div data-c1="mtd-royalty" className="kpi-val">{dv.royalty.text}</div>
                     <div className="kpi-forecast">
-                      {metrics.totalSales>0&&<span style={{color:"#94A3B8"}}>{fmtPct(metrics.royaltyAmount/metrics.totalSales*100)} ממחזור</span>}
+                      {dv.royalty.pctText!=="—"&&<span style={{color:"#94A3B8"}}>{dv.royalty.pctText} ממחזור</span>}
                     </div>
                   </div>
                   )}
@@ -6905,41 +7590,40 @@ function PilotDashboard() {
 
                     {/* Top: label + big number + badge */}
                     <div className="hero-header">
-                      <div className="hero-eyebrow">הכנסות · {MONTH_NAMES[MONTH]}</div>
+                      <div className="hero-eyebrow">הכנסות · {MONTH_NAMES[asOfMonthIdx]} · בפועל עד אתמול</div>
                       <div className="hero-main">
                         <div className="hero-left">
-                          <div className="hero-amount">{fmt(animatedSales)}</div>
-                          <div className="hero-target">מתוך יעד {fmt(tSales)} · {daysLeft} ימים נותרו</div>
+                          <div data-c1="hero-revenue" className="hero-amount">{dv.revenue.text}</div>
+                          <div className="hero-target">מתוך יעד {dv.target.text} · {dv.calendar.daysLeft} ימים נותרו</div>
                         </div>
-                        <span className={`hero-badge ${badgeCls}`}>{salesPct}%</span>
+                        <span className={`hero-badge ${badgeCls}`}>{dv.salesPct.text}</span>
                       </div>
                     </div>
 
                     {/* Progress bar — full width */}
                     <div className="prog-wrap">
                       <div className="prog-track">
-                        <div className="prog-fill" style={{width:`${salesPct}%`}}/>
-                        <div className="prog-marker" style={{left:`${Math.min(dayPct,99)}%`}}/>
+                        <div className="prog-fill" style={{width:`${dv.salesPct.width}%`}}/>
+                        <div className="prog-marker" style={{left:`${Math.min(dv.calendar.dayPctWidth,99)}%`}}/>
                       </div>
                       <div className="prog-labels">
                         <span>₪0</span>
-                        <span>יום {DAY_OF_MONTH} / {DAYS_IN_MONTH}</span>
-                        <span>{fmt(tSales)}</span>
+                        <span>יום {dv.calendar.day} / {dv.calendar.daysInMonth}</span>
+                        <span>{dv.target.text}</span>
                       </div>
                     </div>
 
                     {/* 3-metric forecast row */}
                     <div className="hm-row">
                       {[
-                        {label:"מחזור חזוי", val:fmt(Math.round(fSales)),
-                          sub:gap>=0?`+${fmt(gap)} מעל יעד`:`${fmt(Math.abs(gap))} מתחת ליעד`},
-                        {label:"תחזית קופה", val:fmt(Math.round(metrics.forecast)),
-                          sub:`${fmt(Math.round(metrics.dailyAvg))} / יום ממוצע`},
-                        {label:"רווח חזוי",  val:fmt(Math.round(fProfit)),
-                          sub:fSales>0?fmtPct((fProfit/fSales)*100)+" מהמחזור":"—",
-                          neg:fProfit<0},
-                      ].map(({label,val,sub,neg},i)=>(
-                        <div key={i} className="hm-cell">
+                        // D-10 (VD-12/36): the linear "תחזית קופה" run-rate tile is retired.
+                        {label:"מחזור חזוי", val:dv.forecast.text, c1:"forecast-revenue",
+                          sub:dv.forecast.notes.length ? dv.forecast.notes.join(" · ") : dv.gap.text},
+                        {label:"רווח חזוי",  val:dv.projectedProfit.text, c1:"forecast-profit",
+                          sub:dv.projectedProfit.marginText,
+                          neg:dv.projectedProfit.negative},
+                      ].map(({label,val,sub,neg,c1},i)=>(
+                        <div key={i} className="hm-cell" data-c1={c1}>
                           <div className="hm-label">{label}</div>
                           <div className={`hm-val${neg?" neg":""}`}>{val}</div>
                           {sub&&<div className="hm-sub">{sub}</div>}
@@ -6980,9 +7664,9 @@ function PilotDashboard() {
                 <div className="dash-section dash-grid">
 
                   {/* Chart */}
-                  {revChart.length>0 ? (
-                    <div className="chart-card">
-                      <div className="chart-label">הכנסות מצטברות</div>
+                  {chartHasData ? (
+                    <div className="chart-card" data-c1="daily-chart">
+                      <div className="chart-label">הכנסות יומיות</div>
                       <ResponsiveContainer width="100%" height={190}>
                         <AreaChart data={revChart} margin={{top:4,right:4,left:0,bottom:0}}>
                           <defs>
@@ -6996,9 +7680,9 @@ function PilotDashboard() {
                           <YAxis stroke="none" tick={{fill:"#D1D5DB",fontSize:10}} axisLine={false} tickLine={false}
                             tickFormatter={v=>`${(v/1000).toFixed(0)}k`} width={28}/>
                           <Tooltip contentStyle={{...TT,borderColor:"#F1F5F9",borderRadius:10,boxShadow:"0 4px 16px rgba(0,0,0,0.08)"}}
-                            formatter={v=>[fmt(v),""]} cursor={{stroke:"#EEF2F7",strokeWidth:1}}/>
+                            formatter={v=>[v===null||v===undefined?"—":window.MarjinFinance.presenters.money.formatShekel(String(v)),""]} cursor={{stroke:"#EEF2F7",strokeWidth:1}}/>
                           <Area type="monotone" dataKey="הכנסות" stroke="#3B82F6" strokeWidth={2.5}
-                            fill="url(#rg)" dot={false}
+                            fill="url(#rg)" dot={false} connectNulls={false}
                             activeDot={{r:5,fill:"#3B82F6",stroke:"#fff",strokeWidth:2.5}}/>
                         </AreaChart>
                       </ResponsiveContainer>
@@ -7012,31 +7696,20 @@ function PilotDashboard() {
                   {/* Expense breakdown */}
                   <div className="bd-card">
                     <div className="bd-label">פירוט הוצאות</div>
-                    {[
-                      {lbl:"רכש ספקים",  val:metrics.totalFood,         color:"#3B82F6"},
-                      {lbl:"שכר עובדים", val:metrics.totalPayroll,       color:"#818CF8"},
-                      ...(businessConfig.hasRoyalty?[{lbl:`תמלוגים ${businessConfig.royaltyPct}%`,val:Math.round(metrics.totalSales*(businessConfig.royaltyPct||0)/100),color:"#A5B4FC"}]:[]),
-                      ...(businessConfig.rentPct>0?[{lbl:`שכ״ד ${businessConfig.rentPct}%`,val:Math.round(metrics.totalSales*(businessConfig.rentPct||0)/100),color:"#BAC8F3"}]:[]),
-                      ...(businessConfig.rentType==="fixed"&&businessConfig.rentFixed>0?[{lbl:"שכ״ד קבוע",val:businessConfig.rentFixed,color:"#CBD5E1"}]:[]),
-                      {lbl:"קבועות",      val:metrics.fixedSoFar,        color:"#D1D5DB"},
-                      {lbl:"שונות",        val:metrics.totalOtherExpense, color:"#E5E7EB"},
-                    ].filter(r=>r.val>0).map(({lbl,val,color},i)=>{
-                      const pct = metrics.totalExpenses>0?Math.min((val/metrics.totalExpenses)*100,100):0;
-                      return (
-                        <div key={i} className="bd-row">
+                    {dv.breakdown.map(({key,lbl,text,shareText,width,color})=>(
+                        <div key={key} className="bd-row" data-c1={"bd-"+key}>
                           <div className="bd-hdr">
                             <span className="bd-lbl">{lbl}</span>
                             <div>
-                              <span className="bd-pct">{Math.round(pct)}%</span>
-                              <span className="bd-val">{fmt(val)}</span>
+                              <span className="bd-pct">{shareText}</span>
+                              <span className="bd-val">{text}</span>
                             </div>
                           </div>
                           <div className="bd-track">
-                            <div className="bd-fill" style={{width:`${pct}%`,background:color}}/>
+                            <div className="bd-fill" style={{width:`${width}%`,background:color}}/>
                           </div>
                         </div>
-                      );
-                    })}
+                    ))}
                   </div>
                 </div>
 
@@ -7059,30 +7732,42 @@ function PilotDashboard() {
             ))}
           </div>
 
-          {fcTab==="summary" && <>
+          {fcTab==="summary" && (finDash.status!=="ready" ? (
+            <div className="card card-p" data-c1="fin-unavailable" style={{textAlign:"center",fontSize:13,color:finDash.status==="loading"?"#9CA3AF":"#92400E"}}>
+              {finDash.status==="loading" ? "טוען נתונים כספיים…" : "הנתונים הכספיים אינם זמינים כעת — לא מוצגים סכומים ואחוזים."}
+            </div>
+          ) : (()=>{
+            const fp = finDash.purchasesPct, goal = fp.goal.value;
+            const col = fp.band==="bad" ? "#DC2626" : fp.band==="warn" ? "#D97706" : fp.band==="ok" ? "#16A34A" : "#9CA3AF";
+            return <>
             <div className="kpi-grid">
-              <KPI label="קניות — פוד קוסט" value={fmtPct(metrics.foodCostPct)} sub={`יעד ${cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct)}%`} status={fcColor(metrics.foodCostPct,cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct))==="#DC2626"?"danger":fcColor(metrics.foodCostPct,cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct))==="#D97706"?"warn":null}/>
-              <KPI label="סה״כ רכש" value={fmt(metrics.totalFood)} sub={metrics.totalSales>0?fmtPct(metrics.totalFood/metrics.totalSales*100):null}/>
+              <KPI label="קניות — פוד קוסט" value={fp.text} sub={`יעד ${goal}%`} status={fp.band==="bad"?"danger":fp.band==="warn"?"warn":null}/>
+              <KPI label="סה״כ רכש" value={finDash.purchases.text} sub={fp.text!=="—"?fp.text:null}/>
             </div>
             <div className="card card-p">
               <div className="flex jbet icenter" style={{marginBottom:12}}>
                 <h3 className="sec-head" style={{margin:0}}>קניות — ניתוח עלויות</h3>
-                <span style={{color:fcColor(metrics.foodCostPct,cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct)),fontWeight:700,fontSize:22,letterSpacing:-0.5}}>{fmtPct(metrics.foodCostPct)}</span>
+                <span data-c1="fc-summary-pct" style={{color:col,fontWeight:700,fontSize:22,letterSpacing:-0.5}}>{fp.text}</span>
               </div>
               <div className="gauge">
-                <div className="gauge-fill" style={{width:`${Math.min(metrics.foodCostPct*2,100)}%`,background:fcColor(metrics.foodCostPct,cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct))}}/>
-                <div className="gauge-marker" style={{left:`${cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct)*2}%`}}/>
+                <div className="gauge-fill" style={{width:`${fp.num===null?0:Math.max(0,Math.min(fp.num*2,100))}%`,background:col}}/>
+                <div className="gauge-marker" style={{left:`${Math.min(Number(goal)*2,100)}%`}}/>
               </div>
               <div style={{display:"flex",justifyContent:"space-between",marginTop:6}}>
                 <span style={{color:"#9CA3AF",fontSize:11}}>0%</span>
-                <span style={{color:"#6B7280",fontSize:11}}>יעד {cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct)}%</span>
+                <span style={{color:"#6B7280",fontSize:11}}>יעד {goal}%</span>
                 <span style={{color:"#9CA3AF",fontSize:11}}>50%+</span>
               </div>
-              <p style={{margin:"8px 0 0",fontSize:12,color:fcColor(metrics.foodCostPct,cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct))}}>
-                {metrics.foodCostPct===0?"אין נתוני רכש עדיין":metrics.foodCostPct>cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct)+3?`חריגה של ${(metrics.foodCostPct-cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct)).toFixed(1)}%`:metrics.foodCostPct>cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct)?`סטייה קלה מהיעד`:`${(cfgTarget(businessConfig,"foodCostPct",TARGETS.foodCostPct)-metrics.foodCostPct).toFixed(1)}% מתחת ליעד`}
+              <p style={{margin:"8px 0 0",fontSize:12,color:col}}>
+                {fp.empty ? "אין נתוני רכש עדיין"
+                  : fp.band==="none" ? "אחוז הקניות אינו זמין — נתוני הכנסות או קניות חלקיים"
+                  : fp.band==="bad" ? `חריגה של ${fp.aboveGoalText}`
+                  : fp.band==="warn" ? "סטייה קלה מהיעד"
+                  : `${fp.belowGoalText} מתחת ליעד`}
               </p>
+              {finDash.disclosure.warning&&<p data-c1="revenue-warning" style={{margin:"6px 0 0",fontSize:11,color:"#DC2626"}}>{finDash.disclosure.warning}</p>}
             </div>
-          </>}
+          </>; })())}
 
           {fcTab==="by_supplier" && (()=>{
             if(suppliers.length===0) return <div className="empty"><p style={{color:"#9CA3AF"}}>אין ספקים מוגדרים</p></div>;
@@ -7091,7 +7776,7 @@ function PilotDashboard() {
             const smLabel = new Date(smY, smM-1, 1).toLocaleDateString("he-IL",{month:"long",year:"numeric"});
             const prevMonth = () => { const d=new Date(smY,smM-2,1); setSupMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); setExpandedSup(null); };
             const nextMonth = () => { const d=new Date(smY,smM,1); setSupMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); setExpandedSup(null); };
-            const canNext = smY < YEAR || (smY===YEAR && smM <= MONTH);
+            const canNext = supMonth < finTodayStr.slice(0, 7);
             const getSupPay = (supId, date) => {
               const e = entries.find(x=>x.date===date);
               return e?.supplier_payments?.[supId] || "";
@@ -7121,15 +7806,14 @@ function PilotDashboard() {
                 clearError: () => setSupplierWriteError(""),
               });
             };
-            const monthTotal = suppliers.reduce((total,sup)=>total+Array.from({length:smDays},(_,i)=>{
-              const d=String(i+1).padStart(2,"0");
-              return Number(getSupPay(sup.id,`${smY}-${String(smM).padStart(2,"0")}-${d}`))||0;
-            }).reduce((a,b)=>a+b,0),0);
-            const monthRevenue = entries.filter(e=>e.date.startsWith(`${smY}-${String(smM).padStart(2,"0")}`)).reduce((a,e)=>a+(Number(e.sales)||0)+(Number(e.deliveries)||0),0);
-            const topSupplier = suppliers.map(sup=>{
-              const tot=Array.from({length:smDays},(_,i)=>{const d=String(i+1).padStart(2,"0");return Number(getSupPay(sup.id,`${smY}-${String(smM).padStart(2,"0")}-${d}`))||0;}).reduce((a,b)=>a+b,0);
-              return {name:sup.name,total:tot,pct:monthRevenue>0?(tot/monthRevenue)*100:0};
-            }).sort((a,b)=>b.total-a.total)[0];
+            // C1 (S-03/S-04/S-05/U-05): month totals, shares and the top supplier are fields of the
+            // selected month's report (purchases.bySource — includes deleted suppliers and legacy
+            // food_cost rows). The grid below stays the operational first-row editor (S-06).
+            const sv = finSup;
+            const svReady = sv.status === "ready";
+            const rowsOnDate = (date) => entries.filter(x => x && x.date === date).length;
+            const knownSupIds = new Set(suppliers.map(x => String(x.id)));
+            const extraSources = svReady ? sv.rows.filter(r => !(r.key.indexOf("supplier:") === 0 && knownSupIds.has(r.key.slice(9)))) : [];
             return (
               <div>
                 {/* R5: visible supplier-write failure surface (latest live op only) */}
@@ -7140,27 +7824,31 @@ function PilotDashboard() {
                   </div>
                 )}
                 {/* Summary strip — total + food cost % + top supplier */}
-                {monthTotal>0&&(
-                  <div style={{background:"#EEF2FF",borderRadius:12,padding:"12px 16px",marginBottom:14,border:"1px solid #E0E7FF"}}>
+                {!svReady&&(
+                  <div data-c1="fin-unavailable" style={{background:"#F9FAFB",borderRadius:12,padding:"12px 16px",marginBottom:14,border:"1px solid #E5E7EB",fontSize:12,color:sv.status==="loading"?"#9CA3AF":"#92400E"}}>
+                    {sv.status==="loading" ? "טוען סיכום קניות…" : "סיכום הקניות אינו זמין כעת — לא מוצגים סכומים ואחוזים."}
+                  </div>
+                )}
+                {svReady&&sv.total.amount!==null&&(
+                  <div data-c1="sup-summary" style={{background:"#EEF2FF",borderRadius:12,padding:"12px 16px",marginBottom:14,border:"1px solid #E0E7FF"}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
                       <div>
                         <div style={{fontSize:11,color:"#818CF8",fontWeight:600,textTransform:"uppercase",letterSpacing:".4px",marginBottom:3}}>סה״כ קניות</div>
-                        <div style={{fontSize:20,fontWeight:800,color:"#1E293B",letterSpacing:"-1px"}}>{fmt(monthTotal)}</div>
+                        <div data-c1="sup-total" style={{fontSize:20,fontWeight:800,color:"#1E293B",letterSpacing:"-1px"}}>{sv.total.text}</div>
                       </div>
-                      {monthRevenue>0&&(
-                        <div style={{textAlign:"left"}}>
-                          <div style={{fontSize:11,color:"#818CF8",fontWeight:600,textTransform:"uppercase",letterSpacing:".4px",marginBottom:3}}>פוד קוסט</div>
-                          <div style={{fontSize:20,fontWeight:800,color:"#1E293B",letterSpacing:"-1px"}}>{fmtPct(monthTotal/monthRevenue*100)}</div>
-                        </div>
-                      )}
-                      {topSupplier&&topSupplier.total>0&&(
+                      <div style={{textAlign:"left"}}>
+                        <div style={{fontSize:11,color:"#818CF8",fontWeight:600,textTransform:"uppercase",letterSpacing:".4px",marginBottom:3}}>פוד קוסט</div>
+                        <div data-c1="sup-pct" style={{fontSize:20,fontWeight:800,color:"#1E293B",letterSpacing:"-1px"}}>{sv.purchasesPct.text}</div>
+                      </div>
+                      {sv.top&&(
                         <div style={{textAlign:"left"}}>
                           <div style={{fontSize:11,color:"#818CF8",fontWeight:600,textTransform:"uppercase",letterSpacing:".4px",marginBottom:3}}>ספק מוביל</div>
-                          <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>{topSupplier.name}</div>
-                          <div style={{fontSize:11,color:"#64748B"}}>{fmt(topSupplier.total)} · {topSupplier.pct.toFixed(1)}%</div>
+                          <div style={{fontSize:13,fontWeight:700,color:"#1E293B"}}>{sv.top.name}</div>
+                          <div style={{fontSize:11,color:"#64748B"}}>{sv.top.text} · {sv.top.pctText}</div>
                         </div>
                       )}
                     </div>
+                    {sv.revenue.partial&&<div style={{fontSize:11,color:"#DC2626",marginTop:6}}>{window.MarjinC1.revenueDisclosure(sv.report).warning}</div>}
                   </div>
                 )}
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,background:"#FFFFFF",borderRadius:8,padding:"10px 16px",border:"1px solid #E5E7EB"}}>
@@ -7217,11 +7905,7 @@ function PilotDashboard() {
                 <>
                 {suppliers.map((sup, supIndex) => {
                   const isOpen = expandedSup === sup.id;
-                  const supMonthTotal = Array.from({length:smDays},(_,i)=>{
-                    const d=String(i+1).padStart(2,"0");
-                    return Number(getSupPay(sup.id,`${smY}-${String(smM).padStart(2,"0")}-${d}`))||0;
-                  }).reduce((a,b)=>a+b,0);
-                  const supPct = monthRevenue>0 ? (supMonthTotal/monthRevenue)*100 : 0;
+                  const supRow = svReady ? (sv.bySupplierId[String(sup.id)] || null) : null;
                   const delivDays = Array.from({length:smDays},(_,i)=>{
                     const day=i+1;
                     const date=`${smY}-${String(smM).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
@@ -7252,10 +7936,10 @@ function PilotDashboard() {
                           <span style={{fontSize:11,color:"#9CA3AF"}}>{sup.days.map(d=>DOW_NAMES[d]).join(" ")}</span>
                         </div>
                         <div style={{display:"flex",alignItems:"center",gap:10}}>
-                          {supMonthTotal>0 && (
+                          {supRow && (
                             <>
-                              <span style={{fontWeight:700,color:"#111827",fontSize:14}}>{fmt(supMonthTotal)}</span>
-                              {supPct>0&&<span style={{fontSize:11,fontWeight:600,color:"#818CF8",background:"#EEF2FF",padding:"2px 7px",borderRadius:999}}>{supPct.toFixed(1)}%</span>}
+                              <span data-c1={"sup-row-"+sup.id} style={{fontWeight:700,color:"#111827",fontSize:14}}>{supRow.text}</span>
+                              {supRow.pctText!=="—"&&<span style={{fontSize:11,fontWeight:600,color:"#818CF8",background:"#EEF2FF",padding:"2px 7px",borderRadius:999}}>{supRow.pctText}</span>}
                             </>
                           )}
                           <span style={{fontSize:16,color:"#9CA3AF",display:"inline-block",transition:"transform 0.2s",transform:isOpen?"rotate(180deg)":"none"}}>▾</span>
@@ -7272,6 +7956,7 @@ function PilotDashboard() {
                                 <div style={{minWidth:88}}>
                                   <div style={{fontSize:13,fontWeight:600,color:"#111827"}}>{DOW_NAMES[dow]} {day}/{smM}</div>
                                   {unplanned && <span style={{display:"inline-block",marginTop:2,fontSize:9,fontWeight:700,color:"#92400E",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:99,padding:"1px 6px"}}>לא מתוכנן</span>}
+                                  {rowsOnDate(date)>1 && <span data-c1="dup-rows" title="בתאריך זה נשמרו כמה שורות; התא מציג ועורך את הראשונה, הסכומים למעלה כוללים את כולן" style={{display:"inline-block",marginTop:2,fontSize:9,fontWeight:700,color:"#7C3AED",background:"#F5F3FF",border:"1px solid #DDD6FE",borderRadius:99,padding:"1px 6px"}}>({rowsOnDate(date)} שורות)</span>}
                                 </div>
                                 <input type="number" inputMode="decimal" placeholder="₪"
                                   value={val==="0"||val===0?"":val||""}
@@ -7309,9 +7994,19 @@ function PilotDashboard() {
                     </div>
                   );
                 })}
+                {extraSources.length>0&&(
+                  <div data-c1="sup-extra" style={{background:"#FFFFFF",borderRadius:8,padding:"10px 14px",marginTop:4,border:"1px dashed #E5E7EB"}}>
+                    <div style={{fontSize:11,color:"#9CA3AF",marginBottom:6}}>רכש נוסף בחודש (ספקים שאינם ברשימה / רשומות ישנות)</div>
+                    {extraSources.map(r=>(
+                      <div key={r.key} style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#374151",padding:"2px 0"}}>
+                        <span>{r.name}</span><span>{r.text}{r.pctText!=="—"?` · ${r.pctText}`:""}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div style={{background:"#F9FAFB",borderRadius:7,padding:"11px 14px",display:"flex",justifyContent:"space-between",marginTop:4,border:"1px solid #E5E7EB"}}>
                   <span style={{fontWeight:500,color:"#6B7280",fontSize:12}}>סה״כ רכש {smLabel}</span>
-                  <span style={{fontWeight:700,color:"#111827",fontSize:13}}>{fmt(monthTotal)}</span>
+                  <span data-c1="sup-footer-total" style={{fontWeight:700,color:"#111827",fontSize:13}}>{svReady ? sv.total.text : "—"}</span>
                 </div>
                 </>
                 )}
@@ -7321,30 +8016,27 @@ function PilotDashboard() {
 
           {/* ─── Weather Impact Analysis ─── */}
           {fcTab==="summary" && (()=>{
-            const impactDays = entries.filter(e=>e.weather_impact||e.security_event);
-            if(impactDays.length===0) return null;
-            const calcInc = e => (Number(e.sales)||0)+(Number(e.deliveries)||0)+(Number(e.other_income)||0);
-            const impactAvg = Math.round(impactDays.reduce((a,e)=>a+calcInc(e),0)/impactDays.length);
-            const normalDays = entries.filter(e=>!e.weather_impact&&!e.security_event);
-            const normalAvg = normalDays.length>0?Math.round(normalDays.reduce((a,e)=>a+calcInc(e),0)/normalDays.length):0;
-            const diff = normalAvg>0?Math.round(((impactAvg-normalAvg)/normalAvg)*100):0;
+            // C1 (S-08): means of complete recorded revenue of completed operating days (closures,
+            // missing and partial days excluded) — statistics over canonical day values.
+            const im = finImpact;
+            if (im.status !== "ready" || !im.show) return null;
             return (
-              <div className="card card-p" style={{borderColor:"#FECACA",background:"#FFFAFA"}}>
+              <div className="card card-p" data-c1="impact" style={{borderColor:"#FECACA",background:"#FFFAFA"}}>
                 <h3 className="sec-head" style={{color:"#DC2626"}}>השפעת גורמים חיצוניים</h3>
                 <div style={{display:"flex",gap:10,marginBottom:12}}>
                   <div style={{flex:1,background:"#FEF2F2",borderRadius:10,padding:"10px 12px",textAlign:"center"}}>
                     <div style={{fontSize:11,color:"#9CA3AF",marginBottom:4}}>ממוצע יום גשום/ביטחון</div>
-                    <div style={{fontWeight:700,fontSize:14,color:"#DC2626"}}>{fmt(impactAvg)}</div>
-                    <div style={{fontSize:11,color:"#9CA3AF"}}>{impactDays.length} ימים</div>
+                    <div style={{fontWeight:700,fontSize:14,color:"#DC2626"}}>{im.impactText}</div>
+                    <div style={{fontSize:11,color:"#9CA3AF"}}>{im.impactDays} ימים</div>
                   </div>
                   <div style={{flex:1,background:"#F9FAFB",borderRadius:10,padding:"10px 12px",textAlign:"center"}}>
                     <div style={{fontSize:11,color:"#9CA3AF",marginBottom:4}}>ממוצע יום רגיל</div>
-                    <div style={{fontWeight:700,fontSize:14,color:"#16A34A"}}>{fmt(normalAvg)}</div>
-                    <div style={{fontSize:11,color:"#9CA3AF"}}>{normalDays.length} ימים</div>
+                    <div style={{fontWeight:700,fontSize:14,color:"#16A34A"}}>{im.normalText}</div>
+                    <div style={{fontSize:11,color:"#9CA3AF"}}>{im.normalDays} ימים</div>
                   </div>
                 </div>
-                {normalAvg>0&&<div style={{textAlign:"center",fontSize:13,fontWeight:700,color:diff<0?"#DC2626":"#16A34A"}}>
-                  {diff<0?`ירידה של ${Math.abs(diff)}% בימי השפעה`:`עלייה של ${diff}% בימי השפעה`}
+                {im.diffText!==null&&<div style={{textAlign:"center",fontSize:13,fontWeight:700,color:im.diffNegative?"#DC2626":"#16A34A"}}>
+                  {im.diffNegative?`ירידה של ${im.diffText} בימי השפעה`:`עלייה של ${im.diffText} בימי השפעה`}
                 </div>}
               </div>
             );
@@ -7476,20 +8168,23 @@ function PilotDashboard() {
 
             <div className="form-sec">הוצאות כ״א</div>
             {(()=>{
-              const globalEmps = (businessConfig.employees||[]).filter(e=>Number(e.monthlySalary)>0);
-              const globalDaily = globalEmps.reduce((a,e)=>a+Math.round(Number(e.monthlySalary)/DAYS_IN_MONTH),0);
+              // C1 (E-02/E-03, VD-38): GLOBAL employees only (type "global"); the amount of this
+              // date is the core's placement of the full monthly employer cost (closure-aware,
+              // MARJIN_LABOR/3) — no division by the calendar month here.
+              const globalEmps = (businessConfig.employees||[]).filter(e=>e && e.type==="global");
+              const fe = finEntry;
               return (<>
                 {globalEmps.length>0 && (
-                  <div style={{background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8,padding:"12px 14px",marginBottom:10}}>
-                    <div style={{fontSize:10,color:"#6B7280",fontWeight:600,marginBottom:6,textTransform:"uppercase",letterSpacing:0.8}}>עובדים גלובלי -- אוטומטי</div>
+                  <div data-c1="entry-global" style={{background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8,padding:"12px 14px",marginBottom:10}}>
+                    <div style={{fontSize:10,color:"#6B7280",fontWeight:600,marginBottom:6,textTransform:"uppercase",letterSpacing:0.8}}>עובדים גלובליים -- עלות מעסיק חודשית, משובצת אוטומטית</div>
                     {globalEmps.map(emp=>(
                       <div key={emp.id} style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:3}}>
                         <span style={{color:"#6B7280"}}>{emp.name} <span style={{color:"#9CA3AF"}}>{emp.role}</span></span>
-                        <span style={{fontWeight:700,color:"#6B7280"}}>{Math.round(Number(emp.monthlySalary)/DAYS_IN_MONTH).toLocaleString()} ₪</span>
+                        <span style={{fontWeight:700,color:"#6B7280"}}>{finF ? finF.presenters.money.formatShekel((()=>{ const c = finF.finance.cells.parseAmount(emp.monthlySalary,{allowSkip:false}); return c.state==="present" ? finF.finance.decimal.serializeDec(c.value) : null; })()) : "—"} / חודש</span>
                       </div>
                     ))}
                     <div style={{borderTop:"1px solid #E5E7EB",marginTop:6,paddingTop:6,display:"flex",justifyContent:"space-between",fontSize:12,fontWeight:600,color:"#6B7280"}}>
-                      <span>סה״כ גלובלי</span><span>{globalDaily.toLocaleString()} ₪</span>
+                      <span>חלק גלובלי ליום זה</span><span data-c1="entry-global-day">{fe.status==="ready" ? fe.global.text : "—"}</span>
                     </div>
                   </div>
                 )}
@@ -7500,6 +8195,7 @@ function PilotDashboard() {
                   return (
                     <div style={{background:"#F9FAFB",border:"1px solid #BFDBFE",borderRadius:8,padding:"12px 14px",marginBottom:10}}>
                       <div style={{fontSize:11,color:"#6B7280",fontWeight:700,marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>עובדים שעתיים — הזן עלות יומית</div>
+                      <div data-c1="hourly-not-counted" style={{fontSize:11,color:"#92400E",marginBottom:8}}>שדה זה לא נכלל בעלות כ״א — עלות השעתיים נספרת מהשדה "עלות שעתיים / נוכחות" למטה</div>
                       {hourlyEmps.map(emp=>{
                         const val = (form.hourly_payroll||{})[emp.id]||"";
                         return (
@@ -7517,10 +8213,10 @@ function PilotDashboard() {
                 })()}
                 <label className="label">עלות שעתיים / נוכחות יומית נוספת (₪)</label>
                 <input className="input" type="number" inputMode="numeric" placeholder="0" value={form.payroll} onChange={e=>setForm(f=>({...f,payroll:e.target.value}))}/>
-                {(globalDaily+(Number(form.payroll)||0))>0 && (
-                  <div style={{background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:6,padding:"9px 13px",display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:600,marginBottom:7}}>
-                    <span style={{color:"#6B7280"}}>סה״כ שכר היום</span>
-                    <span style={{color:"#111827"}}>{(globalDaily+(Number(form.payroll)||0)).toLocaleString()} ₪</span>
+                {fe.status==="ready" && fe.show && (
+                  <div data-c1="entry-labor-total" style={{background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:6,padding:"9px 13px",display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:600,marginBottom:7}}>
+                    <span style={{color:"#6B7280"}}>סה״כ עלות מעסיק ליום</span>
+                    <span style={{color:"#111827"}}>{fe.totalText}</span>
                   </div>
                 )}
               </>);
@@ -7622,12 +8318,15 @@ function PilotDashboard() {
             )}
 
             {(()=>{
-              const rawInc=(Number(form.sales)||0)+(Number(form.deliveries)||0)+(Number(form.other_income)||0);
-              const netInc = form.includeVat ? grossToNetAmount(rawInc) : rawInc;
-              if(!rawInc) return null;
+              // C1 (E-01): exactly what the save stores — the page VAT normalisation per field
+              // (U01, retained), then the core's revenue fold of that row.
+              if (!finF || !finEntryDate) return null;
+              const net = window.MarjinVat.normalizeDailyEntryRevenueForVat({...form});
+              const pv = window.MarjinC1.entryRevenuePreview(finF, net, finEntryDate);
+              if (pv.status !== "ready" || pv.presence === "absent" || pv.text === null) return null;
               return (
-                <div style={{...S.preview,background:"#F9FAFB",border:"1px solid #E5E7EB",marginBottom:4}}>
-                  <div className="flex jbet mb2"><span style={{fontWeight:600}}>סה״כ הכנסות{form.includeVat?" (נטו)":""}</span><span style={{color:"#16A34A",fontWeight:700,fontSize:14}}>{fmt(netInc)}</span></div>
+                <div data-c1="entry-revenue-preview" style={{...S.preview,background:"#F9FAFB",border:"1px solid #E5E7EB",marginBottom:4}}>
+                  <div className="flex jbet mb2"><span style={{fontWeight:600}}>סה״כ הכנסות{form.includeVat?" (נטו)":""}</span><span style={{color:pv.presence==="invalid"?"#DC2626":"#16A34A",fontWeight:700,fontSize:14}}>{pv.text}</span></div>
                 </div>
               );
             })()}
@@ -7650,7 +8349,7 @@ function PilotDashboard() {
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
             <div>
               <div style={{fontSize:15,fontWeight:700,color:"#0F172A",letterSpacing:"-.3px"}}>פדיון יומי יומית</div>
-	              <div style={{fontSize:12,color:"#94A3B8",marginTop:3}}>{monthEntries.length} ימים מוזנים · {MONTH_NAMES[MONTH]}</div>
+	              <div data-c1="hist-count" style={{fontSize:12,color:"#94A3B8",marginTop:3}}>{finHist.status==="ready" ? `${finHist.presentDays} ימים מוזנים (עד אתמול)` : "—"} · {MONTH_NAMES[Number(finTodayStr.slice(5,7))-1]}</div>
             </div>
             {entries.length>0&&(
               <button onClick={async ()=>{
@@ -7697,31 +8396,28 @@ function PilotDashboard() {
 	                  list.push({...e,_idx:i});
 	                  dupExtras.set(e.date, list);
 	                });
-	                const sorted = Array.from({length:DAY_OF_MONTH},(_,i)=>{
-	                  const date = `${YEAR}-${MONTH_STR}-${String(i+1).padStart(2,"0")}`;
-	                  return entriesByDate.get(date) || {...EMPTY_ENTRY,date,_idx:null,__missing:true,__key:`__missing__${date}`};
-	                }).reverse();
-	                const today = TODAY_STR;
-	                const sevenDaysAgo = (() => { const d=new Date(_NOW); d.setDate(d.getDate()-7); return d.toISOString().slice(0,10); })();
-
-                // Determine status for each entry
-                const getStatus = (e) => {
-                  const inc = (Number(e.sales)||0)+(Number(e.deliveries)||0);
-                  const suppTotal = e.supplier_payments ? Object.values(e.supplier_payments).reduce((a,b)=>a+(Number(b)||0),0) : 0;
-                  const hasSales = inc > 0;
-                  const hasExpenses = suppTotal > 0 || (Number(e.payroll)||0) > 0 || (Number(e.food_cost)||0) > 0;
-                  if (hasSales && hasExpenses) return "complete";
-                  if (hasSales || hasExpenses) return "partial";
-                  return "empty";
-                };
+	                // C1 (H-02/H-06): the live business month, day 1 → today (Israel business date).
+	                const today = finTodayStr;
+	                const histDates = [];
+	                for (let d = 1; d <= Number(today.slice(8)); d++) histDates.push(`${today.slice(0, 8)}${String(d).padStart(2, "0")}`);
+	                const sorted = histDates.map(date => entriesByDate.get(date) || {...EMPTY_ENTRY,date,_idx:null,__missing:true,__key:`__missing__${date}`}).reverse();
+	                const sevenDaysAgo = finF ? finF.finance.businessDate.addDays(today, -7) : today;
+	                // C1 (H-03/H-04): status and amounts of a DAY (all rows folded, closures known) are the
+	                // history view model's; the card keeps the first row only as its edit identity.
+	                const hv = finHist;
+	                const hvByDate = new Map(hv.status === "ready" ? hv.days.map(d => [d.date, d]) : []);
+	                const getStatus = (e) => { const d = hvByDate.get(e.date); return d ? d.status : "unknown"; };
 
 	                const StatusBadge = ({status}) => {
 	                  const cfg = {
 	                    complete: {bg:"#F0FDF4",color:"#15803D",border:"#BBF7D0",label:"הוזן מלא"},
 	                    partial:  {bg:"#FFFBEB",color:"#B45309",border:"#FDE68A",label:"חסר נתונים"},
-	                    empty:    {bg:"#FEF2F2",color:"#B91C1C",border:"#FECACA",label:"לא הוזן"},
+	                    invalid:  {bg:"#FEF2F2",color:"#B91C1C",border:"#FECACA",label:"ערך לא תקין"},
 	                    missing:  {bg:"#FEF2F2",color:"#B91C1C",border:"#FECACA",label:"לא הוזן"},
-	                  }[status];
+	                    closed:   {bg:"#F1F5F9",color:"#475569",border:"#CBD5E1",label:"יום סגור"},
+	                    contradiction: {bg:"#FEF2F2",color:"#B91C1C",border:"#FECACA",label:"סגור — נרשמו הכנסות"},
+	                    unknown:  {bg:"#F8FAFC",color:"#94A3B8",border:"#E2E8F0",label:"—"},
+	                  }[status] || {bg:"#F8FAFC",color:"#94A3B8",border:"#E2E8F0",label:"—"};
                   return (
                     <span style={{
                       fontSize:10,fontWeight:600,padding:"3px 8px",borderRadius:999,
@@ -7734,14 +8430,10 @@ function PilotDashboard() {
 	                const DayCard = ({e}) => {
 	                  const i = e._idx;
 	                  const isMissing = !!e.__missing;
-	                  const inc = (Number(e.sales)||0)+(Number(e.deliveries)||0)+(Number(e.other_income)||0);
-	                  const supp = e.supplier_payments ? Object.values(e.supplier_payments).reduce((a,b)=>a+(Number(b)||0),0) : 0;
-	                  const hourlyPay = e.hourly_payroll ? Object.values(e.hourly_payroll).reduce((a,b)=>a+(Number(b)||0),0) : 0;
-	                  const exp = supp+(Number(e.payroll)||0)+hourlyPay+(Number(e.other_expense)||0);
-	                  const net = inc-exp;
-	                  const status = isMissing ? "missing" : getStatus(e);
+	                  const dv = hvByDate.get(e.date) || null;
+	                  const status = getStatus(e);
 		                  const isToday = e.date === today;
-		                  const dow = DOW_NAMES[getDateDOW(e.date)];
+		                  const dow = DOW_NAMES[finF ? finF.finance.businessDate.dowOf(e.date) : getDateDOW(e.date)];
 		                  const openEntry = () => {
 		                    const {_idx, __missing, __key, ...cleanEntry} = e;
 		                    setForm(formWithException(isMissing ? {...EMPTY_ENTRY,date:e.date} : cleanEntry, e.date));
@@ -7776,7 +8468,9 @@ function PilotDashboard() {
 	                              {e.notes&&<span style={{fontSize:10,color:"#94A3B8",fontStyle:"italic",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:140}}>{e.notes}</span>}
 	                            </div>
 	                          )}
-	                          {isMissing&&<div style={{fontSize:10,color:"#B91C1C",marginTop:5}}>חסר — לא נשמרה רשומה ליום הזה</div>}
+	                          {isMissing&&status!=="closed"&&<div style={{fontSize:10,color:"#B91C1C",marginTop:5}}>חסר — לא נשמרה רשומה ליום הזה</div>}
+	                          {status==="closed"&&<div data-c1="hist-closed" style={{fontSize:10,color:"#475569",marginTop:5}}>יום סגור — הכנסה 0, לא חסר</div>}
+	                          {isToday&&<div style={{fontSize:10,color:"#6366F1",marginTop:5}}>היום — מחוץ לבפועל (עד אתמול)</div>}
                         </div>
                         <StatusBadge status={status}/>
                       </div>
@@ -7784,9 +8478,9 @@ function PilotDashboard() {
                       {/* Row 2: metrics */}
                       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:0,background:"#F8FAFC",borderRadius:8,overflow:"hidden",border:"1px solid #F1F5F9",marginBottom:12}}>
                         {[
-                          {label:"הכנסות",  val:fmt(inc),   color:"#1E293B", weight:700},
-                          {label:"הוצאות",  val:fmt(exp),   color:"#64748B", weight:500},
-                          {label:"יתרה",    val:fmt(net),   color:net>=0?"#15803D":"#B91C1C", weight:700},
+                          {label:"הכנסות",  val:dv?dv.revenueText:"—",   color:"#1E293B", weight:700},
+                          {label:"הוצאות",  val:dv?dv.expensesText:"—",  color:"#64748B", weight:500},
+                          {label:"יתרה",    val:dv?dv.netText:"—",       color:dv&&dv.netNegative?"#B91C1C":"#15803D", weight:700},
                         ].map(({label,val,color,weight},mi)=>(
                           <div key={mi} style={{
                             padding:"10px 14px",
@@ -7811,7 +8505,7 @@ function PilotDashboard() {
 	                            ערוך
 	                          </button>
 	                        )}
-	                        {status==="partial"&&(
+	                        {!isMissing&&(status==="partial"||status==="invalid"||status==="contradiction")&&(
 	                          <button
 	                            onClick={openEntry}
 	                            style={{
@@ -7822,7 +8516,7 @@ function PilotDashboard() {
                             השלם נתונים
                           </button>
 	                        )}
-	                        {(status==="empty"||status==="missing")&&(
+	                        {isMissing&&(
 	                          <button
 	                            onClick={openEntry}
 	                            style={{
@@ -7848,12 +8542,12 @@ function PilotDashboard() {
                       {!isMissing&&(dupExtras.get(e.date)||[]).length>0&&(
                         <div style={{marginTop:10,background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:8,padding:"8px 12px"}}>
                           <div style={{fontSize:11,fontWeight:700,color:"#B45309",marginBottom:6}}>
-                            {(dupExtras.get(e.date)||[]).length+1} רשומות קיימות לתאריך זה — הכרטיס מציג את הראשונה
+                            {(dupExtras.get(e.date)||[]).length+1} רשומות קיימות לתאריך זה — הסכומים בכרטיס כוללים את כולן; "ערוך" פותח את הראשונה
                           </div>
                           {(dupExtras.get(e.date)||[]).map(dup=>(
                             <div key={dup.id||dup._idx} style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:"#92400E",padding:"3px 0"}}>
                               <span style={{flex:1,minWidth:0}}>
-                                הכנסות {fmt((Number(dup.sales)||0)+(Number(dup.deliveries)||0)+(Number(dup.other_income)||0))} · עלות כ״א {fmt(Number(dup.payroll)||0)}
+                                {(()=>{ const rd = finF ? window.MarjinC1.rowDiagnostic(finF, dup) : null; return rd && rd.status==="ready" ? `שורה: הכנסות ${rd.revenueText} · עלות כ״א ${rd.payrollText}` : "שורה: —"; })()}
                               </span>
                               <button
                                 onClick={()=>{ if(!window.confirm(`למחוק רשומה כפולה זו לתאריך ${e.date}? נמחקת רשומה אחת בלבד, והפעולה אינה ניתנת לביטול.`)) return; deleteEntryById(dup.id); }}
@@ -7875,10 +8569,17 @@ function PilotDashboard() {
 
                 return (
                   <>
+                    {hv.status!=="ready"&&(
+                      <div data-c1="fin-unavailable" style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:12,padding:"12px 16px",marginBottom:14,fontSize:12,color:hv.status==="loading"?"#9CA3AF":"#92400E"}}>
+                        {hv.status==="loading" ? "טוען נתונים כספיים…" : "הנתונים הכספיים אינם זמינים כעת — הסכומים והסטטוסים אינם מוצגים. ניתן עדיין לפתוח ולערוך ימים."}
+                      </div>
+                    )}
+                    {hv.status==="ready"&&hv.disclosure.closures&&<div data-c1="closures" style={{fontSize:11,color:"#64748B",marginBottom:10}}>{hv.disclosure.closures}</div>}
                     {/* Stats summary strip */}
                     {(()=>{
-	                      const incomplete = sorted.filter(e=>e.__missing||getStatus(e)!=="complete").length;
-	                      const complete   = sorted.filter(e=>!e.__missing&&getStatus(e)==="complete").length;
+	                      // C1 (U-1): counts of COMPLETED days (today excluded); closures are neither.
+	                      const complete   = hv.status==="ready" ? String(hv.counts.complete) : "—";
+	                      const incomplete = hv.status==="ready" ? String(hv.counts.incomplete) : "—";
                       return (
                         <div style={{display:"flex",gap:10,marginBottom:20}}>
                           {[
@@ -7924,14 +8625,14 @@ function PilotDashboard() {
       {/* ═══ FORECAST ═══ */}
       {screen==="forecast" && (
         <div className="screen">
-          <ForecastScreen tenantId={window._currentTenantId || ""} bizId={currentBizId || ""} entries={entries} businessConfig={businessConfig} metrics={metrics} lastYear={lastYear} saveLastYear={saveLastYear} currentMonth={MONTH} />
+          <ForecastScreen tenantId={window._currentTenantId || ""} bizId={currentBizId || ""} entries={entries} businessConfig={businessConfig} metrics={finForecastScreenMetrics} lastYear={lastYear} saveLastYear={saveLastYear} currentMonth={MONTH} />
         </div>
       )}
 
       {/* ═══ P&L ═══ */}
       {screen==="pnl" && (
         <div className="screen">
-          <PnLScreen entries={entries} fixedList={fixedList} businessConfig={businessConfig} lastYear={lastYear} />
+          <PnLScreen entries={entries} fixedList={fixedList} businessConfig={businessConfig} lastYear={lastYear} finView={finView} finSrc={finSrc} finCoreState={finCoreState} todayStr={finTodayStr} requestFinanceFrom={requestFinanceFrom} />
         </div>
       )}
 
@@ -8147,7 +8848,7 @@ function PilotDashboard() {
 
       {screen==="employees" && !currentUser && (
         <div className="screen">
-          <EmployeesScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig} entries={entries} submitLaborEntry={submitLaborEntry}/>
+          <EmployeesScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig} entries={entries} submitLaborEntry={submitLaborEntry} finView={finView} finSrc={finSrc} finCoreState={finCoreState} todayStr={finTodayStr} requestFinanceFrom={requestFinanceFrom}/>
         </div>
       )}
 
@@ -8186,7 +8887,7 @@ function PilotDashboard() {
                 <p style={{margin:"2px 0 0",fontSize:11,color:"#9CA3AF"}}>שכ״ד: {businessConfig.rentType==="fixed" ? `${(businessConfig.rentFixed||0).toLocaleString()} ₪` : `${businessConfig.rentPct||0}% ממחזור`}</p>
               </div>
               <div style={{textAlign:"left"}}>
-                <div style={{fontSize:18,fontWeight:700,color:"#111827",letterSpacing:-0.5}}>{fmt(metrics.TOTAL_FIXED)}</div>
+                <div style={{fontSize:18,fontWeight:700,color:"#111827",letterSpacing:-0.5}}>{finDash.status==="ready"?finDash.fixedRent.text:"—"}</div>
                 <div style={{fontSize:10,color:"#9CA3AF",marginTop:1}}>קבועות + שכ״ד</div>
               </div>
             </div>
@@ -8210,9 +8911,9 @@ function PilotDashboard() {
                 </div>
                 <div style={{display:"flex",gap:6,alignItems:"center"}}>
                   {f.rentPct
-                    ? <div className="input" style={{padding:"5px 9px",flex:1,marginBottom:0,color:"#16A34A",fontSize:12}}>≈ {businessConfig.rentType==="fixed"?fmt(businessConfig.rentFixed||0):fmt(Math.round(metrics.totalSales*(businessConfig.rentPct||0)/100))}</div>
+                    ? <div className="input" style={{padding:"5px 9px",flex:1,marginBottom:0,color:"#16A34A",fontSize:12}}>{finDash.status==="ready"?finDash.fixedRent.rentText:"—"}</div>
                     : f.royaltyPct
-                    ? <div className="input" style={{padding:"5px 9px",flex:1,marginBottom:0,color:"#6B7280",fontSize:12}}>≈ {fmt(Math.round(metrics.totalSales*(businessConfig.royaltyPct||0)/100))}</div>
+                    ? <div className="input" style={{padding:"5px 9px",flex:1,marginBottom:0,color:"#6B7280",fontSize:12}}>{finDash.status==="ready"?finDash.royalty.text:"—"}</div>
                     : <input className="input" style={{padding:"5px 9px",flex:1,marginBottom:0}} type="number" inputMode="decimal" placeholder="₪" value={f.amount||""}
                         onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,amount:Number(e.target.value)}:x);setFixedList(u);persistFixed(u,captureSelectionCtx());}}/>
                   }
@@ -8386,19 +9087,27 @@ function PilotDashboard() {
 
 
 // ─── Employees Screen ─────────────────────────────────────────────────────────
-function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLaborEntry }) {
+function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLaborEntry, finView, finSrc, finCoreState, todayStr, requestFinanceFrom }) {
   const employees = businessConfig.employees || [];
   const ROLES_EMP = ["מנהל משמרת","טבח","עוזר טבח","מלצר","ברמן","קופאי","כלים","ניקיון","אחר"];
-  const globalEmps = employees.filter(e=>e.type==="global"&&Number(e.monthlySalary)>0);
+  // Management list (operational): every configured global employee, including ones whose
+  // amount is missing or invalid — the core reports those, it never treats them as ₪0.
+  const globalEmps = employees.filter(e=>e && e.type==="global");
 
   // לוח חודשי
-  const [empMonth, setEmpMonth] = useState(`${YEAR}-${MONTH_STR}`);
+  const [empMonth, setEmpMonth] = useState((todayStr || `${YEAR}-${MONTH_STR}-01`).slice(0, 7));
   const [emY, emM] = empMonth.split("-").map(Number);
   const emDays = new Date(emY, emM, 0).getDate();
   const emLabel = new Date(emY, emM-1, 1).toLocaleDateString("he-IL",{month:"long",year:"numeric"});
   const prevMonth = () => { const d=new Date(emY,emM-2,1); setEmpMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); };
   const nextMonth = () => { const d=new Date(emY,emM,1); setEmpMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); };
-  const canNext = emY < YEAR || (emY===YEAR && emM <= MONTH);
+  const canNext = !!todayStr && empMonth < todayStr.slice(0, 7);
+  // C1 (M-01…M-07): the selected month's labor from the shared core — month employer cost and
+  // %, the closure-aware placement of the monthly employer cost per date, completed days vs
+  // expected ("צפוי") days. No division by the calendar month here.
+  const ev = React.useMemo(() => (typeof finView === "function" ? finView((F, S) => window.MarjinC1.employees(F, S, empMonth)) : { status: "unavailable" }), [finSrc, finCoreState, empMonth]);
+  useEffect(() => { if (ev && ev.status === "loading" && ev.reason === "ledger_range" && typeof requestFinanceFrom === "function") requestFinanceFrom(empMonth + "-01"); }, [ev, empMonth]);
+  const evDay = new Map(ev.status === "ready" ? ev.days.map(d => [d.date, d]) : []);
 
   const getDailyLabor = (date) => {
     const e = entries.find(x=>x.date===date);
@@ -8425,7 +9134,6 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLa
     return res;
   };
 
-  const globalDailyTotal = globalEmps.reduce((a,e)=>a+Math.round(Number(e.monthlySalary)/emDays),0);
 
   // ניהול עובדים גלובליים
   const [showGlobal, setShowGlobal] = useState(false);
@@ -8445,12 +9153,6 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLa
   const removeEmp = id => saveBusinessConfig({...businessConfig, employees:employees.filter(e=>e.id!==id)});
   const startEdit = emp => { setForm({name:emp.name,role:emp.role,type:"global",monthlySalary:emp.monthlySalary||""}); setEditId(emp.id); setAdding(true); setShowGlobal(true); };
 
-  // חישוב סה״כ חודשי
-  const monthTotal = Array.from({length:emDays},(_,i)=>{
-    const date=`${emY}-${String(emM).padStart(2,"0")}-${String(i+1).padStart(2,"0")}`;
-    const daily = Number(getDailyLabor(date))||0;
-    return daily + globalDailyTotal;
-  }).reduce((a,b)=>a+b,0);
 
   return (
     <div>
@@ -8460,8 +9162,8 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLa
         <div style={{textAlign:"center"}}>
           <div style={{fontWeight:700,color:"#111827",fontSize:15}}>{emLabel}</div>
           <div style={{fontSize:12,color:"#9CA3AF",marginTop:1}}>
-                    סה״כ: {monthTotal.toLocaleString()} ₪
-                    {(()=>{const monthRev=entries.filter(e=>e.date.startsWith(`${emY}-${String(emM).padStart(2,"0")}`)).reduce((a,e)=>a+(Number(e.sales)||0)+(Number(e.deliveries)||0),0);return monthRev>0?<span style={{marginRight:6,color:"#6366F1",fontWeight:600}}> · {((monthTotal/monthRev)*100).toFixed(1)}%</span>:null;})()}
+                    <span data-c1="emp-month-total" title={ev.status==="ready"?ev.meaning:""}>סה״כ עלות מעסיק (בפועל עד אתמול): {ev.status==="ready" ? ev.monthTotal.text : "—"}</span>
+                    {ev.status==="ready"&&ev.monthPct!=="—"&&<span data-c1="emp-month-pct" style={{marginRight:6,color:"#6366F1",fontWeight:600}}> · {ev.monthPct}</span>}
                   </div>
         </div>
         <button onClick={nextMonth} disabled={!canNext} style={{background:"none",border:"none",fontSize:22,cursor:"pointer",color:canNext?"#6B7280":"#D1D5DB",padding:"0 8px"}}>›</button>
@@ -8470,13 +9172,16 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLa
       {/* עובדים גלובליים — אוטומטי */}
       {globalEmps.length>0 && (
         <div style={{background:"#F9FAFB",border:"1px solid #E5E7EB",borderRadius:8,padding:"10px 14px",marginBottom:12}}>
-          <div style={{fontSize:11,color:"#16A34A",fontWeight:700,marginBottom:6,letterSpacing:1}}>עובדים גלובליים — {globalDailyTotal.toLocaleString()} ₪/יום אוטומטי</div>
-          {globalEmps.map(emp=>(
+          <div data-c1="emp-global-day" style={{fontSize:11,color:"#16A34A",fontWeight:700,marginBottom:6,letterSpacing:1}}>עובדים גלובליים — {ev.status==="ready" ? ev.globalPerDay.text : "—"} ליום (משובץ אוטומטית לפי ימי לוח השנה)</div>
+          {globalEmps.map(emp=>{
+            const g = ev.status==="ready" ? ev.globalEmployees.find(x=>String(x.key)===String(emp.id)) : null;
+            return (
             <div key={emp.id} style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:2}}>
               <span style={{color:"#6B7280"}}>{emp.name} <span style={{color:"#9CA3AF",fontSize:11}}>{emp.role}</span></span>
-              <span style={{fontWeight:700,color:"#6B7280"}}>{Math.round(Number(emp.monthlySalary)/emDays).toLocaleString()} ₪</span>
+              <span style={{fontWeight:700,color:"#6B7280"}}>{g ? `${g.monthlyText} / חודש` : (ev.status==="ready" ? "סכום חסר או לא תקין" : "—")}</span>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -8486,7 +9191,7 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLa
       {/* לוח הזנה יומית */}
       <div style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:8,overflow:"hidden",marginBottom:12}}>
         <div style={{padding:"12px 16px",borderBottom:"1px solid #F1F5F9",fontSize:13,fontWeight:700,color:"#6B7280"}}>
-          עלות כ״א יומית (מתוכנת נוכחות)
+          עלות כ״א יומית (מתוכנת נוכחות) · סה״כ ליום = עלות שעתיים + חלק גלובלי
         </div>
         {Array.from({length:emDays},(_,i)=>{
           const day=i+1;
@@ -8494,7 +9199,8 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLa
           const dow=new Date(emY,emM-1,day).getDay();
           const val=getDailyLabor(date);
           const hasVal=val!==""&&val!==null&&val!==undefined;
-          const total=(Number(val)||0)+globalDailyTotal;
+          const dayVm = evDay.get(date) || null;
+          const dayRows = entries.filter(x=>x && x.date===date).length;
           return (
             <div key={date} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 16px",borderBottom:"1px solid #F9FAFB",background:dow===6?"#FAFAFA":"#FFFFFF"}}>
               <div style={{minWidth:80}}>
@@ -8504,10 +9210,11 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLa
                 value={hasVal?val:""}
                 onChange={e=>setDailyLabor(date,e.target.value)}
                 style={{flex:1,border:"1px solid #D1D5DB",borderRadius:6,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:"#111827",background:"#FFFFFF",outline:"none"}}/>
-              {(hasVal||globalDailyTotal>0) && (
-                <div style={{textAlign:"left",flexShrink:0}}>
-                <div style={{fontSize:12,fontWeight:700,color:"#374151"}}>{total.toLocaleString()} ₪</div>
-                {(()=>{const dayEntry=entries.find(e=>e.date===date);const dayRev=(Number(dayEntry?.sales)||0)+(Number(dayEntry?.deliveries)||0);return dayRev>0?<div style={{fontSize:10,color:"#94A3B8",marginTop:1}}>{((total/dayRev)*100).toFixed(1)}%</div>:null;})()}
+              {dayRows>1 && <span data-c1="dup-rows" title="בתאריך זה נשמרו כמה שורות; השדה מציג ועורך את הראשונה, הסה״כ כולל את כולן" style={{fontSize:9,fontWeight:700,color:"#7C3AED",background:"#F5F3FF",border:"1px solid #DDD6FE",borderRadius:99,padding:"1px 6px",flexShrink:0}}>({dayRows} שורות)</span>}
+              {dayVm && (
+                <div data-c1="emp-day" style={{textAlign:"left",flexShrink:0}}>
+                <div style={{fontSize:12,fontWeight:700,color:dayVm.expected?"#94A3B8":"#374151"}}>{dayVm.totalText}{dayVm.expected?" · צפוי":""}</div>
+                {dayVm.pctText&&<div style={{fontSize:10,color:"#94A3B8",marginTop:1}}>{dayVm.pctText}</div>}
               </div>
               )}
             </div>
@@ -8530,7 +9237,7 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLa
               <div key={emp.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",background:"#F8FAFC",borderRadius:10,marginBottom:8,border:"1px solid #E5E7EB"}}>
                 <div>
                   <div style={{fontWeight:700,color:"#111827",fontSize:14}}>{emp.name}</div>
-                  <div style={{fontSize:12,color:"#6B7280",marginTop:1}}>{emp.role} · {Number(emp.monthlySalary).toLocaleString()} ₪/חודש</div>
+                  <div style={{fontSize:12,color:"#6B7280",marginTop:1}}>{emp.role} · {(()=>{ const g = ev.status==="ready" ? ev.globalEmployees.find(x=>String(x.key)===String(emp.id)) : null; return g ? g.monthlyText : (ev.status==="ready" ? "סכום חסר או לא תקין" : "—"); })()}/חודש · עלות מעביד</div>
                 </div>
                 <div style={{display:"flex",gap:6}}>
                   <button onClick={()=>startEdit(emp)} style={{background:"#F1F5F9",border:"1px solid #E5E7EB",borderRadius:8,padding:"5px 10px",cursor:"pointer",fontFamily:"inherit",fontSize:12,color:"#6B7280"}}><IcoEdit/></button>
@@ -8549,9 +9256,9 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLa
                 <select style={{...inp,marginBottom:10}} value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value}))}>
                   {ROLES_EMP.map(r=><option key={r} value={r}>{r}</option>)}
                 </select>
-                <div style={{fontSize:11,color:"#9CA3AF",marginBottom:4}}>משכורת חודשית ברוטו (₪)</div>
+                <div style={{fontSize:11,color:"#9CA3AF",marginBottom:4}}>עלות מעביד חודשית (כולל כל העלויות)</div>
                 <input style={inp} type="number" inputMode="numeric" placeholder="0" value={form.monthlySalary} onChange={e=>setForm(f=>({...f,monthlySalary:e.target.value}))}/>
-                {form.monthlySalary && <div style={{background:"#F9FAFB",borderRadius:8,padding:"7px 12px",fontSize:12,color:"#6B7280",fontWeight:600,marginBottom:10}}>עלות יומית: ≈ {Math.round(Number(form.monthlySalary)/DAYS_IN_MONTH).toLocaleString()} ₪/יום</div>}
+                {form.monthlySalary && <div style={{background:"#F9FAFB",borderRadius:8,padding:"7px 12px",fontSize:12,color:"#6B7280",fontWeight:600,marginBottom:10}}>העלות החודשית המלאה משובצת אוטומטית על ימי החודש; ימים סגורים שהסתיימו אינם נושאים עלות</div>}
                 <div style={{display:"flex",gap:8}}>
                   <button onClick={saveEmp} style={{flex:1,background:"#111827",border:"none",borderRadius:6,color:"#fff",padding:"9px",fontWeight:600,cursor:"pointer",fontFamily:"inherit",fontSize:13}}>שמור</button>
                   <button onClick={()=>{setAdding(false);setEditId(null);}} style={{flex:1,background:"#F1F5F9",border:"1px solid #E5E7EB",borderRadius:10,color:"#6B7280",padding:"10px",fontWeight:600,cursor:"pointer",fontFamily:"inherit",fontSize:13}}>ביטול</button>
@@ -9428,46 +10135,42 @@ const MONTH_IDX = {
 };
 
 // ─── P&L Screen ──────────────────────────────────────────────────────────────
-function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[] }) {
-  const [selYear, setSelYear] = useState(YEAR);
-  const [selMonth, setSelMonth] = useState(MONTH);
+function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[], finView, finSrc, finCoreState, todayStr, requestFinanceFrom }) {
+  // C1 (P-01…P-10, U-4…U-11): every figure is a field of the selected month's report
+  // (open month = Actual through D-1; a past month = closed month) and of the prior-year
+  // same month's closed report. VD-50 (the "רווח גולמי" line) is OWNER-PENDING: shown as "—".
+  const today0 = todayStr || `${YEAR}-${MONTH_STR}-01`;
+  const [selYear, setSelYear] = useState(Number(today0.slice(0, 4)));
+  const [selMonth, setSelMonth] = useState(Number(today0.slice(5, 7)) - 1);
+  const monthKey = `${selYear}-${String(selMonth+1).padStart(2,"0")}`;
+  const prevKey = `${selYear-1}-${String(selMonth+1).padStart(2,"0")}`;
+  const pv = React.useMemo(() => (typeof finView === "function" ? finView((F, S) => window.MarjinC1.pnl(F, S, monthKey, prevKey)) : { status: "unavailable" }), [finSrc, finCoreState, monthKey, prevKey]);
+  useEffect(() => {
+    if (typeof requestFinanceFrom !== "function" || !pv) return;
+    if ((pv.status === "loading" && pv.reason === "ledger_range") || pv.prevLoading) requestFinanceFrom(prevKey + "-01");
+  }, [pv, prevKey]);
+  const F = window.MarjinFinance;
+  const ready = pv.status === "ready";
 
-  // Compute metrics for the selected month
-  const monthPrefix = `${selYear}-${String(selMonth+1).padStart(2,"0")}`;
-  const monthEntries = entries.filter(e => e.date && e.date.startsWith(monthPrefix));
-  const daysInSelMonth = new Date(selYear, selMonth+1, 0).getDate();
-  const m = calcMetrics(monthEntries, fixedList, {...businessConfig, suppliers: businessConfig.suppliers||[], employees: businessConfig.employees||[]});
-
-  // Previous year same month
-  const prevYearPrefix = `${selYear-1}-${String(selMonth+1).padStart(2,"0")}`;
-  const prevEntries = entries.filter(e => e.date && e.date.startsWith(prevYearPrefix));
-  const pm = prevEntries.length > 0
-    ? calcMetrics(prevEntries, fixedList, {...businessConfig, suppliers: businessConfig.suppliers||[], employees: businessConfig.employees||[]})
-    : null;
-
-  // Also try lastYear data (manually entered) as fallback
+  // P-03 (U12, RETAINED): the manually imported last-year month is the comparison basis ONLY
+  // when the prior-year month has no recorded Actual. Its numbers are imported values (not
+  // computed here); only the four mapped rows get a delta, and no profit is derived from them.
   const lyData = lastYear[selMonth] || {};
-  const hasPrev = pm || (lyData.sales > 0);
-
-  // Helper: previous value for a field
-  const prev = (field) => {
-    if (pm) return pm[field] || 0;
-    // Map from lastYear fields
-    const map = { totalSales:"sales", totalFood:"foodCost", totalPayroll:"laborCost", TOTAL_FIXED:"fixedExpenses" };
-    return lyData[map[field]] || 0;
+  const lyAmount = (v) => (F && typeof v === "number" && isFinite(v) && v > 0) ? F.finance.decimal.serializeDec(F.finance.decimal.decFromNumber(v)) : null;
+  const lyMap = { revenue: lyAmount(lyData.sales), purchases: lyAmount(lyData.foodCost), labor: lyAmount(lyData.laborCost), fixedRent: lyAmount(lyData.fixedExpenses) };
+  const lyUsable = ready && !pv.hasPrev && Object.values(lyMap).some(x => x !== null);
+  const hasPrev = ready && (pv.hasPrev || lyUsable);
+  const deltaOf = (key) => {
+    if (!ready) return { text: "—", delta: null };
+    const r = pv.rows[key];
+    if (pv.hasPrev) return { text: r.deltaText, delta: r.delta };
+    const p = lyUsable ? lyMap[key] : null;
+    if (p === null || p === undefined || r.amount === null) return { text: "—", delta: null };
+    const d = F.finance.decimal.serializeRat(F.finance.decimal.ratSub(F.finance.decimal.parseAmountString(r.amount), F.finance.decimal.parseAmountString(p)));
+    const n = F.metrics.adapters.legacyNumber.amountToNumber(d);
+    return { text: (n > 0 ? "+" : "") + F.presenters.money.formatShekel(d), delta: d };
   };
-  const prevPct = (field) => {
-    const p = prev("totalSales");
-    return p > 0 ? (prev(field)/p)*100 : 0;
-  };
-
-  // Percentage of sales
-  const pct = (val) => m.totalSales > 0 ? ((val/m.totalSales)*100).toFixed(1)+"%" : "—";
-  const delta = (cur, prv) => {
-    if (!prv) return null;
-    const d = cur - prv;
-    return d;
-  };
+  const signOf = (d) => (d === null || !F) ? null : F.metrics.adapters.legacyNumber.amountToNumber(d);
 
   // Month navigation
   const goMonth = (dir) => {
@@ -9477,31 +10180,31 @@ function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[] })
     if (nm > 11) { nm = 0; ny++; }
     setSelMonth(nm); setSelYear(ny);
   };
+  const atCurrent = monthKey >= today0.slice(0, 7);
 
-  const PnLRow = ({ label, value, prevVal, isBold, isNegative, showPct, indent }) => {
-    const d = prevVal != null && prevVal !== 0 ? value - prevVal : null;
-    const dPct = prevVal > 0 ? ((value - prevVal) / prevVal * 100) : null;
+  const PnLRow = ({ label, text, shareText, delta, isBold, isNegative, negativeValue, showPct, indent, c1 }) => {
+    const d = signOf(delta ? delta.delta : null);
     return (
-      <div style={{
+      <div data-c1={c1} style={{
         display:"grid", gridTemplateColumns: hasPrev ? "1fr auto auto auto" : "1fr auto auto",
         gap:8, padding:"10px 14px", borderBottom:"1px solid #F1F5F9",
         background: isBold ? "#F8FAFC" : "transparent",
         paddingRight: indent ? 28 : 14,
       }}>
         <span style={{fontSize:13, fontWeight:isBold?700:400, color:isBold?"#0F172A":"#334155"}}>{label}</span>
-        <span style={{fontSize:13, fontWeight:isBold?700:500, color:isNegative&&value<0?"#EF4444":"#0F172A", textAlign:"left", minWidth:75, fontVariantNumeric:"tabular-nums"}}>
-          {fmt(value)}
+        <span style={{fontSize:13, fontWeight:isBold?700:500, color:negativeValue?"#EF4444":"#0F172A", textAlign:"left", minWidth:75, fontVariantNumeric:"tabular-nums"}}>
+          {text}
         </span>
         {showPct !== false && (
           <span style={{fontSize:11, color:"#94A3B8", textAlign:"left", minWidth:42, fontVariantNumeric:"tabular-nums"}}>
-            {pct(Math.abs(value))}
+            {shareText || "—"}
           </span>
         )}
         {hasPrev && (
           <span style={{fontSize:11, minWidth:65, textAlign:"left", fontVariantNumeric:"tabular-nums",
             color: d==null ? "#CBD5E1" : d > 0 ? (isNegative?"#EF4444":"#22C55E") : d < 0 ? (isNegative?"#22C55E":"#EF4444") : "#94A3B8"
           }}>
-            {d == null ? "—" : (d>0?"+":"") + fmt(d)}
+            {delta ? delta.text : "—"}
           </span>
         )}
       </div>
@@ -9513,11 +10216,10 @@ function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[] })
       {label}
     </div>
   );
-
-  // Net profit
-  const netProfit = m.lc;
-  const netProfitPct = m.totalSales > 0 ? (netProfit / m.totalSales * 100) : 0;
-  const prevNetProfit = hasPrev ? (prev("totalSales") - (pm ? pm.totalExpenses : (prev("totalFood") + prev("totalPayroll") + prev("TOTAL_FIXED")))) : null;
+  const row = (k) => ready ? pv.rows[k] : { text: "—", shareText: "—", negative: false };
+  const net = row("net");
+  const netDelta = ready && pv.hasPrev ? deltaOf("net") : { text: "—", delta: null };
+  const netNum = ready ? signOf(pv.rows.net.amount) : null;
 
   return (
     <div>
@@ -9526,13 +10228,18 @@ function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[] })
         <button onClick={()=>goMonth(-1)} style={{background:"#F1F5F9",border:"none",borderRadius:8,width:36,height:36,cursor:"pointer",fontSize:16,color:"#64748B",display:"flex",alignItems:"center",justifyContent:"center"}}>→</button>
         <div style={{textAlign:"center"}}>
           <div style={{fontSize:18,fontWeight:700,color:"#0F172A"}}>{MONTH_NAMES[selMonth]} {selYear}</div>
-          <div style={{fontSize:11,color:"#94A3B8"}}>{monthEntries.length} ימים מתוך {daysInSelMonth} · P&L</div>
+          <div data-c1="pnl-days" style={{fontSize:11,color:"#94A3B8"}}>{ready ? `${pv.days.recognized} ימים בפועל מתוך ${pv.days.inMonth} · ${pv.days.present} הוזנו${pv.days.closed ? ` · ${pv.days.closed} סגורים` : ""}` : "—"} · P&L</div>
+          {ready && pv.configurationBasis.indexOf("current_applied_retrospectively") !== -1 && <div style={{fontSize:10,color:"#94A3B8"}}>{F.presenters.labels.LABELS.configurationBasis.current_applied_retrospectively}</div>}
         </div>
         <button onClick={()=>goMonth(1)} style={{background:"#F1F5F9",border:"none",borderRadius:8,width:36,height:36,cursor:"pointer",fontSize:16,color:"#64748B",display:"flex",alignItems:"center",justifyContent:"center"}}
-          disabled={selYear===YEAR && selMonth===MONTH}>←</button>
+          disabled={atCurrent}>←</button>
       </div>
 
-      {monthEntries.length === 0 ? (
+      {!ready ? (
+        <div className="empty" data-c1="fin-unavailable" style={{padding:40}}>
+          <p style={{fontSize:14,color:pv.status==="loading"?"#94A3B8":"#92400E",margin:0}}>{pv.status==="loading" ? "טוען נתונים כספיים…" : "הנתונים הכספיים אינם זמינים כעת — לא מוצגים סכומים ואחוזים."}</p>
+        </div>
+      ) : pv.empty ? (
         <div className="empty" style={{padding:40}}>
           <div style={{fontSize:32,marginBottom:12}}>📊</div>
           <p style={{fontSize:14,color:"#94A3B8",margin:0}}>אין נתונים עבור {MONTH_NAMES[selMonth]} {selYear}</p>
@@ -9548,69 +10255,67 @@ function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[] })
             <span>סעיף</span>
             <span style={{minWidth:75,textAlign:"left"}}>{MONTH_NAMES[selMonth].slice(0,3)} {String(selYear).slice(2)}</span>
             <span style={{minWidth:42,textAlign:"left"}}>%</span>
-            {hasPrev && <span style={{minWidth:65,textAlign:"left"}}>שינוי</span>}
+            {hasPrev && <span style={{minWidth:65,textAlign:"left"}}>{pv.hasPrev ? "שינוי" : "שינוי (נתוני שנה קודמת ידניים)"}</span>}
           </div>
+          {pv.disclosure.warning && <div data-c1="revenue-warning" style={{padding:"8px 14px",fontSize:11,color:"#DC2626",borderBottom:"1px solid #F1F5F9"}}>{pv.disclosure.warning}</div>}
+          {pv.disclosure.closures && <div data-c1="closures" style={{padding:"6px 14px",fontSize:11,color:"#64748B",borderBottom:"1px solid #F1F5F9"}}>{pv.disclosure.closures}</div>}
 
           {/* Revenue */}
           <SectionHeader label="הכנסות" />
-          <PnLRow label="הכנסות" value={m.totalSales} prevVal={prev("totalSales")} isBold showPct={false} />
-          {m.totalNetworkDelivery > 0 && <PnLRow label="מתוכן משלוחים" value={m.totalNetworkDelivery} prevVal={null} indent />}
+          <PnLRow c1="pnl-revenue" label="הכנסות" text={pv.rows.revenue.text} delta={deltaOf("revenue")} isBold showPct={false} />
+          {pv.deliveries.show && <PnLRow c1="pnl-deliveries" label="מתוכן משלוחים" text={pv.deliveries.text} shareText={"—"} indent />}
 
           {/* COGS */}
           <SectionHeader label="עלויות" />
-          <PnLRow label="קניות (פוד קוסט)" value={m.totalFood} prevVal={prev("totalFood")} isNegative />
-          <PnLRow label="עלות עובדים (לייבור)" value={m.totalPayroll} prevVal={prev("totalPayroll")} isNegative />
-          {m.totalOtherExpense > 0 && <PnLRow label="הוצאות אחרות" value={m.totalOtherExpense} prevVal={null} isNegative />}
+          <PnLRow c1="pnl-purchases" label="קניות (פוד קוסט)" text={pv.rows.purchases.text} shareText={pv.rows.purchases.shareText} delta={deltaOf("purchases")} isNegative />
+          <PnLRow c1="pnl-labor" label="עלות עובדים (לייבור)" text={pv.rows.labor.text} shareText={pv.rows.labor.shareText} delta={deltaOf("labor")} isNegative />
+          {pv.showOther && <PnLRow c1="pnl-other" label="הוצאות אחרות" text={pv.rows.other.text} shareText={pv.rows.other.shareText} isNegative />}
 
-          {/* Gross margin */}
-          {(()=>{
-            const gross = m.totalSales - m.totalFood - m.totalPayroll - m.totalOtherExpense;
-            const prevGross = hasPrev ? prev("totalSales") - prev("totalFood") - prev("totalPayroll") : null;
-            return <PnLRow label="רווח גולמי" value={gross} prevVal={prevGross} isBold isNegative={gross<0} />;
-          })()}
+          {/* VD-50 — OWNER DECISION PENDING: no approved definition; isolated, shown as "—". */}
+          <PnLRow c1="pnl-vd50" label="רווח גולמי" text={pv.gross.text} shareText={"—"} delta={{text:"—",delta:null}} isBold />
 
           {/* Fixed */}
           <SectionHeader label="הוצאות קבועות" />
-          <PnLRow label="קבועות + שכ״ד" value={m.TOTAL_FIXED} prevVal={prev("TOTAL_FIXED")} isNegative />
-          {m.royaltyAmount > 0 && <PnLRow label="תמלוגים" value={m.royaltyAmount} prevVal={null} isNegative />}
+          <PnLRow c1="pnl-fixed" label="קבועות + שכ״ד" text={pv.rows.fixedRent.text} shareText={pv.rows.fixedRent.shareText} delta={deltaOf("fixedRent")} isNegative />
+          {pv.showRoyalty && <PnLRow c1="pnl-royalty" label="תמלוגים" text={pv.rows.royalty.text} shareText={pv.rows.royalty.shareText} isNegative />}
 
           {/* Net profit */}
-          <div style={{padding:"14px",background:"linear-gradient(135deg,#0F172A,#1E293B)",display:"grid",
+          <div data-c1="pnl-net" style={{padding:"14px",background:"linear-gradient(135deg,#0F172A,#1E293B)",display:"grid",
             gridTemplateColumns: hasPrev ? "1fr auto auto auto" : "1fr auto auto", gap:8, alignItems:"center"}}>
             <span style={{fontSize:14,fontWeight:700,color:"#F8FAFC"}}>רווח נקי</span>
-            <span style={{fontSize:16,fontWeight:700,color:netProfit>=0?"#4ADE80":"#F87171",minWidth:75,textAlign:"left",fontVariantNumeric:"tabular-nums"}}>
-              {fmt(netProfit)}
+            <span style={{fontSize:16,fontWeight:700,color:netNum===null?"#94A3B8":netNum>=0?"#4ADE80":"#F87171",minWidth:75,textAlign:"left",fontVariantNumeric:"tabular-nums"}}>
+              {net.text}
             </span>
-            <span style={{fontSize:12,fontWeight:600,color:netProfitPct>=0?"#4ADE80":"#F87171",minWidth:42,textAlign:"left"}}>
-              {netProfitPct.toFixed(1)}%
+            <span style={{fontSize:12,fontWeight:600,color:pv.netPct.negative?"#F87171":"#4ADE80",minWidth:42,textAlign:"left"}}>
+              {pv.netPct.text}
             </span>
-            {hasPrev && prevNetProfit != null && (
-              <span style={{fontSize:11,color:netProfit>prevNetProfit?"#4ADE80":"#F87171",minWidth:65,textAlign:"left",fontVariantNumeric:"tabular-nums"}}>
-                {(netProfit-prevNetProfit)>0?"+":""}{fmt(netProfit-prevNetProfit)}
+            {hasPrev && (
+              <span style={{fontSize:11,color:signOf(netDelta.delta)===null?"#94A3B8":signOf(netDelta.delta)>0?"#4ADE80":"#F87171",minWidth:65,textAlign:"left",fontVariantNumeric:"tabular-nums"}}>
+                {netDelta.text}
               </span>
             )}
           </div>
         </div>
       )}
 
-      {/* Summary KPIs below */}
-      {monthEntries.length > 0 && (
+      {/* Summary KPIs below (P-08: colour literals retained, applied to values only) */}
+      {ready && !pv.empty && (
         <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginTop:14}}>
           <div style={{background:"#F8FAFC",borderRadius:10,padding:"12px 14px",border:"1px solid #E2E8F0"}}>
             <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>פוד קוסט</div>
-            <div style={{fontSize:18,fontWeight:700,color:m.foodCostPct>35?"#EF4444":m.foodCostPct>33?"#F59E0B":"#0F172A"}}>{m.foodCostPct.toFixed(1)}%</div>
+            <div data-c1="pnl-kpi-purchases" style={{fontSize:18,fontWeight:700,color:pv.purchasesPct.num===null?"#94A3B8":pv.purchasesPct.num>35?"#EF4444":pv.purchasesPct.num>33?"#F59E0B":"#0F172A"}}>{pv.purchasesPct.text}</div>
           </div>
           <div style={{background:"#F8FAFC",borderRadius:10,padding:"12px 14px",border:"1px solid #E2E8F0"}}>
             <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>לייבור</div>
-            <div style={{fontSize:18,fontWeight:700,color:m.totalSales>0&&(m.totalPayroll/m.totalSales*100)>30?"#EF4444":"#0F172A"}}>{m.totalSales>0?(m.totalPayroll/m.totalSales*100).toFixed(1):"0"}%</div>
+            <div data-c1="pnl-kpi-labor" style={{fontSize:18,fontWeight:700,color:pv.laborPct.num!==null&&pv.laborPct.num>30?"#EF4444":pv.laborPct.num===null?"#94A3B8":"#0F172A"}}>{pv.laborPct.text}</div>
           </div>
           <div style={{background:"#F8FAFC",borderRadius:10,padding:"12px 14px",border:"1px solid #E2E8F0"}}>
-            <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>ממוצע יומי</div>
-            <div style={{fontSize:18,fontWeight:700,color:"#0F172A"}}>{fmt(Math.round(m.totalSales / Math.max(monthEntries.length,1)))}</div>
+            <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>ממוצע יומי (ימי פעילות)</div>
+            <div data-c1="pnl-kpi-avg" style={{fontSize:18,fontWeight:700,color:"#0F172A"}}>{pv.avgPerDay}</div>
           </div>
           <div style={{background:"#F8FAFC",borderRadius:10,padding:"12px 14px",border:"1px solid #E2E8F0"}}>
             <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>רווח נקי %</div>
-            <div style={{fontSize:18,fontWeight:700,color:netProfitPct>=0?"#22C55E":"#EF4444"}}>{netProfitPct.toFixed(1)}%</div>
+            <div data-c1="pnl-kpi-net" style={{fontSize:18,fontWeight:700,color:pv.netPct.text==="—"?"#94A3B8":pv.netPct.negative?"#EF4444":"#22C55E"}}>{pv.netPct.text}</div>
           </div>
         </div>
       )}
@@ -11150,13 +11855,17 @@ function DailyInsightsScreen({ tenantId, bizId }) {
           return;
         }
         // Build the date keys backwards from today.
-        const keys = [];
-        const today = new Date();
-        for (let i = 1; i <= days; i++) {
-          const d = new Date(today);
-          d.setDate(d.getDate() - i);
-          const k = d.toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
-          keys.push(k);
+        // C1 (H-06 / W-03): keys from the shared Israel business date when the core is ready.
+        let keys = [];
+        const __F = window.__marjinFinance && window.__marjinFinance.state === "ready" ? window.MarjinFinance : null;
+        if (__F) keys = window.MarjinC1.insightsKeys(__F, __F.finance.businessDate.israelBusinessDate(Date.now()), days);
+        else {
+          const today = new Date();
+          for (let i = 1; i <= days; i++) {
+            const d = new Date(today);
+            d.setDate(d.getDate() - i);
+            keys.push(d.toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" }));
+          }
         }
         // Read each in parallel via storage.get. Misses come back as null.
         // readChecklistDoc unwraps the {key, value, shared} envelope returned
@@ -11184,8 +11893,10 @@ function DailyInsightsScreen({ tenantId, bizId }) {
   const missingCount = docs.length - presentCount;
 
   // ── Derived stats ──
-  const totalRevenue = present.reduce((s, d) => s + (d.revenue?.total || 0), 0);
-  const avgRevenue = presentCount ? Math.round(totalRevenue / presentCount) : 0;
+  // C1 (I-01…I-03): only documents that RECORD a revenue total count; an absent total is a
+  // gap ("—"), never ₪0. Formatting through the core presenters; exact mean.
+  const __Fi = window.__marjinFinance && window.__marjinFinance.state === "ready" ? window.MarjinFinance : null;
+  const revStats = __Fi ? window.MarjinC1.insightsStats(__Fi, present) : { status: "unavailable" };
   const alertDays = present.filter(d => d.alerts?.is_alert_day).length;
   const rainDays = present.filter(d => d.weather?.is_rain_day).length;
   const warDays = present.filter(d => d.operational?.war_day === "full" || d.operational?.war_day === "partial").length;
@@ -11195,7 +11906,7 @@ function DailyInsightsScreen({ tenantId, bizId }) {
     .sort((a, b) => a.date.localeCompare(b.date))
     .map(d => ({
       date: d.date.slice(5), // MM-DD only for axis
-      revenue: d.revenue?.total || 0,
+      revenue: window.MarjinC1.insightTotal(d),
       rain: d.weather?.rain_mm || 0,
       alerts: d.alerts?.alert_count || 0,
     }));
@@ -11252,7 +11963,7 @@ function DailyInsightsScreen({ tenantId, bizId }) {
           <>
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:14}}>
               <KpiTile label="ימים זמינים" value={`${presentCount}/${docs.length}`} sub={missingCount ? `${missingCount} חסרים` : "מלא"}/>
-              <KpiTile label="מחזור ממוצע" value={fmt(avgRevenue)} sub="לכל יום שנרשם"/>
+              <KpiTile label="מחזור ממוצע" value={revStats.status==="ready" ? revStats.avgText : "—"} sub={revStats.status==="ready" ? `לכל יום שנרשם בו מחזור (${revStats.revenueDays})` : "לא זמין"}/>
               <KpiTile label="ימי אזעקות" value={String(alertDays)} sub={alertDays ? "ראה טבלה" : "אין"}/>
               <KpiTile label="ימי גשם" value={String(rainDays)} sub={`> 1 מ"מ`}/>
             </div>
@@ -11271,7 +11982,7 @@ function DailyInsightsScreen({ tenantId, bizId }) {
                         contentStyle={{fontSize:11,border:"1px solid #E5E7EB",borderRadius:6}}
                         labelStyle={{color:"#6B7280"}}
                         formatter={(v, name) => {
-                          if (name === "revenue") return [fmt(v), "מחזור"];
+                          if (name === "revenue") return [(v === null || v === undefined || !__Fi) ? "—" : __Fi.presenters.money.formatShekel(String(v)), "מחזור"];
                           if (name === "rain") return [`${v} מ"מ`, "גשם"];
                           if (name === "alerts") return [v, "אזעקות"];
                           return [v, name];
@@ -11325,7 +12036,7 @@ function DailyInsightsScreen({ tenantId, bizId }) {
                         <Td>{DOW_HE[d.calendar?.dow ?? -1] || "—"}{d.calendar?.weekend ? " 🛋" : ""}</Td>
                         <Td style={{color:holidayLabel?"#111827":"#D1D5DB",maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{holidayLabel||"—"}</Td>
                         <Td align="left" style={{fontVariantNumeric:"tabular-nums",fontWeight:d.revenue?.had_entry?700:400,color:d.revenue?.had_entry?"#111827":"#9CA3AF"}}>
-                          {d.revenue?.had_entry ? fmt(d.revenue.total) : "—"}
+                          {__Fi ? window.MarjinC1.insightMoney(__Fi, d) : "—"}
                         </Td>
                         <Td align="left" style={{color:d.weather?.is_rain_day?"#1D4ED8":"#9CA3AF"}}>
                           {d.weather?.rain_mm == null ? "—" : d.weather.rain_mm.toFixed(1)}
