@@ -18,7 +18,7 @@ import { C1_INDEX_PIN } from "../support/c1-candidate-pin.mjs";
 import { C2_BASE, C2_RETIRED, c2IndexVerdict } from "../support/c2-index-scope.mjs";
 import { C2_INDEX_PIN } from "../support/c2-candidate-pin.mjs";
 import { VD50_BASE, vd50IndexVerdict } from "../support/vd50-index-scope.mjs";
-import { VD50_INDEX_PIN } from "../support/vd50-candidate-pin.mjs";
+import { VD50_COMMIT, VD50_INDEX_PIN } from "../support/vd50-candidate-pin.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -141,7 +141,8 @@ function assertB2Scope(root) {
     // other protected change is the C2-03 retirement of exactly C2_RETIRED (absent everywhere).
     const c2 = c1 && gitIn(root, ["merge-base", "--is-ancestor", C2_BASE, "HEAD"]).status === 0 && names(["rev-parse", "HEAD"])[0] !== C2_BASE;
     const vd50 = c2 && gitIn(root, ["merge-base", "--is-ancestor", VD50_BASE, "HEAD"]).status === 0 && names(["rev-parse", "HEAD"])[0] !== VD50_BASE;
-    const allowed = assembled ? [...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : [])] : CDM2_APPROVED;
+    const vd50Runtime = ["src/metrics/report.ts", "fincore/v1/metrics/report.js", "fincore/v1/MANIFEST.json"];
+    const allowed = assembled ? [...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : [])] : CDM2_APPROVED;
     const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f));
     assert.deepEqual([...new Set(whole)].sort(), [...allowed].sort(), assembled
       ? "assembled tree: protected changes are exactly CD-M2 R1's approved runtime files + P0 Scheduled Auth's three API routes" + (c2 ? " + the C2-03 retirement of " + C2_RETIRED.join(", ") : "")
@@ -161,6 +162,7 @@ function assertB2Scope(root) {
       ["lib/repositories/entryExceptionsRepo.js", blobBytes(root, CDM2R1 + ":lib/repositories/entryExceptionsRepo.js"), CDM2R1.slice(0, 8) + ":lib/repositories/entryExceptionsRepo.js"],
       [SB, blobBytes(root, B2 + ":" + SB), B2.slice(0, 8) + ":" + SB],
       [SE, blobBytes(root, B2 + ":" + SE), B2.slice(0, 8) + ":" + SE],
+      ...(vd50 ? vd50Runtime.map((f) => [f, blobBytes(root, VD50_COMMIT + ":" + f), "VD-50 candidate " + VD50_COMMIT.slice(0, 8) + ":" + f]) : []),
       ...(assembled ? [
         ...(c1 ? [] : [["index.html", approvedIndexMerge(root), "merge(" + CDM2R1.slice(0, 8) + ", " + HF1R1.slice(0, 8) + ")"]]),
         ...P0_APPROVED.map((f) => [f, blobBytes(root, P0 + ":" + f), P0.slice(0, 8) + ":" + f]),
