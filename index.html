@@ -6145,7 +6145,8 @@ function PilotDashboard() {
       : n.kind === "failed" ? C1.READ_FAILED
       : C1.nodeState(finF, n.raw, expect);
     const ledger = finLedger && finLedger.bizId === currentBizId ? finLedger : { state: "loading" };
-    return { rows: entries, config: nodeOf(finRaw.config, "object"), fixed: nodeOf(finRaw.fixed, "array"), asOf: finAsOf, ledger, rowsReady: finRowsReady };
+    const raw = finRaw.bizId === (currentBizId || null) ? finRaw : { config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING };
+    return { rows: entries, config: nodeOf(raw.config, "object"), fixed: nodeOf(raw.fixed, "array"), asOf: finAsOf, ledger, rowsReady: finRowsReady };
   }, [finF, finAsOf, entries, finRaw, finLedger, finRowsReady, currentBizId]);
   const finStatus = finCoreState === "failed" ? "unavailable" : (finCoreState !== "ready" ? "loading" : null);
   /** Guarded view model: {status:"loading"|"unavailable"} unless the core and every input are ready. */
