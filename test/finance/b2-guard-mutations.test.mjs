@@ -14,6 +14,7 @@ import { gitIn } from "../support/git-context.mjs";
 import { importerVerdict, loadConsumerFiles, repoKindOf, validateConsumerFiles } from "../support/b1-fixtures.mjs";
 import { SERVER_READER_APPROVED_BLOBS, collectServerReaderScopeInputs, serverReaderScopeVerdict } from "../support/server-reader-authorized-delta.mjs";
 import { C1_ASSEMBLY, c1IndexVerdict } from "../support/c1-index-scope.mjs";
+import { C1_INDEX_PIN } from "../support/c1-candidate-pin.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -169,6 +170,14 @@ function assertB2Scope(root) {
         const v = c1IndexVerdict(approved, bytes);
         assert.ok(v.ok, "index.html (" + label + ") violates the C1 contract: " + JSON.stringify(v));
       }
+      // C1 R1 (independent review finding 1): SCOPE is not content identity. The committed,
+      // staged and checked-out index.html must each be exactly the pinned C1 blob (a fixed
+      // literal in test/support/c1-candidate-pin.mjs — never HEAD:index.html or a hash computed
+      // here), so an in-zone change to a financial calculation fails dirty, staged or committed.
+      assert.match(C1_INDEX_PIN.blob, /^[0-9a-f]{40}$/, "the C1 identity pin must be a literal blob id");
+      assert.equal(gitIn(root, ["rev-parse", "HEAD:index.html"]).stdout.trim(), C1_INDEX_PIN.blob, "index.html (committed) is not the pinned C1 candidate blob " + C1_INDEX_PIN.blob.slice(0, 8));
+      assert.equal(gitIn(root, ["rev-parse", ":index.html"]).stdout.trim(), C1_INDEX_PIN.blob, "index.html: staged (index) blob differs from the pinned C1 candidate blob");
+      assert.equal(hashBytes(checkedOut), C1_INDEX_PIN.blob, "index.html: checked-out bytes differ from the pinned C1 candidate blob");
     }
   }
 }
@@ -200,7 +209,7 @@ const isIntegratedRepo = gitIn(REPO, ["merge-base", "--is-ancestor", B2, "HEAD"]
 const isAssembledRepo = isIntegratedRepo && gitIn(REPO, ["merge-base", "--is-ancestor", HF1R1, "HEAD"]).status === 0;
 const isC1Repo = isAssembledRepo && gitIn(REPO, ["merge-base", "--is-ancestor", C1_ASSEMBLY, "HEAD"]).status === 0 && HEAD_SHA !== C1_ASSEMBLY;
 // On a C1 tree a non-approved index.html is refused by the C1 contract instead of the byte pin.
-const INDEX_REFUSED = isC1Repo ? /index\.html \(committed\) violates the C1 contract/ : /index\.html is byte-identical to the approved merge/;
+const INDEX_REFUSED = isC1Repo ? /index\.html \(committed\) violates the C1 contract|index\.html \(committed\) is not the pinned C1 candidate blob/ : /index\.html is byte-identical to the approved merge/;
 const appendTo = (dir, f, text) => { writeFileSync(join(dir, f), readFileSync(join(dir, f), "utf8") + text); };
 
 test("B2G-05-M1 integrated tree: a WORKING-TREE-ONLY edit of an approved CD-M2 runtime file (history unchanged) fails the guard; the clean clone passes", { skip: !isIntegratedRepo && "standalone tree: the integrated exception does not apply" }, () => {
@@ -303,16 +312,42 @@ test("B2G-05-M5 C1 tree: committed index.html changes outside the C1 zones, in a
   }
 });
 
-test("B2G-05-M6 C1 tree: a WORKING-TREE-ONLY edit INSIDE a C1 zone (history unchanged) fails; the documented limitation — the same edit COMMITTED, touching no protected region or write call — is accepted by the contract", { skip: !isC1Repo && "C1 not integrated in this tree" }, () => {
-  const label = '<div className="chart-label">הכנסות יומיות</div>';
+test("B2G-05-M6 C1 tree: an in-zone edit (a label) fails dirty, staged AND committed — scope validation alone would accept it, the identity pin does not", { skip: !isC1Repo && "C1 not integrated in this tree" }, () => {
+  const label = '<div className="chart-label">הכנסות יומיות</div>', edited = '<div className="chart-label">הכנסות יומיות (edited)</div>';
   withClone(HEAD_SHA, (dir) => {
     const p = join(dir, "index.html"), src = readFileSync(p, "utf8");
-    writeFileSync(p, src.replace(label, '<div className="chart-label">הכנסות יומיות (edited)</div>'));
+    writeFileSync(p, src.replace(label, edited));
     assert.throws(() => assertB2Scope(dir), /index\.html: checked-out bytes differ from the committed C1 blob/);
   });
   withWritableClone(HEAD_SHA, (dir) => {
     const p = join(dir, "index.html"), src = readFileSync(p, "utf8");
-    writeFileSync(p, src.replace(label, '<div className="chart-label">הכנסות יומיות (edited)</div>')); commitIn(dir, "in-zone label edit");
-    assertB2Scope(dir);                                                 // LIMITATION: bounded by the zones; independent review covers zone contents
+    const changed = src.replace(label, edited);
+    assert.deepEqual(c1IndexVerdict(approvedIndexMerge(dir), Buffer.from(changed)), { ok: true }, "the scope layer alone accepts this in-zone edit");
+    writeFileSync(p, changed); commitIn(dir, "in-zone label edit");
+    assert.throws(() => assertB2Scope(dir), /index\.html \(committed\) is not the pinned C1 candidate blob/);
+  });
+});
+
+// C1 R1 — the independent reviewer's probe: an in-zone FINANCIAL CALCULATION change (the dashboard
+// sales target forced to "1") must fail B2G-05 when dirty, when staged and when committed.
+const FIN_OLD = "var target = D(F).serializeRat(D(F).ratMul(amt(F, lySales), growthFactor));", FIN_NEW = 'var target = "1";';
+test("B2G-05-M7 C1 tree: an in-zone FINANCIAL calculation mutation passes the scope layer but fails B2G-05 dirty, staged and committed", { skip: !isC1Repo && "C1 not integrated in this tree" }, () => {
+  const mutate = (dir) => { const p = join(dir, "index.html"), src = readFileSync(p, "utf8"); assert.equal(src.split(FIN_OLD).length, 2, "probe anchor unique"); writeFileSync(p, src.replace(FIN_OLD, FIN_NEW)); return readFileSync(p); };
+  withClone(HEAD_SHA, (dir) => {
+    const bytes = mutate(dir);
+    assert.deepEqual(c1IndexVerdict(approvedIndexMerge(dir), bytes), { ok: true }, "scope layer accepts the financial mutation (why identity is required)");
+    assert.throws(() => assertB2Scope(dir), /checked-out bytes differ/, "dirty");
+    assert.equal(spawnSync("git", ["-C", dir, "add", "index.html"]).status, 0);
+    assert.throws(() => assertB2Scope(dir), /staged \(index\) blob differs|checked-out bytes differ/, "staged");
+    assert.equal(spawnSync("git", ["-C", dir, "checkout", "--", "index.html"]).status, 0);   // staged only, working tree = index
+    assert.throws(() => assertB2Scope(dir), /staged \(index\) blob differs|checked-out bytes differ/, "staged (working tree matches index)");
+  });
+  withWritableClone(HEAD_SHA, (dir) => {
+    mutate(dir); commitIn(dir, "in-zone financial mutation");
+    assert.throws(() => assertB2Scope(dir), /index\.html \(committed\) is not the pinned C1 candidate blob/, "committed");
+  });
+  withWritableClone(HEAD_SHA, (dir) => {                               // unrelated non-protected file: not a false failure
+    writeFileSync(join(dir, "scratch-note.txt"), "x\n"); commitIn(dir, "unrelated");
+    assertB2Scope(dir);
   });
 });

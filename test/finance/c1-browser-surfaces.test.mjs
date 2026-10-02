@@ -125,27 +125,30 @@ test("C1-L01 ledger chunks: consecutive, ≤ 366 days, exactly cover the window 
   }
 });
 
-test("C1-L02 loadLedger: structured records only (legacy / ambiguous dropped), reason kept only while active, all chunks or nothing", async () => {
-  const body = { ok: true, exceptions: {
+test("C1-L02 loadLedger: structured records only (legacy / ambiguous dropped), reason kept only while active, all chunks or nothing; the response must answer the chunk's range", async () => {
+  const records = {
     "2026-09-07": { source: "structured", status: "active", reasonCode: "closure" },
     "2026-09-08": { source: "structured", status: "cleared", reasonCode: "closure" },
     "2026-09-09": { source: "legacy", status: "active", reasonCode: "closure" },
     "2026-09-10": { source: "legacy_ambiguous", status: "normal" },
-    "2027-01-01": { source: "structured", status: "active", reasonCode: "closure" },    // outside the chunk: ignored
-  } };
+  };
+  // the list-entry-exceptions API echoes fromDate / toDate and returns only records inside them
+  const body = (f, t) => ({ ok: true, fromDate: f, toDate: t, exceptions: Object.fromEntries(Object.entries(records).filter(([d]) => d >= f && d <= t)) });
   const calls = [];
-  const ok = await C.loadLedger(F, { fetchChunk: async (f, t) => { calls.push([f, t]); return body; } }, "2025-09-01", "2026-09-30");
+  const ok = await C.loadLedger(F, { fetchChunk: async (f, t) => { calls.push([f, t]); return body(f, t); } }, "2025-09-01", "2026-09-30");
   assert.equal(ok.state, "present");
   assert.deepEqual(strip(ok.states), { "2026-09-07": { status: "active", reasonCode: "closure" }, "2026-09-08": { status: "cleared", reasonCode: null } });
   assert.equal(calls.length, 2);
   let n = 0;
-  const oneFails = await C.loadLedger(F, { fetchChunk: async () => { if (n++ === 1) throw new Error("http_error"); return body; } }, "2025-09-01", "2026-09-30");
+  const oneFails = await C.loadLedger(F, { fetchChunk: async (f, t) => { if (n++ === 1) throw new Error("http_error"); return body(f, t); } }, "2025-09-01", "2026-09-30");
   assert.equal(oneFails.state, "unreadable");
   const malformed = await C.loadLedger(F, { fetchChunk: async () => ({ ok: true }) }, "2026-09-01", "2026-09-30");
   assert.equal(malformed.state, "unreadable");
-  const stale = await C.loadLedger(F, { fetchChunk: async () => body, isLive: () => false }, "2026-09-01", "2026-09-30");
+  const outside = await C.loadLedger(F, { fetchChunk: async (f, t) => ({ ...body(f, t), exceptions: { ...body(f, t).exceptions, "2027-01-01": records["2026-09-07"] } }) }, "2026-09-01", "2026-09-30");
+  assert.equal(outside.state, "unreadable", "a record outside the requested chunk is a contract violation (C1 R1)");
+  const stale = await C.loadLedger(F, { fetchChunk: async (f, t) => body(f, t), isLive: () => false }, "2026-09-01", "2026-09-30");
   assert.equal(stale.state, "stale");
-  const none = await C.loadLedger(F, { fetchChunk: async () => ({ ok: true, exceptions: {} }) }, "2026-09-01", "2026-09-30");
+  const none = await C.loadLedger(F, { fetchChunk: async (f, t) => ({ ok: true, fromDate: f, toDate: t, exceptions: {} }) }, "2026-09-01", "2026-09-30");
   assert.equal(none.state, "absent");
 });
 

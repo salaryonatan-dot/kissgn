@@ -1178,13 +1178,63 @@
         var c = chunks[i++];
         return Promise.resolve(io.fetchChunk(c.from, c.to)).then(function (body) {
           if (io.isLive && !io.isLive()) return { state: "stale" };
-          if (!body || body.ok !== true || !body.exceptions || typeof body.exceptions !== "object") return { state: "unreadable", reason: "ledger_shape", from: from, to: to };
+          if (!body || body.ok !== true || !body.exceptions || typeof body.exceptions !== "object" || Array.isArray(body.exceptions)) return { state: "unreadable", reason: "ledger_shape", from: from, to: to };
+          // C1 R1: the response must answer THIS chunk's range, and every record must be well formed
+          if (body.fromDate !== c.from || body.toDate !== c.to) return { state: "unreadable", reason: "ledger_range_mismatch", from: from, to: to };
+          if (io.scope && (body.tenantId !== io.scope.tenantId || body.bizId !== io.scope.bizId)) return { state: "unreadable", reason: "ledger_scope_mismatch", from: from, to: to };
+          var badRecord = Object.keys(body.exceptions).some(function (d) {
+            var r = body.exceptions[d];
+            return !F.finance.businessDate.isBusinessDate(d) || d < c.from || d > c.to || !r || typeof r !== "object" || typeof r.source !== "string" || typeof r.status !== "string";
+          });
+          if (badRecord) return { state: "unreadable", reason: "ledger_record_shape", from: from, to: to };
           var got = structuredStates(body.exceptions);
           Object.keys(got).forEach(function (d) { if (d >= c.from && d <= c.to) states[d] = got[d]; });
           return next();
         });
       }
       return Promise.resolve().then(next).catch(function () { return { state: "unreadable", reason: "read_failed", from: from, to: to }; });
+    }
+    /**
+     * C1 R1 (finding 6): a loaded ledger is valid ONLY for the exact input state it was requested
+     * for. The key binds the selection (tenant, business, generation), the date window, the
+     * revision of the effective exception list the page holds (every reload — e.g. after a CD-M2
+     * closure or reopen — is a new revision) and the retry attempt. `ledgerFor` is evaluated at
+     * render time: a stored result with another key is never used ("loading" instead).
+     */
+    var revisionIds = typeof WeakMap === "function" ? new WeakMap() : null, revisionSeq = 0;
+    function revisionOf(obj) {
+      if (!obj || typeof obj !== "object" || !revisionIds) return 0;
+      var r = revisionIds.get(obj);
+      if (!r) { r = ++revisionSeq; revisionIds.set(obj, r); }
+      return r;
+    }
+    function ledgerKey(sel, win, revision, attempt) {
+      if (!sel || !sel.tenantId || !sel.bizId || !win) return null;
+      return [sel.tenantId, sel.bizId, sel.gen, win.from, win.to, revision, attempt].join("|");
+    }
+    function ledgerFor(stored, key) {
+      return key !== null && stored && stored.key === key ? stored : { state: "loading", key: key };
+    }
+    /**
+     * Ordered request session: only the LATEST requested key may resolve. An older request that
+     * completes later (out of order, or after the business / window changed) resolves `stale`
+     * and is never applied; a failed refresh after a success resolves `unreadable` for the NEW key.
+     */
+    function createLedgerSession(F) {
+      var latest = null;
+      return {
+        latest: function () { return latest; },
+        cancel: function () { latest = null; },
+        request: function (key, from, to, fetchChunk, isLive, scope) {
+          latest = key;
+          var current = function () { return latest === key && (!isLive || isLive()); };
+          return loadLedger(F, { isLive: current, fetchChunk: fetchChunk, scope: scope }, from, to).then(function (res) {
+            if (!current() || res.state === "stale") return { state: "stale", key: key };
+            var out = {}; Object.keys(res).forEach(function (k) { out[k] = res[k]; }); out.key = key;
+            return out;
+          });
+        },
+      };
     }
     function ledgerCovers(ledger, from, to) {
       return !!ledger && (ledger.state === "present" || ledger.state === "absent") && ledger.from <= from && ledger.to >= to;
@@ -1308,17 +1358,24 @@
         if (fRev === null) forecastNotes.push(TXT.forecastInsufficient);
         // D-13 breakdown: one row per canonical component, rent counted once (VD-35); shares
         // only when every component is complete, as exact ratios over their exact total.
+        // C1 R1 (finding 2): an absent optional other expense is the core's complete zero ONLY when
+        // the core reports it complete; an invalid / partial one is unavailable ("—"), never 0.
+        // Shares exist only when the core's operating result is complete (every component complete).
+        var cv = configView(F, inputs, asOf);
+        var otherAmt = A.otherExpense.complete ? (A.otherExpense.value === null ? "0" : A.otherExpense.value) : null;
         var comps = [
-          { key: "purchases", lbl: "רכש ספקים", amount: A.purchases.complete ? A.purchases.value : null, color: "#3B82F6" },
-          { key: "labor", lbl: "עלות עובדים (עלות מעסיק)", amount: typedValue(A.labor.employerCost), color: "#818CF8" },
-          { key: "royalty", lbl: "תמלוגים", amount: fx.state === "complete" ? fx.royaltyPct : null, color: "#A5B4FC" },
-          { key: "rentPct", lbl: "שכ״ד (אחוזים)", amount: fx.state === "complete" ? fx.rentPct : null, color: "#BAC8F3" },
-          { key: "rentFixed", lbl: "שכ״ד קבוע", amount: fx.state === "complete" ? fx.rentFixed : null, color: "#CBD5E1" },
-          { key: "fixed", lbl: "קבועות", amount: fx.state === "complete" ? fx.regular : null, color: "#D1D5DB" },
-          { key: "other", lbl: "שונות", amount: A.otherExpense.value === null ? "0" : (A.otherExpense.complete ? A.otherExpense.value : null), color: "#E5E7EB" },
+          { key: "purchases", lbl: "רכש ספקים", amount: A.purchases.complete ? A.purchases.value : null, color: "#3B82F6", configured: true },
+          { key: "labor", lbl: "עלות עובדים (עלות מעסיק)", amount: typedValue(A.labor.employerCost), color: "#818CF8", configured: true },
+          { key: "royalty", lbl: "תמלוגים", amount: fx.state === "complete" ? fx.royaltyPct : null, color: "#A5B4FC", configured: cv.royaltyConfigured },
+          { key: "rentPct", lbl: "שכ״ד (אחוזים)", amount: fx.state === "complete" ? fx.rentPct : null, color: "#BAC8F3", configured: cv.rentMode === "pct" },
+          { key: "rentFixed", lbl: "שכ״ד קבוע", amount: fx.state === "complete" ? fx.rentFixed : null, color: "#CBD5E1", configured: cv.rentMode === "fixed" },
+          { key: "fixed", lbl: "קבועות", amount: fx.state === "complete" ? fx.regular : null, color: "#D1D5DB", configured: cv.fixedItemsConfigured },
+          { key: "other", lbl: "שונות", amount: otherAmt, color: "#E5E7EB", configured: otherAmt === null },
         ];
-        var compTotal = sumAmounts(F, comps.map(function (c) { return c.amount; }));
-        var breakdown = comps.filter(function (c) { return c.amount === null || toNum(F, c.amount) !== 0; }).map(function (c) {
+        var sharesAvailable = A.operatingProfit.state === "complete";
+        var compTotal = sharesAvailable ? sumAmounts(F, comps.map(function (c) { return c.amount; })) : null;
+        // presence follows configuration / applicability; a known complete zero stays hidden
+        var breakdown = comps.filter(function (c) { return c.configured || (c.amount !== null && toNum(F, c.amount) !== 0); }).map(function (c) {
           var share = compTotal === null || c.amount === null ? null : ratioValue(ratio(F, c.amount, compTotal));
           return { key: c.key, lbl: c.lbl, text: money(F, c.amount), shareText: share === null ? "—" : pctText(F, share), width: share === null ? 0 : Math.min(toNum(F, share), 100), color: c.color };
         });
@@ -1348,8 +1405,10 @@
             empty: R.window.state !== "actual" || A.purchases.value === null },
           labor: { text: typedMoney(F, A.labor.employerCost), state: A.labor.employerCost.state, meaning: F.presenters.labels.LABELS.labor.meaning },
           laborPct: { text: pctText(F, A.labor.employerCostPct), band: band(F, A.labor.employerCostPct, goals.labor.value), goal: goals.labor },
-          fixedRent: { text: money(F, fixedRent), rentText: fx.state === "complete" ? money(F, sumAmounts(F, [fx.rentFixed, fx.rentPct])) : "—", hasRent: fx.state === "complete" && toNum(F, sumAmounts(F, [fx.rentFixed, fx.rentPct])) !== 0, pctText: pctText(F, revenue.complete ? ratio(F, fixedRent, A.revenue.value) : null), state: fx.state },
-          royalty: { text: money(F, royalty), show: royalty !== null && toNum(F, royalty) !== 0, pctText: pctText(F, revenue.complete ? ratio(F, royalty, A.revenue.value) : null) },
+          fixedRent: { text: money(F, fixedRent), rentText: fx.state === "complete" ? money(F, sumAmounts(F, [fx.rentFixed, fx.rentPct])) : "—", hasRent: cv.rentMode !== "none" || (fx.state === "complete" && toNum(F, sumAmounts(F, [fx.rentFixed, fx.rentPct])) !== 0), pctText: pctText(F, revenue.complete ? ratio(F, fixedRent, A.revenue.value) : null), state: fx.state },
+          // C1 R1 (finding 5): the tile follows the configuration — a configured royalty with an
+          // invalid rate shows "—"; only a known complete zero (or no royalty) hides it.
+          royalty: { text: money(F, royalty), show: cv.royaltyConfigured || (royalty !== null && toNum(F, royalty) !== 0), pctText: pctText(F, revenue.complete ? ratio(F, royalty, A.revenue.value) : null) },
           forecast: { text: money(F, fRev), amount: fRev, state: proj.forecast.state, notes: forecastNotes, formulaId: proj.forecast.formulaId },
           projectedPurchases: money(F, pp ? pp.purchases : null),
           projectedLabor: money(F, projectedLabor),
@@ -1396,17 +1455,23 @@
         window: R.window, coverage: R.coverage,
       };
     }
-    /** Month deliveries (P-04): exact sum of the canonical delivery parts of the completed days. */
+    /**
+     * Month deliveries (P-04): exact sum of the canonical delivery parts of the completed days.
+     * C1 R1 (finding 5): `applicable` whenever any day recorded a delivery cell (present OR
+     * invalid / partial); an invalid or partial part makes the amount unavailable — the row
+     * then shows "—" instead of disappearing.
+     */
     function deliveriesOf(F, inputs, month) {
       var b = F.finance.businessDate.monthBounds(month);
       var days = F.product.productDays(inputs, { from: b.first, to: b.last }).days;
-      var list = [];
+      var list = [], applicable = false, unavailable = false;
       for (var i = 0; i < days.length; i++) {
         var p = days[i].revenue.parts.deliveries;
-        if (p.presence === "invalid" || p.partial) return null;
-        if (p.presence === "present") list.push(decStr(F, p.value));
+        if (p.presence !== "absent" || p.partial) applicable = true;
+        if (p.presence === "invalid" || p.partial) unavailable = true;
+        else if (p.presence === "present") list.push(decStr(F, p.value));
       }
-      return list.length ? sumAmounts(F, list) : null;
+      return { applicable: applicable, amount: unavailable ? null : (list.length ? sumAmounts(F, list) : null) };
     }
     /**
      * VD-50 (P&L "רווח גולמי") — OWNER DECISION PENDING. The line has no approved definition, so
@@ -1437,12 +1502,14 @@
         });
         rows.revenue.text = c.revenueRecorded === null ? "—" : money(F, c.revenueRecorded) + (c.revenuePartial ? " · " + TXT.partial : "");
         var deliveries = deliveriesOf(F, cur.inputs, month);
+        var cvm = configView(F, cur.inputs, src.asOf.slice(0, 7) === month ? src.asOf : F.finance.businessDate.monthBounds(month).last);
         var w = cur.report.window;
         return {
           status: "ready", report: cur.report, rows: rows, gross: pnlGrossLineVD50(),
-          deliveries: { text: money(F, deliveries), show: deliveries !== null && toNum(F, deliveries) !== 0 },
-          showOther: c.otherRecorded !== null && toNum(F, c.otherRecorded) !== 0,
-          showRoyalty: c.royalty !== null && toNum(F, c.royalty) !== 0,
+          deliveries: { text: money(F, deliveries.amount), show: deliveries.applicable && (deliveries.amount === null || toNum(F, deliveries.amount) !== 0) },
+          // an incomplete (invalid / partial) other expense is shown as "—", never hidden
+          showOther: !cur.report.actual.otherExpense.complete || (c.otherRecorded !== null && toNum(F, c.otherRecorded) !== 0),
+          showRoyalty: cvm.royaltyConfigured || (c.royalty !== null && toNum(F, c.royalty) !== 0),
           hasPrev: !!(prev && !prev.loading), prevLoading: !!(prev && prev.loading),
           netPct: c.net === null || rev === null ? { text: "—", negative: false } : { text: pctText(F, ratio(F, c.net, rev)), negative: toNum(F, c.net) < 0 },
           purchasesPct: { text: pctText(F, c.purchasesPct), num: toNum(F, ratioValue(c.purchasesPct)) },
@@ -1472,6 +1539,58 @@
       var ct = F.metrics.costTimeline;
       return ct.versionForDay(ct.resolveTimeline(F.product.productTimeline(inputs)), date);
     }
+    var FIXED_FLAG_CODES = ["invalid_fixed_amount", "missing_fixed_amount"];
+    /**
+     * C1 R1 (findings 3 + 5): what the in-force cost configuration CONTAINS — so a configured
+     * component stays visible (as "—" when unavailable) instead of disappearing — and the
+     * CONFIGURED monthly fixed-items + fixed-rent total of the version in force (D-21). Read from
+     * the shared cost timeline (productTimeline / versionForDay) and its typed flags only; an
+     * invalid or missing configured amount makes the total unavailable, never zero.
+     */
+    function configView(F, inputs, date) {
+      var tl = F.product.productTimeline(inputs);
+      var flags = tl.flags || [];
+      var ct = F.metrics.costTimeline;
+      var v = ct.versionForDay(ct.resolveTimeline(tl), date);
+      var flagged = function (pred) { return flags.some(pred); };
+      var royaltyBad = flagged(function (f) { return (f.code === "invalid_rate" || f.code === "missing_rate") && f.field === "royaltyPct"; });
+      var rentPctBad = flagged(function (f) { return (f.code === "invalid_rate" || f.code === "missing_rate") && f.field === "rentPct"; });
+      var rentFixedBad = flagged(function (f) { return f.code === "invalid_rate" && f.field === "rentFixed"; });
+      var fixedBad = flagged(function (f) { return FIXED_FLAG_CODES.indexOf(f.code) !== -1; });
+      var rentMode = rentPctBad ? "pct" : rentFixedBad ? "fixed" : (v ? v.rent.mode : "none");
+      var items = v ? v.fixedItems.map(function (i) { return i.monthlyAmount; }) : [];
+      var rentFixedAmt = v && v.rent.mode === "fixed" ? v.rent.monthlyAmount : (rentMode === "fixed" ? null : "0");
+      var monthly = fixedBad || rentFixedBad ? null : sumAmounts(F, items.concat([rentFixedAmt]));
+      return {
+        royaltyConfigured: royaltyBad || !!(v && v.royalty.mode === "pct"),
+        royaltyRate: v && v.royalty.mode === "pct" && !royaltyBad ? v.royalty.ratePct : null,
+        rentMode: rentMode,
+        rentRate: v && v.rent.mode === "pct" && !rentPctBad ? v.rent.ratePct : null,
+        rentFixedAmount: v && v.rent.mode === "fixed" ? v.rent.monthlyAmount : null,
+        fixedItemsConfigured: fixedBad || items.length > 0,
+        monthlyFixedAndRent: monthly,
+        timelineSource: tl.timelineSource,
+      };
+    }
+    /** D-21: the fixed-cost editor header — configured monthly total of the version in force on `date`. */
+    function configuredMonthly(F, src, date) {
+      if (!src || !src.config || src.config.state === "loading" || !src.fixed || src.fixed.state === "loading") return { status: "loading" };
+      return guarded(function () {
+        var inputs = { rows: [], config: src.config, fixed: src.fixed, asOfBusinessDate: date, exceptionLedgerState: "absent" };
+        var cv = configView(F, inputs, date);
+        var L = F.presenters.labels.LABELS;
+        return {
+          status: "ready", date: date,
+          // explicit unavailable state: an invalid / missing fixed amount is never shown as a total
+          available: cv.monthlyFixedAndRent !== null,
+          text: cv.monthlyFixedAndRent === null ? "לא זמין — סכום קבוע חסר או לא תקין" : money(F, cv.monthlyFixedAndRent), amount: cv.monthlyFixedAndRent,
+          rentPctText: cv.rentMode === "pct" ? (cv.rentRate === null ? "—" : pctText(F, cv.rentRate)) : null,
+          rentFixedText: cv.rentMode === "fixed" ? money(F, cv.rentFixedAmount) : null,
+          royaltyText: cv.royaltyConfigured ? (cv.royaltyRate === null ? "—" : pctText(F, cv.royaltyRate)) : null,
+          basisLabel: cv.timelineSource === "compat_current_config" ? L.configurationBasis.current_applied_retrospectively : "",
+        };
+      });
+    }
 
     // ── entry form preview (E-02/E-03) ─────────────────────────────────────────
     function entryLabor(F, src, date, payrollInput) {
@@ -1482,7 +1601,8 @@
         var v = versionOn(F, got.inputs, date);
         var emps = v ? v.globalEmployees : [];
         var cell = F.finance.cells.parseAmount(payrollInput, { allowSkip: false });
-        var payroll = cell.state === "present" ? D(F).serializeDec(cell.value) : (cell.state === "absent" ? "0" : null);
+        // C1 R1 (finding 4): payroll not entered (absent) is MISSING, not ₪0 — no day total until entered
+        var payroll = cell.state === "present" ? D(F).serializeDec(cell.value) : null;
         var total = pl.global === null ? null : sumAmounts(F, [pl.global, payroll]);
         return { status: "ready", globalCount: emps.length, global: pl, totalText: money(F, total), show: emps.length > 0 || (payroll !== null && toNum(F, payroll) !== 0) };
       });
@@ -1523,16 +1643,21 @@
         var cdays = F.product.productDays(inputs, { from: b.first, to: b.last }).days;
         var byDate = {};
         cdays.forEach(function (c) { byDate[c.date] = c; });
+        var hourlyClosed = cur.report.coverage.hourlyLabor.closedDays;
         var days = bd.datesInRange(b.first, b.last).map(function (d) {
           var pl = placement(F, inputs, d);
           var c = byDate[d];
           var completed = d < asOf;
+          // C1 R1 (finding 4): hourly employer cost is a value only when entered and valid; an absent
+          // cell on a completed OPERATING day is missing ("—"). The only core-known zero is a
+          // completed declared closure without an entered hourly cost (coverage.closedDays).
+          var closedDay = completed && hourlyClosed.indexOf(d) !== -1;
           var hourly = c && c.hourlyLabor.presence === "present" && !c.hourlyLabor.partial ? decStr(F, c.hourlyLabor.value)
-            : (c && c.presence.day === "present" && c.hourlyLabor.presence === "absent" ? "0" : null);
+            : (closedDay && (!c || c.hourlyLabor.presence === "absent") ? "0" : null);
           // Completed day: hourly employer cost entered on the day + the core's placement of the
-          // monthly employer cost (MARJIN_LABOR/3 daily labor). Current day and later: only the
-          // placement is known, shown as expected ("צפוי"), never as Actual.
-          var totalAmt = completed ? (c && c.presence.day === "present" && hourly !== null ? sumAmounts(F, [hourly, pl.global]) : null) : pl.global;
+          // monthly employer cost (MARJIN_LABOR/3 daily labor) — withheld while either is unknown.
+          // Current day and later: only the placement is known, shown as expected ("צפוי").
+          var totalAmt = completed ? (hourly !== null && pl.global !== null ? sumAmounts(F, [hourly, pl.global]) : null) : pl.global;
           var rev = c && c.revenue.presence === "present" && !c.revenue.partial ? decStr(F, c.revenue.value) : null;
           var pctR = completed && totalAmt !== null && rev !== null ? ratio(F, totalAmt, rev) : null;
           return { date: d, completed: completed, placement: pl, totalText: money(F, totalAmt), expected: !completed, pctText: pctR === null || ratioValue(pctR) === null ? null : pctText(F, pctR), hourlyText: money(F, hourly) };
@@ -1682,8 +1807,9 @@
     window.MarjinC1 = Object.freeze({
       C1_VERSION: C1_VERSION, EXPECT: EXPECT, LEDGER_CHUNK_DAYS: LEDGER_CHUNK_DAYS, TXT: TXT, READ_FAILED: READ_FAILED,
       checkBundle: checkBundle, nodeState: nodeState, ledgerChunks: ledgerChunks, structuredStates: structuredStates,
-      earliestRowDate: earliestRowDate, ledgerWindow: ledgerWindow, ledgerCovers: ledgerCovers, loadLedger: loadLedger, inputsFor: inputsFor,
-      monthReport: monthReport, dashboard: dashboard, todayContext: todayContext, pnl: pnl, pnlGrossLineVD50: pnlGrossLineVD50,
+      earliestRowDate: earliestRowDate, ledgerWindow: ledgerWindow, ledgerCovers: ledgerCovers, loadLedger: loadLedger,
+      revisionOf: revisionOf, ledgerKey: ledgerKey, ledgerFor: ledgerFor, createLedgerSession: createLedgerSession, inputsFor: inputsFor,
+      monthReport: monthReport, dashboard: dashboard, configView: configView, configuredMonthly: configuredMonthly, todayContext: todayContext, pnl: pnl, pnlGrossLineVD50: pnlGrossLineVD50,
       placement: placement, versionOn: versionOn, entryLabor: entryLabor, entryRevenuePreview: entryRevenuePreview, rowDiagnostic: rowDiagnostic, employees: employees, history: history,
       suppliers: suppliers, impactStats: impactStats, insightsKeys: insightsKeys, insightTotal: insightTotal, insightsStats: insightsStats, insightMoney: insightMoney,
       supplierCellEntered: supplierCellEntered, revenueDisclosure: revenueDisclosure, band: band,
@@ -6110,33 +6236,37 @@ function PilotDashboard() {
     if (finLedgerFloor && finLedgerFloor < extra) extra = finLedgerFloor;
     return window.MarjinC1.ledgerWindow(finF, entries, finAsOf, extra);
   }, [finF, finAsOf, finRowsReady, entries, supMonth, finLedgerFloor]);
-  const [finLedger, setFinLedger] = useState({ state: "loading" });
-  const finLedgerKey = finLedgerWindow ? `${currentBizId}|${finLedgerWindow.from}|${finLedgerWindow.to}` : null;
+  // C1 R1 (finding 6): the ledger is keyed to the exact input state (selection + generation,
+  // window, revision of the effective exception list, retry attempt). The key is computed at
+  // RENDER time, so the first render after a closure / reopen / business or window change
+  // already refuses the previous result; only the latest request may resolve.
+  const [finLedger, setFinLedger] = useState({ state: "loading", key: null });
+  const [finLedgerAttempt, setFinLedgerAttempt] = useState(0);
+  const finLedgerSessionRef = useRef(null);
+  if (!finLedgerSessionRef.current && finF) finLedgerSessionRef.current = window.MarjinC1.createLedgerSession(finF);
+  const finSel = selectionCtrlRef.current.current();
+  const finLedgerKey = finF ? window.MarjinC1.ledgerKey(finSel, finLedgerWindow, window.MarjinC1.revisionOf(entryExceptions), finLedgerAttempt) : null;
   useEffect(() => {
-    if (!finF || !finLedgerWindow || !currentBizId) { setFinLedger({ state: "loading" }); return; }
-    let live = true;
+    // a page returning to the foreground re-reads the closure history (another device may have
+    // closed or reopened a day); the new attempt invalidates the held result at once
+    const onVis = () => { if (!document.visibilityState || document.visibilityState === "visible") setFinLedgerAttempt((n) => n + 1); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+  const retryFinanceLedger = () => setFinLedgerAttempt((n) => n + 1);
+  useEffect(() => {
+    const session = finLedgerSessionRef.current;
+    if (!finF || !session || !finLedgerWindow || !finLedgerKey) { if (session) session.cancel(); return; }
     const ctx = captureSelectionCtx();
-    const ok = () => live && isSelectionLive(ctx);
-    // Any reload invalidates the previous calendar first: results are never computed from a
-    // ledger that is being replaced (no stale or partially loaded closure history).
-    setFinLedger({ state: "loading" });
-    if (!ctx || !ctx.tenantId || !ctx.bizId) { setFinLedger({ state: "unreadable", reason: "no_selection" }); return; }
-    window.MarjinC1.loadLedger(finF, {
-      isLive: ok,
-      fetchChunk: async (from, to) => {
-        if (!ok()) throw new Error("stale");
-        const resp = await window.apiFetch(`/api/admin?action=list-entry-exceptions&tenantId=${encodeURIComponent(ctx.tenantId)}&bizId=${encodeURIComponent(ctx.bizId)}&fromDate=${from}&toDate=${to}`, { method: "GET" });
-        if (!resp || !resp.ok) throw new Error("http_error");
-        return await resp.json();
-      },
-    }, finLedgerWindow.from, finLedgerWindow.to).then((res) => {
-      if (!ok() || res.state === "stale") return;
-      setFinLedger({ ...res, bizId: currentBizId });
-    });
-    return () => { live = false; };
-    // entryExceptions: every reload of the effective exception list (including after a
-    // CD-M2 closure write) reloads the structured ledger too.
-  }, [finF, finLedgerKey, entryExceptions]);
+    if (!ctx || !ctx.tenantId || !ctx.bizId) { session.cancel(); return; }
+    const key = finLedgerKey;
+    session.request(key, finLedgerWindow.from, finLedgerWindow.to, async (from, to) => {
+      if (!isSelectionLive(ctx)) throw new Error("stale");
+      const resp = await window.apiFetch(`/api/admin?action=list-entry-exceptions&tenantId=${encodeURIComponent(ctx.tenantId)}&bizId=${encodeURIComponent(ctx.bizId)}&fromDate=${from}&toDate=${to}`, { method: "GET" });
+      if (!resp || !resp.ok) throw new Error("http_error");
+      return await resp.json();
+    }, () => isSelectionLive(ctx), { tenantId: ctx.tenantId, bizId: ctx.bizId }).then((res) => { if (res.state !== "stale") setFinLedger(res); });
+  }, [finF, finLedgerKey]);
   const finSrc = React.useMemo(() => {
     if (!finF || !finAsOf) return null;
     const C1 = window.MarjinC1;
@@ -6144,10 +6274,10 @@ function PilotDashboard() {
       : n.kind === "absent" ? { state: "absent" }
       : n.kind === "failed" ? C1.READ_FAILED
       : C1.nodeState(finF, n.raw, expect);
-    const ledger = finLedger && finLedger.bizId === currentBizId ? finLedger : { state: "loading" };
+    const ledger = C1.ledgerFor(finLedger, finLedgerKey);
     const raw = finRaw.bizId === (currentBizId || null) ? finRaw : { config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING };
     return { rows: entries, config: nodeOf(raw.config, "object"), fixed: nodeOf(raw.fixed, "array"), asOf: finAsOf, ledger, rowsReady: finRowsReady };
-  }, [finF, finAsOf, entries, finRaw, finLedger, finRowsReady, currentBizId]);
+  }, [finF, finAsOf, entries, finRaw, finLedger, finLedgerKey, finRowsReady, currentBizId]);
   const finStatus = finCoreState === "failed" ? "unavailable" : (finCoreState !== "ready" ? "loading" : null);
   /** Guarded view model: {status:"loading"|"unavailable"} unless the core and every input are ready. */
   const finView = (fn) => finStatus ? { status: finStatus, reason: "fincore_" + finCoreState } : (!finSrc ? { status: "loading" } : fn(finF, finSrc));
@@ -6827,6 +6957,9 @@ function PilotDashboard() {
     lastYearSales: (lastYear && S.asOf && lastYear[Number(S.asOf.slice(5, 7)) - 1]) ? lastYear[Number(S.asOf.slice(5, 7)) - 1].sales : null,
   })), [finSrc, finCoreState, lastYear]);
   const finSup = React.useMemo(() => finView((F, S) => window.MarjinC1.suppliers(F, S, supMonth, suppliers)), [finSrc, finCoreState, supMonth, suppliers]);
+  // C1 R1 (finding 3): the fixed-cost editor shows the CONFIGURED monthly total of the version in
+  // force today (shared cost timeline) — not the MTD accrual, which stays on the dashboard KPI.
+  const finConfigured = React.useMemo(() => (finF && finSrc && finAsOf) ? window.MarjinC1.configuredMonthly(finF, finSrc, finAsOf) : { status: finStatus || "loading" }, [finSrc, finCoreState]);
   const finImpact = React.useMemo(() => finView((F, S) => window.MarjinC1.impactStats(F, S, entries)), [finSrc, finCoreState]);
   const finEntryDate = (typeof form.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(form.date)) ? form.date : finAsOf;
   const finEntry = React.useMemo(() => finEntryDate ? finView((F, S) => window.MarjinC1.entryLabor(F, S, finEntryDate, form.payroll)) : { status: "loading" }, [finSrc, finCoreState, finEntryDate, form.payroll]);
@@ -7290,7 +7423,7 @@ function PilotDashboard() {
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
                     <div>
                       <div style={{fontSize:16,fontWeight:700,color:"#0F172A",letterSpacing:"-.3px"}}>הוצאות קבועות</div>
-                      <div data-c1="fixed-modal-total" style={{fontSize:12,color:"#94A3B8",marginTop:3}}>קבועות + שכ״ד (מצטבר החודש, בפועל עד אתמול): <strong style={{color:"#1E293B"}}>{finDash.status==="ready"?finDash.fixedRent.text:"—"}</strong>{finDash.status==="ready"&&finDash.royalty.show&&<span> · תמלוגים: <strong style={{color:"#1E293B"}}>{finDash.royalty.text}</strong></span>}</div>
+                      <div data-c1="fixed-modal-total" style={{fontSize:12,color:"#94A3B8",marginTop:3}}>קבועות + שכ״ד לחודש{finConfigured.status==="ready"&&finConfigured.basisLabel?` (${finConfigured.basisLabel})`:""}: <strong style={{color:"#1E293B"}}>{finConfigured.status==="ready"?finConfigured.text:"—"}</strong>{finConfigured.status==="ready"&&finConfigured.rentPctText!==null&&<span> + שכ״ד <strong style={{color:"#1E293B"}}>{finConfigured.rentPctText}</strong> ממחזור</span>}{finConfigured.status==="ready"&&finConfigured.royaltyText!==null&&<span> · תמלוגים: <strong style={{color:"#1E293B"}}>{finConfigured.royaltyText}</strong> ממחזור</span>}</div>
                     </div>
                     <button onClick={()=>setShowFixed(false)} style={{width:30,height:30,background:"#F1F5F9",border:"none",borderRadius:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#64748B"}}>
                       <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -7431,6 +7564,11 @@ function PilotDashboard() {
                   <div className="dash-section">
                     <div data-c1="fin-unavailable" style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:12,padding:"18px",textAlign:"center",fontSize:13,color:dv.status==="loading"?"#9CA3AF":"#92400E"}}>
                       {dv.status==="loading" ? "טוען נתונים כספיים…" : "הנתונים הכספיים אינם זמינים כעת — לא מוצגים סכומים, אחוזים ותחזיות."}
+                      {finSrc && finSrc.ledger && finSrc.ledger.state==="unreadable" && (
+                        <div style={{marginTop:10}}>
+                          <button data-c1="fin-retry" onClick={retryFinanceLedger} style={{padding:"6px 14px",background:"#F8FAFC",border:"1px solid #E2E8F0",borderRadius:8,fontSize:12,color:"#475569",cursor:"pointer",fontFamily:"inherit"}}>נסה שוב לטעון את יומן הסגירות</button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -8888,7 +9026,7 @@ function PilotDashboard() {
                 <p style={{margin:"2px 0 0",fontSize:11,color:"#9CA3AF"}}>שכ״ד: {businessConfig.rentType==="fixed" ? `${(businessConfig.rentFixed||0).toLocaleString()} ₪` : `${businessConfig.rentPct||0}% ממחזור`}</p>
               </div>
               <div style={{textAlign:"left"}}>
-                <div style={{fontSize:18,fontWeight:700,color:"#111827",letterSpacing:-0.5}}>{finDash.status==="ready"?finDash.fixedRent.text:"—"}</div>
+                <div style={{fontSize:18,fontWeight:700,color:"#111827",letterSpacing:-0.5}}>{finConfigured.status==="ready"?finConfigured.text:"—"}</div>
                 <div style={{fontSize:10,color:"#9CA3AF",marginTop:1}}>קבועות + שכ״ד</div>
               </div>
             </div>
@@ -8912,9 +9050,9 @@ function PilotDashboard() {
                 </div>
                 <div style={{display:"flex",gap:6,alignItems:"center"}}>
                   {f.rentPct
-                    ? <div className="input" style={{padding:"5px 9px",flex:1,marginBottom:0,color:"#16A34A",fontSize:12}}>{finDash.status==="ready"?finDash.fixedRent.rentText:"—"}</div>
+                    ? <div className="input" style={{padding:"5px 9px",flex:1,marginBottom:0,color:"#16A34A",fontSize:12}}>{finConfigured.status!=="ready"?"—":finConfigured.rentFixedText!==null?finConfigured.rentFixedText:finConfigured.rentPctText!==null?`${finConfigured.rentPctText} ממחזור`:"—"}</div>
                     : f.royaltyPct
-                    ? <div className="input" style={{padding:"5px 9px",flex:1,marginBottom:0,color:"#6B7280",fontSize:12}}>{finDash.status==="ready"?finDash.royalty.text:"—"}</div>
+                    ? <div className="input" style={{padding:"5px 9px",flex:1,marginBottom:0,color:"#6B7280",fontSize:12}}>{finConfigured.status==="ready"&&finConfigured.royaltyText!==null?`${finConfigured.royaltyText} ממחזור`:"—"}</div>
                     : <input className="input" style={{padding:"5px 9px",flex:1,marginBottom:0}} type="number" inputMode="decimal" placeholder="₪" value={f.amount||""}
                         onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,amount:Number(e.target.value)}:x);setFixedList(u);persistFixed(u,captureSelectionCtx());}}/>
                   }

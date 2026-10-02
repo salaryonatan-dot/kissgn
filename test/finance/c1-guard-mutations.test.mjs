@@ -5,11 +5,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { importerVerdict, loadConsumerFiles, repoKindOf, validateConsumerFiles } from "../support/b1-fixtures.mjs";
 import { C1_ASSEMBLY, C1_PROTECTED, C1_ZONES, c1IndexVerdict, diffHunks } from "../support/c1-index-scope.mjs";
+import { C1_INDEX_PIN } from "../support/c1-candidate-pin.mjs";
 
 const approved = (() => { const r = gitIn(REPO, ["cat-file", "blob", C1_ASSEMBLY + ":index.html"], { encoding: "buffer" }); assert.equal(r.status, 0); return r.stdout.toString("utf8"); })();
 const candidate = readFileSync(join(REPO, "index.html"), "utf8");
@@ -79,6 +81,19 @@ test("C1G-06 negative controls INSIDE the zones: protected write regions and wri
   assert.equal(reason(once(candidate, "  // ── C1 browser financial view models", "  // ── view models")), "c1_seam_shape", "seam marker removed");
 });
 
-test("C1G-07 documented limitation: a non-protected edit INSIDE a zone (no write call) is accepted by the content contract — bounded by the zones; B2G-05 adds committed == staged == checked-out", () => {
+test("C1G-07 scope layer, by design: a non-protected edit INSIDE a zone is accepted by the SCOPE contract alone; content identity is the separate C1_INDEX_PIN layer of B2G-05 (B2G-05-M6/M7)", () => {
   assert.deepEqual(c1IndexVerdict(approved, once(candidate, '<div className="chart-label">הכנסות יומיות</div>', '<div className="chart-label">הכנסות</div>')), { ok: true });
+});
+
+test("C1G-08 identity layer: the pinned C1 blob is a fixed literal equal to the candidate page, and every in-zone mutation (label, financial calculation) changes the blob, so B2G-05 refuses it", () => {
+  assert.match(C1_INDEX_PIN.blob, /^[0-9a-f]{40}$/);
+  assert.match(C1_INDEX_PIN.status, /pending independent review/);
+  const blobOf = (buf) => { const r = spawnSync("git", ["hash-object", "--stdin"], { input: buf, encoding: "utf8" }); assert.equal(r.status, 0); return r.stdout.trim(); };
+  assert.equal(blobOf(candidate), C1_INDEX_PIN.blob, "candidate index.html is the pinned blob");
+  const fin = once(candidate, "var target = D(F).serializeRat(D(F).ratMul(amt(F, lySales), growthFactor));", 'var target = "1";');
+  assert.deepEqual(c1IndexVerdict(approved, fin), { ok: true }, "scope alone accepts the financial mutation");
+  assert.notEqual(blobOf(fin), C1_INDEX_PIN.blob, "the identity pin refuses it");
+  // the pin is a source literal, not derived from HEAD or the working tree at run time
+  const pinSrc = readFileSync(new URL("../support/c1-candidate-pin.mjs", import.meta.url), "utf8");
+  assert.ok(!/rev-parse|hash-object|readFileSync|execSync|spawnSync/.test(pinSrc), "pin module computes nothing");
 });

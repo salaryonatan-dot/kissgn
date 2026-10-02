@@ -86,17 +86,32 @@ const qt = (page, k) => textOf(q(page, k));
 const rootText = (page) => textOf(page.document.getElementById("root"));   // rendered tree only (script text excluded)
 
 let listCalls = [];
+// C1 R1: the list double answers in the REAL handler's shape (api/admin.js handleListEntryExceptions:
+// { ok, tenantId, bizId, fromDate, toDate, exceptions }). `ledgerCtl` switches it at run time:
+//   mode "ok" | "fail" | "gate" (each call is HELD until the test resolves it with a body variant).
+const ledgerCtl = { mode: null, held: [] };
+async function listBody(p, variant = "real") {
+  const { listEntryExceptions } = await import("../../lib/repositories/entryExceptionsRepo.js");   // the REAL server repository
+  const exceptions = await listEntryExceptions({ tenantId: p.get("tenantId"), bizId: p.get("bizId"), fromDate: p.get("fromDate"), toDate: p.get("toDate") });
+  if (variant === "reopened") delete exceptions[d(7)];                      // the same window after day 7 was reopened
+  return { ok: true, tenantId: p.get("tenantId"), bizId: p.get("bizId"), fromDate: p.get("fromDate"), toDate: p.get("toDate"), exceptions };
+}
+const jsonResp = (body) => ({ ok: true, status: 200, json: async () => body });
+const failResp = () => ({ ok: false, status: 500, json: async () => ({ error: "list_failed" }) });
 function makeFetch({ ledger = "ok" } = {}) {
+  ledgerCtl.mode = ledger; ledgerCtl.held = [];
   return async (url, opts) => {
     const u = String(url);
     if (u.startsWith("/api/config")) return { ok: true, status: 200, json: async () => ({ apiKey: "demo", authDomain: "demo.local", databaseURL: DB_URL, projectId: PROJECT }) };
     if (u.startsWith("/api/admin?action=list-entry-exceptions")) {
       const p = new URL(u, "http://x").searchParams;
       listCalls.push({ from: p.get("fromDate"), to: p.get("toDate") });
-      if (ledger === "fail") return { ok: false, status: 500, json: async () => ({ error: "list_failed" }) };
-      const { listEntryExceptions } = await import("../../lib/repositories/entryExceptionsRepo.js");   // the REAL server repository
-      const exceptions = await listEntryExceptions({ tenantId: p.get("tenantId"), bizId: p.get("bizId"), fromDate: p.get("fromDate"), toDate: p.get("toDate") });
-      return { ok: true, status: 200, json: async () => ({ ok: true, exceptions }) };
+      if (ledgerCtl.mode === "fail") return failResp();
+      if (ledgerCtl.mode === "gate") {
+        return await new Promise((release) => ledgerCtl.held.push({ from: p.get("fromDate"), to: p.get("toDate"),
+          answer: async (variant) => release(variant === "fail" ? failResp() : jsonResp(await listBody(p, variant))) }));
+      }
+      return jsonResp(await listBody(p));
     }
     return { ok: false, status: 404, json: async () => ({ error: "not_available_in_harness" }), text: async () => "" };
   };
@@ -110,6 +125,15 @@ async function boot({ fincore = "ok", ledger = "ok" } = {}) {
 }
 const settled = (page) => page.until(() => (q(page, "mtd-revenue") !== null) || (q(page, "fin-unavailable") !== null && !/טוען/.test(qt(page, "fin-unavailable"))), 20000);
 const nav = async (page, label) => { const b = Array.from(page.document.querySelectorAll("button.mhd-tab")).find((x) => textOf(x) === label); expect(b, "nav tab " + label); click(b); await page.sleep(300); };
+const visible = async (page) => { page.document.dispatchEvent(new page.window.Event("visibilitychange")); await page.sleep(50); };
+/** Answer every held list call (present or arriving within `ms`) whose request is the one tagged by `pick`. */
+async function answerHeld(page, n, variant, ms = 8000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) { if (ledgerCtl.held.length > n) break; await page.sleep(20); }
+  const h = ledgerCtl.held[n]; if (!h) throw new Error("no held list call #" + n + " (held " + ledgerCtl.held.length + ")");
+  await h.answer(variant); await page.sleep(50);
+}
+const dm = (x) => x.slice(8) + "." + x.slice(5, 7);
 const fatalErrors = (page) => page.console.errors.filter((e) => /ReferenceError|TypeError|is not defined|Minified React error/.test(e));
 
 // ── expected values: the same seeded data through the same generated core (node) ──
@@ -282,10 +306,88 @@ async function main() {
     } finally { p.detach(); await apps.seed.database().ref("tenants/tenantA/biz:bizA:entries").set(env(ROWS)); }
   });
 
+  // ── C1 R1 (independent review findings 3 and 6) ──────────────────────────────────────────
+  await run("C1R-11", "ledger list FAILS → explicit unavailable state with a retry control; after the API recovers, retry renders the report (no stale or partial numbers before)", async () => {
+    const p = await boot({ ledger: "fail" });
+    try {
+      await settled(p);
+      expect(q(p, "fin-unavailable") && !q(p, "mtd-revenue"), "unavailable while the ledger cannot be read");
+      const btn = q(p, "fin-retry"); expect(btn, "retry control rendered: " + qt(p, "fin-unavailable"));
+      ledgerCtl.mode = "ok"; const before = listCalls.length;
+      click(btn);
+      await p.until(() => q(p, "mtd-revenue") !== null, 15000);
+      expect(listCalls.length > before, "retry re-read the ledger");
+      eq(qt(p, "mtd-revenue"), X.dash.revenue.text, "recovered MTD revenue");
+      eq(qt(p, "closures"), X.dash.disclosure.closures, "recovered closures line");
+      return `retry: ${listCalls.length - before} list calls → ${qt(p, "mtd-revenue")}`;
+    } finally { p.detach(); }
+  });
+
+  await run("C1R-12", "a successful ledger followed by a FAILED refresh (page returns to the foreground): unavailable — the earlier result is not reused for the new request", async () => {
+    const p = await boot();
+    try {
+      await settled(p);
+      expect(q(p, "mtd-revenue"), "initially ready");
+      ledgerCtl.mode = "fail";
+      await visible(p);
+      await p.until(() => q(p, "fin-unavailable") !== null && q(p, "mtd-revenue") === null && q(p, "fin-retry") !== null, 15000);
+      ledgerCtl.mode = "ok";
+      click(q(p, "fin-retry"));
+      await p.until(() => q(p, "mtd-revenue") !== null, 15000);
+      eq(qt(p, "mtd-revenue"), X.dash.revenue.text, "after retry");
+      return "ready → failed refresh → unavailable → retry → ready";
+    } finally { p.detach(); }
+  });
+
+  await run("C1R-13", "OVERLAPPING refreshes resolved OUT OF ORDER: the newer (day 7 reopened) wins; the older (day 7 closed) arrives last and is discarded", async () => {
+    const p = await boot();
+    try {
+      await settled(p);
+      expect(qt(p, "closures").includes(dm(d(7))), "initially day 7 is a closure");
+      ledgerCtl.mode = "gate"; ledgerCtl.held = [];
+      await visible(p);                                  // request A (older)
+      await p.until(() => ledgerCtl.held.length >= 1, 8000);
+      await visible(p);                                  // request B (newer)
+      await p.until(() => ledgerCtl.held.length >= 2, 8000);
+      expect(!q(p, "mtd-revenue"), "while the latest request is pending, no result is shown as authoritative");
+      // B: answer its first chunk and every later chunk of B with the "reopened" state
+      await answerHeld(p, 1, "reopened");
+      for (let i = 2; ; i++) { const t0 = Date.now(); while (ledgerCtl.held.length <= i && Date.now() - t0 < 1500) await p.sleep(20); if (ledgerCtl.held.length <= i) break; await ledgerCtl.held[i].answer("reopened"); await p.sleep(50); }
+      await p.until(() => q(p, "mtd-revenue") !== null, 15000);
+      const afterB = qt(p, "revenue-warning");
+      expect(afterB.includes(dm(d(7))), "the newer result: day 7 is now MISSING (reopened) — " + afterB);
+      // A: the older request resolves LAST with day 7 closed
+      const heldBefore = ledgerCtl.held.length;
+      await ledgerCtl.held[0].answer("real"); await p.sleep(400);
+      eq(ledgerCtl.held.length, heldBefore, "the stale request stopped (no further chunks)");
+      expect(qt(p, "revenue-warning").includes(dm(d(7))), "still the newer state after the older result arrived");
+      expect(!q(p, "closures") || !qt(p, "closures").includes(dm(d(7))), "the older 'closed' result never applied");
+      return `B (reopened) applied; A (closed) discarded · warning "${qt(p, "revenue-warning")}"`;
+    } finally { ledgerCtl.mode = "ok"; for (const h of ledgerCtl.held) h.answer("real").catch(() => {}); p.detach(); }
+  });
+
+  await run("C1R-14", "fixed-cost editor header (D-21): the CONFIGURED monthly amount (₪3,100, current config applied retrospectively) — not the MTD accrual", async () => {
+    const p = await boot();
+    try {
+      await settled(p);
+      const opener = Array.from(p.document.querySelectorAll("button.mhd-icon-btn")).find((b) => b.getAttribute("title") === "הוצאות קבועות");
+      expect(opener, "fixed-cost editor button");
+      click(opener);
+      await p.until(() => q(p, "fixed-modal-total") !== null, 8000);
+      const t = qt(p, "fixed-modal-total");
+      const configured = X.F.presenters.money.formatShekel(String(FIXED[0].amount));   // the seeded configuration (one item, no fixed rent)
+      eq(configured, "₪3,100", "seeded configured monthly");
+      expect(t.includes("₪3,100"), "header shows the configured monthly amount: " + t);
+      expect(!t.includes(X.dash.fixedRent.text) || X.dash.fixedRent.text === "₪3,100", "not the MTD accrual " + X.dash.fixedRent.text);
+      expect(t.includes(X.F.presenters.labels.LABELS.configurationBasis.current_applied_retrospectively), "basis label");
+      return t;
+    } finally { p.detach(); }
+  });
+
   const w = (s, n) => String(s).padEnd(n).slice(0, n);
   console.log(`\n${w("case", 7)} ${w("status", 6)} ${w("ms", 6)} notes`); console.log("-".repeat(120));
   for (const r of results) console.log(`${w(r.id, 7)} ${w(r.status, 6)} ${w(r.ms, 6)} ${r.status === "PASS" ? r.notes : r.notes.split("\n")[0]}`);
-  const EXPECTED = 10;
+  const EXPECTED = 14;
   console.log("\n=== TOTALS ===");
   console.log(`total=${results.length} passed=${results.length - failures} failed=${failures}`);
   if (results.length !== EXPECTED) { console.error(`INCOMPLETE: expected ${EXPECTED}`); process.exitCode = 3; return; }
