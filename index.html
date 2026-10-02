@@ -1480,6 +1480,7 @@
         revenue: A.revenue.complete ? A.revenue.value : null, revenuePartial: !A.revenue.complete, revenueRecorded: A.revenue.value,
         purchases: A.purchases.complete ? A.purchases.value : null,
         labor: typedValue(A.labor.employerCost),
+        gross: typedValue(A.grossProfitBeforeFixed),
         other: A.otherExpense.complete ? (A.otherExpense.value === null ? "0" : A.otherExpense.value) : null,
         otherRecorded: A.otherExpense.value,
         fixedRent: fx.state === "complete" ? sumAmounts(F, [fx.regular, fx.rentFixed, fx.rentPct]) : null,
@@ -1508,11 +1509,12 @@
       }
       return { applicable: applicable, amount: unavailable ? null : (list.length ? sumAmounts(F, list) : null) };
     }
-    /**
-     * VD-50 (P&L "רווח גולמי") — OWNER DECISION PENDING. The line has no approved definition, so
-     * it is reported unavailable. No variant formula and no legacy formula is computed for it.
-     */
-    function pnlGrossLineVD50() { return Object.freeze({ status: "VD50_PENDING", value: null, text: "—" }); }
+    /** VD-50: the core owns the classified gross-profit amount and its availability. */
+    function pnlGrossLineVD50(F, actual) {
+      var typed = actual.grossProfitBeforeFixed;
+      var value = typedValue(typed);
+      return Object.freeze({ status: typed.state, value: value, text: money(F, value) });
+    }
     function pnl(F, src, month, priorMonth) {
       var cur = monthReport(F, src, month);
       if (cur.status !== "ready") return cur;
@@ -1540,7 +1542,7 @@
         var cvm = configView(F, cur.inputs, src.asOf.slice(0, 7) === month ? src.asOf : F.finance.businessDate.monthBounds(month).last);
         var w = cur.report.window;
         return {
-          status: "ready", report: cur.report, rows: rows, gross: pnlGrossLineVD50(),
+          status: "ready", report: cur.report, rows: rows, gross: pnlGrossLineVD50(F, cur.report.actual),
           deliveries: { text: money(F, deliveries.amount), show: deliveries.applicable && (deliveries.amount === null || toNum(F, deliveries.amount) !== 0) },
           // an incomplete (invalid / partial) other expense is shown as "—", never hidden
           showOther: !cur.report.actual.otherExpense.complete || (c.otherRecorded !== null && toNum(F, c.otherRecorded) !== 0),
@@ -10377,7 +10379,7 @@ const MONTH_IDX = {
 function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[], finView, finSrc, finCoreState, todayStr, requestFinanceFrom }) {
   // C1 (P-01…P-10, U-4…U-11): every figure is a field of the selected month's report
   // (open month = Actual through D-1; a past month = closed month) and of the prior-year
-  // same month's closed report. VD-50 (the "רווח גולמי" line) is OWNER-PENDING: shown as "—".
+  // same month's closed report. VD-50 gross profit is classified before fixed operating costs.
   const today0 = todayStr || `${YEAR}-${MONTH_STR}-01`;
   const [selYear, setSelYear] = useState(Number(today0.slice(0, 4)));
   const [selMonth, setSelMonth] = useState(Number(today0.slice(5, 7)) - 1);
@@ -10510,8 +10512,8 @@ function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[], f
           <PnLRow c1="pnl-labor" label="עלות עובדים (לייבור)" text={pv.rows.labor.text} shareText={pv.rows.labor.shareText} delta={deltaOf("labor")} isNegative />
           {pv.showOther && <PnLRow c1="pnl-other" label="הוצאות אחרות" text={pv.rows.other.text} shareText={pv.rows.other.shareText} isNegative />}
 
-          {/* VD-50 — OWNER DECISION PENDING: no approved definition; isolated, shown as "—". */}
-          <PnLRow c1="pnl-vd50" label="רווח גולמי" text={pv.gross.text} shareText={"—"} delta={{text:"—",delta:null}} isBold />
+          {/* VD-50 — revenue less food and full employer labor; fixed costs follow below. */}
+          <PnLRow c1="pnl-vd50" label="רווח גולמי (לפני הוצאות קבועות)" text={pv.gross.text} shareText={"—"} delta={{text:"—",delta:null}} isBold />
 
           {/* Fixed */}
           <SectionHeader label="הוצאות קבועות" />

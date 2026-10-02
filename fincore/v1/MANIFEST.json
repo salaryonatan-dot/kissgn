@@ -28,7 +28,7 @@
     "src/presenters/money.ts",
     "src/presenters/percent.ts"
   ],
-  "sourceDigest": "6bd3aa60b652441e8f5955e9dbcbd814af3e499b07b0c58226a6c8b9010f96c6",
+  "sourceDigest": "5fa80c4cbe0010aa9cfa2b77f5ee4bbab7f06c22c99ce3eb3e2569c3443bed68",
   "files": [
     {
       "path": "browser/marjinFinanceGlobal.js",
@@ -84,7 +84,7 @@
     },
     {
       "path": "metrics/report.js",
-      "sha256": "dc5a34e6cb8cd803268af0dfa91091439460f92c837e5a714707ff0af13b3d31"
+      "sha256": "13d2db3101695b9cf40edfe7a23abf8d11392b1fea87e1a36be0d972c8dc2907"
     },
     {
       "path": "metrics/revenueForecast.js",

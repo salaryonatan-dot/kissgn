@@ -215,14 +215,33 @@ test("C1-D04 complete month: every displayed figure is a formatted core field (l
 });
 
 // ═══ VD-50, today context, VAT basis ════════════════════════════════════════════════════
-test("C1-V01 VD-50 (P&L 'רווח גולמי') is isolated: always '—', no formula, whatever the data", () => {
-  for (const rows of [SEP_COMPLETED.map((d) => fullDay(d)), []]) {
-    const p = C.pnl(F, browserSrc({ rows }), month, null);
-    assert.deepEqual(strip(p.gross), { status: "VD50_PENDING", value: null, text: "—" });
-  }
+test("VD50-01 P&L gross profit comes from the shared complete core field, before fixed costs", () => {
+  const rows = SEP_COMPLETED.map((d) => fullDay(d));
+  const p = C.pnl(F, browserSrc({ rows }), month, null);
+  const A = p.report.actual;
+  assert.equal(p.gross.status, "complete");
+  assert.equal(p.gross.value, A.grossProfitBeforeFixed.value);
+  assert.equal(p.gross.text, F.presenters.money.formatShekel(A.grossProfitBeforeFixed.value));
+  assert.equal(p.rows.net.amount, A.operatingProfit.value, "net profit is unchanged");
+  assert.notEqual(p.gross.value, A.contributionBeforeFixed.value, "other expense is outside this classification");
   const seam = seamSource(HTML);
   const fn = seam.slice(seam.indexOf("function pnlGrossLineVD50"), seam.indexOf("function pnl(F"));
-  assert.doesNotMatch(fn, /contributionOf|ratSub|sumAmounts|revenue|purchases/, "no gross-profit formula is computed");
+  assert.doesNotMatch(fn, /contributionOf|ratSub|sumAmounts|revenue\s*[-+*/]|purchases\s*[-+*/]/, "the page performs no gross-profit arithmetic");
+  assert.match(HTML, /רווח גולמי \(לפני הוצאות קבועות\)/);
+});
+
+test("VD50-02 missing, invalid and explicit-zero components retain typed availability", () => {
+  const complete = SEP_COMPLETED.map((d) => fullDay(d));
+  const zeroRows = complete.map((d) => ({ ...d, sales: "0", deliveries: "0", other_income: "0", supplier_payments: {}, food_cost: "0", payroll: "0" }));
+  const zero = C.pnl(F, browserSrc({ rows: zeroRows, config: { employees: [] }, fixed: [] }), month, null);
+  assert.equal(zero.gross.status, "complete");
+  assert.equal(zero.gross.value, "0");
+  const missing = C.pnl(F, browserSrc({ rows: complete.slice(1) }), month, null);
+  assert.equal(missing.gross.value, null);
+  assert.equal(missing.gross.text, "—");
+  const invalid = C.pnl(F, browserSrc({ rows: complete.map((d, i) => i === 0 ? { ...d, payroll: "bad" } : d) }), month, null);
+  assert.equal(invalid.gross.value, null);
+  assert.equal(invalid.gross.text, "—");
 });
 
 test("C1-T01 today (D-15) is context only: today's recorded revenue is shown separately and never enters Actual MTD; the report ends at D-1", () => {

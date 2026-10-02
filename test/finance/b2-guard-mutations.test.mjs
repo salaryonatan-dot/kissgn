@@ -17,6 +17,8 @@ import { C1_ASSEMBLY, c1IndexVerdict } from "../support/c1-index-scope.mjs";
 import { C1_INDEX_PIN } from "../support/c1-candidate-pin.mjs";
 import { C2_BASE, C2_RETIRED, c2IndexVerdict } from "../support/c2-index-scope.mjs";
 import { C2_INDEX_PIN } from "../support/c2-candidate-pin.mjs";
+import { VD50_BASE, vd50IndexVerdict } from "../support/vd50-index-scope.mjs";
+import { VD50_INDEX_PIN } from "../support/vd50-candidate-pin.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -138,6 +140,7 @@ function assertB2Scope(root) {
     // C1-pinned and C1-contract-valid) by the C2 scope contract and the C2 identity pin; the ONLY
     // other protected change is the C2-03 retirement of exactly C2_RETIRED (absent everywhere).
     const c2 = c1 && gitIn(root, ["merge-base", "--is-ancestor", C2_BASE, "HEAD"]).status === 0 && names(["rev-parse", "HEAD"])[0] !== C2_BASE;
+    const vd50 = c2 && gitIn(root, ["merge-base", "--is-ancestor", VD50_BASE, "HEAD"]).status === 0 && names(["rev-parse", "HEAD"])[0] !== VD50_BASE;
     const allowed = assembled ? [...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : [])] : CDM2_APPROVED;
     const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f));
     assert.deepEqual([...new Set(whole)].sort(), [...allowed].sort(), assembled
@@ -187,6 +190,16 @@ function assertB2Scope(root) {
         const base = blobBytes(root, C2_BASE + ":index.html");
         assert.equal(hashBytes(base), C1_INDEX_PIN.blob, "C2 base index.html is the C1 identity-pinned blob " + C1_INDEX_PIN.blob.slice(0, 8));
         assert.deepEqual(c1IndexVerdict(approved, base), { ok: true }, "the C2 base index.html satisfies the C1 contract");
+        if (vd50) {
+          const c2Page = blobBytes(root, VD50_BASE + ":index.html");
+          assert.deepEqual(c2IndexVerdict(base, c2Page), { ok: true }, "VD-50 base satisfies the C2 scope");
+          assert.equal(hashBytes(c2Page), C2_INDEX_PIN.blob, "VD-50 base is the fixed reviewed C2 identity");
+          for (const [label, bytes] of [["committed", committed], ["staged (index)", staged], ["checked-out", checkedOut]]) {
+            assert.deepEqual(vd50IndexVerdict(c2Page, bytes), { ok: true }, "index.html (" + label + ") violates VD-50 scope");
+            assert.equal(hashBytes(bytes), VD50_INDEX_PIN.blob, "index.html (" + label + ") differs from fixed VD-50 candidate pin");
+          }
+          return;
+        }
         for (const [label, bytes] of [["committed", committed], ["staged (index)", staged], ["checked-out", checkedOut]]) {
           const v = c2IndexVerdict(base, bytes);
           assert.ok(v.ok, "index.html (" + label + ") violates the C2 contract: " + JSON.stringify(v));
@@ -242,7 +255,7 @@ const isC1Repo = isAssembledRepo && gitIn(REPO, ["merge-base", "--is-ancestor", 
 const isC2Repo = isC1Repo && gitIn(REPO, ["merge-base", "--is-ancestor", C2_BASE, "HEAD"]).status === 0 && HEAD_SHA !== C2_BASE;
 // On a C1 tree a non-approved index.html is refused by the C1 contract instead of the byte pin;
 // on a C2 tree by the C2 contract (the C1 surfaces are frozen at the reviewed C1 R2 bytes).
-const INDEX_REFUSED = isC2Repo ? /index\.html \(committed\) violates the C2 contract|index\.html \(committed\) is not the pinned C2 candidate blob/
+const INDEX_REFUSED = isC2Repo ? /index\.html \(committed\) violates the C2 contract|index\.html \(committed\) is not the pinned C2 candidate blob|index\.html \(committed\) violates VD-50 scope|index\.html \(committed\) differs from fixed VD-50 candidate pin/
   : isC1Repo ? /index\.html \(committed\) violates the C1 contract|index\.html \(committed\) is not the pinned C1 candidate blob/ : /index\.html is byte-identical to the approved merge/;
 // On a C2 tree every C1-zone mutation is OUTSIDE the two C2 zones: the C2 scope refuses it first.
 const C1_REASON = (re) => (isC2Repo ? /change_outside_c2_zones/ : re);
@@ -404,7 +417,7 @@ test("B2G-05-M7 C1 tree: an in-zone FINANCIAL calculation mutation passes the sc
 const FP_OLD = '["otherExpense", "other_expense"], ["isException", "is_exception"]]);', FP_NEW = '["otherExpense", "other_expense"]]);';
 test("B2G-05-M8 C2 tree: an in-zone fingerprint mutation passes the C2 scope but fails dirty, staged and committed; the C2 base is the C1-pinned, C1-valid page", { skip: !isC2Repo && "C2 not integrated in this tree" }, () => {
   const mutate = (dir) => { const p = join(dir, "index.html"), src = readFileSync(p, "utf8"); assert.equal(src.split(FP_OLD).length, 2, "probe anchor unique"); writeFileSync(p, src.replace(FP_OLD, FP_NEW)); return readFileSync(p); };
-  withClone(HEAD_SHA, (dir) => {
+  withClone(VD50_BASE, (dir) => {
     assertB2Scope(dir);                                                 // positive control: the exact C2 commit
     const base = c2BaseOf(dir);
     assert.equal(hashBytes(base), C1_INDEX_PIN.blob, "the C2 base is the C1-pinned blob");
@@ -417,7 +430,7 @@ test("B2G-05-M8 C2 tree: an in-zone fingerprint mutation passes the C2 scope but
     assert.equal(spawnSync("git", ["-C", dir, "checkout", "--", "index.html"]).status, 0);
     assert.throws(() => assertB2Scope(dir), /staged \(index\) blob differs|checked-out bytes differ/, "staged");
   });
-  withWritableClone(HEAD_SHA, (dir) => {
+  withWritableClone(VD50_BASE, (dir) => {
     mutate(dir); commitIn(dir, "in-zone fingerprint mutation");
     assert.throws(() => assertB2Scope(dir), /index\.html \(committed\) is not the pinned C2 candidate blob/, "committed");
   });
@@ -435,7 +448,7 @@ test("B2G-05-M9 C2 tree: committed changes to the call site, a second C2 block, 
     ["entryDelta.js restored", (dir) => writeFileSync(join(dir, "lib", "entryDelta.js"), blobBytes(dir, C2_BASE + ":lib/entryDelta.js")), /protected changes are exactly/],
   ];
   for (const [label, mut, re] of cases) {
-    withWritableClone(HEAD_SHA, (dir) => {
+    withWritableClone(VD50_BASE, (dir) => {
       mut(dir); commitIn(dir, label);
       assert.throws(() => assertB2Scope(dir), re, label);
     });

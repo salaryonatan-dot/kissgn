@@ -333,6 +333,10 @@ export function computePeriodReport(days, timeline, purchaseBasis, laborSource, 
     const contributionIssues = [...revenueIssues, ...purchaseIssues, ...hourlyIssues, ...otherIssues, ...calendarIssues];
     const contribution = () => contributionOf(known(revenue.rat, "revenue"), known(purchases.rat, "purchases"), known(hourly.rat, "hourly_employer_cost"), otherRecorded);
     const contributionBeforeFixed = typedAmount(contribution, contributionIssues, revenueKnown, empty);
+    // VD-50 is a separate classification from contribution: other expenses and fixed costs
+    // are deducted later. Keep the arithmetic in the shared core for server/browser parity.
+    const grossIssues = [...revenueIssues, ...purchaseIssues, ...laborIssues];
+    const grossProfitBeforeFixed = typedAmount(() => ratSub(ratSub(known(revenue.rat, "revenue"), known(purchases.rat, "purchases")), ratAdd(known(hourly.rat, "hourly_employer_cost"), accrual.global)), grossIssues, revenueKnown, empty);
     const profitIssues = [...contributionIssues, ...globalIssues, ...configIssues];
     // (percentage-rent revenue issues are already contribution issues)
     const operatingProfit = typedAmount(() => operatingProfitOf(contribution(), accrual.global, fixedTotal), profitIssues, revenueKnown, empty);
@@ -390,6 +394,7 @@ export function computePeriodReport(days, timeline, purchaseBasis, laborSource, 
                 hourlyLaborPerPresentDay: perPresentDay(hourly.rat, hourly.operatingPresent),
             },
             contributionBeforeFixed,
+            grossProfitBeforeFixed,
             operatingProfit,
             costAllocation: {
                 policy: accrual.allocation.policy,

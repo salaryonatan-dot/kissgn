@@ -13,11 +13,13 @@ import { C1_ASSEMBLY, c1IndexVerdict, diffHunks } from "../support/c1-index-scop
 import { C1_INDEX_PIN } from "../support/c1-candidate-pin.mjs";
 import { C2_BASE, C2_ZONES, C2_PROTECTED_LINES, C2_RETIRED, c2IndexVerdict } from "../support/c2-index-scope.mjs";
 import { C2_INDEX_PIN } from "../support/c2-candidate-pin.mjs";
+import { VD50_BASE } from "../support/vd50-index-scope.mjs";
 
 const blob = (spec) => { const r = gitIn(REPO, ["cat-file", "blob", spec], { encoding: "buffer" }); assert.equal(r.status, 0, spec); return r.stdout.toString("utf8"); };
 const blobOf = (s) => { const r = spawnSync("git", ["hash-object", "--stdin"], { input: s, encoding: "utf8" }); assert.equal(r.status, 0); return r.stdout.trim(); };
 const base = blob(C2_BASE + ":index.html");
-const candidate = readFileSync(join(REPO, "index.html"), "utf8");
+// On successor trees, keep proving the exact independently reviewed C2 page.
+const candidate = blob(VD50_BASE + ":index.html");
 const once = (src, from, to) => { assert.equal(src.split(from).length, 2, "mutation anchor unique: " + from.slice(0, 70)); return src.replace(from, to); };
 const reason = (b) => c2IndexVerdict(base, b).reason;
 

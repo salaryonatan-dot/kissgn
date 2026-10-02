@@ -144,6 +144,8 @@ export interface FinancialReport {
     readonly purchasesPct: PurchasesPct;
     readonly averages: { readonly revenuePerPresentDay: RatioResult; readonly purchasesPerPresentDay: RatioResult; readonly hourlyLaborPerPresentDay: RatioResult };
     readonly contributionBeforeFixed: TypedAmount;
+    /** VD-50: revenue less food cost and full employer labor, before fixed operating costs. */
+    readonly grossProfitBeforeFixed: TypedAmount;
     readonly operatingProfit: TypedAmount;
     /**
      * CDA-14 / CDA-15 / CDA-20: how the monthly costs of the window were placed. Counters here
@@ -482,6 +484,14 @@ export function computePeriodReport(
   const contributionIssues = [...revenueIssues, ...purchaseIssues, ...hourlyIssues, ...otherIssues, ...calendarIssues];
   const contribution = () => contributionOf(known(revenue.rat, "revenue"), known(purchases.rat, "purchases"), known(hourly.rat, "hourly_employer_cost"), otherRecorded);
   const contributionBeforeFixed = typedAmount(contribution, contributionIssues, revenueKnown, empty);
+  // VD-50 is a separate classification from contribution: other expenses and fixed costs
+  // are deducted later. Keep the arithmetic in the shared core for server/browser parity.
+  const grossIssues = [...revenueIssues, ...purchaseIssues, ...laborIssues];
+  const grossProfitBeforeFixed = typedAmount(
+    () => ratSub(ratSub(known(revenue.rat, "revenue"), known(purchases.rat, "purchases")),
+      ratAdd(known(hourly.rat, "hourly_employer_cost"), accrual.global)),
+    grossIssues, revenueKnown, empty,
+  );
   const profitIssues = [...contributionIssues, ...globalIssues, ...configIssues];
   // (percentage-rent revenue issues are already contribution issues)
   const operatingProfit = typedAmount(() => operatingProfitOf(contribution(), accrual.global, fixedTotal), profitIssues, revenueKnown, empty);
@@ -540,6 +550,7 @@ export function computePeriodReport(
         hourlyLaborPerPresentDay: perPresentDay(hourly.rat, hourly.operatingPresent),
       },
       contributionBeforeFixed,
+      grossProfitBeforeFixed,
       operatingProfit,
       costAllocation: {
         policy: accrual.allocation.policy,
