@@ -24,7 +24,7 @@ export async function loadFinance() {
 /** Evaluate the seam of `html` (default: the working-tree index.html); returns window.MarjinC1. */
 export function loadSeam(html = readFileSync(join(REPO, "index.html"), "utf8")) {
   const win = {};
-  vm.runInNewContext(seamSource(html), { window: win, Object, Math, Number, String, Array, isFinite });
+  vm.runInNewContext(seamSource(html), { window: win, Object, Math, Number, String, Array, isFinite, setTimeout, clearTimeout, AbortController });
   return win.MarjinC1;
 }
 

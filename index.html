@@ -1067,6 +1067,10 @@
     var EXPECT = Object.freeze({ product: "MARJIN_PRODUCT/2", forecast: "REV_FORECAST/v2" });
     // list-entry-exceptions accepts ranges of at most MAX_LIST_RANGE_DAYS = 400 days.
     var LEDGER_CHUNK_DAYS = 366;
+    // One deadline for the WHOLE sequential closure-history read, not one per chunk. Existing
+    // analytics fetches use 4–8 s per upstream call; 30 s leaves room for the normal 2–3 local
+    // history chunks while ensuring an unresponsive list API becomes explicitly retryable.
+    var LEDGER_ATTEMPT_DEADLINE_MS = 30000;
     // Approved disclosure wording (identical to the accepted B2 e-mail presenter).
     var TXT = Object.freeze({
       partial: "חלקי",
@@ -1172,11 +1176,12 @@
     function loadLedger(F, io, from, to) {
       var chunks = ledgerChunks(F, from, to), states = {}, i = 0;
       function next() {
+        if (io.isLive && !io.isLive()) return { state: "stale" };
         if (i >= chunks.length) {
           return { state: Object.keys(states).length ? "present" : "absent", states: states, from: from, to: to, chunks: chunks.length };
         }
         var c = chunks[i++];
-        return Promise.resolve(io.fetchChunk(c.from, c.to)).then(function (body) {
+        return Promise.resolve(io.fetchChunk(c.from, c.to, io.signal)).then(function (body) {
           if (io.isLive && !io.isLive()) return { state: "stale" };
           if (!body || body.ok !== true || !body.exceptions || typeof body.exceptions !== "object" || Array.isArray(body.exceptions)) return { state: "unreadable", reason: "ledger_shape", from: from, to: to };
           // C1 R1: the response must answer THIS chunk's range, and every record must be well formed
@@ -1220,19 +1225,49 @@
      * completes later (out of order, or after the business / window changed) resolves `stale`
      * and is never applied; a failed refresh after a success resolves `unreadable` for the NEW key.
      */
-    function createLedgerSession(F) {
-      var latest = null;
+    function createLedgerSession(F, timing) {
+      timing = timing || {};
+      var latest = null, active = null;
+      function finish(attempt, result, abort) {
+        if (attempt.done) return;
+        attempt.done = true;
+        if (attempt.timer !== null) { attempt.clearTimer(attempt.timer); attempt.timer = null; }
+        if (active === attempt) active = null;
+        if (abort && attempt.controller) attempt.controller.abort();
+        attempt.resolve(result);
+      }
+      function invalidate() {
+        if (active) finish(active, { state: "stale", key: active.key }, true);
+      }
       return {
         latest: function () { return latest; },
-        cancel: function () { latest = null; },
+        cancel: function () { invalidate(); latest = null; },
         request: function (key, from, to, fetchChunk, isLive, scope) {
+          invalidate();
           latest = key;
-          var current = function () { return latest === key && (!isLive || isLive()); };
-          return loadLedger(F, { isLive: current, fetchChunk: fetchChunk, scope: scope }, from, to).then(function (res) {
-            if (!current() || res.state === "stale") return { state: "stale", key: key };
+          // A test may supply deterministic timers; production always uses the fixed 30 s policy.
+          var setTimer = timing.setTimeout || setTimeout, clearTimer = timing.clearTimeout || clearTimeout;
+          var deadline = timing.deadlineMs === undefined ? LEDGER_ATTEMPT_DEADLINE_MS : timing.deadlineMs;
+          var controller = typeof AbortController === "function" ? new AbortController() : null;
+          var attempt = { key: key, done: false, timer: null, clearTimer: clearTimer, controller: controller, resolve: null };
+          var outcome = new Promise(function (resolve) { attempt.resolve = resolve; });
+          active = attempt;
+          var current = function () { return active === attempt && !attempt.done && latest === key && (!isLive || isLive()); };
+          attempt.timer = setTimer(function () {
+            finish(attempt, current()
+              ? { state: "unreadable", reason: "deadline_exceeded", from: from, to: to, key: key }
+              : { state: "stale", key: key }, true);
+          }, deadline);
+          Promise.resolve().then(function () {
+            return loadLedger(F, { isLive: current, fetchChunk: fetchChunk, scope: scope, signal: controller && controller.signal }, from, to);
+          }).then(function (res) {
+            if (!current() || res.state === "stale") { finish(attempt, { state: "stale", key: key }, false); return; }
             var out = {}; Object.keys(res).forEach(function (k) { out[k] = res[k]; }); out.key = key;
-            return out;
+            finish(attempt, out, false);
+          }, function () {
+            finish(attempt, current() ? { state: "unreadable", reason: "read_failed", from: from, to: to, key: key } : { state: "stale", key: key }, false);
           });
+          return outcome;
         },
       };
     }
@@ -1805,7 +1840,7 @@
     }
 
     window.MarjinC1 = Object.freeze({
-      C1_VERSION: C1_VERSION, EXPECT: EXPECT, LEDGER_CHUNK_DAYS: LEDGER_CHUNK_DAYS, TXT: TXT, READ_FAILED: READ_FAILED,
+      C1_VERSION: C1_VERSION, EXPECT: EXPECT, LEDGER_CHUNK_DAYS: LEDGER_CHUNK_DAYS, LEDGER_ATTEMPT_DEADLINE_MS: LEDGER_ATTEMPT_DEADLINE_MS, TXT: TXT, READ_FAILED: READ_FAILED,
       checkBundle: checkBundle, nodeState: nodeState, ledgerChunks: ledgerChunks, structuredStates: structuredStates,
       earliestRowDate: earliestRowDate, ledgerWindow: ledgerWindow, ledgerCovers: ledgerCovers, loadLedger: loadLedger,
       revisionOf: revisionOf, ledgerKey: ledgerKey, ledgerFor: ledgerFor, createLedgerSession: createLedgerSession, inputsFor: inputsFor,
@@ -6260,12 +6295,13 @@ function PilotDashboard() {
     const ctx = captureSelectionCtx();
     if (!ctx || !ctx.tenantId || !ctx.bizId) { session.cancel(); return; }
     const key = finLedgerKey;
-    session.request(key, finLedgerWindow.from, finLedgerWindow.to, async (from, to) => {
+    session.request(key, finLedgerWindow.from, finLedgerWindow.to, async (from, to, signal) => {
       if (!isSelectionLive(ctx)) throw new Error("stale");
-      const resp = await window.apiFetch(`/api/admin?action=list-entry-exceptions&tenantId=${encodeURIComponent(ctx.tenantId)}&bizId=${encodeURIComponent(ctx.bizId)}&fromDate=${from}&toDate=${to}`, { method: "GET" });
+      const resp = await window.apiFetch(`/api/admin?action=list-entry-exceptions&tenantId=${encodeURIComponent(ctx.tenantId)}&bizId=${encodeURIComponent(ctx.bizId)}&fromDate=${from}&toDate=${to}`, { method: "GET", signal });
       if (!resp || !resp.ok) throw new Error("http_error");
       return await resp.json();
     }, () => isSelectionLive(ctx), { tenantId: ctx.tenantId, bizId: ctx.bizId }).then((res) => { if (res.state !== "stale") setFinLedger(res); });
+    return () => { session.cancel(); };
   }, [finF, finLedgerKey]);
   const finSrc = React.useMemo(() => {
     if (!finF || !finAsOf) return null;

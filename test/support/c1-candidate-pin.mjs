@@ -14,7 +14,7 @@
 // It becomes the approved pin only when the independent reviewer confirms that this blob is the
 // one they reviewed; until then its status is the candidate's, never "approved".
 export const C1_INDEX_PIN = Object.freeze({
-  blob: "07f00dc2894543ab36d77ce21f939d2d71db56af",                       // git blob id (sha1) of the candidate index.html
+  blob: "7063bba9aa11103baaa8a462bbab1694bbd66ef4",                       // git blob id (sha1) of the candidate index.html
   status: "CANDIDATE — pending independent review",   // a reviewer changes nothing here except to confirm
-  lineage: "C1 R1 successor of rejected e1a24d9582e0109524eed29fe5bfeb3981f1a8dd",
+  lineage: "C1 R2 successor of 0c5348d8efdbd039bf7f4ceadf4613ea30f4ef59",
 });

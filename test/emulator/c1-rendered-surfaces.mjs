@@ -384,10 +384,49 @@ async function main() {
     } finally { p.detach(); }
   });
 
+  await run("C1R-15", "a never-settling closure list expires to an explicit retry; retry recovers, and the old late response cannot replace it", async () => {
+    const p = await boot();
+    const setT = p.window.setTimeout.bind(p.window), clearT = p.window.clearTimeout.bind(p.window);
+    const deadlines = new Map(); let nextTimer = -1;
+    try {
+      await settled(p);
+      expect(q(p, "mtd-revenue"), "initial ledger ready");
+      // Intercept ONLY the C1 deadline; React, the harness and emulator retain real timers.
+      p.window.setTimeout = (fn, ms, ...args) => ms === p.window.MarjinC1.LEDGER_ATTEMPT_DEADLINE_MS
+        ? (deadlines.set(nextTimer, fn), nextTimer--)
+        : setT(fn, ms, ...args);
+      p.window.clearTimeout = (id) => deadlines.has(id) ? deadlines.delete(id) : clearT(id);
+      ledgerCtl.mode = "gate"; ledgerCtl.held = [];
+      await visible(p);
+      await p.until(() => ledgerCtl.held.length >= 1 && deadlines.size === 1, 8000);
+      expect(!q(p, "mtd-revenue"), "pending refresh withholds the previous amount");
+      const [id, expire] = deadlines.entries().next().value;
+      expire();
+      await p.until(() => q(p, "fin-retry") !== null && q(p, "mtd-revenue") === null, 8000);
+      expect(deadlines.size === 0, "expired attempt cleared its timer");
+      const before = listCalls.length;
+      ledgerCtl.mode = "ok";
+      click(q(p, "fin-retry"));
+      await p.until(() => q(p, "mtd-revenue") !== null, 15000);
+      expect(listCalls.length > before, "retry made a new list request");
+      eq(qt(p, "mtd-revenue"), X.dash.revenue.text, "recovered revenue");
+      expect(deadlines.size === 0, "timely retry cleared its timer");
+      const closureLine = qt(p, "closures");
+      await ledgerCtl.held[0].answer("reopened"); await p.sleep(100);
+      eq(qt(p, "closures"), closureLine, "expired late response did not replace retry success");
+      return `loading → retryable unavailable → ${qt(p, "mtd-revenue")} · late old response ignored`;
+    } finally {
+      p.window.setTimeout = setT; p.window.clearTimeout = clearT;
+      ledgerCtl.mode = "ok";
+      for (const h of ledgerCtl.held) h.answer("real").catch(() => {});
+      p.detach();
+    }
+  });
+
   const w = (s, n) => String(s).padEnd(n).slice(0, n);
   console.log(`\n${w("case", 7)} ${w("status", 6)} ${w("ms", 6)} notes`); console.log("-".repeat(120));
   for (const r of results) console.log(`${w(r.id, 7)} ${w(r.status, 6)} ${w(r.ms, 6)} ${r.status === "PASS" ? r.notes : r.notes.split("\n")[0]}`);
-  const EXPECTED = 14;
+  const EXPECTED = 15;
   console.log("\n=== TOTALS ===");
   console.log(`total=${results.length} passed=${results.length - failures} failed=${failures}`);
   if (results.length !== EXPECTED) { console.error(`INCOMPLETE: expected ${EXPECTED}`); process.exitCode = 3; return; }
