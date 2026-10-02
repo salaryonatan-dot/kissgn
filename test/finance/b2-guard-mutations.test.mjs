@@ -15,6 +15,8 @@ import { importerVerdict, loadConsumerFiles, repoKindOf, validateConsumerFiles }
 import { SERVER_READER_APPROVED_BLOBS, collectServerReaderScopeInputs, serverReaderScopeVerdict } from "../support/server-reader-authorized-delta.mjs";
 import { C1_ASSEMBLY, c1IndexVerdict } from "../support/c1-index-scope.mjs";
 import { C1_INDEX_PIN } from "../support/c1-candidate-pin.mjs";
+import { C2_BASE, C2_RETIRED, c2IndexVerdict } from "../support/c2-index-scope.mjs";
+import { C2_INDEX_PIN } from "../support/c2-candidate-pin.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -131,11 +133,23 @@ function assertB2Scope(root) {
     // (test/support/c1-index-scope.mjs: fixed zones anchored in the APPROVED bytes, protected
     // write sub-regions byte-identical, no write call changed) — never a blanket bypass.
     const c1 = assembled && gitIn(root, ["merge-base", "--is-ancestor", C1_ASSEMBLY, "HEAD"]).status === 0 && names(["rev-parse", "HEAD"])[0] !== C1_ASSEMBLY;
-    const allowed = assembled ? [...CDM2_APPROVED, ...P0_APPROVED] : CDM2_APPROVED;
+    // WP-C2: when the reviewed C1 R2 commit (C2_BASE) is a STRICT ancestor of HEAD, the tree carries
+    // the C2 rebuild-trigger change. Its index.html is checked against the C2 BASE page (itself
+    // C1-pinned and C1-contract-valid) by the C2 scope contract and the C2 identity pin; the ONLY
+    // other protected change is the C2-03 retirement of exactly C2_RETIRED (absent everywhere).
+    const c2 = c1 && gitIn(root, ["merge-base", "--is-ancestor", C2_BASE, "HEAD"]).status === 0 && names(["rev-parse", "HEAD"])[0] !== C2_BASE;
+    const allowed = assembled ? [...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : [])] : CDM2_APPROVED;
     const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f));
     assert.deepEqual([...new Set(whole)].sort(), [...allowed].sort(), assembled
-      ? "assembled tree: protected changes are exactly CD-M2 R1's approved runtime files + P0 Scheduled Auth's three API routes"
+      ? "assembled tree: protected changes are exactly CD-M2 R1's approved runtime files + P0 Scheduled Auth's three API routes" + (c2 ? " + the C2-03 retirement of " + C2_RETIRED.join(", ") : "")
       : "integrated tree: protected changes are exactly CD-M2 R1's approved runtime files");
+    if (c2) {
+      for (const f of C2_RETIRED) {
+        assert.notEqual(gitIn(root, ["cat-file", "-e", "HEAD:" + f]).status, 0, f + " is retired (absent from HEAD)");
+        assert.equal(names(["ls-files", "--", f]).length, 0, f + " is retired (absent from the index)");
+        assert.ok(!existsSync(join(root, f)), f + " is retired (absent from the working tree)");
+      }
+    }
     assert.equal(gitIn(root, ["merge-base", "--is-ancestor", CDM2R1, "HEAD"]).status, 0, "…and they come from the approved CD-M2 R1 lineage");
     if (assembled) assert.equal(gitIn(root, ["merge-base", "--is-ancestor", P0, "HEAD"]).status, 0, "…and the approved P0 Scheduled Auth lineage");
     // the approved content of each runtime file: [file, expected blob bytes, label]
@@ -166,6 +180,23 @@ function assertB2Scope(root) {
       const committed = blobBytes(root, "HEAD:index.html"), staged = blobBytes(root, ":index.html"), checkedOut = readFileSync(join(root, "index.html"));
       assert.ok(checkedOut.equals(committed), "index.html: checked-out bytes differ from the committed C1 blob");
       assert.ok(staged.equals(committed), "index.html: staged (index) blob differs from the committed C1 blob");
+      if (c2) {
+        // C2 layer. The base page is recomputed from git objects (never the working tree) and must
+        // be exactly the C1 identity-pinned blob AND satisfy the C1 contract; the candidate must
+        // then satisfy the C2 contract against it and be exactly the C2 identity-pinned blob.
+        const base = blobBytes(root, C2_BASE + ":index.html");
+        assert.equal(hashBytes(base), C1_INDEX_PIN.blob, "C2 base index.html is the C1 identity-pinned blob " + C1_INDEX_PIN.blob.slice(0, 8));
+        assert.deepEqual(c1IndexVerdict(approved, base), { ok: true }, "the C2 base index.html satisfies the C1 contract");
+        for (const [label, bytes] of [["committed", committed], ["staged (index)", staged], ["checked-out", checkedOut]]) {
+          const v = c2IndexVerdict(base, bytes);
+          assert.ok(v.ok, "index.html (" + label + ") violates the C2 contract: " + JSON.stringify(v));
+        }
+        assert.match(C2_INDEX_PIN.blob, /^[0-9a-f]{40}$/, "the C2 identity pin must be a literal blob id");
+        assert.equal(gitIn(root, ["rev-parse", "HEAD:index.html"]).stdout.trim(), C2_INDEX_PIN.blob, "index.html (committed) is not the pinned C2 candidate blob " + C2_INDEX_PIN.blob.slice(0, 8));
+        assert.equal(gitIn(root, ["rev-parse", ":index.html"]).stdout.trim(), C2_INDEX_PIN.blob, "index.html: staged (index) blob differs from the pinned C2 candidate blob");
+        assert.equal(hashBytes(checkedOut), C2_INDEX_PIN.blob, "index.html: checked-out bytes differ from the pinned C2 candidate blob");
+        return;
+      }
       for (const [label, bytes] of [["committed", committed], ["staged (index)", staged], ["checked-out", checkedOut]]) {
         const v = c1IndexVerdict(approved, bytes);
         assert.ok(v.ok, "index.html (" + label + ") violates the C1 contract: " + JSON.stringify(v));
@@ -208,8 +239,14 @@ const HEAD_SHA = gitIn(REPO, ["rev-parse", "HEAD"]).stdout.trim();
 const isIntegratedRepo = gitIn(REPO, ["merge-base", "--is-ancestor", B2, "HEAD"]).status === 0 && HEAD_SHA !== B2;
 const isAssembledRepo = isIntegratedRepo && gitIn(REPO, ["merge-base", "--is-ancestor", HF1R1, "HEAD"]).status === 0;
 const isC1Repo = isAssembledRepo && gitIn(REPO, ["merge-base", "--is-ancestor", C1_ASSEMBLY, "HEAD"]).status === 0 && HEAD_SHA !== C1_ASSEMBLY;
-// On a C1 tree a non-approved index.html is refused by the C1 contract instead of the byte pin.
-const INDEX_REFUSED = isC1Repo ? /index\.html \(committed\) violates the C1 contract|index\.html \(committed\) is not the pinned C1 candidate blob/ : /index\.html is byte-identical to the approved merge/;
+const isC2Repo = isC1Repo && gitIn(REPO, ["merge-base", "--is-ancestor", C2_BASE, "HEAD"]).status === 0 && HEAD_SHA !== C2_BASE;
+// On a C1 tree a non-approved index.html is refused by the C1 contract instead of the byte pin;
+// on a C2 tree by the C2 contract (the C1 surfaces are frozen at the reviewed C1 R2 bytes).
+const INDEX_REFUSED = isC2Repo ? /index\.html \(committed\) violates the C2 contract|index\.html \(committed\) is not the pinned C2 candidate blob/
+  : isC1Repo ? /index\.html \(committed\) violates the C1 contract|index\.html \(committed\) is not the pinned C1 candidate blob/ : /index\.html is byte-identical to the approved merge/;
+// On a C2 tree every C1-zone mutation is OUTSIDE the two C2 zones: the C2 scope refuses it first.
+const C1_REASON = (re) => (isC2Repo ? /change_outside_c2_zones/ : re);
+const PIN_REFUSED = isC2Repo ? /index\.html \(committed\) violates the C2 contract/ : /index\.html \(committed\) is not the pinned C1 candidate blob/;
 const appendTo = (dir, f, text) => { writeFileSync(join(dir, f), readFileSync(join(dir, f), "utf8") + text); };
 
 test("B2G-05-M1 integrated tree: a WORKING-TREE-ONLY edit of an approved CD-M2 runtime file (history unchanged) fails the guard; the clean clone passes", { skip: !isIntegratedRepo && "standalone tree: the integrated exception does not apply" }, () => {
@@ -307,11 +344,18 @@ test("B2G-05-M5 C1 tree: committed index.html changes outside the C1 zones, in a
   for (const [label, mut, re] of cases) {
     withWritableClone(HEAD_SHA, (dir) => {
       mut(dir); commitIn(dir, label);
-      assert.throws(() => assertB2Scope(dir), re, label);
+      assert.throws(() => assertB2Scope(dir), C1_REASON(re), label);
     });
   }
 });
 
+// The scope layer that applies to this tree: on a C1 tree a C1-zone edit is ACCEPTED by scope (why
+// identity is required); on a C2 tree the same edit is outside the C2 zones and REFUSED by scope.
+const c2BaseOf = (dir) => blobBytes(dir, C2_BASE + ":index.html");
+function assertScopeLayer(dir, bytes, what) {
+  if (isC2Repo) assert.equal(c2IndexVerdict(c2BaseOf(dir), bytes).reason, "change_outside_c2_zones", what + ": on a C2 tree the C2 scope refuses a C1-zone edit");
+  else assert.deepEqual(c1IndexVerdict(approvedIndexMerge(dir), bytes), { ok: true }, what);
+}
 test("B2G-05-M6 C1 tree: an in-zone edit (a label) fails dirty, staged AND committed — scope validation alone would accept it, the identity pin does not", { skip: !isC1Repo && "C1 not integrated in this tree" }, () => {
   const label = '<div className="chart-label">הכנסות יומיות</div>', edited = '<div className="chart-label">הכנסות יומיות (edited)</div>';
   withClone(HEAD_SHA, (dir) => {
@@ -322,9 +366,9 @@ test("B2G-05-M6 C1 tree: an in-zone edit (a label) fails dirty, staged AND commi
   withWritableClone(HEAD_SHA, (dir) => {
     const p = join(dir, "index.html"), src = readFileSync(p, "utf8");
     const changed = src.replace(label, edited);
-    assert.deepEqual(c1IndexVerdict(approvedIndexMerge(dir), Buffer.from(changed)), { ok: true }, "the scope layer alone accepts this in-zone edit");
+    assertScopeLayer(dir, Buffer.from(changed), "the scope layer alone accepts this in-zone edit");
     writeFileSync(p, changed); commitIn(dir, "in-zone label edit");
-    assert.throws(() => assertB2Scope(dir), /index\.html \(committed\) is not the pinned C1 candidate blob/);
+    assert.throws(() => assertB2Scope(dir), PIN_REFUSED);
   });
 });
 
@@ -335,7 +379,7 @@ test("B2G-05-M7 C1 tree: an in-zone FINANCIAL calculation mutation passes the sc
   const mutate = (dir) => { const p = join(dir, "index.html"), src = readFileSync(p, "utf8"); assert.equal(src.split(FIN_OLD).length, 2, "probe anchor unique"); writeFileSync(p, src.replace(FIN_OLD, FIN_NEW)); return readFileSync(p); };
   withClone(HEAD_SHA, (dir) => {
     const bytes = mutate(dir);
-    assert.deepEqual(c1IndexVerdict(approvedIndexMerge(dir), bytes), { ok: true }, "scope layer accepts the financial mutation (why identity is required)");
+    assertScopeLayer(dir, bytes, "scope layer accepts the financial mutation (why identity is required)");
     assert.throws(() => assertB2Scope(dir), /checked-out bytes differ/, "dirty");
     assert.equal(spawnSync("git", ["-C", dir, "add", "index.html"]).status, 0);
     assert.throws(() => assertB2Scope(dir), /staged \(index\) blob differs|checked-out bytes differ/, "staged");
@@ -344,10 +388,56 @@ test("B2G-05-M7 C1 tree: an in-zone FINANCIAL calculation mutation passes the sc
   });
   withWritableClone(HEAD_SHA, (dir) => {
     mutate(dir); commitIn(dir, "in-zone financial mutation");
-    assert.throws(() => assertB2Scope(dir), /index\.html \(committed\) is not the pinned C1 candidate blob/, "committed");
+    assert.throws(() => assertB2Scope(dir), PIN_REFUSED, "committed");
   });
   withWritableClone(HEAD_SHA, (dir) => {                               // unrelated non-protected file: not a false failure
     writeFileSync(join(dir, "scratch-note.txt"), "x\n"); commitIn(dir, "unrelated");
     assertB2Scope(dir);
   });
+});
+
+// ── WP-C2: the C2 layer of B2G-05 ──────────────────────────────────────────────────────────────
+// An in-zone FINGERPRINT mutation (is_exception dropped from the fact groups) passes the C2 scope
+// layer but fails B2G-05 dirty, staged and committed; edits of the protected call site, a second
+// C2 block, a write call added inside a C2 zone, an un-retired entryDelta.js and C1-surface edits
+// fail; the exact C2 commit passes.
+const FP_OLD = '["otherExpense", "other_expense"], ["isException", "is_exception"]]);', FP_NEW = '["otherExpense", "other_expense"]]);';
+test("B2G-05-M8 C2 tree: an in-zone fingerprint mutation passes the C2 scope but fails dirty, staged and committed; the C2 base is the C1-pinned, C1-valid page", { skip: !isC2Repo && "C2 not integrated in this tree" }, () => {
+  const mutate = (dir) => { const p = join(dir, "index.html"), src = readFileSync(p, "utf8"); assert.equal(src.split(FP_OLD).length, 2, "probe anchor unique"); writeFileSync(p, src.replace(FP_OLD, FP_NEW)); return readFileSync(p); };
+  withClone(HEAD_SHA, (dir) => {
+    assertB2Scope(dir);                                                 // positive control: the exact C2 commit
+    const base = c2BaseOf(dir);
+    assert.equal(hashBytes(base), C1_INDEX_PIN.blob, "the C2 base is the C1-pinned blob");
+    assert.deepEqual(c1IndexVerdict(approvedIndexMerge(dir), base), { ok: true }, "the C2 base satisfies the C1 contract");
+    assert.deepEqual(c2IndexVerdict(base, readFileSync(join(dir, "index.html"))), { ok: true }, "the candidate satisfies the C2 contract");
+    const bytes = mutate(dir);
+    assert.deepEqual(c2IndexVerdict(base, bytes), { ok: true }, "the C2 scope alone accepts the in-zone fingerprint mutation (why identity is required)");
+    assert.throws(() => assertB2Scope(dir), /checked-out bytes differ/, "dirty");
+    assert.equal(spawnSync("git", ["-C", dir, "add", "index.html"]).status, 0);
+    assert.equal(spawnSync("git", ["-C", dir, "checkout", "--", "index.html"]).status, 0);
+    assert.throws(() => assertB2Scope(dir), /staged \(index\) blob differs|checked-out bytes differ/, "staged");
+  });
+  withWritableClone(HEAD_SHA, (dir) => {
+    mutate(dir); commitIn(dir, "in-zone fingerprint mutation");
+    assert.throws(() => assertB2Scope(dir), /index\.html \(committed\) is not the pinned C2 candidate blob/, "committed");
+  });
+});
+
+test("B2G-05-M9 C2 tree: committed changes to the call site, a second C2 block, a write call in a C2 zone, a C1 surface, or an un-retired entryDelta.js fail", { skip: !isC2Repo && "C2 not integrated in this tree" }, () => {
+  const edit = (dir, from, to) => { const p = join(dir, "index.html"), src = readFileSync(p, "utf8"); assert.equal(src.split(from).length, 2, "mutation anchor unique: " + from.slice(0, 60)); writeFileSync(p, src.replace(from, to)); };
+  const cases = [
+    ["call site edited (C2-02)", (dir) => edit(dir, "  const __revenueChanged = __revenueMaterialChanged(__prevEntry, netForm);", "  const __revenueChanged = true;"), /change_outside_c2_zones/],
+    ["injection edited (C2-02)", (dir) => edit(dir, "        materialChanged: __revenueMaterialChanged,", "        materialChanged: () => true,"), /change_outside_c2_zones/],
+    ["trigger no longer delegates (in-zone)", (dir) => edit(dir, "    return window.MarjinC2.financialChanged(fin, prev, next).changed;", "    return true;"), /c2_trigger_shape/],
+    ["write call added in the trigger zone", (dir) => edit(dir, "    return window.MarjinC2.financialChanged(fin, prev, next).changed;", "    saveBusinessConfig({});\n    return window.MarjinC2.financialChanged(fin, prev, next).changed;"), /write_path_lines_changed/],
+    ["second C2 block", (dir) => edit(dir, '  <script type="text/babel" data-presets="react">', '  <script>\n  // ── C2 canonical financial fingerprint (copy)\n  </script>\n  <script type="text/babel" data-presets="react">'), /c2_block_shape/],
+    ["C1 seam edited", (dir) => edit(dir, FIN_OLD, FIN_NEW), /change_outside_c2_zones/],
+    ["entryDelta.js restored", (dir) => writeFileSync(join(dir, "lib", "entryDelta.js"), blobBytes(dir, C2_BASE + ":lib/entryDelta.js")), /protected changes are exactly/],
+  ];
+  for (const [label, mut, re] of cases) {
+    withWritableClone(HEAD_SHA, (dir) => {
+      mut(dir); commitIn(dir, label);
+      assert.throws(() => assertB2Scope(dir), re, label);
+    });
+  }
 });

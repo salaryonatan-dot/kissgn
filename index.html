@@ -1852,6 +1852,75 @@
     });
   })();
   </script>
+  <!-- ═══ C2: canonical financial fingerprint (rebuild trigger, VD-46; frozen as FZ-11) ═══
+       "Did this save change a financial fact, so server analytics must be rebuilt?" is answered
+       ONLY by the core normalizer (MarjinFinance.finance.normalize.normalizeRows) — there is no
+       page formula. A financial fact is: each revenue part (presence + exact canonical amount),
+       the selected purchase source with its exact contributions and total ("skip" and "0" are
+       both an explicit present zero), payroll (hourly labor), other_expense, and is_exception.
+       hourly_payroll (never counted, C-06) and notes / annotations are not facts. Every
+       function takes the core `F` explicitly (no globals) so the block is vm-testable
+       (test/finance/c2-fingerprint.test.mjs). -->
+  <script>
+  // ── C2 canonical financial fingerprint ──────────────────────────────────────
+  (function () {
+    "use strict";
+    var FINGERPRINT_VERSION = "MARJIN_FFP/1";
+    // Reason codes, in this fixed order. The first three are decisions taken WITHOUT comparing
+    // facts (the rebuild is requested); the rest name the fact groups that differ.
+    var REASONS = Object.freeze(["new_entry", "fincore_unavailable", "row_unreadable", "revenue", "purchases", "hourly_labor", "other_expense", "is_exception"]);
+    var GROUPS = Object.freeze([["revenue", "revenue"], ["purchases", "purchases"], ["hourlyLabor", "hourly_labor"], ["otherExpense", "other_expense"], ["isException", "is_exception"]]);
+    // normalizeRows quarantines rows dated after asOf; a fingerprint describes the row itself,
+    // whatever its date, so asOf is the last valid business date.
+    var AS_OF = "9999-12-31";
+    function exact(F, m) {
+      return { presence: m.presence, partial: m.partial === true, value: m.value === null ? null : F.finance.decimal.serializeDec(m.value) };
+    }
+    /** The canonical financial facts of ONE stored or proposed entry row, or null if the core
+     *  does not admit it as a dated row (no plain object / no valid business date). */
+    function financialFacts(F, row) {
+      var n;
+      try {
+        var res = F.finance.normalize.normalizeRows([row], { asOfBusinessDate: AS_OF });
+        if (!res || res.rows.length !== 1) return null;
+        n = res.rows[0];
+      } catch (e) { return null; }
+      return {
+        revenue: { sales: exact(F, n.revenueParts.sales), deliveries: exact(F, n.revenueParts.deliveries), otherIncome: exact(F, n.revenueParts.otherIncome) },
+        purchases: {
+          source: n.purchaseSource,
+          total: exact(F, n.metrics.purchases),
+          contributions: n.purchaseContributions.map(function (c) { return { source: c.source, value: F.finance.decimal.serializeDec(c.value) }; })
+            .sort(function (a, b) { return a.source < b.source ? -1 : a.source > b.source ? 1 : 0; }),
+        },
+        hourlyLabor: exact(F, n.metrics.hourlyLabor),
+        otherExpense: exact(F, n.metrics.otherExpense),
+        isException: n.isException === true,
+      };
+    }
+    /** Deterministic fingerprint string of a row (version + normalizer version + facts). */
+    function financialFingerprint(F, row) {
+      var facts = financialFacts(F, row);
+      var head = FINGERPRINT_VERSION + "|" + F.versions.norm + "|";
+      if (!facts) return head + "unreadable";
+      return head + JSON.stringify(GROUPS.map(function (g) { return facts[g[0]]; }));
+    }
+    /** { changed, reasons } for a save from `prev` (stored row, or null for a new entry) to `next`. */
+    function financialChanged(F, prev, next) {
+      if (!prev) return { changed: true, reasons: ["new_entry"] };
+      if (!F) return { changed: true, reasons: ["fincore_unavailable"] };
+      var a = financialFacts(F, prev), b = financialFacts(F, next);
+      if (!a || !b) return { changed: true, reasons: ["row_unreadable"] };
+      var reasons = [];
+      GROUPS.forEach(function (g) { if (JSON.stringify(a[g[0]]) !== JSON.stringify(b[g[0]])) reasons.push(g[1]); });
+      return { changed: reasons.length > 0, reasons: reasons };
+    }
+    window.MarjinC2 = Object.freeze({
+      FINGERPRINT_VERSION: FINGERPRINT_VERSION, REASONS: REASONS,
+      financialFacts: financialFacts, financialFingerprint: financialFingerprint, financialChanged: financialChanged,
+    });
+  })();
+  </script>
 
   <script type="text/babel" data-presets="react">
 
@@ -6741,17 +6810,12 @@ function PilotDashboard() {
     const active = st && st.status === "active";
     return { ...base, is_exception: !!active, exception_reason: active ? (st.reasonCode||"") : "", exception_note: active ? (st.reasonText||"") : "" };
   };
-  // Real material-change detector for the rebuild decision (mirrors lib/entryDelta.js).
+  // C2 (VD-46, supersedes VD-15): the rebuild decision's "did this save change a financial fact?"
+  // is the canonical financial fingerprint (window.MarjinC2 over the core normalizer). Only the
+  // C1-verified core is used; when it is not ready the save requests the rebuild (never skips it).
   const __revenueMaterialChanged = (prev, next) => {
-    if (!prev) return true; // new entry
-    const num = (x)=>{ const n=Number(x); return Number.isFinite(n)?n:0; };
-    const F = ["sales","deliveries","other_income","food_cost","payroll","hourly_payroll","other_expense"];
-    for (const f of F) if (num(prev[f]) !== num(next[f])) return true;
-    const norm = (sp)=>{ const o={}; if(sp&&typeof sp==="object") for(const [k,v] of Object.entries(sp)){ if(v==="skip")continue; o[k]=num(v);} return o; };
-    const a=norm(prev.supplier_payments), b=norm(next.supplier_payments);
-    const keys=new Set([...Object.keys(a),...Object.keys(b)]);
-    for(const k of keys) if((a[k]||0)!==(b[k]||0)) return true;
-    return false;
+    const fin = (window.__marjinFinance && window.__marjinFinance.state === "ready") ? window.MarjinFinance : null;
+    return window.MarjinC2.financialChanged(fin, prev, next).changed;
   };
 
   // R3: saveEntry is a thin wrapper — the FULL orchestration is the PRODUCTION

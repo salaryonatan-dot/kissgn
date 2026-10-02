@@ -1,0 +1,130 @@
+{
+ "id": "FZ-11",
+ "owner": "C2",
+ "artifact": "financialFingerprint(row) definition + reason codes (window.MarjinC2, index.html C2 block)",
+ "consumer": "Daily analytics-receipt input fingerprint (must reuse this definition)",
+ "note": "keys and types only, never values; ids are frozen contract identifiers",
+ "ids": {
+  "FINGERPRINT_VERSION": "MARJIN_FFP/1",
+  "normalizer": "MARJIN_NORM/3",
+  "REASONS": [
+   "new_entry",
+   "fincore_unavailable",
+   "row_unreadable",
+   "revenue",
+   "purchases",
+   "hourly_labor",
+   "other_expense",
+   "is_exception"
+  ],
+  "facts": [
+   "revenue",
+   "purchases",
+   "hourlyLabor",
+   "otherExpense",
+   "isException"
+  ],
+  "excluded": [
+   "hourly_payroll",
+   "notes",
+   "weather_impact",
+   "exception_reason",
+   "exception_note",
+   "security_event",
+   "id",
+   "includeVat"
+  ]
+ },
+ "shapes": {
+  "api": {
+   "FINGERPRINT_VERSION": "string",
+   "REASONS": [
+    "string"
+   ],
+   "financialChanged": "function",
+   "financialFacts": "function",
+   "financialFingerprint": "function"
+  },
+  "facts": {
+   "hourlyLabor": {
+    "partial": "boolean",
+    "presence": "string",
+    "value": {
+     "$oneOf": [
+      "null",
+      "string"
+     ]
+    }
+   },
+   "isException": "boolean",
+   "otherExpense": {
+    "partial": "boolean",
+    "presence": "string",
+    "value": {
+     "$oneOf": [
+      "null",
+      "string"
+     ]
+    }
+   },
+   "purchases": {
+    "contributions": [
+     {
+      "source": "string",
+      "value": "string"
+     }
+    ],
+    "source": "string",
+    "total": {
+     "partial": "boolean",
+     "presence": "string",
+     "value": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     }
+    }
+   },
+   "revenue": {
+    "deliveries": {
+     "partial": "boolean",
+     "presence": "string",
+     "value": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     }
+    },
+    "otherIncome": {
+     "partial": "boolean",
+     "presence": "string",
+     "value": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     }
+    },
+    "sales": {
+     "partial": "boolean",
+     "presence": "string",
+     "value": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     }
+    }
+   }
+  },
+  "changed": {
+   "changed": "boolean",
+   "reasons": [
+    "string"
+   ]
+  },
+  "fingerprint": "string"
+ }
+}

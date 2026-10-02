@@ -27,12 +27,20 @@
 
 import assert from "node:assert/strict";
 import vm from "node:vm";
+import { loadFinance } from "./c1-seam.mjs";
+import { loadC2 } from "./c2-seam.mjs";
 import {
   html, plain, tick, settleAll, mkId, day, entriesKey,
   makeRemoteService, drainLiveRigs,
 } from "./cross-writer-harness.mjs";
 
 export { html, plain, tick, settleAll, mkId, day, entriesKey, makeRemoteService, drainLiveRigs };
+
+// C2: the rebuild trigger delegates to window.MarjinC2 (the REAL fingerprint block of this
+// index.html) over the REAL generated fincore/v1 bundle, exactly as the page does once the C1
+// bootstrap reports the core "ready". A test may model a core that is not ready (opts.fincore).
+export const FINCORE = await loadFinance();
+export const C2 = loadC2(html);
 
 // ── Production seams, loaded into a sandbox that also supplies the timer the real
 // `scheduleNav` needs. The Gate-3-approved harness is imported UNCHANGED for topology
@@ -229,7 +237,8 @@ export const CALL_SITES = {
   materialChanged: {
     name: "__revenueMaterialChanged",
     anchor: "const __revenueMaterialChanged = (prev, next) => {",
-    markers: ["supplier_payments"],
+    // C2: the body is the canonical fingerprint comparison over the C1-verified core, nothing else
+    markers: ['window.__marjinFinance.state === "ready"', "window.MarjinFinance", "window.MarjinC2.financialChanged(fin, prev, next).changed"],
   },
 };
 
@@ -402,7 +411,12 @@ export function makeUiEnv(opts = {}) {
     loadDashboardInsights: async (d) => { rec("loadInsights", d); return { ok: true, found: true, date: d }; },
   };
   // __revenueMaterialChanged is itself production code — extracted, never restated.
-  deps.__revenueMaterialChanged = evalDeclaration(SOURCE.materialChanged, "__revenueMaterialChanged", { ...BASE_GLOBALS() });
+  // C2: its window is the page's: the C2 block, the core bundle and the C1 bootstrap state.
+  const fincoreState = o.fincore || "ready";
+  deps.__revenueMaterialChanged = evalDeclaration(SOURCE.materialChanged, "__revenueMaterialChanged", {
+    ...BASE_GLOBALS(),
+    window: { MarjinC2: C2, MarjinFinance: FINCORE, __marjinFinance: { state: fincoreState, error: null } },
+  });
 
   const timerBase = TIMERS.length;
   const env = {

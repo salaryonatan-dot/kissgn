@@ -13,7 +13,13 @@ import {
   buildEffectiveRecord, shouldRebuildDecision, dateRangeDays, MAX_LIST_RANGE_DAYS,
   MANAGER_OPERATION_SOFT_LIMIT, OWNER_OPERATION_HARD_LIMIT, hashState,
 } from "../../lib/entryExceptions.js";
-import { revenueChanged, shouldRebuild, stripOrPreserveException, REVENUE_MATERIAL_FIELDS } from "../../lib/entryDelta.js";
+import vm from "node:vm";
+// WP-C2: lib/entryDelta.js (S37, a test-only duplicate) is RETIRED. The rebuild delta, the
+// rebuild decision and the legacy-exception strip are pinned on the PRODUCTION index.html text:
+// the C2 fingerprint block (window.MarjinC2 over the committed fincore/v1 core), the
+// executeEntrySave `shouldRebuild` expression and its `__applyExc`.
+import { loadFinance } from "../support/c1-seam.mjs";
+import { loadC2 } from "../support/c2-seam.mjs";
 
 let pass = 0, fail = 0;
 const T = (n, fn) => { try { fn(); console.log("PASS " + n); pass++; } catch (e) { console.log("FAIL " + n + " — " + (e && e.message)); fail++; } };
@@ -257,34 +263,63 @@ T("P8 dateRangeDays: forward positive, reversed negative, cap = 400", () => {
 });
 
 
-// ═══ REVENUE DELTA (lib/entryDelta.js) ═══
-T("DELTA material field set is exactly the analytics-affecting fields", () => {
-  assert.deepStrictEqual(REVENUE_MATERIAL_FIELDS, ["sales","deliveries","other_income","food_cost","payroll","hourly_payroll","other_expense"]);
+// ═══ REVENUE DELTA — the C2 canonical fingerprint (production index.html; VD-46 supersedes VD-15) ═══
+const IDX_SRC = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "index.html"), "utf8");
+const FIN = await loadFinance();
+const C2 = loadC2(IDX_SRC);
+const revenueChanged = (prev, next) => C2.financialChanged(FIN, prev, next).changed;
+T("DELTA the fact groups are exactly revenue parts, purchases, payroll, other_expense and is_exception — hourly_payroll is not one (VD-46)", () => {
+  assert.deepStrictEqual([...C2.REASONS].slice(3), ["revenue", "purchases", "hourly_labor", "other_expense", "is_exception"]);
+  assert.strictEqual(revenueChanged({ date: "2026-07-13", sales: 100, hourly_payroll: { e1: "80" } }, { date: "2026-07-13", sales: 100, hourly_payroll: { e1: "95" } }), false);
 });
 T("DELTA new entry (no prev) is always changed", () => assert.strictEqual(revenueChanged(null, { sales: 0 }), true));
-T("DELTA identical entry ⇒ not changed", () => assert.strictEqual(revenueChanged({ sales: 100, deliveries: 5 }, { sales: 100, deliveries: 5 }), false));
-T("DELTA numeric string vs number compare equal", () => assert.strictEqual(revenueChanged({ sales: "100" }, { sales: 100 }), false));
-T("DELTA missing vs zero normalize equal", () => assert.strictEqual(revenueChanged({ sales: "" }, { sales: 0 }), false));
-T("DELTA a material change is detected", () => assert.strictEqual(revenueChanged({ sales: 100 }, { sales: 101 }), true));
-T("DELTA supplier_payments change detected by key union; 'skip' ignored; order-independent", () => {
-  assert.strictEqual(revenueChanged({ supplier_payments: { s1: 10, s2: "skip" } }, { supplier_payments: { s2: "skip", s1: 10 } }), false);
-  assert.strictEqual(revenueChanged({ supplier_payments: { s1: 10 } }, { supplier_payments: { s1: 12 } }), true);
-  assert.strictEqual(revenueChanged({ supplier_payments: {} }, { supplier_payments: { s3: 5 } }), true);
+T("DELTA identical entry ⇒ not changed", () => assert.strictEqual(revenueChanged({ date: "2026-07-13", sales: 100, deliveries: 5 }, { date: "2026-07-13", sales: 100, deliveries: 5 }), false));
+T("DELTA numeric string vs number compare equal", () => assert.strictEqual(revenueChanged({ date: "2026-07-13", sales: "100" }, { date: "2026-07-13", sales: 100 }), false));
+T("DELTA missing vs explicit zero DIFFER (C2-01 presence; supersedes the entryDelta 0-coercion); missing vs missing equal", () => {
+  assert.strictEqual(revenueChanged({ date: "2026-07-13", sales: "" }, { date: "2026-07-13", sales: 0 }), true);
+  assert.strictEqual(revenueChanged({ date: "2026-07-13", sales: "" }, { date: "2026-07-13" }), false);
+  assert.strictEqual(revenueChanged({ date: "2026-07-13", sales: "0" }, { date: "2026-07-13", sales: 0 }), false);
 });
-T("DELTA exception + UI-only fields are IGNORED", () => {
+T("DELTA a material change is detected", () => assert.strictEqual(revenueChanged({ date: "2026-07-13", sales: 100 }, { date: "2026-07-13", sales: 101 }), true));
+T("DELTA supplier_payments change detected by key; 'skip' is an explicit zero; order-independent", () => {
+  assert.strictEqual(revenueChanged({ date: "2026-07-13", supplier_payments: { s1: 10, s2: "skip" } }, { date: "2026-07-13", supplier_payments: { s2: "skip", s1: 10 } }), false);
+  assert.strictEqual(revenueChanged({ date: "2026-07-13", supplier_payments: { s1: 10 } }, { date: "2026-07-13", supplier_payments: { s1: 12 } }), true);
+  assert.strictEqual(revenueChanged({ date: "2026-07-13", supplier_payments: {} }, { date: "2026-07-13", supplier_payments: { s3: 5 } }), true);
+  assert.strictEqual(revenueChanged({ date: "2026-07-13", supplier_payments: { s1: "0" } }, { date: "2026-07-13", supplier_payments: { s1: "skip" } }), false);
+});
+T("DELTA UI-only fields are IGNORED; is_exception is a fact (VD-46 / C2-01)", () => {
   assert.strictEqual(revenueChanged(
-    { sales: 100, is_exception: false, exception_reason: "", notes: "a", weather_impact: "x", security_event: false },
-    { sales: 100, is_exception: true, exception_reason: "closure", notes: "b", weather_impact: "y", security_event: true }
+    { date: "2026-07-13", sales: 100, is_exception: false, exception_reason: "", notes: "a", weather_impact: "x", security_event: false },
+    { date: "2026-07-13", sales: 100, is_exception: false, exception_reason: "closure", notes: "b", weather_impact: "y", security_event: true }
   ), false);
+  assert.strictEqual(revenueChanged({ date: "2026-07-13", sales: 100, is_exception: false }, { date: "2026-07-13", sales: 100, is_exception: true }), true);
 });
-T("DELTA shouldRebuild: revenueChanged OR (applied && rebuildRequired)", () => {
+// The PRODUCTION rebuild decision: the exact executeEntrySave expression, evaluated as written.
+const REBUILD_LINE = "  const shouldRebuild = __revenueChanged || (__exResponse && __exResponse.applied === true && __exResponse.rebuildRequired === true);";
+T("DELTA shouldRebuild (production expression): revenueChanged OR (applied && rebuildRequired)", () => {
+  assert.strictEqual(IDX_SRC.split(REBUILD_LINE).length, 2, "the production decision line is present exactly once");
+  const shouldRebuild = (__revenueChanged, __exResponse) => !!vm.runInNewContext(REBUILD_LINE.trim().replace(/^const shouldRebuild = /, "").replace(/;$/, ""), { __revenueChanged, __exResponse });
   assert.strictEqual(shouldRebuild(true, null), true);
   assert.strictEqual(shouldRebuild(false, { applied: true, rebuildRequired: true }), true);
   assert.strictEqual(shouldRebuild(false, { applied: false, rebuildRequired: false }), false); // replay + unchanged
   assert.strictEqual(shouldRebuild(false, { applied: true, rebuildRequired: false }), false);
+  assert.strictEqual(shouldRebuild(false, null), false);
 });
 
-// ═══ LEGACY EXCEPTION DEFENSIVE PRESERVATION (lib/entryDelta.js stripOrPreserveException) ═══
+// ═══ LEGACY EXCEPTION DEFENSIVE PRESERVATION (production executeEntrySave __applyExc) ═══
+const APPLY_START = "  const __applyExc = (o, doStrip, prev) => {";
+const APPLY_SRC = (() => {
+  const i = IDX_SRC.indexOf(APPLY_START);
+  assert.ok(i >= 0 && IDX_SRC.indexOf(APPLY_START, i + 1) === -1, "__applyExc anchor unique");
+  const j = IDX_SRC.indexOf("\n  };", i);
+  return IDX_SRC.slice(i, j + 5);
+})();
+const stripOrPreserveException = vm.runInNewContext(APPLY_SRC + "\n__applyExc;", {});
+T("LEGACY the production __applyExc is the strip/preserve body under test", () => {
+  assert.ok(APPLY_SRC.includes("delete c.is_exception; delete c.exception_reason; delete c.exception_note; delete c.exception_set_at; delete c.exception_set_by;"));
+  assert.ok(APPLY_SRC.includes("if (!doStrip && prev && prev.is_exception === true) {"));
+  assert.ok(APPLY_SRC.trimEnd().endsWith("};"));
+});
 const legacyPrev = { date: "2026-07-13", sales: 100, is_exception: true, exception_reason: "holiday", exception_note: "n", exception_set_at: 5, exception_set_by: "u1" };
 T("LEGACY non-editor (strip=false) PRESERVES pre-existing legacy exception fields", () => {
   const out = stripOrPreserveException({ ...legacyPrev, sales: 120 }, false, legacyPrev);
@@ -303,6 +338,10 @@ T("LEGACY no new governance dual-written: strip=false but prev NOT exceptional �
 T("LEGACY structured-cleared prev (is_exception not true) ⇒ nothing preserved (normal)", () => {
   const out = stripOrPreserveException({ sales: 100 }, false, { sales: 100, is_exception: false });
   assert.ok(!("is_exception" in out));
+});
+T("RETIRED lib/entryDelta.js is gone and nothing imports it", () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  assert.throws(() => readFileSync(join(root, "lib", "entryDelta.js")), (e) => e.code === "ENOENT");
 });
 
 // ═══ CLIENT WIRING (static-src on index.html) ═══

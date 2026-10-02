@@ -207,9 +207,11 @@
    "file": "index.html",
    "sites": ":5463-5473 __revenueMaterialChanged",
    "slice": "C2",
-   "disposition": "MIGRATE",
+   "disposition": "MIGRATED (C2)",
    "presenceImpact": true,
-   "purchaseBasisImpact": false
+   "purchaseBasisImpact": false,
+   "c2Note": "C2-01 (VD-46, supersedes VD-15): the rebuild trigger is window.MarjinC2.financialChanged — the canonical fingerprint over normalizeRows (revenue parts, purchases source/contributions/total incl. skip/0, payroll, other_expense, is_exception; hourly_payroll and notes excluded). C2-03: lib/entryDelta.js (S37) retired.",
+   "servedBy": "window.MarjinC2 (index.html) over fincore/v1"
   },
   {
    "id": "U20",
@@ -660,15 +662,6 @@
    "slice": "B1",
    "disposition": "RETAIN (input)",
    "presenceImpact": false,
-   "purchaseBasisImpact": false
-  },
-  {
-   "id": "S37",
-   "file": "lib/entryDelta.js",
-   "sites": "revenueChanged (tests only)",
-   "slice": "C2",
-   "disposition": "RETIRE",
-   "presenceImpact": true,
    "purchaseBasisImpact": false
   },
   {
