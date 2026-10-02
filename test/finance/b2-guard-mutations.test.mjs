@@ -311,8 +311,10 @@ function withWritableClone(commit, fn) {
   const dir = mkdtempSync(join(tmpdir(), "b2g05w-"));
   try {
     const bundle = join(dir, "head.bundle"), clone = join(dir, "clone");
-    assert.equal(gitIn(REPO, ["rev-parse", "HEAD"]).stdout.trim(), commit, "the writable clone is of this checkout's HEAD");
-    const b = gitIn(REPO, ["bundle", "create", bundle, "HEAD"]);   // a bundle needs a ref; HEAD === commit (asserted)
+    // The bundle contains the current HEAD's ancestry; historical mutation controls may
+    // checkout their fixed approved ancestor without writing to this worktree.
+    assert.equal(gitIn(REPO, ["merge-base", "--is-ancestor", commit, "HEAD"]).status, 0);
+    const b = gitIn(REPO, ["bundle", "create", bundle, "HEAD"]);
     assert.equal(b.status, 0, String(b.stderr));
     const c = spawnSync("git", ["clone", "-q", "--no-checkout", bundle, clone], { encoding: "utf8", cwd: dir });
     assert.equal(c.status, 0, c.stderr);
