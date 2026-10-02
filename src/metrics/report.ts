@@ -317,7 +317,7 @@ function typedAmount(compute: () => Rat, issues: readonly ComponentIssue[], reve
   return { state: "complete", value: serializeRat(compute()), issues: [] };
 }
 
-const CONFIG_INVALID_CODES: readonly string[] = ["invalid_fixed_amount", "invalid_rate"];
+const CONFIG_INVALID_CODES: readonly string[] = ["invalid_fixed_amount", "invalid_rate", "cost_history_unreadable"];
 const CONFIG_MISSING_CODES: readonly string[] = ["missing_fixed_amount", "missing_rate"];
 
 /** Average per recorded OPERATING day (declared closed days are not in the denominator). */
@@ -435,7 +435,7 @@ export function computePeriodReport(
   // total is its entitlement whatever the closures, so it stays determinable.
   const calendarUnknownDates = context.closureCalendarUnreadable === true && window.kind === "open_month" ? dates : [];
   if (calendarUnknownDates.length >= 1) globalIssues.push({ component: "global_employer_cost", kind: "invalid", reason: "closure_calendar_unreadable", dates: calendarUnknownDates });
-  globalIssues.push(...flagIssue(timelineFlags, ["invalid_global_amount"], "global_employer_cost", "invalid", dates));
+  globalIssues.push(...flagIssue(timelineFlags, ["invalid_global_amount", "cost_history_unreadable"], "global_employer_cost", "invalid", dates));
   globalIssues.push(...flagIssue(timelineFlags, ["missing_global_amount"], "global_employer_cost", "missing", dates));
 
   const configIssues: ComponentIssue[] = [];

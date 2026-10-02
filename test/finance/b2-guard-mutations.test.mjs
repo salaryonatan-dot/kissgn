@@ -140,7 +140,7 @@ function assertB2Scope(root) {
     // C1-pinned and C1-contract-valid) by the C2 scope contract and the C2 identity pin; the ONLY
     // other protected change is the C2-03 retirement of exactly C2_RETIRED (absent everywhere).
     const c2 = c1 && gitIn(root, ["merge-base", "--is-ancestor", C2_BASE, "HEAD"]).status === 0 && names(["rev-parse", "HEAD"])[0] !== C2_BASE;
-    const vd50 = c2 && gitIn(root, ["merge-base", "--is-ancestor", VD50_BASE, "HEAD"]).status === 0 && names(["rev-parse", "HEAD"])[0] !== VD50_BASE;
+    const vd50 = c2 && gitIn(root, ["merge-base", "--is-ancestor", VD50_COMMIT, "HEAD"]).status === 0;
     const vd50Runtime = ["src/metrics/report.ts", "fincore/v1/metrics/report.js", "fincore/v1/MANIFEST.json"];
     const allowed = assembled ? [...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : [])] : CDM2_APPROVED;
     const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f));
@@ -260,8 +260,8 @@ const isC2Repo = isC1Repo && gitIn(REPO, ["merge-base", "--is-ancestor", C2_BASE
 const INDEX_REFUSED = isC2Repo ? /index\.html \(committed\) violates the C2 contract|index\.html \(committed\) is not the pinned C2 candidate blob|index\.html \(committed\) violates VD-50 scope|index\.html \(committed\) differs from fixed VD-50 candidate pin/
   : isC1Repo ? /index\.html \(committed\) violates the C1 contract|index\.html \(committed\) is not the pinned C1 candidate blob/ : /index\.html is byte-identical to the approved merge/;
 // On a C2 tree every C1-zone mutation is OUTSIDE the two C2 zones: the C2 scope refuses it first.
-const C1_REASON = (re) => (isC2Repo ? /change_outside_c2_zones/ : re);
-const PIN_REFUSED = isC2Repo ? /index\.html \(committed\) violates the C2 contract/ : /index\.html \(committed\) is not the pinned C1 candidate blob/;
+const C1_REASON = (re) => (isC2Repo ? /change_outside_c2_zones|vd50_scope_changed/ : re);
+const PIN_REFUSED = isC2Repo ? /index\.html \(committed\) violates the C2 contract|index\.html \(committed\) violates VD-50 scope/ : /index\.html \(committed\) is not the pinned C1 candidate blob/;
 const appendTo = (dir, f, text) => { writeFileSync(join(dir, f), readFileSync(join(dir, f), "utf8") + text); };
 
 test("B2G-05-M1 integrated tree: a WORKING-TREE-ONLY edit of an approved CD-M2 runtime file (history unchanged) fails the guard; the clean clone passes", { skip: !isIntegratedRepo && "standalone tree: the integrated exception does not apply" }, () => {

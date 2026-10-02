@@ -791,6 +791,14 @@
       return onValue(ref(db, path), (snap) => { if (snap.exists()) callback(snap.val()); },
         (err) => { if (typeof onError === "function") { try { onError(err); } catch(_){} } });
     };
+    // F1: cost_history must deliver a confirmed absent snapshot. The legacy raw-node
+    // helper intentionally suppresses absent nodes, so it cannot serve this contract.
+    window.storage.subscribeCostHistory = (bizId, callback, onError) => {
+      const path = fkeyShared(`biz:${bizId}:cost_history`);
+      if (!path) return () => {};
+      return onValue(ref(db, path), (snap) => callback(snap.exists() ? snap.val() : null),
+        (err) => { if (typeof onError === "function") onError(err); });
+    };
     // VERSION FENCE (P0-DATA-01): the server-owned per-business storage policy lives
     // OUTSIDE the tenant subtree (`storage_v2_control/{tenantId}/{bizId}`), readable by
     // authorized members, never writable by a client. `subscribePolicy` delivers `null`
@@ -873,7 +881,8 @@
       const mod = await import("/fincore/v1/browser/marjinFinanceGlobal.js");
       const api = mod && mod.default;
       const v = api && api.versions;
-      if (!api || api !== window.MarjinFinance || !v || v.product !== "MARJIN_PRODUCT/2" || v.forecast !== "REV_FORECAST/v2") {
+      if (!api || api !== window.MarjinFinance || !v || v.product !== "MARJIN_PRODUCT/2" || v.forecast !== "REV_FORECAST/v2" ||
+          v.costHistory !== "MARJIN_COSTH/1" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") {
         throw new Error("fincore_version_mismatch");
       }
       window.__marjinFinance = { state: "ready", error: null };
@@ -1090,6 +1099,7 @@
       if (!api || typeof api !== "object" || !api.versions || !api.product || !api.presenters) return { ok: false, reason: "fincore_shape" };
       if (api.versions.product !== EXPECT.product) return { ok: false, reason: "fincore_version_mismatch" };
       if (api.versions.forecast !== EXPECT.forecast) return { ok: false, reason: "fincore_version_mismatch" };
+      if (api.versions.costHistory !== "MARJIN_COSTH/1" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") return { ok: false, reason: "fincore_cost_history_incompatible" };
       return { ok: true };
     }
 
@@ -1284,6 +1294,8 @@
     function inputsFor(F, src, need) {
       if (!src || !src.rowsReady) return { status: "loading", reason: "entries" };
       if (!src.config || src.config.state === "loading" || !src.fixed || src.fixed.state === "loading") return { status: "loading", reason: "settings" };
+      if (src.costHistory && src.costHistory.state === "loading") return { status: "loading", reason: "cost_history" };
+      if (src.costHistory && src.costHistory.state === "unreadable") return { status: "unavailable", reason: "cost_history_unreadable" };
       var L = src.ledger;
       if (!L || L.state === "loading") return { status: "loading", reason: "ledger" };
       if (L.state === "unreadable") return { status: "unavailable", reason: "closure_calendar_unknown" };
@@ -1292,7 +1304,7 @@
       return {
         status: "ready",
         inputs: {
-          rows: src.rows, config: src.config, fixed: src.fixed, asOfBusinessDate: src.asOf,
+          rows: src.rows, config: src.config, fixed: src.fixed, costHistory: src.costHistory || { state: "absent" }, asOfBusinessDate: src.asOf,
           exceptionStates: states, exceptionsByDate: F.product.exceptionsByDateOf(states),
           exceptionLedgerState: L.state,
         },
@@ -6298,9 +6310,9 @@ function PilotDashboard() {
   // {kind:"loading"} | {kind:"raw", raw} | {kind:"absent"} | {kind:"failed"} — a failed read is
   // never "absent" and an unreadable node is never replaced by defaults.
   const FIN_NODE_LOADING = { kind: "loading" };
-  const [finRaw, setFinRaw] = useState({ config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING, bizId: null });
+  const [finRaw, setFinRaw] = useState({ config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING, costHistory: FIN_NODE_LOADING, bizId: null });
   useEffect(() => {
-    setFinRaw({ config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING, bizId: currentBizId || null });
+    setFinRaw({ config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING, costHistory: FIN_NODE_LOADING, bizId: currentBizId || null });
     if (!currentBizId || !window.storage || !window.storage.subscribeNode) return;
     let live = true;
     const ctx = captureSelectionCtx();
@@ -6320,6 +6332,10 @@ function PilotDashboard() {
         }
       })();
     });
+    if (window.storage.subscribeCostHistory) unsubs.push(window.storage.subscribeCostHistory(currentBizId,
+      (raw) => put("costHistory", { kind: raw === null ? "absent" : "raw", raw }),
+      () => put("costHistory", { kind: "failed" })));
+    else put("costHistory", { kind: "failed" });
     return () => { live = false; unsubs.forEach(u => typeof u === "function" && u()); };
   }, [currentBizId]);
   // Months a screen asked for that lie before the default ledger window (e.g. an old P&L month).
@@ -6382,8 +6398,11 @@ function PilotDashboard() {
       : n.kind === "failed" ? C1.READ_FAILED
       : C1.nodeState(finF, n.raw, expect);
     const ledger = C1.ledgerFor(finLedger, finLedgerKey);
-    const raw = finRaw.bizId === (currentBizId || null) ? finRaw : { config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING };
-    return { rows: entries, config: nodeOf(raw.config, "object"), fixed: nodeOf(raw.fixed, "array"), asOf: finAsOf, ledger, rowsReady: finRowsReady };
+    const raw = finRaw.bizId === (currentBizId || null) ? finRaw : { config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING, costHistory: FIN_NODE_LOADING };
+    const costHistory = raw.costHistory.kind === "loading" ? { state: "loading" }
+      : raw.costHistory.kind === "failed" ? finF.costHistory.codec.decodeHistory({ failed: "read_failed" })
+      : finF.costHistory.codec.decodeHistory({ exists: raw.costHistory.kind !== "absent", value: raw.costHistory.raw });
+    return { rows: entries, config: nodeOf(raw.config, "object"), fixed: nodeOf(raw.fixed, "array"), costHistory, asOf: finAsOf, ledger, rowsReady: finRowsReady };
   }, [finF, finAsOf, entries, finRaw, finLedger, finLedgerKey, finRowsReady, currentBizId]);
   const finStatus = finCoreState === "failed" ? "unavailable" : (finCoreState !== "ready" ? "loading" : null);
   /** Guarded view model: {status:"loading"|"unavailable"} unless the core and every input are ready. */

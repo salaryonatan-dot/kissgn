@@ -178,6 +178,21 @@ export function productClosureCalendar(inputs, n = normalized(inputs)) {
  * an UNREADABLE fixed node is invalid — never zero — via the core's own invalid path.
  */
 export function productTimeline(inputs) {
+    if (inputs.costHistory?.state === "unreadable") {
+        return { versions: [], timelineSource: "unavailable", vatBasis: "net_of_vat",
+            flags: [{ code: "cost_history_unreadable", reason: inputs.costHistory.reason }] };
+    }
+    if (inputs.costHistory?.state === "present") {
+        const versions = inputs.costHistory.versions.map((v) => ({
+            versionId: v.versionId, effectiveFrom: v.effectiveFrom, recordedAt: v.recordedAt, basis: v.basis,
+            globalEmployees: v.globalEmployees.map((e) => ({ employeeKey: e.employeeKey,
+                kind: "authoritative_employer_cost", monthlyAmount: e.monthlyEmployerCost,
+                sourceSystem: "marjin_cost_history", ingestionMethod: "manual" })),
+            fixedItems: v.fixedItems.map((f) => ({ itemKey: f.itemKey, monthlyAmount: f.monthlyAmount })),
+            rent: v.rent, royalty: v.royalty,
+        }));
+        return { versions, timelineSource: "persisted", vatBasis: "net_of_vat" };
+    }
     const config = inputs.config && inputs.config.state === "present" ? inputs.config.value : null;
     const fixed = inputs.fixed && inputs.fixed.state === "present" ? inputs.fixed.value : null;
     const base = costTimelineFromCurrentConfig(config, fixed);

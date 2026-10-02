@@ -54,6 +54,7 @@ export type FlagCode =
   | "missing_global_amount"
   | "employee_amount_not_global"
   | "invalid_fixed_amount"
+  | "cost_history_unreadable"
   | "invalid_rate"
   | "missing_rate"
   | "missing_fixed_amount"

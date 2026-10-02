@@ -121,6 +121,14 @@ export function authorizedVersionFenceRulesDelta(core, live) {
   const cdk = core?.rules?.tenants?.["$tenantId"]?.["$dataKey"];
   const adk = a?.rules?.tenants?.["$tenantId"]?.["$dataKey"];
   if (!cdk || !adk) return { ok: false, reason: "dataKey_missing" };
+  const head = "auth !== null && ( ";
+  const withF1Read = typeof adk[".read"] === "string" && adk[".read"].startsWith(head + F1_COST_HISTORY_READ_PREFIX);
+  const withF1Write = typeof adk[".write"] === "string" && adk[".write"].startsWith(head + F1_COST_HISTORY_WRITE_PREFIX);
+  if (withF1Read !== withF1Write) return { ok: false, reason: "cost_history_delta_incomplete" };
+  if (withF1Read) {
+    adk[".read"] = head + adk[".read"].slice((head + F1_COST_HISTORY_READ_PREFIX).length);
+    adk[".write"] = head + adk[".write"].slice((head + F1_COST_HISTORY_WRITE_PREFIX).length);
+  }
   if (typeof cdk[".write"] !== "string" || typeof adk[".write"] !== "string") return { ok: false, reason: "write_rule_missing" };
   const expected = expectedFencedWriteRule(cdk[".write"]);
   if (expected === null) return { ok: false, reason: "core_write_shape_unknown" };
@@ -139,3 +147,21 @@ export function authorizedVersionFenceRulesDelta(core, live) {
 // mirror must be byte-identical. Re-pinning is an explicit reviewed change; a guard never
 // derives this value from the live file under test.
 export const APPROVED_FENCE_RULES_BLOB = "1e5dea2f9b1eac037c766b325b927c20285c0eec";
+
+// F1 R2 candidate: the only further Rules change is a scoped read branch and an
+// explicit false write branch for cost_history. The literal prefixes are the
+// independently reviewed R2 fixture delta; stripping them must expose the exact
+// approved fenced Rules before the existing guard accepts anything.
+export const F1_COST_HISTORY_READ_PREFIX = "$dataKey.matches(/^biz:[^:]+:cost_history$/) ? (root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true && ((root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner') || root.child('tenants').child($tenantId).child('biz_access').child($dataKey.replace('biz:','').replace(':cost_history','')).child(auth.uid).val() === true)) : ";
+export const F1_COST_HISTORY_WRITE_PREFIX = "$dataKey.matches(/^biz:[^:]+:cost_history$/) ? false : ";
+export const F1_RULES_CANDIDATE_BLOB = "32ea32bfc9b70c16c06b1acf87d045c5e28ff1d8"; // pending Claude review
+
+export function authorizedF1CostHistoryRulesDelta(core, live) {
+  const d = live?.rules?.tenants?.["$tenantId"]?.["$dataKey"];
+  const head = "auth !== null && ( ";
+  if (typeof d?.[".read"] !== "string" || !d[".read"].startsWith(head + F1_COST_HISTORY_READ_PREFIX) ||
+      typeof d?.[".write"] !== "string" || !d[".write"].startsWith(head + F1_COST_HISTORY_WRITE_PREFIX)) {
+    return { ok: false, reason: "cost_history_delta_missing_or_changed" };
+  }
+  return authorizedVersionFenceRulesDelta(core, live);
+}

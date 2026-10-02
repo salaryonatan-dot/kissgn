@@ -37,6 +37,7 @@ import type { AmountString } from "../finance/decimal.js";
 import { decIsZero } from "../finance/decimal.js";
 import { productPurchaseBasis } from "./purchaseBasis.js";
 import { productLaborSource } from "./laborSource.js";
+import type { CostHistoryDecision } from "../finance/costHistory.js";
 
 export const PRODUCT_FINANCE_VERSION = "MARJIN_PRODUCT/2";
 /** The one forecast formula the month projection is bound to (REV_FORECAST/v2; re-exported for the server wrappers). */
@@ -92,6 +93,8 @@ export interface ProductInputs {
   readonly rows: readonly unknown[];
   readonly config: EnvelopeState<Record<string, unknown>>;
   readonly fixed: EnvelopeState<unknown[]>;
+  /** F1: one coherent per-business cost_history snapshot; omitted only by legacy callers. */
+  readonly costHistory?: CostHistoryDecision;
   /** The CURRENT Israel business date (supplied by the caller; Actual ends the day before). */
   readonly asOfBusinessDate: BusinessDate;
   /** Structured date-level exception ledger as booleans (authoritative when a date is present). */
@@ -295,6 +298,21 @@ export function productClosureCalendar(inputs: ProductInputs, n: NormalizeResult
  * an UNREADABLE fixed node is invalid — never zero — via the core's own invalid path.
  */
 export function productTimeline(inputs: ProductInputs): CostTimeline {
+  if (inputs.costHistory?.state === "unreadable") {
+    return { versions: [], timelineSource: "unavailable", vatBasis: "net_of_vat",
+      flags: [{ code: "cost_history_unreadable", reason: inputs.costHistory.reason }] };
+  }
+  if (inputs.costHistory?.state === "present") {
+    const versions = inputs.costHistory.versions.map((v) => ({
+      versionId: v.versionId, effectiveFrom: v.effectiveFrom, recordedAt: v.recordedAt, basis: v.basis,
+      globalEmployees: v.globalEmployees.map((e: any) => ({ employeeKey: e.employeeKey,
+        kind: "authoritative_employer_cost" as const, monthlyAmount: e.monthlyEmployerCost,
+        sourceSystem: "marjin_cost_history" as const, ingestionMethod: "manual" as const })),
+      fixedItems: v.fixedItems.map((f: any) => ({ itemKey: f.itemKey, monthlyAmount: f.monthlyAmount })),
+      rent: v.rent, royalty: v.royalty,
+    }));
+    return { versions, timelineSource: "persisted", vatBasis: "net_of_vat" };
+  }
   const config = inputs.config && inputs.config.state === "present" ? inputs.config.value : null;
   const fixed = inputs.fixed && inputs.fixed.state === "present" ? inputs.fixed.value : null;
   const base = costTimelineFromCurrentConfig(config, fixed);

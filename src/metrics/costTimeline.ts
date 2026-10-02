@@ -47,7 +47,7 @@ export interface CostVersion {
 
 export interface CostTimeline {
   readonly versions: readonly CostVersion[];
-  readonly timelineSource: "persisted" | "compat_current_config";
+  readonly timelineSource: "persisted" | "compat_current_config" | "unavailable";
   readonly vatBasis: "net_of_vat";
   readonly flags?: readonly Flag[];
 }

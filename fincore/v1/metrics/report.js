@@ -160,7 +160,7 @@ function typedAmount(compute, issues, revenueKnown, empty) {
         return { state: "incomplete_components", value: null, issues };
     return { state: "complete", value: serializeRat(compute()), issues: [] };
 }
-const CONFIG_INVALID_CODES = ["invalid_fixed_amount", "invalid_rate"];
+const CONFIG_INVALID_CODES = ["invalid_fixed_amount", "invalid_rate", "cost_history_unreadable"];
 const CONFIG_MISSING_CODES = ["missing_fixed_amount", "missing_rate"];
 /** Average per recorded OPERATING day (declared closed days are not in the denominator). */
 function perPresentDay(total, presentDays) {
@@ -278,7 +278,7 @@ export function computePeriodReport(days, timeline, purchaseBasis, laborSource, 
     const calendarUnknownDates = context.closureCalendarUnreadable === true && window.kind === "open_month" ? dates : [];
     if (calendarUnknownDates.length >= 1)
         globalIssues.push({ component: "global_employer_cost", kind: "invalid", reason: "closure_calendar_unreadable", dates: calendarUnknownDates });
-    globalIssues.push(...flagIssue(timelineFlags, ["invalid_global_amount"], "global_employer_cost", "invalid", dates));
+    globalIssues.push(...flagIssue(timelineFlags, ["invalid_global_amount", "cost_history_unreadable"], "global_employer_cost", "invalid", dates));
     globalIssues.push(...flagIssue(timelineFlags, ["missing_global_amount"], "global_employer_cost", "missing", dates));
     const configIssues = [];
     if (accrual.uncoveredDates.length >= 1)

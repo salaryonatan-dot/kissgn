@@ -15,7 +15,7 @@ import { REPO } from "../support/fincore-load.mjs";
 import { loadFinance, loadSeam, seamSource } from "../support/c1-seam.mjs";
 import { seed, coreOf, closure } from "../support/b2-email-harness.mjs";
 import { INV_AS_OF, INV_NOW_MS, SEP_COMPLETED, fullDay, GLOBAL_3000, FIXED_3100 } from "../support/financial-invariants.mjs";
-import { env } from "../support/b1-fixtures.mjs";
+import { env, T, B } from "../support/b1-fixtures.mjs";
 import { buildEffectiveRecord } from "../../lib/entryExceptions.js";
 
 const F = await loadFinance();
@@ -25,7 +25,7 @@ const HTML = readFileSync(join(REPO, "index.html"), "utf8");
 // ── builders: the browser inputs from the SAME raw nodes the server reads ──
 /** The list-entry-exceptions effective records for structured envelopes (the repository's own builder). */
 const apiRecords = (envelopes) => Object.fromEntries(Object.entries(envelopes || {}).map(([d, e]) => [d, buildEffectiveRecord(d, e, null)]));
-function browserSrc({ rows, config = GLOBAL_3000, fixed = FIXED_3100, exceptions = {}, raw = {}, asOf = INV_AS_OF, ledgerState } = {}) {
+function browserSrc({ rows, config = GLOBAL_3000, fixed = FIXED_3100, exceptions = {}, raw = {}, asOf = INV_AS_OF, ledgerState, costHistory } = {}) {
   const cfgRaw = raw.config !== undefined ? raw.config : env(config);
   const fixRaw = raw.fixed !== undefined ? raw.fixed : fixed === null ? null : env(fixed);
   const states = C.structuredStates(apiRecords(exceptions));
@@ -34,6 +34,7 @@ function browserSrc({ rows, config = GLOBAL_3000, fixed = FIXED_3100, exceptions
     config: cfgRaw === null ? { state: "absent" } : C.nodeState(F, cfgRaw, "object"),
     fixed: fixRaw === null ? { state: "absent" } : C.nodeState(F, fixRaw, "array"),
     ledger: ledgerState || { state: Object.keys(states).length ? "present" : "absent", states, from: "2000-01-01", to: "2100-12-31" },
+    costHistory: costHistory || { state: "absent" },
   };
 }
 const strip = (x) => JSON.parse(JSON.stringify(x));
@@ -69,11 +70,31 @@ test("C1-P02 parity of settings states: an unreadable config (direct object) and
   }
 });
 
+test("F1-P03 C1 browser and server use the same persisted cost-history snapshot", async () => {
+  const rows = SEP_COMPLETED.map((d) => fullDay(d));
+  const id = "00000000-0000-4000-8000-000000000001";
+  const rawHistory = { head: { revision: 1, headVersionId: id }, versions: { [id]: {
+    versionId: id, schema: "MARJIN_COSTV/1", effectiveFrom: "2026-09-01", recordedAt: Date.parse("2026-09-01T09:00:00Z"),
+    recordedBy: "owner", basis: "recorded", predecessorVersionId: "none", globalEmployeesCount: 1,
+    globalEmployees: [{ employeeKey: "g1", monthlyEmployerCost: "3000" }], fixedItemsCount: 0,
+    rent: { mode: "none" }, royalty: { mode: "none" },
+  } } };
+  const db = seed({ rows });
+  db.seed(`tenants/${T}/biz:${B}:cost_history`, rawHistory);
+  const server = await coreOf(INV_NOW_MS);
+  const decision = F.costHistory.codec.decodeHistory({ exists: true, value: rawHistory });
+  const browser = C.monthReport(F, browserSrc({ rows, costHistory: decision }), month);
+  assert.equal(browser.status, "ready");
+  assert.deepEqual(strip(browser.report), strip(server.report));
+});
+
 // ═══ module readiness ══════════════════════════════════════════════════════════════════
 test("C1-M01 bundle check: the approved identifiers pass; another product / forecast id or a malformed object is refused", () => {
   assert.deepEqual(strip(C.checkBundle(F)), { ok: true });
   assert.equal(C.checkBundle({ ...F, versions: { ...F.versions, product: "MARJIN_PRODUCT/1" } }).reason, "fincore_version_mismatch");
   assert.equal(C.checkBundle({ ...F, versions: { ...F.versions, forecast: "REV_FORECAST/v1" } }).reason, "fincore_version_mismatch");
+  assert.equal(C.checkBundle({ ...F, versions: { ...F.versions, costHistory: "MARJIN_COSTH/0" } }).reason, "fincore_cost_history_incompatible");
+  assert.equal(C.checkBundle({ ...F, costHistory: { codec: {} } }).reason, "fincore_cost_history_incompatible");
   assert.equal(C.checkBundle(null).reason, "fincore_shape");
   assert.equal(C.checkBundle({ versions: F.versions }).reason, "fincore_shape");
 });

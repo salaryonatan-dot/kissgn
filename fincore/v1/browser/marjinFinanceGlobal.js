@@ -24,6 +24,7 @@ import * as forecast from "../forecast/revenueForecast.js";
 import * as revenueForecast from "../metrics/revenueForecast.js";
 // Slice B1 (AMEND-01): the product composition shared by server and browser.
 import * as product from "../policy/productFinance.js";
+import { COST_HISTORY_CAPABILITY, costHistoryCodec, timelineSourceFor } from "../finance/costHistory.js";
 const api = Object.freeze({
     versions: Object.freeze({
         fin: report.FINANCIAL_FORMULA_VERSION,
@@ -37,6 +38,7 @@ const api = Object.freeze({
         forecast: product.REV_FORECAST_FORMULA_ID,
         forecastLegacy: forecast.REV_FORECAST_FORMULA_ID,
         product: product.PRODUCT_FINANCE_VERSION,
+        costHistory: COST_HISTORY_CAPABILITY,
     }),
     finance: Object.freeze({ decimal, cells, businessDate, normalize, purchaseBasis, labor }),
     metrics: Object.freeze({ costTimeline, report, projected, revenueForecast, adapters: Object.freeze({ legacyNumber, configCompat }) }),
@@ -44,6 +46,7 @@ const api = Object.freeze({
     presenters: Object.freeze({ money, percent, labels }),
     forecast,
     product,
+    costHistory: Object.freeze({ codec: costHistoryCodec, timelineSourceFor }),
 });
 globalThis.MarjinFinance = api;
 export default api;

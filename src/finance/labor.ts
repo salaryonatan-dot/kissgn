@@ -30,7 +30,7 @@ export type LaborIngestionMethod = "manual" | "integration";
 /** Employees covered by the daily entered figure. Frozen: hourly employees only (no overlap with global employees). */
 export type LaborCoverage = "hourly_employees_only";
 /** Where a global employee's monthly employer cost comes from. Today: the Marjin employee configuration. */
-export type GlobalCostSourceSystem = "marjin_employee_config" | LaborSourceSystem;
+export type GlobalCostSourceSystem = "marjin_employee_config" | "marjin_cost_history" | LaborSourceSystem;
 
 /** Provenance of the HOURLY employer cost carried by the entry row field `payroll`. */
 export interface LaborSourceInput {

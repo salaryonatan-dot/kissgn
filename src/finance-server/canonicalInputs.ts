@@ -14,11 +14,12 @@ import { readEntriesNode, requireEntriesRows } from "../../lib/analytics/entries
 import { israelBusinessDate } from "../finance/businessDate.js";
 import { decodeEnvelope, decodeExceptionLedger, exceptionsByDateOf } from "../policy/productFinance.js";
 import type { EnvelopeState, ExceptionLedgerState, ProductInputs } from "../policy/productFinance.js";
+import { costHistoryCodec } from "../finance/costHistory.js";
 
 export const CANONICAL_SERVER_API_VERSION = "MARJIN_FIN_SERVER/1";
 
 export type InputState = EnvelopeState<unknown>["state"] | "not_loaded";
-export type InputIssue = "config_unreadable" | "fixed_unreadable" | "exceptions_unreadable";
+export type InputIssue = "config_unreadable" | "fixed_unreadable" | "exceptions_unreadable" | "cost_history_unreadable";
 
 export interface ServerInputs extends ProductInputs {
   readonly tenantId: string;
@@ -28,6 +29,7 @@ export interface ServerInputs extends ProductInputs {
   readonly fixedState: InputState;
   /** Structured exception ledger: not_loaded unless `need.exceptions`. */
   readonly exceptionsState: ExceptionLedgerState["state"] | "not_loaded";
+  readonly costHistoryState: "absent" | "present" | "unreadable" | "not_loaded";
   readonly inputIssues: readonly InputIssue[];
 }
 
@@ -39,14 +41,16 @@ export async function loadCanonicalInputs(
   db: DbLike,
   tenantId: string,
   bizId: string,
-  opts: { readonly site: string; readonly nowMs?: number; readonly need: { readonly config: boolean; readonly fixed: boolean; readonly exceptions: boolean } },
+  opts: { readonly site: string; readonly nowMs?: number; readonly need: { readonly config: boolean; readonly fixed: boolean; readonly exceptions: boolean; readonly costHistory?: boolean } },
 ): Promise<ServerInputs> {
   const base = `tenants/${tenantId}/biz:${bizId}`;
-  const [entriesSnap, configSnap, fixedSnap, exceptionsSnap] = await Promise.all([
+  const needHistory = opts.need.costHistory === undefined ? opts.need.config || opts.need.fixed : opts.need.costHistory;
+  const [entriesSnap, configSnap, fixedSnap, exceptionsSnap, costHistoryRead] = await Promise.all([
     db.ref(`${base}:entries`).once("value"),
     opts.need.config ? db.ref(`${base}:config`).once("value") : Promise.resolve(null),
     opts.need.fixed ? db.ref(`${base}:fixed`).once("value") : Promise.resolve(null),
     opts.need.exceptions || opts.need.config || opts.need.fixed ? db.ref(`tenants/${tenantId}/entry_exceptions/${bizId}`).once("value") : Promise.resolve(null),
+    needHistory ? db.ref(`${base}:cost_history`).once("value").then((s) => ({ snap: s })).catch((failed: unknown) => ({ failed })) : Promise.resolve(null),
   ]);
   const raw = entriesSnap.val();
   const rows = requireEntriesRows(raw, { tenantId, bizId, site: opts.site }) as unknown[];
@@ -58,6 +62,10 @@ export async function loadCanonicalInputs(
   if (fixed.state === "unreadable") inputIssues.push("fixed_unreadable");
   const ledger: ExceptionLedgerState | null = exceptionsSnap ? decodeExceptionLedger(exceptionsSnap.val()) : null;
   if (ledger && ledger.state === "unreadable") inputIssues.push("exceptions_unreadable");
+  const costHistory = costHistoryRead ? ("failed" in costHistoryRead
+    ? costHistoryCodec.decodeHistory({ failed: costHistoryRead.failed })
+    : costHistoryCodec.decodeHistory({ exists: costHistoryRead.snap.val() !== null, value: costHistoryRead.snap.val() })) : null;
+  if (costHistory?.state === "unreadable") inputIssues.push("cost_history_unreadable");
   const nowMs = opts.nowMs === undefined ? Date.now() : opts.nowMs;
   return {
     tenantId,
@@ -69,6 +77,8 @@ export async function loadCanonicalInputs(
     configState: configSnap ? config.state : "not_loaded",
     fixedState: fixedSnap ? fixed.state : "not_loaded",
     exceptionsState: ledger ? ledger.state : "not_loaded",
+    costHistoryState: costHistory ? costHistory.state : "not_loaded",
+    ...(costHistory ? { costHistory } : {}),
     ...(ledger && ledger.state === "present" ? { exceptionStates: ledger.value, exceptionsByDate: exceptionsByDateOf(ledger.value) } : {}),
     exceptionLedgerState: ledger ? ledger.state : "not_loaded",
     inputIssues,
