@@ -1,0 +1,740 @@
+{
+ "id": "FZ-06",
+ "owner": "B2",
+ "artifact": "SnapshotData v2 (typed)",
+ "source": "09_AGENT_DAILY_HANDOFF.md §1; derived from the accepted code at 239602c9 by test/support/fz-producers.mjs",
+ "note": "shapes: keys and types only (JSON projection), never values; ids: frozen contract identifiers and observed enum values",
+ "ids": {
+  "version": [
+   "MARJIN_SNAPSHOT/2"
+  ],
+  "presentation": [
+   "month_actual",
+   "no_completed_days"
+  ]
+ },
+ "shapes": {
+  "snapshot": {
+   "bizId": "string",
+   "bizName": "string",
+   "date": "string",
+   "daysInMonth": "number",
+   "daysLeft": "number",
+   "daysPassed": "number",
+   "financials": {
+    "amounts": {
+     "fixedRegular": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [
+       "string"
+      ],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "globalEmployerCost": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [
+       "string"
+      ],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "hourlyEmployerCost": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "laborEmployerCost": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [
+       "string"
+      ],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "operatingProfit": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [
+       "string"
+      ],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "otherExpense": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "purchases": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "rentFixed": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [
+       "string"
+      ],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "rentPct": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [
+       "string"
+      ],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "revenue": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "royalty": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [
+       "string"
+      ],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     }
+    },
+    "costAllocation": {
+     "allocationEligibleDays": "number",
+     "completedClosureDates": [
+      "string"
+     ],
+     "dayPlacement": "string",
+     "placementUnavailableDates": []
+    },
+    "coverage": {
+     "closedDays": [
+      "string"
+     ],
+     "closedWithRevenue": [
+      "string"
+     ],
+     "hourlyLabor": {
+      "invalid": [],
+      "missing": [
+       "string"
+      ],
+      "partial": []
+     },
+     "legacyHourlyPayrollDates": [
+      "string"
+     ],
+     "purchases": {
+      "invalid": [],
+      "missing": [
+       "string"
+      ],
+      "partial": []
+     },
+     "revenue": {
+      "invalid": [
+       "string"
+      ],
+      "missing": [
+       "string"
+      ],
+      "partial": [
+       "string"
+      ]
+     }
+    },
+    "goals": {
+     "foodCostPct": {
+      "exact": "string",
+      "number": "number",
+      "ownerApproved": "boolean",
+      "source": "string"
+     },
+     "laborPct": {
+      "exact": "string",
+      "number": "number",
+      "ownerApproved": "boolean",
+      "source": "string"
+     },
+     "sales": {
+      "exact": "string",
+      "number": "number",
+      "ownerApproved": "boolean",
+      "source": "string"
+     }
+    },
+    "month": "string",
+    "policy": {
+     "comparisons": [
+      {
+       "goal": {
+        "origin": "string",
+        "ownerApproved": "boolean",
+        "source": "string",
+        "value": "string"
+       },
+       "goalKey": "string",
+       "metric": "string",
+       "state": "string"
+      }
+     ],
+     "policyVersion": "string",
+     "reportVersion": "string"
+    },
+    "presentation": "string",
+    "projection": {
+     "forecastEligibleRemainingDays": {
+      "$oneOf": [
+       "null",
+       "number"
+      ]
+     },
+     "formulaIds": {
+      "forecast": "string",
+      "projection": "string"
+     },
+     "futureClosureDates": [
+      "string"
+     ],
+     "invalidRevenueDates": [
+      "string"
+     ],
+     "missingRevenueDates": [
+      "string"
+     ],
+     "operatingProfit": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "revenue": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "state": "string",
+     "warnings": [
+      "string"
+     ]
+    },
+    "provenance": {
+     "api": "string",
+     "asOfBusinessDate": "string",
+     "configState": "string",
+     "configurationBasis": [
+      "string"
+     ],
+     "dec": "string",
+     "exceptionsState": "string",
+     "fin": "string",
+     "fixedState": "string",
+     "forecast": "string",
+     "labor": "string",
+     "laborSource": "string",
+     "norm": "string",
+     "operatingCalendar": "string",
+     "pb": "string",
+     "pbPolicy": "string",
+     "policy": "string",
+     "product": "string",
+     "proj": "string",
+     "snapshot": "string",
+     "timelineSource": "string",
+     "windowRule": "string"
+    },
+    "ratios": {
+     "fixedRegularShare": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "laborPct": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "operatingProfitShare": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "purchasesPct": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "rentFixedShare": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "rentPctShare": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "revenueShare": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "royaltyShare": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     }
+    },
+    "version": "string",
+    "window": {
+     "asOfBusinessDate": "string",
+     "completedThrough": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     },
+     "daysInMonth": "number",
+     "daysLeft": "number",
+     "presentDays": "number",
+     "progressPct": "string",
+     "recognizedDays": "number"
+    }
+   },
+   "fixedRegular": {
+    "$oneOf": [
+     "null",
+     "number"
+    ]
+   },
+   "foodCostPct": {
+    "$oneOf": [
+     "null",
+     "number"
+    ]
+   },
+   "forecast": {
+    "$oneOf": [
+     "null",
+     "number"
+    ]
+   },
+   "insights": [
+    {
+     "message": "string",
+     "rule": "string",
+     "type": "string"
+    }
+   ],
+   "laborPct": {
+    "$oneOf": [
+     "null",
+     "number"
+    ]
+   },
+   "month": "string",
+   "netProfit": {
+    "$oneOf": [
+     "null",
+     "number"
+    ]
+   },
+   "paceRevenue": {
+    "$oneOf": [
+     "null",
+     "number"
+    ]
+   },
+   "presentDays": "number",
+   "presentation": "string",
+   "rentFixedAmount": {
+    "$oneOf": [
+     "null",
+     "number"
+    ]
+   },
+   "rentPctAmount": {
+    "$oneOf": [
+     "null",
+     "number"
+    ]
+   },
+   "royaltyAmount": {
+    "$oneOf": [
+     "null",
+     "number"
+    ]
+   },
+   "targetFoodCost": "number",
+   "targetLabor": "number",
+   "targetSales": "number",
+   "tenantId": "string",
+   "totalFood": {
+    "$oneOf": [
+     "null",
+     "number"
+    ]
+   },
+   "totalOtherExpense": {
+    "$oneOf": [
+     "null",
+     "number"
+    ]
+   },
+   "totalPayroll": {
+    "$oneOf": [
+     "null",
+     "number"
+    ]
+   },
+   "totalSales": {
+    "$oneOf": [
+     "null",
+     "number"
+    ]
+   }
+  }
+ }
+}

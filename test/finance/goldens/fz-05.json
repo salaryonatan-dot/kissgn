@@ -1,0 +1,201 @@
+{
+ "id": "FZ-05",
+ "owner": "B2",
+ "artifact": "canonicalMonthProjection result",
+ "source": "09_AGENT_DAILY_HANDOFF.md §1; derived from the accepted code at 239602c9 by test/support/fz-producers.mjs",
+ "note": "shapes: keys and types only (JSON projection), never values; ids: frozen contract identifiers and observed enum values",
+ "ids": {
+  "forecastFormulaId": [
+   "REV_FORECAST/v2"
+  ],
+  "projectionFormulaIds": [
+   {
+    "projection": "MARJIN_PROJ/2",
+    "forecast": "REV_FORECAST/v2",
+    "actualReport": "MARJIN_FIN/3"
+   }
+  ],
+  "forecastStates": [
+   "complete",
+   "insufficient_history",
+   "partial",
+   "unavailable"
+  ]
+ },
+ "shapes": {
+  "result": {
+   "forecast": {
+    "engine": {
+     "$oneOf": [
+      "null",
+      {
+       "actualCompletedRevenue": "string",
+       "asOfBusinessDate": "string",
+       "completedClosureDates": [
+        "string"
+       ],
+       "completedThrough": {
+        "$oneOf": [
+         "null",
+         "string"
+        ]
+       },
+       "forecastEligibleRemainingDays": "number",
+       "formulaId": "string",
+       "futureClosureDates": [
+        "string"
+       ],
+       "invalidRevenueDates": [
+        "string"
+       ],
+       "minSamples": "number",
+       "missingRevenueDates": [
+        "string"
+       ],
+       "month": "string",
+       "monthEndForecastRevenue": {
+        "$oneOf": [
+         "null",
+         "string"
+        ]
+       },
+       "remainingDates": [
+        {
+         "date": "string",
+         "kind": "string",
+         "value": {
+          "$oneOf": [
+           "null",
+           "string"
+          ]
+         }
+        }
+       ],
+       "remainingForecastRevenue": "string",
+       "sampleWindow": "number",
+       "state": "string",
+       "warnings": [
+        "string"
+       ],
+       "weekdays": [
+        {
+         "remainingEligibleDates": [
+          "string"
+         ],
+         "sampleAverage": {
+          "$oneOf": [
+           "null",
+           "string"
+          ]
+         },
+         "sampleDates": [
+          "string"
+         ],
+         "sampleValues": [
+          "string"
+         ],
+         "status": "string",
+         "weekday": "number"
+        }
+       ]
+      }
+     ]
+    },
+    "formulaId": "string",
+    "invalidRevenueDates": [
+     "string"
+    ],
+    "missingRevenueDates": [
+     "string"
+    ],
+    "projectedRevenue": {
+     "$oneOf": [
+      "null",
+      "string"
+     ]
+    },
+    "state": "string",
+    "warnings": [
+     "string"
+    ]
+   },
+   "projection": {
+    "$oneOf": [
+     "null",
+     {
+      "afterActual": {
+       "$oneOf": [
+        "null",
+        {
+         "days": "number",
+         "fixedRegularAndRent": "string",
+         "from": "string",
+         "globalEmployerCost": "string",
+         "to": "string"
+        }
+       ]
+      },
+      "fixed": "string",
+      "formulaIds": {
+       "actualReport": "string",
+       "forecast": "string",
+       "projection": "string"
+      },
+      "globalEmployerCost": "string",
+      "hourlyLabor": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "kind": "string",
+      "month": "string",
+      "operatingProfit": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "otherExpense": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "purchases": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "revenue": "string",
+      "warnings": [
+       "string"
+      ]
+     }
+    ]
+   },
+   "provenance": {
+    "api": "string",
+    "asOfBusinessDate": "string",
+    "configState": "string",
+    "configurationBasis": [
+     "string"
+    ],
+    "dec": "string",
+    "exceptionsState": "string",
+    "fin": "string",
+    "fixedState": "string",
+    "labor": "string",
+    "laborSource": "string",
+    "norm": "string",
+    "operatingCalendar": "string",
+    "pb": "string",
+    "pbPolicy": "string",
+    "product": "string",
+    "timelineSource": "string",
+    "windowRule": "string"
+   }
+  }
+ }
+}

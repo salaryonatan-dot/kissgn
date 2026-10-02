@@ -1,0 +1,226 @@
+{
+ "id": "FZ-03",
+ "owner": "B1",
+ "artifact": "analytics doc encoding + fin block",
+ "source": "09_AGENT_DAILY_HANDOFF.md §1; derived from the accepted code at 239602c9 by test/support/fz-producers.mjs",
+ "note": "shapes: keys and types only (JSON projection), never values; ids: frozen contract identifiers and observed enum values",
+ "ids": {
+  "docKeys": [
+   "alerts",
+   "bizId",
+   "bizName",
+   "calendar",
+   "date",
+   "exception",
+   "fin",
+   "is_exception",
+   "meta",
+   "operational",
+   "revenue",
+   "tenantId",
+   "weather"
+  ],
+  "docVersion": [
+   "1.0.0"
+  ],
+  "finV": [
+   "MARJIN_FIN/3"
+  ],
+  "outsideActualReason": [
+   "current_day",
+   "future_date"
+  ],
+  "revenueStates": [
+   "absent",
+   "closed_day_has_recorded_values",
+   "partial_invalid",
+   "present"
+  ]
+ },
+ "shapes": {
+  "revenue": {
+   "deliveries?": "number",
+   "food_cost?": "number",
+   "had_entry": "boolean",
+   "has_sales": "boolean",
+   "other_income?": "number",
+   "payroll?": "number",
+   "sales?": "number",
+   "total?": "number"
+  },
+  "fin": {
+   "api": "string",
+   "asOfBusinessDate": "string",
+   "configState?": "string",
+   "configurationBasis?": [
+    "string"
+   ],
+   "dec": "string",
+   "derived?": {
+    "conversion": "string",
+    "foodCostPct?": "number",
+    "globalLaborCost?": "number",
+    "laborCost?": "number",
+    "laborCostComplete": "boolean",
+    "laborPct?": "number"
+   },
+   "flagCodes?": [
+    "string"
+   ],
+   "hourlyEmployerCost?": {
+    "state": "string",
+    "value?": "string"
+   },
+   "inActual": "boolean",
+   "inputIssues?": [
+    "string"
+   ],
+   "labor": "string",
+   "laborSource": "string",
+   "legacyHourlyPayroll?": {
+    "counted": "boolean",
+    "recorded": "boolean"
+   },
+   "norm": "string",
+   "outsideActualReason?": "string",
+   "pb": "string",
+   "pbPolicy": "string",
+   "presence?": {
+    "day": "string",
+    "hourlyLabor": "string",
+    "otherExpense": "string",
+    "purchases": "string",
+    "revenue": "string"
+   },
+   "product": "string",
+   "purchases?": {
+    "bySource?": [
+     {
+      "amount": "string",
+      "source": "string"
+     }
+    ],
+    "state": "string",
+    "value?": "string"
+   },
+   "revenue?": {
+    "state": "string",
+    "value?": "string"
+   },
+   "rowCount?": "number",
+   "timelineSource?": "string",
+   "v": "string",
+   "windowRule": "string"
+  },
+  "exceptionFields": {
+   "exception": {
+    "$oneOf": [
+     "null",
+     {
+      "note": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "set_at": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "set_by": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      }
+     }
+    ]
+   },
+   "is_exception": "boolean"
+  },
+  "encoderOutput": {
+   "fin": {
+    "api": "string",
+    "asOfBusinessDate": "string",
+    "configState?": "string",
+    "configurationBasis?": [
+     "string"
+    ],
+    "dec": "string",
+    "derived?": {
+     "conversion": "string",
+     "foodCostPct?": "number",
+     "globalLaborCost?": "number",
+     "laborCost?": "number",
+     "laborCostComplete": "boolean",
+     "laborPct?": "number"
+    },
+    "flagCodes?": [
+     "string"
+    ],
+    "hourlyEmployerCost?": {
+     "state": "string",
+     "value?": "string"
+    },
+    "inActual": "boolean",
+    "inputIssues?": [
+     "string"
+    ],
+    "labor": "string",
+    "laborSource": "string",
+    "legacyHourlyPayroll?": {
+     "counted": "boolean",
+     "recorded": "boolean"
+    },
+    "norm": "string",
+    "outsideActualReason?": "string",
+    "pb": "string",
+    "pbPolicy": "string",
+    "presence?": {
+     "day": "string",
+     "hourlyLabor": "string",
+     "otherExpense": "string",
+     "purchases": "string",
+     "revenue": "string"
+    },
+    "product": "string",
+    "purchases?": {
+     "bySource?": [
+      {
+       "amount": "string",
+       "source": "string"
+      }
+     ],
+     "state": "string",
+     "value?": "string"
+    },
+    "revenue?": {
+     "state": "string",
+     "value?": "string"
+    },
+    "rowCount?": "number",
+    "timelineSource?": "string",
+    "v": "string",
+    "windowRule": "string"
+   },
+   "revenue": {
+    "deliveries?": "number",
+    "food_cost?": "number",
+    "had_entry": "boolean",
+    "has_sales": "boolean",
+    "other_income?": "number",
+    "payroll?": "number",
+    "sales?": "number",
+    "total?": "number"
+   }
+  }
+ }
+}

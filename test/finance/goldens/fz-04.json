@@ -1,0 +1,441 @@
+{
+ "id": "FZ-04",
+ "owner": "Slice A / B1",
+ "artifact": "FinancialReport via canonicalMonthReport",
+ "source": "09_AGENT_DAILY_HANDOFF.md §1; derived from the accepted code at 239602c9 by test/support/fz-producers.mjs",
+ "note": "shapes: keys and types only (JSON projection), never values; ids: frozen contract identifiers and observed enum values",
+ "ids": {
+  "fin": [
+   "MARJIN_FIN/3"
+  ],
+  "windowStates": [
+   "actual",
+   "no_completed_days"
+  ]
+ },
+ "shapes": {
+  "result": {
+   "inputIssues": [
+    "string"
+   ],
+   "provenance": {
+    "api": "string",
+    "asOfBusinessDate": "string",
+    "configState": "string",
+    "configurationBasis": [
+     "string"
+    ],
+    "dec": "string",
+    "exceptionsState": "string",
+    "fin": "string",
+    "fixedState": "string",
+    "labor": "string",
+    "laborSource": "string",
+    "norm": "string",
+    "operatingCalendar": "string",
+    "pb": "string",
+    "pbPolicy": "string",
+    "product": "string",
+    "timelineSource": "string",
+    "windowRule": "string"
+   },
+   "report": {}
+  },
+  "report": {
+   "actual": {
+    "averages": {
+     "hourlyLaborPerPresentDay": {
+      "state": "string",
+      "value?": "string"
+     },
+     "purchasesPerPresentDay": {
+      "state": "string",
+      "value?": "string"
+     },
+     "revenuePerPresentDay": {
+      "state": "string",
+      "value?": "string"
+     }
+    },
+    "contributionBeforeFixed": {
+     "issues": [
+      {
+       "component": "string",
+       "dates": [
+        "string"
+       ],
+       "kind": "string",
+       "reason": "string"
+      }
+     ],
+     "state": "string",
+     "value": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     }
+    },
+    "costAllocation": {
+     "allocationEligibleDays": "number",
+     "completedClosureDates": [
+      "string"
+     ],
+     "dayPlacement": "string",
+     "noEligibleSegments": [],
+     "placementUnavailableDates": [],
+     "policy": "string"
+    },
+    "fixedAccrual": {
+     "allocation": "string",
+     "issues": [
+      {
+       "component": "string",
+       "dates": [
+        "string"
+       ],
+       "kind": "string",
+       "reason": "string"
+      }
+     ],
+     "regular": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     },
+     "rentFixed": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     },
+     "rentPct": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     },
+     "royaltyPct": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     },
+     "state": "string",
+     "total": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     }
+    },
+    "hourlyLabor": {
+     "complete": "boolean",
+     "presentDays": "number",
+     "value": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     }
+    },
+    "labor": {
+     "contract": "string",
+     "employerCost": {
+      "issues": [
+       {
+        "component": "string",
+        "dates": [
+         "string"
+        ],
+        "kind": "string",
+        "reason": "string"
+       }
+      ],
+      "state": "string",
+      "value": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      }
+     },
+     "employerCostPct": {
+      "state": "string",
+      "value?": "string"
+     },
+     "globalAllocation": "string",
+     "globalEmployeesApplied": "number",
+     "globalEmployerCost": {
+      "issues": [
+       {
+        "component": "string",
+        "dates": [
+         "string"
+        ],
+        "kind": "string",
+        "reason": "string"
+       }
+      ],
+      "state": "string",
+      "value": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      }
+     },
+     "hourlyEmployerCost": {
+      "complete": "boolean",
+      "presentDays": "number",
+      "value": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      }
+     },
+     "legacyHourlyPayroll": {
+      "counted": "boolean",
+      "dates": [
+       "string"
+      ]
+     },
+     "source": {
+      "coverage": "string",
+      "fields": [
+       "string"
+      ],
+      "ingestionMethod": "string",
+      "meaning": "string",
+      "policyId": "string",
+      "sourceProduct": "string",
+      "sourceSystem": "string"
+     }
+    },
+    "operatingProfit": {
+     "issues": [
+      {
+       "component": "string",
+       "dates": [
+        "string"
+       ],
+       "kind": "string",
+       "reason": "string"
+      }
+     ],
+     "state": "string",
+     "value": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     }
+    },
+    "otherExpense": {
+     "complete": "boolean",
+     "presentDays": "number",
+     "value": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     }
+    },
+    "purchases": {
+     "basis": {
+      "comparability": "string",
+      "compatibilityUsed": "boolean",
+      "contract": "string",
+      "kind": "string",
+      "policyId": "string",
+      "segmentsApplied": [
+       {
+        "from": "string",
+        "kind": "string",
+        "origin": "string",
+        "to": "null",
+        "versionId": "string"
+       }
+      ],
+      "supersededVersionIds": [],
+      "unresolvedDates": []
+     },
+     "bySource": {
+      "supplier:s1?": "string"
+     },
+     "complete": "boolean",
+     "presentDays": "number",
+     "value": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     }
+    },
+    "purchasesPct": {
+     "basisKind?": "string",
+     "comparability?": "string",
+     "state": "string",
+     "value?": "string"
+    },
+    "revenue": {
+     "complete": "boolean",
+     "presentDays": "number",
+     "value": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     }
+    }
+   },
+   "configurationBasis": [
+    "string"
+   ],
+   "costVersionsApplied": [
+    "string"
+   ],
+   "coverage": {
+    "day": {
+     "closedDays": [
+      "string"
+     ],
+     "expectedDays": "number",
+     "invalidDays": [],
+     "missingDays": [
+      "string"
+     ],
+     "partialDays": [
+      "string"
+     ],
+     "presentDays": "number"
+    },
+    "hourlyLabor": {
+     "closedDays": [
+      "string"
+     ],
+     "expectedDays": "number",
+     "invalidDays": [],
+     "missingDays": [
+      "string"
+     ],
+     "partialDays": [],
+     "presentDays": "number"
+    },
+    "otherExpense": {
+     "closedDays": [
+      "string"
+     ],
+     "expectedDays": "number",
+     "invalidDays": [],
+     "missingDays": [
+      "string"
+     ],
+     "partialDays": [],
+     "presentDays": "number"
+    },
+    "purchases": {
+     "closedDays": [
+      "string"
+     ],
+     "expectedDays": "number",
+     "invalidDays": [],
+     "missingDays": [
+      "string"
+     ],
+     "partialDays": [],
+     "presentDays": "number"
+    },
+    "revenue": {
+     "closedDays": [
+      "string"
+     ],
+     "expectedDays": "number",
+     "invalidDays": [
+      "string"
+     ],
+     "missingDays": [
+      "string"
+     ],
+     "partialDays": [
+      "string"
+     ],
+     "presentDays": "number"
+    }
+   },
+   "flags": [
+    {
+     "code": "string",
+     "date?": "string",
+     "field?": "string",
+     "key?": "string",
+     "reason?": "string",
+     "rowId?": "string"
+    }
+   ],
+   "operatingCalendar": {
+    "closedDates": [
+     "string"
+    ],
+    "operatingDays": "number",
+    "source": "string"
+   },
+   "quarantine": {
+    "futureRows": [
+     {
+      "date": "string",
+      "rowId": "string"
+     }
+    ],
+    "invalidDateRows": []
+   },
+   "timelineSource": "string",
+   "timezone": "string",
+   "vatBasis": "string",
+   "versions": {
+    "dec": "string",
+    "fin": "string",
+    "labor": "string",
+    "norm": "string",
+    "pb": "string"
+   },
+   "window": {
+    "asOfBusinessDate": "string",
+    "completedThrough": {
+     "$oneOf": [
+      "null",
+      "string"
+     ]
+    },
+    "currentDay": {
+     "$oneOf": [
+      "null",
+      {
+       "date": "string",
+       "inActual": "boolean"
+      }
+     ]
+    },
+    "from": {
+     "$oneOf": [
+      "null",
+      "string"
+     ]
+    },
+    "kind": "string",
+    "month": "string",
+    "recognizedDays": "number",
+    "rule": "string",
+    "state": "string",
+    "to": {
+     "$oneOf": [
+      "null",
+      "string"
+     ]
+    }
+   }
+  }
+ }
+}

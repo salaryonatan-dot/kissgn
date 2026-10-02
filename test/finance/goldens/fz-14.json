@@ -1,0 +1,33 @@
+{
+ "id": "FZ-14",
+ "owner": "Slice A",
+ "artifact": "presenters",
+ "source": "09_AGENT_DAILY_HANDOFF.md §1; derived from the accepted code at 239602c9 by test/support/fz-producers.mjs",
+ "note": "shapes: keys and types only (JSON projection), never values; ids: frozen contract identifiers and observed enum values",
+ "ids": {
+  "NOT_AVAILABLE": "—",
+  "money": [
+   "NOT_AVAILABLE",
+   "formatShekel",
+   "formatTypedAmount"
+  ],
+  "percent": [
+   "formatPercent"
+  ],
+  "labels": [
+   "LABELS"
+  ],
+  "labelKeys": [
+   "basis",
+   "configurationBasis",
+   "incomplete",
+   "labor",
+   "presence"
+  ]
+ },
+ "shapes": {
+  "formatShekel": "string",
+  "formatPercent": "string",
+  "formatTypedAmount": "string"
+ }
+}

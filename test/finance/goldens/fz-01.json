@@ -1,0 +1,108 @@
+{
+ "id": "FZ-01",
+ "owner": "B1",
+ "artifact": "CanonicalDailyMetric",
+ "source": "09_AGENT_DAILY_HANDOFF.md §1; derived from the accepted code at 239602c9 by test/support/fz-producers.mjs",
+ "note": "shapes: keys and types only (JSON projection), never values; ids: frozen contract identifiers and observed enum values",
+ "ids": {
+  "artifact": "CanonicalDailyMetric",
+  "producer": "canonicalDailySeries(inputs, range).days"
+ },
+ "shapes": {
+  "day": {
+   "avgTicket": "number",
+   "date": "string",
+   "fin": {
+    "api": "string",
+    "asOfBusinessDate": "string",
+    "configState": "string",
+    "configurationBasis": [
+     "string"
+    ],
+    "dec": "string",
+    "exceptionsState": "string",
+    "fin": "string",
+    "fixedState": "string",
+    "labor": "string",
+    "laborSource": "string",
+    "norm": "string",
+    "operatingCalendar": "string",
+    "pb": "string",
+    "pbPolicy": "string",
+    "product": "string",
+    "timelineSource": "string",
+    "windowRule": "string"
+   },
+   "foodCost": "number",
+   "foodCostPct": {
+    "$oneOf": [
+     "null",
+     "number"
+    ]
+   },
+   "globalLaborCost": {
+    "$oneOf": [
+     "null",
+     "number"
+    ]
+   },
+   "hourlyLaborCost": "number",
+   "laborCost": "number",
+   "laborCostComplete": "boolean",
+   "laborIngestionMethod": "string",
+   "laborMeaning": "string",
+   "laborPct": {
+    "$oneOf": [
+     "null",
+     "number"
+    ]
+   },
+   "laborSourceSystem": "string",
+   "partial": {
+    "hourlyLabor": "boolean",
+    "purchases": "boolean",
+    "revenue": "boolean"
+   },
+   "presence": {
+    "day": "string",
+    "hourlyLabor": "string",
+    "otherExpense": "string",
+    "purchases": "string",
+    "revenue": "string"
+   },
+   "purchaseBasis": "string",
+   "purchaseBasisCompat": "boolean",
+   "revenue": "number",
+   "transactionCount": "number"
+  },
+  "series": {
+   "days": [],
+   "flagCodes": [
+    "string"
+   ],
+   "inputIssues": [
+    "string"
+   ],
+   "missingDates": [
+    "string"
+   ],
+   "provenance": {},
+   "quarantine": {
+    "futureRows": "number",
+    "invalidDateRows": "number"
+   },
+   "window": {
+    "asOfBusinessDate": "string",
+    "completedThrough": "string",
+    "effective": {
+     "from": "string",
+     "to": "string"
+    },
+    "requested": {
+     "from": "string",
+     "to": "string"
+    }
+   }
+  }
+ }
+}

@@ -1,0 +1,67 @@
+{
+ "id": "FZ-02",
+ "owner": "B1",
+ "artifact": "ServerProvenance",
+ "source": "09_AGENT_DAILY_HANDOFF.md §1; derived from the accepted code at 239602c9 by test/support/fz-producers.mjs",
+ "note": "shapes: keys and types only (JSON projection), never values; ids: frozen contract identifiers and observed enum values",
+ "ids": {
+  "api": "MARJIN_FIN_SERVER/1",
+  "product": "MARJIN_PRODUCT/2",
+  "fin": "MARJIN_FIN/3",
+  "norm": "MARJIN_NORM/3",
+  "dec": "MARJIN_DEC/1",
+  "labor": "MARJIN_LABOR/3",
+  "pb": "MARJIN_PB/1",
+  "pbPolicy": "PB_NET/BD-1",
+  "laborSource": "LABOR_SRC/shiftorganizer-hourly-manual/2026-09-29",
+  "windowRule": "completed_days_through_d_minus_1",
+  "observed": {
+   "timelineSource": [
+    "compat_current_config"
+   ],
+   "configurationBasis": [
+    "current_applied_retrospectively"
+   ],
+   "configState": [
+    "present",
+    "unreadable"
+   ],
+   "fixedState": [
+    "present",
+    "unreadable"
+   ],
+   "exceptionsState": [
+    "absent",
+    "present",
+    "unreadable"
+   ],
+   "operatingCalendar": [
+    "entry_exception_closure",
+    "unknown"
+   ]
+  }
+ },
+ "shapes": {
+  "provenance": {
+   "api": "string",
+   "asOfBusinessDate": "string",
+   "configState": "string",
+   "configurationBasis": [
+    "string"
+   ],
+   "dec": "string",
+   "exceptionsState": "string",
+   "fin": "string",
+   "fixedState": "string",
+   "labor": "string",
+   "laborSource": "string",
+   "norm": "string",
+   "operatingCalendar": "string",
+   "pb": "string",
+   "pbPolicy": "string",
+   "product": "string",
+   "timelineSource": "string",
+   "windowRule": "string"
+  }
+ }
+}

@@ -1,0 +1,115 @@
+{
+ "id": "FZ-15",
+ "owner": "B1",
+ "artifact": "error taxonomy",
+ "source": "09_AGENT_DAILY_HANDOFF.md §1; derived from the accepted code at 239602c9 by test/support/fz-producers.mjs",
+ "note": "shapes: keys and types only (JSON projection), never values; ids: frozen contract identifiers and observed enum values",
+ "ids": {
+  "classes": [
+   "EntriesStorageError",
+   "FinanceContractError"
+  ],
+  "financeContractErrorCodes": [
+   "duplicate_row_id",
+   "exceptions_required"
+  ],
+  "entriesStorageStatus": [
+   "malformed_storage"
+  ],
+  "inputIssues": [
+   "config_unreadable",
+   "exceptions_unreadable",
+   "fixed_unreadable"
+  ],
+  "classification": [
+   [
+    "EntriesStorageError",
+    false,
+    true
+   ],
+   [
+    "FinanceContractError",
+    true,
+    false
+   ],
+   [
+    "FinanceContractError",
+    true,
+    false
+   ]
+  ],
+  "nonErrorIsCanonical": false,
+  "typesExport": "function"
+ },
+ "shapes": {
+  "financeContractError": {
+   "class": "string",
+   "isCanonicalFinanceError": "boolean",
+   "isEntriesReadError": "boolean",
+   "isError": "boolean",
+   "name": "string",
+   "props": {
+    "code": "string",
+    "detail": "string",
+    "message": "string",
+    "name": "string"
+   }
+  },
+  "entriesStorageError": {
+   "class": "string",
+   "isCanonicalFinanceError": "boolean",
+   "isEntriesReadError": "boolean",
+   "isError": "boolean",
+   "name": "string",
+   "props": {
+    "bizId": "string",
+    "message": "string",
+    "mode": "string",
+    "name": "string",
+    "reason": "string",
+    "site": "string",
+    "status": "string",
+    "tenantId": "string"
+   }
+  },
+  "unreadableEnvelopes": {
+   "config": {
+    "reason?": "string",
+    "state": "string",
+    "value?": {
+     "employees": [
+      {
+       "id": "string",
+       "monthlySalary": "string",
+       "name": "string",
+       "type": "string"
+      }
+     ],
+     "targetSales?": "string",
+     "targets?": {
+      "foodCostPct": "string",
+      "laborCostPct": "string",
+      "salesGrowthPct?": "string"
+     }
+    }
+   },
+   "configState": "string",
+   "exceptionsState": "string",
+   "fixed": {
+    "reason?": "string",
+    "state": "string",
+    "value?": [
+     {
+      "amount": "string",
+      "id": "string",
+      "name": "string"
+     }
+    ]
+   },
+   "fixedState": "string",
+   "inputIssues": [
+    "string"
+   ]
+  }
+ }
+}

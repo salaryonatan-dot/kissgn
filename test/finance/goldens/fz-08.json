@@ -1,0 +1,98 @@
+{
+ "id": "FZ-08",
+ "owner": "B2/C1 (read)",
+ "artifact": "policy evaluation use (resolvePolicy / evaluatePolicy)",
+ "source": "09_AGENT_DAILY_HANDOFF.md §1; derived from the accepted code at 239602c9 by test/support/fz-producers.mjs",
+ "note": "shapes: keys and types only (JSON projection), never values; ids: frozen contract identifiers and observed enum values",
+ "ids": {
+  "policyVersion": "MARJIN_POLICY/0-compat",
+  "keys": [
+   "alert.foodCostPctCritical",
+   "alert.foodCostPctMax",
+   "alert.laborPctCritical",
+   "alert.laborPctMax",
+   "goal.foodCostPct",
+   "goal.laborCostPct",
+   "goal.salesGrowthPct"
+  ],
+  "sources": [
+   "business_config",
+   "compatibility_product_default"
+  ],
+  "comparisonStates": [
+   "above_goal",
+   "at_or_below_goal",
+   "not_evaluable"
+  ],
+  "metrics": [
+   "laborEmployerCostPct",
+   "purchasesPct"
+  ]
+ },
+ "shapes": {
+  "resolved": {
+   "policyVersion": "string",
+   "values": {
+    "alert.foodCostPctCritical": {
+     "origin": "string",
+     "ownerApproved": "boolean",
+     "source": "string",
+     "value": "string"
+    },
+    "alert.foodCostPctMax": {
+     "origin": "string",
+     "ownerApproved": "boolean",
+     "source": "string",
+     "value": "string"
+    },
+    "alert.laborPctCritical": {
+     "origin": "string",
+     "ownerApproved": "boolean",
+     "source": "string",
+     "value": "string"
+    },
+    "alert.laborPctMax": {
+     "origin": "string",
+     "ownerApproved": "boolean",
+     "source": "string",
+     "value": "string"
+    },
+    "goal.foodCostPct": {
+     "origin": "string",
+     "ownerApproved": "boolean",
+     "source": "string",
+     "value": "string"
+    },
+    "goal.laborCostPct": {
+     "origin": "string",
+     "ownerApproved": "boolean",
+     "source": "string",
+     "value": "string"
+    },
+    "goal.salesGrowthPct": {
+     "origin": "string",
+     "ownerApproved": "boolean",
+     "source": "string",
+     "value": "string"
+    }
+   }
+  },
+  "evaluation": {
+   "comparisons": [
+    {
+     "goal": {
+      "origin": "string",
+      "ownerApproved": "boolean",
+      "source": "string",
+      "value": "string"
+     },
+     "goalKey": "string",
+     "metric": "string",
+     "state": "string"
+    }
+   ],
+   "policyVersion": "string",
+   "reportVersion": "string"
+  }
+ }
+}
