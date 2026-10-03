@@ -29,7 +29,7 @@
     "src/presenters/money.ts",
     "src/presenters/percent.ts"
   ],
-  "sourceDigest": "d41b2aa0de2c109ad9f829d78a8bf5ac2da1c5a21b1a4a6e2b6cbb28c0bc4750",
+  "sourceDigest": "45b74f3a4d0ccc6bfcff1a74c1387d11a60df0bc99991c2d2e99dc9cc515c47c",
   "files": [
     {
       "path": "browser/marjinFinanceGlobal.js",
@@ -61,7 +61,7 @@
     },
     {
       "path": "finance/supplierCredits.js",
-      "sha256": "c800682d23dd6c651c94274a4f2d5f9f9d6729fbeb33825c6b9514fd06edefcd"
+      "sha256": "07ee6bf51919bddb00413defc13922067022086ee9850b868cae8c981f6a3b3b"
     },
     {
       "path": "finance/types.js",
@@ -89,7 +89,7 @@
     },
     {
       "path": "metrics/report.js",
-      "sha256": "a571c62f9455a9e64c9b296968815a7ce85e112f73e4c09dc73818e9e1ab142d"
+      "sha256": "2c1b8391befa9b8a87902e0eeefac722d9796687044b6fa5fcb13f22673cad9a"
     },
     {
       "path": "metrics/revenueForecast.js",
@@ -109,7 +109,7 @@
     },
     {
       "path": "policy/productFinance.js",
-      "sha256": "ffe8dcc7c65e2fe8082020f7c94a0c8dfe31a3636eec9d0625e3b88c03a39ef6"
+      "sha256": "797fc5d8b2706822eed65f6fc33d759963d0123aa43dbd99fac419419c1b18c5"
     },
     {
       "path": "policy/purchaseBasis.js",

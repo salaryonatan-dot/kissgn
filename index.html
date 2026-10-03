@@ -1047,7 +1047,7 @@
     };
   })();
   </script>
-  <!-- ═══ P1: Supplier Credits browser seam (MARJIN_P1/2 over MARJIN_CREDITS/2, P1 R1) ═══
+  <!-- ═══ P1: Supplier Credits browser seam (MARJIN_P1/2 over MARJIN_CREDITS/3, P1 R1) ═══
        A supplier credit is its own document (never a negative purchase), attributed to the
        credit document's ISSUE DATE, net of VAT and strictly positive, with a MANDATORY document
        number (unique per business + supplier + normalized number). The browser never reads or
@@ -1065,7 +1065,7 @@
   (function () {
     "use strict";
     var P1_VERSION = "MARJIN_P1/2";
-    var CREDITS_CONTRACT = "MARJIN_CREDITS/2";
+    var CREDITS_CONTRACT = "MARJIN_CREDITS/3";
     /** One deadline for the whole list read (same policy as the C1 closure-history read). */
     var CREDITS_DEADLINE_MS = 30000;
     var TXT = Object.freeze({
@@ -1112,6 +1112,8 @@
       invalid_document_number_chars: "מספר המסמך יכול לכלול אותיות, ספרות ומפרידים (רווח, מקף, לוכסן, נקודה) בלבד.",
       invalid_document_number_too_long: "מספר המסמך ארוך מדי (עד 64 תווים).",
       duplicate_document: "מסמך זיכוי עם מספר זה כבר רשום לספק זה. הזיכוי לא נשמר.",
+      similar_document: "נמצא מספר מסמך דומה אצל ספק זה. בדוק שזהו מסמך אחר ואשר במפורש; המסמך טרם נשמר.",
+      similarity_confirmation_not_applicable: "האישור למסמך דומה אינו מתאים למצב הנוכחי. רענן ובדוק שוב.",
       identity_change_requires_correction: "שינוי מספר המסמך או הספק דורש אישור תיקון זהות.",
       identity_correction_not_applicable: "מספר המסמך והספק לא השתנו.",
       invalid_note: "ההערה אינה תקינה.",
@@ -1233,7 +1235,8 @@
       if (!F.finance.businessDate.isBusinessDate(f.issueDate)) errors.issueDate = ERRORS.invalid_issue_date;
       var amount = SC.canonicalCreditAmount(typeof f.amount === "string" ? f.amount.trim() : f.amount);
       if (amount === null) errors.amount = ERRORS.invalid_amount;
-      var doc = SC.normalizeDocumentNumber(typeof f.documentNumber === "string" ? f.documentNumber : null);
+      var supplier = (supplierList || []).find(function (s) { return s && String(s.id) === f.supplierId; });
+      var doc = SC.normalizeDocumentNumber(typeof f.documentNumber === "string" ? f.documentNumber : null, !!(supplier && supplier.documentNumberCaseSensitive === true));
       if (!doc.ok) errors.documentNumber = ERRORS[doc.code];
       var note = typeof f.note === "string" ? f.note.trim() : "";
       if (note.length > SC.MAX_NOTE_LENGTH) errors.note = ERRORS.invalid_note_too_long;
@@ -6642,6 +6645,7 @@ function PilotDashboard() {
   const [creditMsg, setCreditMsg] = useState(null);
   const [creditBusy, setCreditBusy] = useState(false);
   const [creditRetry, setCreditRetry] = useState(null); // { action, body, okText, after } of an UNKNOWN outcome
+  const [creditSimilarity, setCreditSimilarity] = useState(null); // explicit confirmation of a server-detected likely duplicate
   const canWriteCredits = !!loggedInUser && ["super_owner", "owner", "manager"].includes(loggedInUser.role);
   const canDecideCredits = !!loggedInUser && loggedInUser.role === "owner";
   const creditMutation = async (action, body, ctx) => {
@@ -6651,7 +6655,8 @@ function PilotDashboard() {
       json = await resp.json().catch(() => null);
     } catch (_) { transportOk = false; }
     if (!isSelectionLive(ctx)) return { kind: "stale" };
-    return window.MarjinP1.classify(transportOk, resp ? resp.status : 0, json);
+    const result = window.MarjinP1.classify(transportOk, resp ? resp.status : 0, json);
+    return { ...result, detail: json && json.detail };
   };
   const afterCreditApplied = async (json, ctx, okText) => {
     setCreditsAttempt((n) => n + 1);
@@ -6675,12 +6680,26 @@ function PilotDashboard() {
     if (r.kind === "unknown") { setCreditRetry({ action, body, okText, after }); setCreditMsg({ kind: "error", text: P1.TXT.unknown }); setCreditsAttempt((n) => n + 1); return; }
     setCreditRetry(null);
     if (r.kind === "refused") {
+      if (r.code === "similar_document" && r.detail && Array.isArray(r.detail.confirmedAgainst))
+        setCreditSimilarity({ action, body, ctx, okText, after, confirmedAgainst: r.detail.confirmedAgainst });
+      else setCreditSimilarity(null);
       setCreditMsg({ kind: "error", text: P1.refusalText(r.code) });
       if (["revision_conflict", "credit_not_active", "credit_not_current", "review_unresolved", "review_not_flagged", "review_identity_mismatch"].includes(r.code)) setCreditsAttempt((n) => n + 1);
       return;
     }
     if (after) after();
     await afterCreditApplied(r.json, ctx, okText);
+  };
+  const confirmSimilarCredit = async () => {
+    if (!creditSimilarity || creditBusy) return;
+    const s = creditSimilarity;
+    if (!isSelectionLive(s.ctx)) { setCreditSimilarity(null); return; }
+    const reason = window.prompt("נמצא מסמך דומה. אם זהו מסמך אחר, כתוב סיבה לאישור החריג (תישמר לביקורת):");
+    if (!reason || reason.trim().length < 3) return;
+    setCreditSimilarity(null);
+    setCreditBusy(true);
+    try { await runCreditOperation(s.action, { ...s.body, similarityConfirmation: { confirmed: true, confirmedAgainst: s.confirmedAgainst, reason: reason.trim() } }, s.ctx, s.okText, s.after); }
+    finally { setCreditBusy(false); }
   };
   const retryCreditOperation = async () => {
     if (creditBusy || !creditRetry) return;
@@ -6702,7 +6721,7 @@ function PilotDashboard() {
     const creditId = P1.newId(), operationId = P1.newId();
     if (!creditId || !operationId) { setCreditMsg({ kind: "error", text: P1.errorText("no_uuid") }); return; }
     setCreditBusy(true); setCreditMsg(null);
-    const after = () => { setCreditForm(EMPTY_CREDIT_FORM); setCreditEditing(null); };
+    const after = () => { setCreditForm(EMPTY_CREDIT_FORM); setCreditEditing(null); setCreditSimilarity(null); };
     try {
       if (creditEditing) await runCreditOperation("replace-supplier-credit", P1.replaceBody(ctx, creditEditing, v.input, creditId, operationId, v.identityChanged), ctx, P1.TXT.saved, after);
       else await runCreditOperation("create-supplier-credit", P1.createBody(ctx, v.input, creditId, operationId), ctx, P1.TXT.saved, after);
@@ -8658,7 +8677,7 @@ function PilotDashboard() {
             const cPrev = () => { const d=new Date(cY,cM-2,1); setSupMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); };
             const cNext = () => { const d=new Date(cY,cM,1); setSupMonth(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); };
             const cCanNext = supMonth < finTodayStr.slice(0, 7);
-            const field = (k) => ({ value: creditForm[k], onChange: (e) => { const val = e.target.value; setCreditForm((f) => ({ ...f, [k]: val })); } });
+            const field = (k) => ({ value: creditForm[k], onChange: (e) => { const val = e.target.value; setCreditForm((f) => ({ ...f, [k]: val })); setCreditSimilarity(null); } });
             const inp = {width:"100%",border:"1px solid #D1D5DB",borderRadius:8,padding:"9px 11px",fontSize:13,fontFamily:"inherit",color:"#111827",boxSizing:"border-box"};
             const err = (k) => creditErrors[k] ? <div data-p1={"err-"+k} style={{fontSize:11,color:"#DC2626",marginTop:3}}>{creditErrors[k]}</div> : null;
             return (
@@ -8705,7 +8724,8 @@ function PilotDashboard() {
                 {creditMsg && (
                   <div role={creditMsg.kind==="error"?"alert":"status"} data-p1={"credit-msg-"+creditMsg.kind}
                     style={{background:creditMsg.kind==="error"?"#FEF2F2":creditMsg.kind==="warn"?"#FFFBEB":"#F0FDF4",border:`1px solid ${creditMsg.kind==="error"?"#FECACA":creditMsg.kind==="warn"?"#FDE68A":"#BBF7D0"}`,color:creditMsg.kind==="error"?"#B91C1C":creditMsg.kind==="warn"?"#92400E":"#166534",borderRadius:10,padding:"9px 13px",marginBottom:12,fontSize:13,fontWeight:600}}>
-                    {creditMsg.text}
+                  {creditMsg.text}
+                    {creditSimilarity && <div style={{marginTop:8}}><button data-p1="credit-confirm-similar" className="btn btn-ghost btn-sm" disabled={creditBusy} onClick={confirmSimilarCredit}>בדקתי: זהו מסמך אחר — אשר עם סיבה מתועדת</button></div>}
                     {creditRetry && <div style={{marginTop:8}}><button data-p1="credit-retry-same" className="btn btn-ghost btn-sm" disabled={creditBusy} onClick={retryCreditOperation}>{window.MarjinP1.TXT.retrySame}</button></div>}
                   </div>
                 )}

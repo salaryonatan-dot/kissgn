@@ -162,7 +162,7 @@ test("RV-R03 reconciliation (any writer may trigger it; the ORIGINAL actor's cur
   const rec = await call("reconcile-supplier-credit-reviews", { tenantId: T, bizId: B, operationId: oid(90) }, { as: "own" });
   assert.equal(rec.code, 200);
   assert.deepEqual(rec.body.results.map((x) => [x.operationId, x.status, x.state, x.audit || null]), [[oid(1), "resolved", "cleared", null], [oid(2), "resolved", "flagged", "flag_persisted"]]);
-  assert.equal(db.read(`tenants/${T}/audit/supplier_credit_flags/${oid(2)}`).outcome, "reconciled_unauthorized");
+  assert.equal(stored(db).review[oid(2)].flagAudit.outcome, "reconciled_unauthorized");
   const again = await call("reconcile-supplier-credit-reviews", { tenantId: T, bizId: B, operationId: oid(91) }, { as: "own" });
   assert.deepEqual(again.body.results, [], "nothing pending any more; the flagged entry is untouched");
   assert.deepEqual(dec(db).credits.map((c) => c.creditId), [cid(1)]);
@@ -235,12 +235,66 @@ test("RV-R08 two independent server instances writing in parallel: exactly one a
   const db = seed();
   const rs = await Promise.all([
     call("create-supplier-credit", CREATE(1, { documentNumber: "INV 77" }), { server: SERVER_A }),
-    call("create-supplier-credit", CREATE(2, { documentNumber: "inv-77" }), { server: SERVER_B }),
-    call("create-supplier-credit", CREATE(3, { documentNumber: "INV/77" }), { server: SERVER_A, as: "mgr2" }),
+    call("create-supplier-credit", CREATE(2, { documentNumber: "inv 77" }), { server: SERVER_B }),
+    call("create-supplier-credit", CREATE(3, { documentNumber: "INV 77" }), { server: SERVER_A, as: "mgr2" }),
   ]);
   assert.deepEqual(rs.map((r) => r.code).sort(), [200, 409, 409]);
   assert.ok(rs.filter((r) => r.code === 409).every((r) => r.body.error === "duplicate_document"));
   const n = stored(db);
-  assert.equal(Object.keys(n.records).length, 1); assert.deepEqual(Object.keys(n.documents.s_s1), ["d_inv77"]);
+  assert.equal(Object.keys(n.records).length, 1); assert.deepEqual(Object.keys(n.documents.s_s1), ["d_inv~20~77"]);
   assert.deepEqual(dec(db).issues, []);
+});
+
+test('P1R2-S01 similarity warning is visible as a typed refusal; explicit reason is stored atomically and replay is idempotent', async () => {
+  const db=seed();
+  assert.equal((await call('create-supplier-credit',CREATE(1,{documentNumber:'CR001'}))).code,200);
+  const warning=await call('create-supplier-credit',CREATE(2,{documentNumber:'CR-001'}));
+  assert.deepEqual([warning.code,warning.body.error,warning.body.detail],[409,'similar_document',{confirmedAgainst:[cid(1)]}]);
+  assert.equal(Object.keys(stored(db).records).length,1);
+  const confirm={confirmed:true,confirmedAgainst:[cid(1)],reason:'Checked distinct credit document'};
+  const body=CREATE(2,{documentNumber:'CR-001',similarityConfirmation:confirm});
+  const accepted=await call('create-supplier-credit',body);
+  assert.equal(accepted.code,200,JSON.stringify(accepted.body));
+  assert.equal(stored(db).records[cid(2)].similarityConfirmation.reason,confirm.reason);
+  assert.equal(stored(db).records[cid(2)].similarityConfirmation.by,'mgr');
+  assert.equal((await call('create-supplier-credit',body)).body.replayed,true);
+  assert.equal((await call('create-supplier-credit',{...body,similarityConfirmation:{...confirm,reason:'Changed reason'}})).body.error,'idempotency_conflict');
+  assert.equal(Object.keys(stored(db).records).length,2);
+});
+
+test('P1R2-S02 same-tenant owner without explicit biz access decides flagged; super_owner and removed owner cannot', async () => {
+  const db=seed();
+  revokeAfterCommit(db,'mgr');
+  assert.equal((await call('create-supplier-credit',CREATE(1))).body.review,'flagged');
+  const digest=stored(db).review[oid(1)].intentDigest;
+  const body={tenantId:T,bizId:B,operationId:oid(80),targetOperationId:oid(1),intentDigest:digest,decision:'accept'};
+  assert.equal((await call('decide-supplier-credit-review',body,{as:'sup'})).code,403);
+  db.seed(`tenants/${T}/members/own`,false);
+  assert.equal((await call('decide-supplier-credit-review',body,{as:'own'})).code,403);
+  assert.equal(stored(db).review[oid(1)].state,'flagged');
+  db.seed(`tenants/${T}/members/own`,true);
+  assert.equal(db.read(`tenants/${T}/biz_access/${B}/own`),null);
+  const accepted=await call('decide-supplier-credit-review',body,{as:'own'});
+  assert.equal(accepted.code,200,JSON.stringify(accepted.body));
+  assert.equal(stored(db).review[oid(1)].state,'acknowledged');
+  assert.equal(stored(db).review[oid(1)].decisionAudit.operationId,oid(80));
+});
+
+test('P1R2-S03 failed atomic flag transaction leaves pending with no audit, and later recovery flags once', async () => {
+  const db=seed();
+  let first=true, transitions=0;
+  hook(db,p=>p===NODE,r=>({transaction:async(fn,...args)=>{
+    if(first){first=false;const out=await r.transaction(fn,...args);db.seed(`tenants/${T}/members/mgr`,false);return out;}
+    if(transitions++===0) throw new Error('flag transaction rejected');
+    return r.transaction(fn,...args);
+  }}));
+  const result=await call('create-supplier-credit',CREATE(1));
+  assert.equal(result.code,200,JSON.stringify(result.body));
+  assert.deepEqual([result.body.review,result.body.audit],['pending','flag_unconfirmed']);
+  assert.equal(stored(db).review[oid(1)].state,'pending');
+  assert.equal(stored(db).review[oid(1)].flagAudit,undefined);
+  const rec=await call('reconcile-supplier-credit-reviews',{tenantId:T,bizId:B,operationId:oid(91)},{as:'own'});
+  assert.equal(rec.code,200,JSON.stringify(rec.body));
+  assert.equal(stored(db).review[oid(1)].state,'flagged');
+  assert.equal(stored(db).review[oid(1)].flagAudit.operationId,oid(1));
 });

@@ -213,7 +213,7 @@ async function main() {
     eq(body.amount, "50.5", "canonical amount sent"); eq(body.issueDate, d(8), "issue date as typed"); eq(body.documentNumber, "cr 2", "normalized display number sent");
     const nd = await stored();
     const rec = nd.records[body.creditId];
-    expect(rec && rec.amount === "50.5" && rec.documentKey === "cr2" && rec.createdBy === USER.uid && rec.createdRole === "owner", "stored record " + JSON.stringify(rec));
+    expect(rec && rec.amount === "50.5" && rec.documentKey === "cr~20~2" && rec.documentCaseSensitive === false && rec.createdBy === USER.uid && rec.createdRole === "owner", "stored record " + JSON.stringify(rec));
     eq(nd.review[body.operationId].state, "cleared", "the post-commit check cleared the review");
     await page.until(() => qp(page, `credit-row-${body.creditId}`) !== null, 10000);
     const X = await expected(nd);
@@ -236,9 +236,9 @@ async function main() {
     setValue(page, qp(page, "credit-amount"), "0"); setValue(page, qp(page, "credit-date"), d(9)); await page.sleep(50);
     click(qp(page, "credit-save")); await page.sleep(200);
     expect(qp(page, "err-amount"), "zero refused"); expect(qp(page, "err-documentNumber"), "missing document number refused"); eq(ctl.calls.length, before, "still no request");
-    // a duplicate identity (formatting differs) passes the client and is refused by the server, nothing stored
+    // a hard duplicate (case differs) passes the client and is refused by the server, nothing stored
     const n0 = Object.keys((await stored()).records).length;
-    setValue(page, qp(page, "credit-amount"), "5"); setValue(page, qp(page, "credit-doc"), "CR/100"); await page.sleep(50);
+    setValue(page, qp(page, "credit-amount"), "5"); setValue(page, qp(page, "credit-doc"), "cr-100"); await page.sleep(50);
     click(qp(page, "credit-save"));
     await page.until(() => qp(page, "credit-msg-error") !== null, 10000);
     expect(/כבר רשום/.test(textOf(qp(page, "credit-msg-error"))), "duplicate message: " + textOf(qp(page, "credit-msg-error")));
@@ -278,7 +278,7 @@ async function main() {
     const nd = await stored();
     eq(nd.voids[call.body.operationId].replacedByCreditId, call.body.newCreditId, "replace event links the successor"); eq(nd.voids[call.body.operationId].creditId, activeId, "and voids the predecessor");
     eq(nd.records[call.body.newCreditId].amount, "40", "new amount"); eq(nd.records[call.body.newCreditId].replacesCreditId, activeId, "back link");
-    eq(nd.records[call.body.newCreditId].documentKey, "cr2", "same document identity"); eq(call.body.identityCorrection, undefined, "no identity correction");
+    eq(nd.records[call.body.newCreditId].documentKey, "cr~20~2", "same document identity"); eq(call.body.identityCorrection, undefined, "no identity correction");
     await page.until(() => qp(page, `credit-row-${call.body.newCreditId}`) !== null, 10000);
     const X = await expected(nd);
     eq(textOf(qp(page, "credits-total")), X.tab.totalText, "total after edit");
@@ -379,11 +379,34 @@ async function main() {
     expect(/permission/i.test(rv), "review forge denied: " + rv);
     return "read + write denied";
   });
+  await run("P1R-12", "a similar separator variant shows a visible warning and needs an explicit audited different-document confirmation", async () => {
+    const p = await boot();
+    try {
+      await creditsTab(p);
+      const n0 = Object.keys((await stored()).records).length;
+      setValue(p, qp(p, "credit-supplier"), "s1"); setValue(p, qp(p, "credit-date"), d(10));
+      setValue(p, qp(p, "credit-amount"), "9"); setValue(p, qp(p, "credit-doc"), "CR/100");
+      await p.sleep(50); click(qp(p, "credit-save"));
+      await p.until(() => qp(p, "credit-confirm-similar") !== null, 10000);
+      expect(/דומה/.test(textOf(qp(p, "credit-msg-error"))), "visible similarity warning");
+      eq(Object.keys((await stored()).records).length, n0, "warning stores nothing");
+      p.window.prompt = () => "Verified distinct original document";
+      click(qp(p, "credit-confirm-similar"));
+      await p.until(() => qp(p, "credit-msg-ok") !== null || qp(p, "credit-msg-warn") !== null, 15000);
+      const call = ctl.calls.filter((c) => c.action === "create-supplier-credit").pop();
+      const nd = await stored();
+      eq(Object.keys(nd.records).length, n0 + 1, "one new credit");
+      eq(nd.records[call.body.creditId].similarityConfirmation.reason, "Verified distinct original document", "audited reason");
+      eq(JSON.stringify(nd.records[call.body.creditId].similarityConfirmation.confirmedAgainst), JSON.stringify([cid(1)]), "exact similarity identity");
+      eq(nd.records[call.body.creditId].similarityConfirmation.by, USER.uid, "authenticated actor");
+      return "warning → explicit audited confirmation";
+    } finally { p.detach(); }
+  });
 
   const wd = (s, n) => String(s).padEnd(n).slice(0, n);
   console.log(`\n${wd("case", 7)} ${wd("status", 6)} ${wd("ms", 6)} notes`); console.log("-".repeat(120));
   for (const r of results) console.log(`${wd(r.id, 7)} ${wd(r.status, 6)} ${wd(r.ms, 6)} ${r.status === "PASS" ? r.notes : r.notes.split("\n")[0]}`);
-  const EXPECTED = 11;
+  const EXPECTED = 12;
   console.log("\n=== TOTALS ===");
   console.log(`total=${results.length} passed=${results.length - failures} failed=${failures}`);
   if (results.length !== EXPECTED) { console.error(`INCOMPLETE: expected ${EXPECTED}`); process.exitCode = 3; return; }

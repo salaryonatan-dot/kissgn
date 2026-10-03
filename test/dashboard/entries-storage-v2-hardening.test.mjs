@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import { gitIn } from "../support/git-context.mjs";
-import { authorizedEntriesRulesDelta, EXPECTED_ENTRIES_DELTA, expectedWriteRule, CUTOVER_GUARD, authorizedVersionFenceRulesDelta, expectedFencedWriteRule, FENCE_GUARD, EXPECTED_STORAGE_V2_CONTROL_RULES } from "../support/rules-authorized-delta.mjs";
+import { authorizedEntriesRulesDelta, EXPECTED_ENTRIES_DELTA, expectedWriteRule, CUTOVER_GUARD, authorizedVersionFenceRulesDelta, expectedFencedWriteRule, FENCE_GUARD, EXPECTED_STORAGE_V2_CONTROL_RULES, LEGACY_CREDITS_BRANCH, P1_CREDITS_DENIAL_BRANCH } from "../support/rules-authorized-delta.mjs";
 import { createLegacyPreflight, PREFLIGHT_BLOCKERS } from "../../tools/storage-v2/preflight.mjs";
 import { createStorageV2Upgrader } from "../../tools/storage-v2/upgrade.mjs";
 
@@ -491,7 +491,7 @@ test("[H10] the S0 rules exception accepts the candidate and rejects every inert
   assert.deepEqual(authorizedEntriesRulesDelta(before, core), { ok: true });
   assert.equal(dkOf(core)[".write"], expectedWriteRule(dkOf(before)[".write"]));
   assert.deepEqual(authorizedVersionFenceRulesDelta(core, after), { ok: true });
-  assert.equal(dkOf(after)[".write"], expectedFencedWriteRule(dkOf(core)[".write"]));
+  assert.equal(dkOf(after)[".write"], expectedFencedWriteRule(dkOf(core)[".write"]).replace(LEGACY_CREDITS_BRANCH, P1_CREDITS_DENIAL_BRANCH));
   assert.deepEqual(after.rules.storage_v2_control, EXPECTED_STORAGE_V2_CONTROL_RULES);
   assert.equal(authorizedEntriesRulesDelta(before, after).ok, false, "the fenced rules are NOT accepted as a plain core (no blanket exemption)");
   // mutations are applied to the LIVE rules and checked against the core→fence exception
@@ -540,11 +540,11 @@ test("[H10] the S0 rules exception accepts the candidate and rejects every inert
 });
 test("[H10] the VAT S0 guard consumes the semantic module (no token checks remain) and its VAT assertions are untouched", () => {
   const vat = readFileSync(join(ROOT, "test/finance/vat-invariant.test.mjs"), "utf8");
-  assert.ok(vat.includes('import { authorizedEntriesRulesDelta, authorizedVersionFenceRulesDelta, APPROVED_FENCE_RULES_BLOB } from "../support/rules-authorized-delta.mjs";'));
+  assert.ok(vat.includes('import { authorizedEntriesRulesDelta, authorizedVersionFenceRulesDelta, P1_R2_RULES_BLOB } from "../support/rules-authorized-delta.mjs";'));
   // VERSION FENCE: Layer A validates the exact core→fence Rules delta and the reviewed blob;
   // no blanket post-core allowance and no path exemption
   assert.ok(vat.includes("const fenceDelta = authorizedVersionFenceRulesDelta(coreRules, liveRules);"));
-  assert.ok(vat.includes("APPROVED_FENCE_RULES_BLOB, \"database.rules.json is the reviewed fenced version (exact blob)\""));
+  assert.ok(vat.includes("P1_R2_RULES_BLOB, \"database.rules.json is the P1 R2 candidate denial (exact blob; pending independent review)\""));
   assert.ok(vat.includes('rel === "database.rules.json"))'), "only the validated Rules change is projected out of the reader layer");
   assert.ok(vat.includes("return authorizedEntriesRulesDelta(before, after).ok === true;"));
   assert.ok(!vat.includes('.includes("matches(")'), "token presence is no longer an acceptance criterion");

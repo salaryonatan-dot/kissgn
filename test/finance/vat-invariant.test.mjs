@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 // guard for reasons that had nothing to do with the VAT invariant. The invariant
 // assertions below are unchanged; only how git is invoked is.
 import { gitIn } from "../support/git-context.mjs";
-import { authorizedEntriesRulesDelta, authorizedVersionFenceRulesDelta, APPROVED_FENCE_RULES_BLOB } from "../support/rules-authorized-delta.mjs";
+import { authorizedEntriesRulesDelta, authorizedVersionFenceRulesDelta, P1_R2_RULES_BLOB } from "../support/rules-authorized-delta.mjs";
 import { SERVER_READER_BASE, SERVER_READER_AUTHORIZED_FILES, isProtectedPath, collectServerReaderScopeInputs, serverReaderScopeVerdict } from "../support/server-reader-authorized-delta.mjs";
 import vm from "node:vm";
 import { dailyReportMessage } from "../../lib/whatsappMessages.js";
@@ -227,7 +227,7 @@ test("S0 diff contains no historical data transform, migration, RTDB rules, or f
   assert.deepEqual(fenceDelta, { ok: true }, "database.rules.json must be the approved core plus the exact version-fence delta");
   const liveRulesBlob = gitIn(ROOT, ["hash-object", "database.rules.json"]);
   assert.equal(liveRulesBlob.status, 0, liveRulesBlob.stderr);
-  assert.equal(liveRulesBlob.stdout.trim(), APPROVED_FENCE_RULES_BLOB, "database.rules.json is the reviewed fenced version (exact blob)");
+  assert.equal(liveRulesBlob.stdout.trim(), P1_R2_RULES_BLOB, "database.rules.json is the P1 R2 candidate denial (exact blob; pending independent review)");
   assert.equal(read("test/emulator/database.rules.json"), read("database.rules.json"), "emulator Rules mirror is byte-identical");
 
   // ── LAYER B — the approved server-reader files, core → working tree ──────────────

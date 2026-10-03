@@ -1,4 +1,4 @@
-// P1 Supplier Credits (P1 R1, MARJIN_CREDITS/2) — storage domain (lib/supplierCredits.js), repository and
+// P1 Supplier Credits (P1 R1, MARJIN_CREDITS/3) — storage domain (lib/supplierCredits.js), repository and
 // the REAL api/admin.js handlers with ONLY the Admin-SDK / auth / email seams replaced.
 //   SC-L*  pure domain: create / void / replace / owner decisions, idempotency, CAS, limits, fail-closed nodes
 //   SC-P*  parity: the writer's amount / id / document rules ≡ the Financial Core decoder; every write decodes VALID
@@ -64,13 +64,13 @@ const input = (over = {}) => SC.validateCreditInput({ supplierId: "s1", issueDat
 const applied = (node, c) => { const r = SC.applyCreditOperation(node, c); assert.equal(r.outcome, "applied", JSON.stringify(r)); return r.node; };
 const cleared = (node, op, now = 1001) => SC.applyReviewTransition(node, { tenantId: T, bizId: B, operationId: op, intentDigest: node.review[op].intentDigest, to: "cleared", resolution: "post_commit_authorized", now }).node;
 
-test("SC-L01 create on an absent node: MARJIN_CREDITS/2 envelope bound to tenant + business, immutable record, identity reservation, head, PENDING review, ledger", () => {
+test("SC-L01 create on an absent node: MARJIN_CREDITS/3 envelope bound to tenant + business, immutable record, identity reservation, head, PENDING review, ledger", () => {
   const r = SC.applyCreditOperation(null, cmd({ action: "create", creditId: cid(1), operationId: oid(1), input: input() }));
   assert.equal(r.outcome, "applied");
   const n = r.node;
-  assert.deepEqual([n.schemaVersion, n.contract, n.tenantId, n.bizId, n.revision], [2, "MARJIN_CREDITS/2", T, B, 1]);
-  assert.deepEqual(n.records[cid(1)], { creditId: cid(1), logicalId: cid(1), tenantId: T, bizId: B, supplierId: "s1", issueDate: "2026-10-02", amount: "300", documentNumber: "CR-1", documentKey: "cr1", operationId: oid(1), seq: 1, createdAt: 1000, createdBy: "u1", createdRole: "owner" });
-  assert.deepEqual(n.documents, { s_s1: { "d_cr1": { logicalId: cid(1), creditId: cid(1), operationId: oid(1), reservedAt: 1000, reservedBy: "u1" } } });
+  assert.deepEqual([n.schemaVersion, n.contract, n.tenantId, n.bizId, n.revision], [3, "MARJIN_CREDITS/3", T, B, 1]);
+  assert.deepEqual(n.records[cid(1)], { creditId: cid(1), logicalId: cid(1), tenantId: T, bizId: B, supplierId: "s1", issueDate: "2026-10-02", amount: "300", documentNumber: "CR-1", documentKey: "cr~2d~1", documentCaseSensitive: false, operationId: oid(1), seq: 1, createdAt: 1000, createdBy: "u1", createdRole: "owner" });
+  assert.deepEqual(n.documents, { s_s1: { "d_cr~2d~1": { logicalId: cid(1), creditId: cid(1), operationId: oid(1), reservedAt: 1000, reservedBy: "u1" } } });
   assert.deepEqual(n.heads, { [cid(1)]: { creditId: cid(1), seq: 1 } });
   assert.equal(n.review[oid(1)].state, "pending"); assert.equal(n.review[oid(1)].kind, "create"); assert.match(n.review[oid(1)].intentDigest, /^[0-9a-f]{64}$/);
   assert.equal(n.review[oid(1)].intentDigest, SC.storedIntentDigest(n, oid(1)), "the review is bound to the full stored payload");
@@ -79,7 +79,7 @@ test("SC-L01 create on an absent node: MARJIN_CREDITS/2 envelope bound to tenant
 });
 
 test("SC-L02 validateCreditInput: supplier, issue date, positive canonical amount, MANDATORY document number, bounded note — rejected never truncated", () => {
-  assert.deepEqual(input({ amount: "300.50", documentNumber: "  CR   9 ", note: "  " }), { supplierId: "s1", issueDate: "2026-10-02", amount: "300.5", documentNumber: "CR 9", documentKey: "cr9" });
+  assert.deepEqual(input({ amount: "300.50", documentNumber: "  CR   9 ", note: "  " }), { supplierId: "s1", issueDate: "2026-10-02", amount: "300.5", documentNumber: "CR 9", documentKey: "cr~20~9", documentFingerprint: "cr9", documentCaseSensitive: false });
   const bad = [
     [{ supplierId: "" }, "invalid_supplier_id"], [{ supplierId: "a/b" }, "invalid_supplier_id"], [{ supplierId: 2 }, "invalid_supplier_id"],
     [{ issueDate: "2027-02-29" }, "invalid_issue_date"], [{ issueDate: "2026-10-2" }, "invalid_issue_date"], [{ issueDate: undefined }, "invalid_issue_date"],
@@ -117,7 +117,7 @@ test("SC-L04 void is an immutable event (who / when / why); the record payload n
 
 test("SC-L05 replace = a traceable successor in ONE operation: the predecessor stays immutable, a replace event links both ways, the pointer moves; same document identity unless explicitly corrected", () => {
   const a = cleared(applied(null, cmd({ action: "create", creditId: cid(1), operationId: oid(1), input: input() })), oid(1));
-  const r = SC.applyCreditOperation(a, cmd({ action: "replace", creditId: cid(1), newCreditId: cid(2), operationId: oid(2), expectedSeq: 1, input: input({ amount: "250", issueDate: "2026-10-05", documentNumber: "cr 1" }), now: 3000 }));
+  const r = SC.applyCreditOperation(a, cmd({ action: "replace", creditId: cid(1), newCreditId: cid(2), operationId: oid(2), expectedSeq: 1, input: input({ amount: "250", issueDate: "2026-10-05", documentNumber: "cr-1" }), now: 3000 }));
   assert.equal(r.outcome, "applied");
   assert.deepEqual(r.node.records[cid(1)], a.records[cid(1)]);
   assert.equal(r.node.records[cid(2)].replacesCreditId, cid(1)); assert.equal(r.node.records[cid(2)].logicalId, cid(1)); assert.equal(r.node.records[cid(2)].issueDate, "2026-10-05");
@@ -129,8 +129,8 @@ test("SC-L05 replace = a traceable successor in ONE operation: the predecessor s
   assert.equal(SC.applyCreditOperation(a, cmd({ action: "replace", creditId: cid(1), newCreditId: cid(3), operationId: oid(3), expectedSeq: 1, identityCorrection: true, input: input() })).code, "identity_correction_not_applicable");
   const c = SC.applyCreditOperation(a, cmd({ action: "replace", creditId: cid(1), newCreditId: cid(3), operationId: oid(3), expectedSeq: 1, identityCorrection: true, input: input({ documentNumber: "CR-77" }) }));
   assert.equal(c.outcome, "applied"); assert.equal(c.node.records[cid(3)].identityCorrection, true);
-  assert.ok(c.node.documents.s_s1["d_cr1"] && c.node.documents.s_s1["d_cr77"], "old identity still reserved; the corrected one reserved for the same logical credit");
-  assert.equal(c.node.documents.s_s1["d_cr77"].logicalId, cid(1));
+  assert.ok(c.node.documents.s_s1["d_cr~2d~1"] && c.node.documents.s_s1["d_cr~2d~77"], "old identity still reserved; the corrected one reserved for the same logical credit");
+  assert.equal(c.node.documents.s_s1["d_cr~2d~77"].logicalId, cid(1));
   assert.equal(SC.applyCreditOperation(a, cmd({ action: "replace", creditId: cid(1), newCreditId: cid(1), operationId: oid(4), expectedSeq: 1, input: input() })).code, "credit_id_exists");
 });
 
@@ -321,7 +321,7 @@ test("SC-A07 DEC-AUTH-1 window: a revocation BETWEEN the re-check and the commit
   const res = await call("create-supplier-credit", CREATE(1));
   assert.equal(res.code, 200); assert.deepEqual([res.body.applied, res.body.postCommitAccess, res.body.review, res.body.audit, res.body.rebuildRequired], [true, "revoked_during_commit", "flagged", "flag_persisted", false]);
   assert.equal(stored(db).review[oid(1)].state, "flagged"); assert.equal(stored(db).review[oid(1)].resolution, "revoked_during_commit");
-  const flag = db.read(`tenants/${T}/audit/supplier_credit_flags/${oid(1)}`);
+  const flag = stored(db).review[oid(1)].flagAudit;
   assert.equal(flag.outcome, "revoked_during_commit"); assert.equal(flag.operationId, oid(1)); assert.equal(flag.actor, "u1");
   assert.deepEqual(decoded(db).credits, [], "a flagged credit is never counted");
   db.ref = orig;

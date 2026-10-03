@@ -119,12 +119,14 @@ async function main() {
     overrides.A = [{ match: (p) => p === NODE, wrap: txWrap(async (o) => { if (o.committed && !done) { done = true; await seedDb().ref(`tenants/${T}/members/u_mgr`).set(false); } }) }];
     const res = await call("create-supplier-credit", CREATE(1));
     eq([res.body.postCommitAccess, res.body.review, res.body.audit], ["revoked_during_commit", "flagged", "flag_persisted"], "result");
-    const FLAG = `tenants/${T}/audit/supplier_credit_flags/${oid(1)}`;
-    eq((await seedDb().ref(FLAG).once("value")).val().outcome, "revoked_during_commit", "audit record");
-    const ownerRead = (await asUser("owner", { uid: "u_owner", token: { email: "o@x" } }).ref(FLAG).once("value")).val();
-    eq(ownerRead.operationId, oid(1), "the owner reads the audit evidence");
-    expect(await denied(asUser("owner", { uid: "u_owner", token: { email: "o@x" } }).ref(FLAG).set({ outcome: "erased" })), "the owner cannot rewrite it");
-    expect(await denied(asUser("viewer", { uid: "u_view", token: { email: "v@x" } }).ref(FLAG).once("value")), "a viewer cannot read it");
+    const audit = (await nodeNow()).review[oid(1)].flagAudit;
+    eq(audit.outcome, "revoked_during_commit", "atomic audit record");
+    eq(audit.operationId, oid(1), "audit identity");
+    expect(await denied(asUser("owner", { uid: "u_owner", token: { email: "o@x" } }).ref(`${NODE}/review/${oid(1)}/flagAudit`).set({ outcome: "erased" })), "the owner cannot rewrite it");
+    const response = { code: null, body: null, setHeader() {}, status(n) { this.code=n; return this; }, json(v) { this.body=v; return this; } };
+    await SRV.A({ method:"GET", query:{action:"list-supplier-credits",tenantId:T,bizId:B}, headers:{}, __claims:{uid:"u_owner",email:"o@x"} }, response);
+    const listed = response;
+    eq(listed.body.node.review[oid(1)].flagAudit.operationId, oid(1), "owner reads durable evidence via the authorized API");
     eq((await decoded()).credits, [], "not counted");
     return "flagged + audit";
   });
@@ -135,7 +137,7 @@ async function main() {
       { match: (p) => committed && p === `tenants/${T}/biz_access/${B}/u_mgr`, wrap: () => ({ get: async () => { throw new Error("transport"); }, once: async () => { throw new Error("transport"); } }) }];
     const r1 = await call("create-supplier-credit", CREATE(1));
     eq([r1.body.postCommitAccess, r1.body.review], ["verification_unavailable", "pending"], "pending");
-    expect(!(await seedDb().ref(`tenants/${T}/audit/supplier_credit_flags/${oid(1)}`).once("value")).exists(), "no false evidence");
+    expect(!(await nodeNow()).review[oid(1)].flagAudit, "no false evidence");
     overrides.A = [];
     const r2 = await call("create-supplier-credit", CREATE(1), { server: "B" });
     eq([r2.body.replayed, r2.body.review], [true, "cleared"], "the retry (on the OTHER instance) finishes it");
@@ -181,12 +183,12 @@ async function main() {
   });
   await run("PRE-6", "two server instances race 6 creates of ONE identity (different formatting) ⇒ exactly one accepted; five duplicate_document; one reservation", async () => {
     await seed();
-    const fmts = ["INV 77", "inv-77", "INV/77", " Inv _ 77 ", "INV.77", "inv:77"];
+    const fmts = ["INV 77", "inv 77", "Inv 77", " INV   77 ", "INV\u00a077", "inv 77"];
     const rs = await Promise.all(fmts.map((f, i) => call("create-supplier-credit", CREATE(10 + i, { documentNumber: f }), { server: i % 2 ? "B" : "A", as: i % 3 ? "u_mgr" : "u_mgr2" })));
     eq(rs.filter((r) => r.code === 200).length, 1, "one accepted " + JSON.stringify(rs.map((r) => [r.code, r.body.error])));
     expect(rs.filter((r) => r.code !== 200).every((r) => r.code === 409 && r.body.error === "duplicate_document"), "typed duplicates");
     const nd = await nodeNow();
-    eq(Object.keys(nd.records).length, 1, "one record"); eq(Object.keys(nd.documents.s_s1), ["d_inv77"], "one reservation");
+    eq(Object.keys(nd.records).length, 1, "one record"); eq(Object.keys(nd.documents.s_s1), ["d_inv~20~77"], "one reservation");
     eq((await decoded()).issues, [], "valid");
     return "1 / 6";
   });

@@ -430,7 +430,7 @@ test("B2G-05-P1b P1 tree: committed negative-purchase substitution, formula dupl
     ["core credit attribution edited", (dir) => edit(dir, "src/finance/supplierCredits.ts", "      if (!wanted.has(c.issueDate)) continue;", "      /* issue-date attribution removed */"), /src\/finance\/supplierCredits\.ts \(committed\) is not the pinned P1 candidate blob/],
     ["an unpinned protected file", (dir) => writeFileSync(join(dir, "lib", "creditsExtra.js"), "export const x = 1;\n"), /protected changes are exactly/],
     ["a pinned file reverted to the base", (dir) => writeFileSync(join(dir, "api", "admin.js"), blobBytes(dir, P1_BASE + ":api/admin.js")), /protected changes are exactly/],
-    ["Rules changed", (dir) => appendTo(dir, "database.rules.json", " "), /protected changes are exactly/],
+    ["Rules changed", (dir) => appendTo(dir, "database.rules.json", " "), /database\.rules\.json \(committed\) is not the pinned P1 candidate blob/],
   ];
   for (const [label, mut, re] of cases) {
     withWritableClone(HEAD_SHA, (dir) => {

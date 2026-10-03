@@ -14,7 +14,7 @@ export { decodeSupplierCredits, REVIEW_ISSUE_CODES, SUPPLIER_CREDITS_CONTRACT_VE
 import { productLaborSource } from "./laborSource.js";
 /**
  * MARJIN_PRODUCT/3 (P1 supplier credits): the composition applies the supplier credits issued on
- * each date (MARJIN_CREDITS/2 since P1 R1, `ProductInputs.supplierCredits`) to that date's purchases, so the
+ * each date (MARJIN_CREDITS/3 since P1 R1, `ProductInputs.supplierCredits`) to that date's purchases, so the
  * report, the daily metrics, the day record and the projection are all NET of credits.
  * MARJIN_PRODUCT/2 (closed-days amendment) is otherwise unchanged.
  */

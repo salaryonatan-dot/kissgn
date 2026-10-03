@@ -1,4 +1,4 @@
-// P1 R1 — strict reader: replacement / void / audit / identity / head / review validation (MARJIN_CREDITS/2)
+// P1 R1 — strict reader: replacement / void / audit / identity / head / review validation (MARJIN_CREDITS/3)
 // and the accounting of DEC-AUTH-1 review states.
 //   CA-*  every corruption reproduced on the rejected candidate (Stage A probes A3a…A3k) is now an ISSUE:
 //         the corrupt logical credit contributes NOTHING (no earlier "valid-looking" record is used) and
@@ -68,10 +68,10 @@ const CORRUPTIONS = [
   ["review: malformed state fields (cleared without resolution)", (n) => { delete n.review[oid(2)].resolution; }, "invalid_review", true],
   ["review: TWO unresolved operations (an earlier one reopened)", (n) => { const r = n.review[oid(1)]; n.review[oid(1)] = { schema: r.schema, state: "pending", kind: r.kind, logicalId: r.logicalId, creditId: r.creditId, seq: r.seq, intentDigest: r.intentDigest, actor: r.actor, actorRole: r.actorRole, committedAt: r.committedAt }; const r2 = n.review[oid(2)]; n.review[oid(2)] = { schema: r2.schema, state: "pending", kind: r2.kind, logicalId: r2.logicalId, creditId: r2.creditId, newCreditId: r2.newCreditId, seq: r2.seq, intentDigest: r2.intentDigest, actor: r2.actor, actorRole: r2.actorRole, committedAt: r2.committedAt }; }, "invalid_review", true],
   ["review: an orphan entry for no operation", (n) => { n.review["orphan-op-0001"] = { ...n.review[oid(2)] }; }, "invalid_review", true],
-  ["identity: the reservation names another logical credit", (n) => { n.documents.s_s1["d_cr1"].logicalId = cid(9); }, "invalid_document", "both"],
+  ["identity: the reservation names another logical credit", (n) => { n.documents.s_s1["d_cr~2d~1"].logicalId = cid(9); }, "invalid_document", "both"],
   ["identity: the record's normalized key does not match its number", (n) => { n.records[cid(2)].documentKey = "cr77"; }, "invalid_document", true],
-  ["identity: an unflagged identity change on replacement", (n) => { Object.assign(n.records[cid(2)], { documentNumber: "CR-77", documentKey: "cr77" }); n.documents.s_s1["d_cr77"] = { ...n.documents.s_s1["d_cr1"], creditId: cid(2), operationId: oid(2), reservedAt: n.records[cid(2)].createdAt }; }, "invalid_document", true],
-  ["identity: a reservation used by no record", (n) => { n.documents.s_s1["d_cr555"] = { ...n.documents.s_s1["d_cr1"] }; }, "invalid_document", true],
+  ["identity: an unflagged identity change on replacement", (n) => { Object.assign(n.records[cid(2)], { documentNumber: "CR-77", documentKey: "cr77" }); n.documents.s_s1["d_cr~2d~77"] = { ...n.documents.s_s1["d_cr~2d~1"], creditId: cid(2), operationId: oid(2), reservedAt: n.records[cid(2)].createdAt }; }, "invalid_document", true],
+  ["identity: a reservation used by no record", (n) => { n.documents.s_s1["d_cr~2d~555"] = { ...n.documents.s_s1["d_cr~2d~1"] }; }, "invalid_document", true],
   ["orphan: a head of no logical credit", (n) => { n.heads[cid(77)] = { creditId: cid(77), seq: 1 }; }, "orphan_entry", false],
 ];
 

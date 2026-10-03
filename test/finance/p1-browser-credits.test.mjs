@@ -38,7 +38,7 @@ const P1 = loadP1();
 const deq = (a, b, m) => assert.deepEqual(a === undefined ? a : JSON.parse(JSON.stringify(a)), b, m);
 const cid = (n) => `c0000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const rec = (n, supplierId, issueDate, amount, extra = {}) => spec(n, supplierId, issueDate, amount, extra);
-/** A MARJIN_CREDITS/2 node built by the real writer domain (cleared reviews unless stated). */
+/** A MARJIN_CREDITS/3 node built by the real writer domain (cleared reviews unless stated). */
 const node = (...specs) => creditNode(specs);
 const BIND = { tenantId: T, bizId: B };
 const SUPS = [{ id: "s1", name: "קוקה קולה" }, { id: 2, name: "ירקות" }];
@@ -90,8 +90,9 @@ test("P1B-03 form validation uses the core rules: supplier of the business, real
   deq(errs({ supplierId: "s1", issueDate: "2026-10-02", amount: "1", documentNumber: "x".repeat(65), note: "y".repeat(501) }), ["documentNumber", "note"]);
   for (const [d, code] of [["   ", "document_number_required"], ["CR*1", "invalid_document_number_chars"], ["CR\u200F1", "invalid_document_number"]]) assert.equal(P1.validateForm(F, { supplierId: "s1", issueDate: "2026-10-02", amount: "1", documentNumber: d }, SUPS).errors.documentNumber, P1.ERRORS[code], d);
   // editing: a changed supplier / normalized number is an explicit identity correction; formatting is not
-  const editing = { supplierId: "s1", documentKey: "cr1" };
-  assert.equal(P1.validateForm(F, { supplierId: "s1", issueDate: "2026-10-02", amount: "1", documentNumber: "cr / 1" }, SUPS, editing).identityChanged, false);
+  const editing = { supplierId: "s1", documentKey: "cr~2d~1" };
+  assert.equal(P1.validateForm(F, { supplierId: "s1", issueDate: "2026-10-02", amount: "1", documentNumber: "cr-1" }, SUPS, editing).identityChanged, false);
+  assert.equal(P1.validateForm(F, { supplierId: "s1", issueDate: "2026-10-02", amount: "1", documentNumber: "cr/1" }, SUPS, editing).identityChanged, true);
   assert.equal(P1.validateForm(F, { supplierId: "s1", issueDate: "2026-10-02", amount: "1", documentNumber: "CR-2" }, SUPS, editing).identityChanged, true);
   assert.equal(P1.validateForm(F, { supplierId: "2", issueDate: "2026-10-02", amount: "1", documentNumber: "CR-1" }, SUPS, editing).identityChanged, true);
   assert.equal(P1.ERRORS.invalid_amount.includes("חיובי"), true);
@@ -138,12 +139,12 @@ test("P1B-07 month view states: loading, unavailable (not_loaded / unreadable �
     rec(3, "2", "2026-10-02", "10.5"),
     rec(4, "s1", "2026-10-02", "7", { voided: true }),
     rec(5, "s1", "2026-09-30", "1000"),
-  ]), 1, 2, { issueDate: "2026-10-03", amount: "90", documentNumber: "CR 1" }));
+  ]), 1, 2, { issueDate: "2026-10-03", amount: "90", documentNumber: "CR-1" }));
   const v = P1.monthView(F, st, "2026-10", SUPS);
   deq(v.rows.map((r) => [r.creditId, r.issueDate, r.status, r.statusText, r.counted, r.editable]), [
     [cid(2), "2026-10-03", "active", "", true, true], [cid(3), "2026-10-02", "active", "", true, true], [cid(4), "2026-10-02", "voided", "בוטל", false, false], [cid(1), "2026-10-01", "replaced", "הוחלף בעריכה", false, false],
   ]);
-  assert.equal(v.total, "100.5"); assert.equal(v.activeCount, 2); assert.equal(v.rows[1].supplierName, "ירקות"); assert.equal(v.rows[0].documentNumber, "CR 1");
+  assert.equal(v.total, "100.5"); assert.equal(v.activeCount, 2); assert.equal(v.rows[1].supplierName, "ירקות"); assert.equal(v.rows[0].documentNumber, "CR-1");
   assert.equal(v.rows[0].headSeq, 2, "the edit / void CAS is the logical credit's head sequence");
   assert.equal(P1.monthView(F, st, "2026-09", SUPS).total, "1000", "issue-month listing: the September credit is listed only in September");
 });
@@ -164,7 +165,7 @@ test("P1B-08 invalid records are surfaced in their issue month (undatable ones i
 test("P1B-09 a record's note survives into the edit form; the edit (replace) body keeps the logical credit's head sequence for CAS", () => {
   const st = decoded(node(rec(1, "s1", "2026-10-02", "5", { note: "חשבונית 77" })));
   const r = P1.monthView(F, st, "2026-10", SUPS).rows[0];
-  assert.equal(r.note, "חשבונית 77"); assert.equal(r.headSeq, 1); assert.equal(r.documentKey, "cr1");
+  assert.equal(r.note, "חשבונית 77"); assert.equal(r.headSeq, 1); assert.equal(r.documentKey, "cr~2d~1");
   assert.match(HTML, /note: row\.note \|\| "" \}\);/, "startEditCredit restores the note");
 });
 

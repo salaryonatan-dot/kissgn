@@ -60,7 +60,7 @@ test("P1G-05 negative controls INSIDE the P1 zones: write path, negative-purchas
     ["a second P1 block", BLOCK, BLOCK + "\n    // ── P1 supplier credits browser seam (copy)", "p1_block_shape"],
     ["bundle identity reverted", 'v.product !== "MARJIN_PRODUCT/3"', 'v.product !== "MARJIN_PRODUCT/2"', "bundle_identity"],
     ["an extra credit-write call", '      else await runCreditOperation("create-supplier-credit", P1.createBody(ctx, v.input, creditId, operationId), ctx, P1.TXT.saved, after);', '      else await runCreditOperation("create-supplier-credit", P1.createBody(ctx, v.input, creditId, operationId), ctx, P1.TXT.saved, after) || await creditMutation("create-supplier-credit", {}, ctx);', "credit_action_shape"],
-    ["the P1 seam no longer names its R1 contract", 'var CREDITS_CONTRACT = "MARJIN_CREDITS/2";', 'var CREDITS_CONTRACT = "MARJIN_CREDITS/1";', "p1_contract_identity"],
+    ["the P1 seam no longer names its R1 contract", 'var CREDITS_CONTRACT = "MARJIN_CREDITS/3";', 'var CREDITS_CONTRACT = "MARJIN_CREDITS/1";', "p1_contract_identity"],
     ["a hard-delete action", BLOCK, BLOCK + '\n    var DEL = "delete-supplier-credit"; var X = "void-supplier-credit";', "credit_action_shape"],
   ];
   for (const [label, from, to, want] of cases) assert.equal(reason(once(candidate, from, to)), want, label);
@@ -86,7 +86,9 @@ test("P1G-07 the pins are fixed literals, pending independent review, cover exac
     assert.match(b, /^[0-9a-f]{40}$/, f);
     assert.equal(blobOf(readFileSync(join(REPO, f))), b, f + " = pinned blob");
   }
-  assert.ok(!Object.keys(P1_PINS.blobs).some((f) => f === "database.rules.json" || f.startsWith("test/")), "no Rules change; no test file pinned as runtime");
+  assert.ok(P1_PINS.blobs["database.rules.json"], "the legacy-credit Rules denial has an exact candidate pin");
+  assert.ok(P1_PINS.blobs["test/support/rules-authorized-delta.mjs"], "the semantic Rules guard has an exact candidate pin");
+  assert.ok(!Object.keys(P1_PINS.blobs).some((f) => f.startsWith("test/") && f !== "test/support/rules-authorized-delta.mjs"), "no unrelated test file is a runtime pin");
 });
 
 test("P1G-08 owner decision 4: the legacy pending-credit card stays RETIRED — re-adding its subscription, state, input component, alert card or resolve action is refused (R6)", () => {

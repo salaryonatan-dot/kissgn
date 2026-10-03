@@ -142,6 +142,21 @@ async function main() {
     expect(await denied(asUser("r-cross-tenant owner", PRINCIPALS[3][1]).ref(`tenants/${T}/biz:${B}:suppliers`).once("value")), "cross-tenant denied");
     return "principals effective";
   });
+  await run("SCE-A4", "legacy credit data remains readable but every new client write, including a parent update, is denied", async () => {
+    await seed();
+    const legacy = `tenants/${T}/biz:${B}:credits`;
+    const old = { _v: JSON.stringify([{ id: "legacy-1", amount: "10" }]) };
+    await seedDb().ref(legacy).set(old);
+    for (const [name, o] of PRINCIPALS) {
+      const db = asUser("legacy-" + name, o);
+      if (name === "owner" || name === "manager") eq(JSON.stringify((await db.ref(legacy).once("value")).val()), JSON.stringify(old), name + " read compatibility");
+      for (const op of [() => db.ref(legacy).set({ _v: "[]" }), () => db.ref(`${legacy}/_v`).set("[]"),
+        () => db.ref(`tenants/${T}`).update({ [`biz:${B}:credits/_v`]: "[]" }), () => db.ref(legacy).remove()])
+        expect(await denied(op()), name + " legacy mutation denied");
+    }
+    eq(JSON.stringify((await seedDb().ref(legacy).once("value")).val()), JSON.stringify(old), "legacy bytes preserved");
+    return "legacy read retained, writes denied";
+  });
 
   await run("SCE-B1", "parallel creates (12) all land over the real transaction: 12 records, 12 ledger entries, 12 CLEARED reviews; the node decodes VALID", async () => {
     await seed();
@@ -210,7 +225,7 @@ async function main() {
   for (const r of results) console.log(`${w(r.id, 7)} ${w(r.status, 6)} ${r.status === "PASS" ? r.notes : r.notes.split("\n")[0]}`);
   console.log("\n=== TOTALS ===");
   console.log(`total=${results.length} passed=${results.length - failures} failed=${failures}`);
-  if (results.length !== 8) { process.exitCode = 3; return; }
+  if (results.length !== 9) { process.exitCode = 3; return; }
   if (failures) { console.error("\n=== FAILURES ==="); for (const r of results.filter((x) => x.status === "FAIL")) console.error(`${r.id} ${r.description}\n    ${r.notes}`); process.exitCode = 1; return; }
   console.log("\nALL CASES PASSED — supplier credits are server-mediated, client-denied and exactly-once over the real emulator");
 }

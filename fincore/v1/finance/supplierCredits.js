@@ -1,9 +1,11 @@
 import { decAdd, decFromPlainString, decIsNegative, decIsZero, decSub, serializeDec } from "./decimal.js";
 import { isBusinessDate } from "./businessDate.js";
 import { sortFlags } from "./normalize.js";
-export const SUPPLIER_CREDITS_CONTRACT_VERSION = "MARJIN_CREDITS/2";
-export const SUPPLIER_CREDITS_SCHEMA_VERSION = 2;
-export const CREDIT_REVIEW_SCHEMA = "MARJIN_CREDITR/1";
+export const SUPPLIER_CREDITS_CONTRACT_VERSION = "MARJIN_CREDITS/3";
+export const SUPPLIER_CREDITS_SCHEMA_VERSION = 3;
+export const CREDIT_REVIEW_SCHEMA = "MARJIN_CREDITR/2";
+export const CREDIT_FLAG_AUDIT_SCHEMA = "MARJIN_CREDIT_AUDIT/2";
+export const CREDIT_DECISION_AUDIT_SCHEMA = "MARJIN_CREDIT_DECISION/1";
 /** Same identity grammar as entry rows (UUID v4, lower-case). */
 export const CREDIT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 /** Operation ids: the entry-exception grammar (RTDB-safe). */
@@ -25,13 +27,12 @@ export const CREDIT_REVIEW_DECIDER_ROLES = Object.freeze(["owner"]);
 /**
  * Separators: Unicode white space, the hyphen / dash family (U+002D, U+2010–U+2015, U+2212 minus,
  * U+05BE Hebrew maqaf), slash, backslash, underscore, full stop, colon and number sign. Separators are
- * REMOVED from the key (the Codex remediation contract), so separator-formatting differences merge
- * ("CR001", "CR 001", "cr-001", "CR/001", "CR - 001" all share the key "cr001"). Accepted consequence:
- * numbers that differ ONLY in separator placement ("12-3" / "1-23") are one identity. Nothing else
- * (leading zeros, letters, digits) is ever rewritten.
+ * preserved with their positions in the hard identity. A separate similarity fingerprint removes
+ * them only to warn about likely duplicates; it never reserves or merges an identity.
  */
 const SEPARATOR_CLASS = "\\s\\-\\u2010-\\u2015\\u2212\\u05BE\\/\\\\_.:#";
 const SEP_RUN = new RegExp("[" + SEPARATOR_CLASS + "]+", "gu");
+const SEP_CHAR = new RegExp("^[" + SEPARATOR_CLASS + "]$", "u");
 const ALLOWED_CHAR = new RegExp("^[\\p{L}\\p{M}\\p{N}" + SEPARATOR_CLASS + "]$", "u");
 const FORBIDDEN_CHAR = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]/u;
 const HAS_ALNUM = /[\p{L}\p{N}]/u;
@@ -42,11 +43,12 @@ const HAS_ALNUM = /[\p{L}\p{N}]/u;
  *   2. display = trimmed, every white-space run collapsed to one ASCII space; empty ⇒ required;
  *      display length ≤ 64 UTF-16 units (rejected, never truncated);
  *   3. every character is a letter, a combining mark, a digit or a separator (above);
- *   4. key = NFKC(lowercase(display)) with every separator removed; the key must contain at least one
- *      letter or digit (it is then letters / marks / digits only, hence RTDB-key-safe).
+ *   4. hard key = NFKC(lowercase(display)) with each separator escaped as ~hex~. Since ~ is not an
+ *      allowed input character this preserves punctuation and positions without an RTDB-key collision.
+ *   5. fingerprint = the same canonical text with separators removed. It is a warning signal only.
  * Case folding is the locale-INDEPENDENT Unicode default (String.prototype.toLowerCase).
  */
-export function normalizeDocumentNumber(raw) {
+export function normalizeDocumentNumber(raw, caseSensitive = false) {
     if (raw === undefined || raw === null)
         return { ok: false, code: "document_number_required" };
     if (typeof raw !== "string")
@@ -62,10 +64,12 @@ export function normalizeDocumentNumber(raw) {
     for (const ch of display)
         if (!ALLOWED_CHAR.test(ch))
             return { ok: false, code: "invalid_document_number_chars" };
-    const key = display.toLowerCase().normalize("NFKC").replace(SEP_RUN, "");
-    if (!HAS_ALNUM.test(key))
+    const canonical = (caseSensitive ? display : display.toLowerCase()).normalize("NFKC");
+    const fingerprint = display.toLowerCase().normalize("NFKC").replace(SEP_RUN, "");
+    if (!HAS_ALNUM.test(fingerprint))
         return { ok: false, code: "invalid_document_number_chars" };
-    return { ok: true, display, key };
+    const key = [...canonical].map((ch) => SEP_CHAR.test(ch) ? "~" + ch.codePointAt(0).toString(16) + "~" : ch).join("");
+    return { ok: true, display, key, fingerprint };
 }
 function isPlainObject(v) {
     return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -99,8 +103,8 @@ export function isValidNote(v) {
     return typeof v === "string" && v.length > 0 && v.length <= MAX_NOTE_LENGTH && v.trim() === v && !/[\u0000-\u001f]/.test(v);
 }
 // ── per-entry decoding (no cross-reference) ──────────────────────────────────────────────────────
-const RECORD_REQUIRED = ["creditId", "logicalId", "tenantId", "bizId", "supplierId", "issueDate", "amount", "documentNumber", "documentKey", "operationId", "seq", "createdAt", "createdBy", "createdRole"];
-const RECORD_OPTIONAL = ["note", "replacesCreditId", "identityCorrection"];
+const RECORD_REQUIRED = ["creditId", "logicalId", "tenantId", "bizId", "supplierId", "issueDate", "amount", "documentNumber", "documentKey", "documentCaseSensitive", "operationId", "seq", "createdAt", "createdBy", "createdRole"];
+const RECORD_OPTIONAL = ["note", "replacesCreditId", "identityCorrection", "similarityConfirmation"];
 function decodeRecord(key, r, bind) {
     if (!exactKeys(r, RECORD_REQUIRED, RECORD_OPTIONAL))
         return { code: "invalid_record" };
@@ -116,8 +120,17 @@ function decodeRecord(key, r, bind) {
     // the stored amount must already be canonical (the writer canonicalizes): "300.50" is not a stored form
     if (amount === null || amount !== r.amount)
         return { code: "invalid_amount" };
-    const doc = normalizeDocumentNumber(r.documentNumber);
+    if (typeof r.documentCaseSensitive !== "boolean")
+        return { code: "invalid_document" };
+    const doc = normalizeDocumentNumber(r.documentNumber, r.documentCaseSensitive);
     if (!doc.ok || doc.display !== r.documentNumber || doc.key !== r.documentKey)
+        return { code: "invalid_document" };
+    const sc = r.similarityConfirmation;
+    if (sc !== undefined && (!isPlainObject(sc) || !exactKeys(sc, ["fingerprint", "confirmedAgainst", "reason", "by", "at"]) ||
+        sc.fingerprint !== doc.fingerprint || !Array.isArray(sc.confirmedAgainst) || sc.confirmedAgainst.length === 0 ||
+        !sc.confirmedAgainst.every(isCreditId) || new Set(sc.confirmedAgainst).size !== sc.confirmedAgainst.length ||
+        [...sc.confirmedAgainst].sort().join("|") !== sc.confirmedAgainst.join("|") || !isValidNote(sc.reason) ||
+        sc.by !== r.createdBy || sc.at !== r.createdAt))
         return { code: "invalid_document" };
     if (r.note !== undefined && !isValidNote(r.note))
         return { code: "invalid_record" };
@@ -135,7 +148,8 @@ function decodeRecord(key, r, bind) {
         return { code: "invalid_link" };
     return {
         creditId: key, logicalId: r.logicalId, supplierId: r.supplierId, issueDate: r.issueDate, amount,
-        documentNumber: doc.display, documentKey: doc.key, note: r.note === undefined ? null : r.note,
+        documentNumber: doc.display, documentKey: doc.key, documentCaseSensitive: r.documentCaseSensitive,
+        similarityConfirmation: sc === undefined ? null : sc, note: r.note === undefined ? null : r.note,
         replacesCreditId: repl === undefined ? null : repl, identityCorrection: r.identityCorrection === true,
         operationId: r.operationId, seq: r.seq, createdAt: r.createdAt, createdBy: r.createdBy, createdRole: r.createdRole,
     };
@@ -170,14 +184,14 @@ export const REVIEW_RESOLUTIONS = Object.freeze({
     cleared: Object.freeze(["post_commit_authorized", "reconciled_authorized"]),
     flagged: Object.freeze(["revoked_during_commit", "reconciled_unauthorized"]),
 });
-function decodeReview(key, e) {
+function decodeReview(key, e, bind) {
     if (!OPERATION_ID_RE.test(key) || e.schema !== CREDIT_REVIEW_SCHEMA)
         return null;
     const st = e.state, kind = e.kind;
     if (kind !== "create" && kind !== "void" && kind !== "replace")
         return null;
     const base = [...REVIEW_BASE, ...(kind === "replace" ? ["newCreditId"] : [])];
-    const resolved = st === "cleared" || st === "flagged" ? ["resolvedAt", "resolution"] : st === "acknowledged" || st === "rejected" ? ["resolvedAt", "resolution", "decidedAt", "decidedBy"] : st === "pending" ? [] : null;
+    const resolved = st === "cleared" ? ["resolvedAt", "resolution"] : st === "flagged" ? ["resolvedAt", "resolution", "flagAudit"] : st === "acknowledged" || st === "rejected" ? ["resolvedAt", "resolution", "flagAudit", "decidedAt", "decidedBy", "decisionAudit"] : st === "pending" ? [] : null;
     if (resolved === null || !exactKeys(e, [...base, ...resolved]))
         return null;
     if (!isCreditId(e.logicalId) || !isCreditId(e.creditId))
@@ -197,6 +211,20 @@ function decodeReview(key, e) {
     }
     if (st === "acknowledged" || st === "rejected") {
         if (!isSafeInt(e.decidedAt, 1) || e.decidedAt < e.resolvedAt || !isActor(e.decidedBy))
+            return null;
+        const a = e.decisionAudit;
+        if (!isPlainObject(a) || !exactKeys(a, ["contract", "operationId", "targetOperationId", "tenantId", "bizId", "intentDigest", "decision", "by", "at"]) ||
+            a.contract !== CREDIT_DECISION_AUDIT_SCHEMA || !OPERATION_ID_RE.test(String(a.operationId)) || a.targetOperationId !== key ||
+            a.intentDigest !== e.intentDigest || a.decision !== st || a.by !== e.decidedBy || a.at !== e.decidedAt ||
+            a.tenantId !== bind.tenantId || a.bizId !== bind.bizId)
+            return null;
+    }
+    if (st === "flagged" || st === "acknowledged" || st === "rejected") {
+        const a = e.flagAudit;
+        if (!isPlainObject(a) || !exactKeys(a, ["contract", "tenantId", "bizId", "operationId", "logicalId", "creditId", "intentDigest", "actor", "committedAt", "outcome", "detectedAt"]) ||
+            a.contract !== CREDIT_FLAG_AUDIT_SCHEMA || a.operationId !== key || a.logicalId !== e.logicalId || a.creditId !== e.creditId ||
+            a.intentDigest !== e.intentDigest || a.actor !== e.actor || a.committedAt !== e.committedAt || a.outcome !== e.resolution || a.detectedAt !== e.resolvedAt ||
+            a.tenantId !== bind.tenantId || a.bizId !== bind.bizId)
             return null;
     }
     return {
@@ -451,10 +479,22 @@ export function decodeSupplierCredits(raw, expect) {
     const recordDefective = new Set(defects.map((d) => d[0]).filter((x) => x !== null));
     const report = (lid, key, code) => { if (lid === null || !recordDefective.has(lid))
         defects.push([lid, key, code]); };
+    for (const r of records)
+        if (r.similarityConfirmation) {
+            const fp = normalizeDocumentNumber(r.documentNumber, r.documentCaseSensitive);
+            for (const logicalId of r.similarityConfirmation.confirmedAgainst) {
+                if (!records.some((other) => other.logicalId === logicalId && other.logicalId !== r.logicalId && other.supplierId === r.supplierId &&
+                    other.documentKey !== r.documentKey && normalizeDocumentNumber(other.documentNumber, other.documentCaseSensitive).ok &&
+                    normalizeDocumentNumber(other.documentNumber, other.documentCaseSensitive).fingerprint === fp.fingerprint))
+                    report(r.logicalId, r.creditId, "invalid_document");
+            }
+        }
     const reviews = new Map();
     for (const [k, e] of Object.entries(raw.review || {})) {
-        const r = isPlainObject(e) ? decodeReview(k, e) : null;
+        const r = isPlainObject(e) ? decodeReview(k, e, bind) : null;
         if (!r) {
+            if (isPlainObject(e) && (e.state === "flagged" || e.state === "acknowledged" || e.state === "rejected"))
+                return { state: "unreadable", reason: "invalid_review_audit" };
             report(lidOf(e), k, "invalid_review");
             continue;
         }
@@ -543,7 +583,8 @@ export function decodeSupplierCredits(raw, expect) {
             const touches = !!u && ((u.record !== undefined && u.record.creditId === r.creditId) || u.target === r.creditId);
             out.push({
                 creditId: r.creditId, logicalId: r.logicalId, supplierId: r.supplierId, issueDate: r.issueDate, amount: r.amount,
-                status: f.recordStatus.get(r.creditId), documentNumber: r.documentNumber, documentKey: r.documentKey, note: r.note,
+                status: f.recordStatus.get(r.creditId), documentNumber: r.documentNumber, documentKey: r.documentKey,
+                documentCaseSensitive: r.documentCaseSensitive, similarityConfirmation: r.similarityConfirmation, note: r.note,
                 replacesCreditId: r.replacesCreditId, replacedByCreditId: f.successor.get(r.creditId) || null, identityCorrection: r.identityCorrection,
                 operationId: r.operationId, seq: r.seq, createdAt: r.createdAt, createdBy: r.createdBy, createdRole: r.createdRole,
                 review: reviews.get(r.operationId).state, unresolved: touches ? f.logical.unresolved : null,

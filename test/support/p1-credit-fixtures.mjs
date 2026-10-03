@@ -1,4 +1,4 @@
-// P1 R1 test support: MARJIN_CREDITS/2 nodes built with the REAL pure writer domain
+// P1 R1 test support: MARJIN_CREDITS/3 nodes built with the REAL pure writer domain
 // (lib/supplierCredits.js applyCreditOperation + applyReviewTransition) — never hand-written envelopes —
 // so every fixture is exactly what the server would store. Invalid shapes are produced by mutating a
 // valid node AFTER it was built (`mutate`).
