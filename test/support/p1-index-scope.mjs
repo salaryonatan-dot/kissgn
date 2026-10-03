@@ -14,7 +14,11 @@
 //       and the four credit actions each appear exactly once;
 //   R5  while the subtraction primitives (decSub / ratSub / subAmounts) appear exactly as often as
 //       in the base: the page never computes net purchases itself (formula duplication) — net is
-//       the shared core's.
+//       the shared core's;
+//   R6  (P1 R1, owner decision 4) while the legacy pending-credit card stays RETIRED: no legacy
+//       `biz:{b}:credits` subscription, no pending-credit state, no legacy input component, no
+//       `resolveCredit` action — new credits enter only through the Supplier Credits tab;
+//   R7  (P1 R1) while the P1 block names the MARJIN_P1/2 seam over the MARJIN_CREDITS/2 contract.
 // Everything outside the zones is byte-identical to the reviewed C1 R2 page. This is not an
 // exemption: content identity is the separate P1 pin layer (test/support/p1-candidate-pin.mjs).
 import { C1_PROTECTED, C1_WRITE_TOKENS, diffHunks } from "./c1-index-scope.mjs";
@@ -37,9 +41,17 @@ export const P1_ZONES = Object.freeze([
   ["supplier strip disclosures (insertion)", '                          <div style={{fontSize:11,color:"#64748B"}}>{sv.top.text} · {sv.top.pctText}</div>', "{sv.revenue.partial&&<div", "insert"],
   ["supplier row gross − credits", '                              <span data-c1={"sup-row-"+sup.id}', "{supRow.text}</span>"],
   ["Supplier Credits tab (insertion)", '                  <span data-c1="sup-footer-total"', "          {/* ─── Weather Impact Analysis ─── */}", "insert"],
+  // P1 R1 — retirement of the legacy pending-credit card (owner decision 4); stored data untouched
+  ["legacy pending-credit input component (retired)", "// ─── CreditInput ─", "// ─── Business Selector ─"],
+  ["legacy pending-credit state (retired)", "  const [pendingCredits, setPendingCredits] = useState([]);", " // [{id,supplierId,supplierName,date,amount,note}]"],
+  ["legacy pending-credit reset (retired)", "    setPendingCredits([]);", "    setMasterTasks([]);"],
+  ["legacy credits subscription (retired)", "    sub(`biz:${currentBizId}:credits`,", "setPendingCredits);"],
+  ["legacy pending-credit alert card (retired)", "      {/* ═══ CREDIT ALERTS ═══ */}", "      {/* ═══ ENTRY -- STEP 1: REVENUE ═══ */}"],
 ]);
 
-export const P1_ACTIONS = Object.freeze(["list-supplier-credits", "create-supplier-credit", "void-supplier-credit", "replace-supplier-credit"]);
+export const P1_ACTIONS = Object.freeze(["list-supplier-credits", "create-supplier-credit", "void-supplier-credit", "replace-supplier-credit", "decide-supplier-credit-review", "reconcile-supplier-credit-reviews"]);
+/** Tokens of the retired legacy pending-credit card: none may appear in a P1 R1 page. */
+export const P1_RETIRED_LEGACY = Object.freeze(["pendingCredits", "setPendingCredits", "CreditInput", "resolveCredit", ":credits`", "CREDIT ALERTS"]);
 const SUBTRACTION = Object.freeze(["decSub(", "ratSub(", "subAmounts("]);
 
 const text = (b) => (Buffer.isBuffer(b) ? b.toString("utf8") : String(b));
@@ -95,5 +107,9 @@ export function p1IndexVerdict(baseBytes, candidateBytes) {
   for (const a of P1_ACTIONS) if (countOf(B, a) !== 1) return { ok: false, reason: "credit_action_shape", detail: [a, countOf(B, a)] };
   // R5
   for (const t of SUBTRACTION) if (countOf(B, t) !== countOf(A, t)) return { ok: false, reason: "formula_duplication", detail: [t, countOf(A, t), countOf(B, t)] };
+  // R6
+  for (const t of P1_RETIRED_LEGACY) if (countOf(B, t) !== 0) return { ok: false, reason: "legacy_credit_card_reactivated", detail: [t, countOf(B, t)] };
+  // R7
+  if (countOf(B, 'var P1_VERSION = "MARJIN_P1/2";') !== 1 || countOf(B, 'var CREDITS_CONTRACT = "MARJIN_CREDITS/2";') !== 1) return { ok: false, reason: "p1_contract_identity" };
   return { ok: true };
 }

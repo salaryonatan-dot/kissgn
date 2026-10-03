@@ -1,4 +1,4 @@
-// Marjin — P1 Supplier Credits over the REAL local RTDB emulator.
+// Marjin — P1 Supplier Credits (P1 R1, MARJIN_CREDITS/2) over the REAL local RTDB emulator.
 //   SCE-A  Rules: the credit node `tenants/{t}/biz:{b}:supplier_credits` (and every child) is
 //          client-DENIED for owner, manager (with business access), viewer, a cross-tenant owner
 //          and the unauthenticated principal — read, set, update, child write. No Rules change:
@@ -6,8 +6,9 @@
 //          positive control (the owner may read `biz:{b}:suppliers`) proves the principals work.
 //   SCE-B  the ACTUAL api/admin.js handlers over the real Admin transport (only auth / email /
 //          Admin-app seams replaced): parallel creates all land (append-safe, one revision each);
-//          parallel voids of the SAME revision → exactly one applies; a parallel duplicate
-//          operation applies once; the stored node decodes VALID with the Financial Core.
+//          parallel voids of the SAME head → exactly one applies; a parallel duplicate
+//          operation applies once; every review is cleared; the stored node decodes VALID.
+//          P1 R1: the review / reservation / pointer children are client-denied as well.
 //   SCE-C  the loader reads the node through the real transport and the month report is net.
 //
 // Deliberately NOT named *.test.mjs. Run with the own-pid emulator runner (see test/emulator/README.md).
@@ -41,6 +42,8 @@ const dir = mkdtempSync(join(tmpdir(), "p1-admin-emu-"));
 cpSync(join(ROOT, "lib"), join(dir, "lib"), { recursive: true });
 mkdirSync(join(dir, "api"), { recursive: true });
 cpSync(join(ROOT, "api", "admin.js"), join(dir, "api", "admin.js"));
+mkdirSync(join(dir, "fincore"), { recursive: true });
+cpSync(join(ROOT, "fincore", "v1"), join(dir, "fincore", "v1"), { recursive: true });
 try { symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "dir"); } catch (_) {}
 writeFileSync(join(dir, "lib", "adminSdk.js"), `export function getAdminDb() { return globalThis.__DB(); }\nexport function getAdminAuth() { return { getUser: async () => ({}) }; }\n`);
 writeFileSync(join(dir, "lib", "verifyToken.js"), `export async function requireAuth() { if (!globalThis.__CLAIMS) throw new Error("no auth"); return globalThis.__CLAIMS; }\nexport async function verifyToken() { return globalThis.__CLAIMS; }\n`);
@@ -48,6 +51,7 @@ writeFileSync(join(dir, "lib", "sendEmail.js"), `export async function sendEmail
 const handler = (await import(pathToFileURL(join(dir, "api", "admin.js")).href)).default;
 const SC = await import(pathToFileURL(join(ROOT, "lib", "supplierCredits.js")).href);
 const CORE = (await import(pathToFileURL(join(ROOT, "fincore", "v1", "browser", "marjinFinanceGlobal.js")).href)).default;
+const FIX = await import(pathToFileURL(join(ROOT, "test", "support", "p1-credit-fixtures.mjs")).href);
 
 const T = "tenantA", B = "bizA", NODE = `tenants/${T}/biz:${B}:supplier_credits`;
 const cid = (n) => `c0000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -77,7 +81,7 @@ async function call(action, body, claims = { uid: "u_owner", email: "o@x" }, met
   await handler({ method, query: { action, ...query }, headers: { authorization: "Bearer t" }, body }, r);
   return { code: r.code, body: r.body };
 }
-const CREATE = (n, over = {}) => ({ tenantId: T, bizId: B, creditId: cid(n), operationId: oid(n), supplierId: "s1", issueDate: "2026-08-15", amount: "10", ...over });
+const CREATE = (n, over = {}) => ({ tenantId: T, bizId: B, creditId: cid(n), operationId: oid(n), supplierId: "s1", issueDate: "2026-08-15", amount: "10", documentNumber: "CR-" + n, ...over });
 
 const results = []; let failures = 0;
 async function run(id, description, fn) {
@@ -96,14 +100,14 @@ async function main() {
     ["owner", { uid: "u_owner", token: { email: "o@x" } }], ["manager", { uid: "u_mgr", token: { email: "m@x" } }],
     ["viewer", { uid: "u_view", token: { email: "v@x" } }], ["cross-tenant owner", { uid: "u_other", token: { email: "x@x" } }], ["unauthenticated", null],
   ];
-  const STORED = { schemaVersion: 1, revision: 1, records: { [cid(1)]: { creditId: cid(1), supplierId: "s1", issueDate: "2026-08-15", amount: "300", status: "active", revision: 1 } } };
+  const STORED = FIX.creditNode([FIX.spec(1, "s1", "2026-08-15", "300")], { tenantId: T, bizId: B });
 
   await run("SCE-A1", "Rules: every client principal is DENIED read of the credit node and of each child (records, operations, schemaVersion)", async () => {
     await seed(STORED);
     let n = 0;
     for (const [name, o] of PRINCIPALS) {
       const db = asUser("r-" + name, o);
-      for (const p of [NODE, NODE + "/records", NODE + `/records/${cid(1)}`, NODE + "/operations", NODE + "/schemaVersion"]) { expect(await denied(db.ref(p).once("value")), `${name} read ${p} must be denied`); n++; }
+      for (const p of [NODE, NODE + "/records", NODE + `/records/${cid(1)}`, NODE + "/operations", NODE + "/schemaVersion", NODE + "/review", NODE + "/documents", NODE + "/heads", NODE + "/voids"]) { expect(await denied(db.ref(p).once("value")), `${name} read ${p} must be denied`); n++; }
     }
     return n + " reads denied";
   });
@@ -120,6 +124,11 @@ async function main() {
         () => db.ref(NODE + "/schemaVersion").set(2),
         () => db.ref(NODE).remove(),
         () => db.ref(`tenants/${T}`).update({ [`biz:${B}:supplier_credits/revision`]: 5 }),
+        () => db.ref(NODE + `/review/${oid(1)}/state`).set("cleared"),
+        () => db.ref(NODE + `/review/${oid(1)}`).set({ state: "acknowledged" }),
+        () => db.ref(NODE + "/heads").remove(),
+        () => db.ref(NODE + "/documents/s_s1/d_cr1").remove(),
+        () => db.ref(`tenants/${T}/audit/supplier_credit_flags/${oid(1)}`).set({ outcome: "forged" }),
       ];
       for (const op of ops) { expect(await denied(op()), `${name} write must be denied`); n++; }
     }
@@ -134,31 +143,32 @@ async function main() {
     return "principals effective";
   });
 
-  await run("SCE-B1", "parallel creates (12) all land over the real transaction: revision 12, 12 active records, 12 ledger entries; the node decodes VALID", async () => {
+  await run("SCE-B1", "parallel creates (12) all land over the real transaction: 12 records, 12 ledger entries, 12 CLEARED reviews; the node decodes VALID", async () => {
     await seed();
     const rs = await Promise.all(Array.from({ length: 12 }, (_, i) => call("create-supplier-credit", CREATE(i + 1, { amount: String(i + 1) }))));
     for (const r of rs) eq(r.code, 200, JSON.stringify(r.body));
     const nd = (await seedDb().ref(NODE).once("value")).val();
-    eq(nd.revision, 12, "one revision per applied create"); eq(Object.keys(nd.records).length, 12, "records"); eq(Object.keys(nd.operations).length, 12, "ops");
-    const st = CORE.finance.supplierCredits.decodeSupplierCredits(SC.safeNodeView(nd));
-    eq(st.state, "present", "decoded"); eq(st.issues.length, 0, "no invalid record"); eq(st.records.length, 12, "all valid");
+    eq(nd.revision, 24, "one revision per create + one per post-commit clearance"); eq(Object.keys(nd.records).length, 12, "records"); eq(Object.keys(nd.operations).length, 12, "ops");
+    expect(Object.values(nd.review).every((r) => r.state === "cleared"), "every review cleared");
+    const st = CORE.finance.supplierCredits.decodeSupplierCredits(SC.safeNodeView(nd), { tenantId: T, bizId: B });
+    eq(st.state, "present", "decoded"); eq(st.issues.length, 0, "no invalid record"); eq(st.credits.length, 12, "all counted");
     return "12/12 applied";
   });
-  await run("SCE-B2", "parallel voids / replaces of the SAME record revision: exactly ONE applies, every other is a typed 409 with no change", async () => {
+  await run("SCE-B2", "parallel voids / replaces of the SAME head: exactly ONE applies, every other is a typed 409 with no change (never a false credit_not_found)", async () => {
     await seed();
     eq((await call("create-supplier-credit", CREATE(1))).code, 200, "seed credit");
     const racers = [
-      ...Array.from({ length: 4 }, (_, i) => call("void-supplier-credit", { tenantId: T, bizId: B, creditId: cid(1), operationId: oid(100 + i), expectedRecordRevision: 1 })),
-      ...Array.from({ length: 4 }, (_, i) => call("replace-supplier-credit", { ...CREATE(200 + i), creditId: cid(1), newCreditId: cid(200 + i), operationId: oid(200 + i), expectedRecordRevision: 1 })),
+      ...Array.from({ length: 4 }, (_, i) => call("void-supplier-credit", { tenantId: T, bizId: B, creditId: cid(1), operationId: oid(100 + i), expectedSeq: 1 })),
+      ...Array.from({ length: 4 }, (_, i) => call("replace-supplier-credit", { ...CREATE(200 + i, { documentNumber: "CR-1" }), creditId: cid(1), newCreditId: cid(200 + i), operationId: oid(200 + i), expectedSeq: 1 })),
     ];
     const rs = await Promise.all(racers);
     const ok = rs.filter((r) => r.code === 200), lost = rs.filter((r) => r.code === 409);
     eq(ok.length, 1, "exactly one winner " + JSON.stringify(rs.map((r) => [r.code, r.body && r.body.error]))); eq(lost.length, 7, "seven typed conflicts " + JSON.stringify(rs.map((r) => [r.code, r.body && r.body.error])));
-    for (const r of lost) expect(["revision_conflict", "credit_not_active"].includes(r.body.error), r.body.error);
+    for (const r of lost) expect(["revision_conflict", "credit_not_active", "review_unresolved", "credit_not_current"].includes(r.body.error), r.body.error);
     const nd = (await seedDb().ref(NODE).once("value")).val();
-    eq(nd.revision, 2, "one applied mutation after the create"); eq(nd.records[cid(1)].status, "voided", "the record is voided (kept)");
-    const actives = Object.values(nd.records).filter((r) => r.status === "active").length;
-    eq(actives, ok[0].body.result.newCreditId ? 1 : 0, "at most the one replacement is active");
+    eq(Object.keys(nd.operations).length, 2, "the create + exactly one applied mutation"); eq(Object.keys(nd.voids).length, 1, "one void / replace event");
+    const st = CORE.finance.supplierCredits.decodeSupplierCredits(SC.safeNodeView(nd), { tenantId: T, bizId: B });
+    eq(st.issues.length, 0, "valid"); eq(st.credits.length, ok[0].body.result.newCreditId ? 1 : 0, "at most the one replacement counts");
     return "1 applied, 7 refused";
   });
   await run("SCE-B3", "a duplicated operation (same operationId + body, in parallel) applies ONCE; the other replays; a reused operationId with another body is idempotency_conflict", async () => {
@@ -166,7 +176,8 @@ async function main() {
     const [a, b] = await Promise.all([call("create-supplier-credit", CREATE(1)), call("create-supplier-credit", CREATE(1))]);
     eq(a.code, 200, "a"); eq(b.code, 200, "b");
     eq([a.body.applied, b.body.applied].filter(Boolean).length, 1, "applied once"); eq([a.body.replayed, b.body.replayed].filter(Boolean).length, 1, "replayed once");
-    eq((await seedDb().ref(NODE).once("value")).val().revision, 1, "one revision");
+    const nd3 = (await seedDb().ref(NODE).once("value")).val();
+    eq(Object.keys(nd3.operations).length, 1, "one operation"); eq(Object.keys(nd3.records).length, 1, "one record"); eq(nd3.review[oid(1)].state, "cleared", "cleared once");
     const c = await call("create-supplier-credit", CREATE(1, { amount: "11" })); eq(c.code, 409, "conflict"); eq(c.body.error, "idempotency_conflict", "code");
     return "exactly-once";
   });

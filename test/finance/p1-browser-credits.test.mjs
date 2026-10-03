@@ -17,6 +17,7 @@ import { loadFinance, loadSeam, present, absent, ledgerOf, row, srcOf } from "..
 import { compileServer, makeDb } from "../support/server-reader-harness.mjs";
 import { NOW_MS, T, B, env, seedRaw, stableJson, uid, asLegacy } from "../support/b1-fixtures.mjs";
 import * as SC from "../../lib/supplierCredits.js";
+import { spec, creditNode, replaceIn, mutate } from "../support/p1-credit-fixtures.mjs";
 
 const F = await loadFinance();
 const HTML = readFileSync(join(REPO, "index.html"), "utf8");
@@ -36,15 +37,17 @@ const P1 = loadP1();
 /** vm-realm objects compared structurally (cross-realm prototypes differ) */
 const deq = (a, b, m) => assert.deepEqual(a === undefined ? a : JSON.parse(JSON.stringify(a)), b, m);
 const cid = (n) => `c0000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const rec = (n, supplierId, issueDate, amount, extra = {}) => ({ creditId: cid(n), supplierId, issueDate, amount, status: "active", revision: 1, createdAt: 1, createdBy: "u", ...extra });
-const node = (...recs) => ({ schemaVersion: 1, revision: Math.max(1, recs.length), records: Object.fromEntries(recs.map((r) => [r.creditId, r])) });
+const rec = (n, supplierId, issueDate, amount, extra = {}) => spec(n, supplierId, issueDate, amount, extra);
+/** A MARJIN_CREDITS/2 node built by the real writer domain (cleared reviews unless stated). */
+const node = (...specs) => creditNode(specs);
+const BIND = { tenantId: T, bizId: B };
 const SUPS = [{ id: "s1", name: "קוקה קולה" }, { id: 2, name: "ירקות" }];
 const AS_OF = "2026-10-05";
 const pad = (n) => String(n).padStart(2, "0");
 const monthRows = (m, days, sup = () => ({ s1: "300" })) => Array.from({ length: days }, (_, i) => row(`${m}-${pad(i + 1)}`, { sales: "1000", supplier_payments: sup(i + 1), payroll: "100" }, uid(Number(m.slice(5)) * 100 + i + 1)));
 const ROWS = () => [...monthRows("2026-09", 30, (d) => ({ s1: d <= 30 ? "300" : "0" })), ...monthRows("2026-10", 4)];
 const src = (credits, rows = ROWS(), asOf = AS_OF) => ({ ...srcOf({ rows, asOf }), ...(credits === undefined ? {} : { credits }) });
-const decoded = (raw) => F.finance.supplierCredits.decodeSupplierCredits(raw);
+const decoded = (raw) => F.finance.supplierCredits.decodeSupplierCredits(raw, BIND);
 
 // ── P1B-01…06 seam ─────────────────────────────────────────────────────────────
 test("P1B-01 list session: ready / response shape / failed read / deadline → explicit unreadable; a newer key makes the older STALE (never overwrites)", async () => {
@@ -63,24 +66,34 @@ test("P1B-01 list session: ready / response shape / failed read / deadline → e
 });
 
 test("P1B-02 sourceFor: loading until THIS key is held; a failed read is not_loaded (never 'no credits'); a held node is core-decoded", () => {
-  deq(P1.sourceFor(F, null, "k"), { state: "loading" });
-  deq(P1.sourceFor(F, { key: "old", state: "ready", node: null }, "k"), { state: "loading" });
-  deq(P1.sourceFor(F, { key: "k", state: "unreadable", reason: "read_failed" }, "k"), { state: "not_loaded" });
-  deq(P1.sourceFor(F, { key: "k", state: "ready", node: null }, "k"), { state: "absent" });
-  assert.equal(P1.sourceFor(F, { key: "k", state: "ready", node: "garbage" }, "k").state, "unreadable");
-  assert.equal(P1.sourceFor(F, { key: "k", state: "ready", node: node(rec(1, "s1", "2026-10-01", "5")) }, "k").records.length, 1);
+  deq(P1.sourceFor(F, null, "k", BIND), { state: "loading" });
+  deq(P1.sourceFor(F, { key: "old", state: "ready", node: null }, "k", BIND), { state: "loading" });
+  deq(P1.sourceFor(F, { key: "k", state: "unreadable", reason: "read_failed" }, "k", BIND), { state: "not_loaded" });
+  deq(P1.sourceFor(F, { key: "k", state: "ready", node: null }, "k", BIND), { state: "absent" });
+  assert.equal(P1.sourceFor(F, { key: "k", state: "ready", node: "garbage" }, "k", BIND).state, "unreadable");
+  assert.equal(P1.sourceFor(F, { key: "k", state: "ready", node: node(rec(1, "s1", "2026-10-01", "5")) }, "k", BIND).records.length, 1);
+  // P1 R1: the node is BOUND to the selected business; a missing binding or another credit contract is not_loaded
+  assert.equal(P1.sourceFor(F, { key: "k", state: "ready", node: node(rec(1, "s1", "2026-10-01", "5")) }, "k", { tenantId: T, bizId: "bizB" }).state, "unreadable");
+  deq(P1.sourceFor(F, { key: "k", state: "ready", node: null }, "k", null), { state: "not_loaded" });
+  deq(P1.sourceFor({ ...F, versions: { ...F.versions, credits: "MARJIN_CREDITS/1" } }, { key: "k", state: "ready", node: null }, "k", BIND), { state: "not_loaded" });
 });
 
 test("P1B-03 form validation uses the core rules: supplier of the business, real issue date, positive net-of-VAT amount — a NEGATIVE amount is refused (never a negative invoice)", () => {
-  const ok = P1.validateForm(F, { supplierId: "s1", issueDate: "2026-10-02", amount: " 300.50 ", documentNumber: " CR-1 ", note: "" }, SUPS);
-  deq(ok, { ok: true, input: { supplierId: "s1", issueDate: "2026-10-02", amount: "300.5", documentNumber: "CR-1" } });
-  assert.equal(P1.validateForm(F, { supplierId: "2", issueDate: "2026-10-02", amount: "1" }, SUPS).ok, true, "numeric supplier ids compare as strings");
+  const ok = P1.validateForm(F, { supplierId: "s1", issueDate: "2026-10-02", amount: " 300.50 ", documentNumber: " CR   1 ", note: "" }, SUPS);
+  deq(ok, { ok: true, input: { supplierId: "s1", issueDate: "2026-10-02", amount: "300.5", documentNumber: "CR 1" }, identityChanged: false });
+  assert.equal(P1.validateForm(F, { supplierId: "2", issueDate: "2026-10-02", amount: "1", documentNumber: "7" }, SUPS).ok, true, "numeric supplier ids compare as strings");
   const errs = (f) => Object.keys(P1.validateForm(F, f, SUPS).errors || {}).sort();
-  deq(errs({ supplierId: "", issueDate: "", amount: "" }), ["amount", "issueDate", "supplierId"]);
-  deq(errs({ supplierId: "s9", issueDate: "2026-10-02", amount: "1" }), ["supplierId"], "not a supplier of the business");
-  for (const a of ["-300", "0", "0.00", "1,000", "1e3", "abc", "300.555"]) deq(errs({ supplierId: "s1", issueDate: "2026-10-02", amount: a }), ["amount"], a);
-  for (const d of ["2026-02-30", "2027-02-29", "02/10/2026", "2026-10-2"]) deq(errs({ supplierId: "s1", issueDate: d, amount: "1" }), ["issueDate"], d);
+  deq(errs({ supplierId: "", issueDate: "", amount: "" }), ["amount", "documentNumber", "issueDate", "supplierId"], "the document number is MANDATORY");
+  deq(errs({ supplierId: "s9", issueDate: "2026-10-02", amount: "1", documentNumber: "D" }), ["supplierId"], "not a supplier of the business");
+  for (const a of ["-300", "0", "0.00", "1,000", "1e3", "abc", "300.555"]) deq(errs({ supplierId: "s1", issueDate: "2026-10-02", amount: a, documentNumber: "D" }), ["amount"], a);
+  for (const d of ["2026-02-30", "2027-02-29", "02/10/2026", "2026-10-2"]) deq(errs({ supplierId: "s1", issueDate: d, amount: "1", documentNumber: "D" }), ["issueDate"], d);
   deq(errs({ supplierId: "s1", issueDate: "2026-10-02", amount: "1", documentNumber: "x".repeat(65), note: "y".repeat(501) }), ["documentNumber", "note"]);
+  for (const [d, code] of [["   ", "document_number_required"], ["CR*1", "invalid_document_number_chars"], ["CR\u200F1", "invalid_document_number"]]) assert.equal(P1.validateForm(F, { supplierId: "s1", issueDate: "2026-10-02", amount: "1", documentNumber: d }, SUPS).errors.documentNumber, P1.ERRORS[code], d);
+  // editing: a changed supplier / normalized number is an explicit identity correction; formatting is not
+  const editing = { supplierId: "s1", documentKey: "cr1" };
+  assert.equal(P1.validateForm(F, { supplierId: "s1", issueDate: "2026-10-02", amount: "1", documentNumber: "cr / 1" }, SUPS, editing).identityChanged, false);
+  assert.equal(P1.validateForm(F, { supplierId: "s1", issueDate: "2026-10-02", amount: "1", documentNumber: "CR-2" }, SUPS, editing).identityChanged, true);
+  assert.equal(P1.validateForm(F, { supplierId: "2", issueDate: "2026-10-02", amount: "1", documentNumber: "CR-1" }, SUPS, editing).identityChanged, true);
   assert.equal(P1.ERRORS.invalid_amount.includes("חיובי"), true);
 });
 
@@ -90,15 +103,19 @@ test("P1B-04 identities come only from crypto.randomUUID (never Math.random); re
   const ctx = { tenantId: T, bizId: B };
   const input = { supplierId: "s1", issueDate: "2026-10-02", amount: "300" };
   deq(P1.createBody(ctx, input, cid(1), cid(2)), { tenantId: T, bizId: B, creditId: cid(1), operationId: cid(2), ...input });
-  const r = { creditId: cid(1), revision: 3 };
-  deq(P1.voidBody(ctx, r, cid(4)), { tenantId: T, bizId: B, creditId: cid(1), operationId: cid(4), expectedRecordRevision: 3 });
-  deq(P1.replaceBody(ctx, r, input, cid(5), cid(6)), { tenantId: T, bizId: B, creditId: cid(1), newCreditId: cid(5), operationId: cid(6), expectedRecordRevision: 3, ...input });
+  const r = { creditId: cid(1), headSeq: 3, pendingOp: { operationId: "op-77777777", intentDigest: "d".repeat(64) } };
+  deq(P1.voidBody(ctx, r, cid(4)), { tenantId: T, bizId: B, creditId: cid(1), operationId: cid(4), expectedSeq: 3 });
+  deq(P1.replaceBody(ctx, r, input, cid(5), cid(6)), { tenantId: T, bizId: B, creditId: cid(1), newCreditId: cid(5), operationId: cid(6), expectedSeq: 3, ...input });
+  deq(P1.replaceBody(ctx, r, input, cid(5), cid(6), true), { tenantId: T, bizId: B, creditId: cid(1), newCreditId: cid(5), operationId: cid(6), expectedSeq: 3, ...input, identityCorrection: true });
+  deq(P1.decideBody(ctx, r, "reject", cid(7)), { tenantId: T, bizId: B, operationId: cid(7), targetOperationId: "op-77777777", intentDigest: "d".repeat(64), decision: "reject" });
+  deq(P1.reconcileBody(ctx, cid(8)), { tenantId: T, bizId: B, operationId: cid(8) });
 });
 
-test("P1B-05 every server error code has a Hebrew message; unknown codes fall back to 'not saved'", () => {
-  const codes = ["invalid_supplier_id", "unknown_supplier", "suppliers_unavailable", "invalid_issue_date", "invalid_amount", "credit_id_exists", "credit_not_found", "credit_not_active", "revision_conflict", "idempotency_conflict", "record_limit_reached", "operation_limit_reached", "node_unreadable", "role_not_allowed", "business_access_denied", "maintenance", "network"];
-  for (const c of codes) assert.match(P1.errorText(c), /[֐-׿]/, c);
-  assert.equal(P1.errorText("weird"), P1.ERRORS.failed);
+test("P1B-05 every definite server refusal has a Hebrew message; an UNKNOWN code / network failure is 'status unknown — retry the same operation', never 'not saved'", () => {
+  for (const c of P1.DEFINITE) if (!["unauthorized", "forbidden", "invalid_credit_id", "invalid_operation_id", "invalid_new_credit_id", "invalid_expected_seq", "invalid_identity_correction", "invalid_target_operation_id", "invalid_intent_digest", "invalid_decision"].includes(c)) assert.match(P1.errorText(c), /[֐-׿]/, c);
+  for (const c of ["weird", "network", "outcome_unknown", "txn_failed"]) assert.equal(P1.errorText(c), P1.TXT.unknown, c);
+  assert.doesNotMatch(P1.TXT.unknown, /לא נשמר/);
+  assert.equal(P1.ERRORS.network, undefined, "the rejected candidate's 'network ⇒ not saved' message is gone");
 });
 
 test("P1B-06 the seam never reads or writes RTDB and calls only the four credit actions (server-mediated documents)", () => {
@@ -107,7 +124,7 @@ test("P1B-06 the seam never reads or writes RTDB and calls only the four credit 
   const page = HTML;
   const actions = [...page.matchAll(/action=([a-z-]*supplier-credit[a-z-]*)/g)].map((m) => m[1]);
   deq([...new Set(actions)].sort(), ["list-supplier-credits"]);
-  for (const a of ["create-supplier-credit", "void-supplier-credit", "replace-supplier-credit"]) assert.ok(page.includes(`"${a}"`), a);
+  for (const a of ["create-supplier-credit", "void-supplier-credit", "replace-supplier-credit", "decide-supplier-credit-review", "reconcile-supplier-credit-reviews"]) assert.ok(page.includes(`"${a}"`), a);
 });
 
 // ── P1B-07…09 tab view ─────────────────────────────────────────────────────────
@@ -116,33 +133,38 @@ test("P1B-07 month view states: loading, unavailable (not_loaded / unreadable �
   for (const s of [{ state: "not_loaded" }, { state: "unreadable", reason: "schema_version" }]) assert.equal(P1.monthView(F, s, "2026-10", SUPS).status, "unavailable");
   const empty = P1.monthView(F, { state: "absent" }, "2026-10", SUPS);
   deq([empty.status, empty.empty, empty.activeCount, empty.total], ["ready", true, 0, null]);
-  const st = decoded(node(
-    rec(1, "s1", "2026-10-01", "100", { status: "voided", revision: 2, replacedByCreditId: cid(2) }),
-    rec(2, "s1", "2026-10-03", "90", { replacesCreditId: cid(1), documentNumber: "CR-2" }),
+  const st = decoded(replaceIn(creditNode([
+    rec(1, "s1", "2026-10-01", "100"),
     rec(3, "2", "2026-10-02", "10.5"),
-    rec(4, "s1", "2026-10-02", "7", { status: "voided", revision: 2 }),
+    rec(4, "s1", "2026-10-02", "7", { voided: true }),
     rec(5, "s1", "2026-09-30", "1000"),
-  ));
+  ]), 1, 2, { issueDate: "2026-10-03", amount: "90", documentNumber: "CR 1" }));
   const v = P1.monthView(F, st, "2026-10", SUPS);
-  deq(v.rows.map((r) => [r.creditId, r.issueDate, r.status, r.statusText]), [
-    [cid(2), "2026-10-03", "active", ""], [cid(3), "2026-10-02", "active", ""], [cid(4), "2026-10-02", "voided", "בוטל"], [cid(1), "2026-10-01", "voided", "הוחלף בעריכה"],
+  deq(v.rows.map((r) => [r.creditId, r.issueDate, r.status, r.statusText, r.counted, r.editable]), [
+    [cid(2), "2026-10-03", "active", "", true, true], [cid(3), "2026-10-02", "active", "", true, true], [cid(4), "2026-10-02", "voided", "בוטל", false, false], [cid(1), "2026-10-01", "replaced", "הוחלף בעריכה", false, false],
   ]);
-  assert.equal(v.total, "100.5"); assert.equal(v.activeCount, 2); assert.equal(v.rows[1].supplierName, "ירקות"); assert.equal(v.rows[0].documentNumber, "CR-2");
+  assert.equal(v.total, "100.5"); assert.equal(v.activeCount, 2); assert.equal(v.rows[1].supplierName, "ירקות"); assert.equal(v.rows[0].documentNumber, "CR 1");
+  assert.equal(v.rows[0].headSeq, 2, "the edit / void CAS is the logical credit's head sequence");
   assert.equal(P1.monthView(F, st, "2026-09", SUPS).total, "1000", "issue-month listing: the September credit is listed only in September");
 });
 
 test("P1B-08 invalid records are surfaced in their issue month (undatable ones in every month) — never silently dropped", () => {
-  const st = decoded({ schemaVersion: 1, revision: 1, records: { [cid(1)]: rec(1, "s1", "2026-10-02", "0"), [cid(2)]: rec(2, "s1", "2026-10-03", "5") } });
+  const st = decoded(node(rec(1, "s1", "2026-10-02", "1", { raw: { amount: "0" } }), rec(2, "s1", "2026-10-03", "5")));
   const oct = P1.monthView(F, st, "2026-10", SUPS), sep = P1.monthView(F, st, "2026-09", SUPS);
   assert.equal(oct.invalidCount, 1); assert.ok(oct.invalidText); assert.equal(sep.invalidCount, 0);
-  const und = decoded({ schemaVersion: 1, revision: 1, records: { [cid(1)]: rec(1, "s1", "2027-02-29", "5") } });
+  const und = decoded(node(rec(1, "s1", "2027-02-29", "5")));
   assert.equal(P1.monthView(F, und, "2026-01", SUPS).invalidCount, 1);
+  // review states are shown as such — never as counted, never as invalid data
+  const rv = decoded(node(rec(1, "s1", "2026-10-02", "5", { review: "pending" }), rec(2, "s1", "2026-10-03", "6", { review: "flagged" }), rec(3, "s1", "2026-10-04", "7", { review: "rejected" })));
+  const v = P1.monthView(F, rv, "2026-10", SUPS);
+  deq(v.rows.map((r) => [r.creditId, r.counted, r.statusText, r.pendingOp && r.pendingOp.state]), [[cid(3), false, P1.TXT.reviewRejected, null], [cid(2), false, P1.TXT.reviewFlagged, "flagged"], [cid(1), false, P1.TXT.reviewPending, "pending"]]);
+  deq([v.total, v.invalidCount, v.unresolvedCount, v.hasPending], [null, 0, 2, true]); assert.ok(v.reviewText);
 });
 
-test("P1B-09 a record's note survives into the edit form; the edit (replace) body keeps the record's revision for CAS", () => {
+test("P1B-09 a record's note survives into the edit form; the edit (replace) body keeps the logical credit's head sequence for CAS", () => {
   const st = decoded(node(rec(1, "s1", "2026-10-02", "5", { note: "חשבונית 77" })));
   const r = P1.monthView(F, st, "2026-10", SUPS).rows[0];
-  assert.equal(r.note, "חשבונית 77"); assert.equal(r.revision, 1);
+  assert.equal(r.note, "חשבונית 77"); assert.equal(r.headSeq, 1); assert.equal(r.documentKey, "cr1");
   assert.match(HTML, /note: row\.note \|\| "" \}\);/, "startEditCredit restores the note");
 });
 
@@ -163,13 +185,16 @@ test("P1B-10 C1 suppliers / Food Cost view: rows reconcile gross − credits = n
 
 test("P1B-11 C1 incomplete / net-negative / loading: credits loading ⇒ the view is loading; not_loaded / unreadable / invalid ⇒ purchases partial + disclosure; net-negative ⇒ disclosure", () => {
   deq(C1.suppliers(F, src({ state: "loading" }), "2026-09", SUPS), { status: "loading", reason: "supplier_credits" });
-  for (const st of [{ state: "not_loaded" }, decoded("garbage"), decoded({ schemaVersion: 1, revision: 1, records: { [cid(1)]: rec(1, "s1", "2026-09-10", "-5") } })]) {
+  for (const st of [{ state: "not_loaded" }, decoded("garbage"), decoded(node(rec(1, "s1", "2026-09-10", "1", { raw: { amount: "-5" } })))]) {
     const v = C1.suppliers(F, src(st), "2026-09", SUPS);
     assert.equal(v.status, "ready"); assert.equal(v.total.complete, false, JSON.stringify(st).slice(0, 60));
     assert.equal(v.disclosure.incomplete, C1.TXT.creditsIncomplete); assert.equal(v.purchasesPct.num, null, "no complete-looking Food Cost");
   }
   const neg = C1.suppliers(F, src(decoded(node(rec(1, "s1", "2026-09-10", "9500")))), "2026-09", SUPS);
   assert.equal(neg.total.amount, "-500"); assert.equal(neg.disclosure.negative, C1.TXT.negativeNetPurchases);
+  // an unresolved review: purchases incomplete with the REVIEW disclosure (not "invalid data")
+  const pend = C1.suppliers(F, src(decoded(node(rec(1, "s1", "2026-09-10", "50", { review: "pending" })))), "2026-09", SUPS);
+  assert.equal(pend.total.complete, false); assert.equal(pend.disclosure.incomplete, C1.TXT.creditsReview); assert.equal(pend.credits && pend.credits.amount, null, "the pending credit is not counted");
 });
 
 test("P1B-12 without credits (absent node) every C1 view is byte-identical to the pre-P1 composition (no credit source)", () => {
@@ -215,16 +240,17 @@ test("P1B-15 Food Cost parity: the browser C1 report over the list-API node ≡ 
   const CI = await srv.import("src/finance-server/canonicalInputs.js");
   const CM = await srv.import("src/finance-server/canonicalMetrics.js");
   const serialize = F.metrics.report.serializeReport;
-  const nodes = [null, node(rec(1, "s1", "2026-09-15", "300")), node(rec(1, "s1", "2026-09-20", "9500"), rec(2, "s9", "2026-09-21", "3")), { schemaVersion: 1, revision: 1, records: { [cid(1)]: rec(1, "s1", "2026-09-10", "0") } }, "garbage"];
+  const nodes = [null, node(rec(1, "s1", "2026-09-15", "300")), node(rec(1, "s1", "2026-09-20", "9500"), rec(2, "s9", "2026-09-21", "3")), node(rec(1, "s1", "2026-09-10", "1", { raw: { amount: "0" } })), "garbage",
+    node(rec(1, "s1", "2026-09-15", "300", { review: "pending" })), node(rec(1, "s1", "2026-09-15", "300", { review: "flagged" }), rec(2, "s1", "2026-09-16", "20"))];
   const rows = ROWS().map(({ id, ...r }) => ({ id, ...r }));
   for (const stored of nodes) {
     const db = seedRaw(makeDb(), { entries: asLegacy(rows), config: env({}), fixed: null, suppliers: env(SUPS) });
-    if (stored !== null) db.seed(`tenants/${T}/biz:${B}:supplier_credits`, typeof stored === "object" ? { ...stored, operations: { x: { kind: "create" } } } : stored);
+    if (stored !== null) db.seed(`tenants/${T}/biz:${B}:supplier_credits`, stored);
     const si = await CI.loadCanonicalInputs(db, T, B, { site: "t", nowMs: Date.UTC(2026, 9, 5, 9), need: { config: true, fixed: true, exceptions: true } });
     for (const m of ["2026-09", "2026-10"]) {
       const server = CM.canonicalMonthReport(si, { kind: m === "2026-10" ? "open_month" : "closed_month", month: m }).report;
       const listNode = SC.safeNodeView(db.read(`tenants/${T}/biz:${B}:supplier_credits`));
-      const s = { ...srcOf({ rows, asOf: si.asOfBusinessDate, config: present({}), fixed: absent() }), credits: P1.sourceFor(F, { key: "k", state: "ready", node: listNode }, "k") };
+      const s = { ...srcOf({ rows, asOf: si.asOfBusinessDate, config: present({}), fixed: absent() }), credits: P1.sourceFor(F, { key: "k", state: "ready", node: listNode }, "k", BIND) };
       const browser = C1.suppliers(F, s, m, SUPS);
       assert.equal(browser.status, "ready", JSON.stringify(browser));
       assert.equal(serialize(browser.report), serialize(server), `${JSON.stringify(stored).slice(0, 40)} ${m}`);

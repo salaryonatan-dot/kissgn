@@ -11,25 +11,29 @@
 // The literals are FIXED values written by the P1 implementer for the candidate submitted for
 // review; they are never computed at test time. They are NOT approved: they become approved pins
 // only when an independent reviewer confirms that these blobs are the ones they reviewed.
+//
+// P1 R1 (consolidated remediation of the rejected candidate 1057af892db981531c6ab67df86fea873914d0f5): the
+// literals below are the P1 R1 successor's blobs — CANDIDATE identities, pending independent Codex review.
+// The rejected candidate's literals are recorded in the handoff (P1_R1_HANDOFF.md), never reused here.
 export const P1_PINS = Object.freeze({
-  status: "CANDIDATE — pending independent review",
-  lineage: "P1 Supplier Credits successor of C1 R2 358ce56be97a4222609a02f1a126e261744ee6fa",
+  status: "CANDIDATE (P1 R1) — pending independent review (Codex)",
+  lineage: "P1 Supplier Credits R1 successor of the rejected P1 candidate 1057af892db981531c6ab67df86fea873914d0f5 (base C1 R2 358ce56be97a4222609a02f1a126e261744ee6fa)",
   blobs: Object.freeze({
-    "api/admin.js": "36f71a60dc5dcf05bcc744dd999ee30c241cc425",
-    "fincore/v1/MANIFEST.json": "668ff17d9cd476b259662f61cfd96483c9866a46",
+    "api/admin.js": "a0973f0146f706105b4f5d3b62e7123ffd066061",
+    "fincore/v1/MANIFEST.json": "9e9e2d3f2f4555fa704c5ed0c267b041f50d440c",
     "fincore/v1/browser/marjinFinanceGlobal.js": "b512ea5b3835f1e8cf7985942c513e64b5f73cec",
-    "fincore/v1/finance/supplierCredits.js": "33a4c11df1d88cd730007c93acf61261dd0f3c33",
-    "fincore/v1/metrics/report.js": "d1bee7a1e9e90e38fa1eeb5636be901a68f93d1b",
-    "fincore/v1/policy/productFinance.js": "32304ee62bc023dcdb6a4ac387db14f915952717",
-    "index.html": "c35e1babe4d45be06ec2e569b35cfe1b4d5efbcb",
-    "lib/repositories/supplierCreditsRepo.js": "4aa0e7a84659460ed55cc03dc574202f0c31dcb7",
-    "lib/supplierCredits.js": "7e2a6c57f97daff1c95140b17abc353fbdfffbd3",
+    "fincore/v1/finance/supplierCredits.js": "bb97ebab758920b722c50c028f4222713c9ff233",
+    "fincore/v1/metrics/report.js": "dd5010b961b4047877b0f2bc8e043c235c9f1348",
+    "fincore/v1/policy/productFinance.js": "0aa99b1bf9ba891fab600b39c82178cf4414d173",
+    "index.html": "7e9f9ccd4f6b56d82dc2531f0c3170d379d0f336",
+    "lib/repositories/supplierCreditsRepo.js": "4aff658c088f18bf2899d94e7b9e63e100919bd7",
+    "lib/supplierCredits.js": "5fb219603ead0fafec2cd00afa7ecb7b3fcbe9b2",
     "src/browser/marjinFinanceGlobal.ts": "96573cd63843a444e377857418353e11238f6cc6",
-    "src/finance-server/canonicalInputs.ts": "d991f79af55fb93330df11b500f10b32b1e3f46a",
-    "src/finance-server/canonicalMetrics.ts": "e91f71482805ffd9b56f462ffea099e38c9c3aa9",
-    "src/finance/supplierCredits.ts": "c8639b08ea212909d0eb67eae3b5d3e5b537ede8",
-    "src/finance/types.ts": "29cbcea52b7ede8dd8903b3065a752a9302a89a7",
-    "src/metrics/report.ts": "6ad57ea596a6eb3dd22e19860c6e34edfc54f295",
-    "src/policy/productFinance.ts": "bd255d78163928c166ce7e0d83517e66e6c27c22",
+    "src/finance-server/canonicalInputs.ts": "b1c9da2d10611078d6afc45edb5b048e37d32b74",
+    "src/finance-server/canonicalMetrics.ts": "106148d9c4532f075883d63bb65b6f1d19463c26",
+    "src/finance/supplierCredits.ts": "cd7019167ba96c837d8d530b2b201ce0f219b893",
+    "src/finance/types.ts": "09c06d9ac16eb8b6211f5688691391a44b1c7e16",
+    "src/metrics/report.ts": "3e88efd22f2df1bc105cabc92b633039993bea80",
+    "src/policy/productFinance.ts": "696a702052b282e2ec96ca734931536273da16c2",
   }),
 });

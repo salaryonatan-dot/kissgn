@@ -35,6 +35,7 @@ function assertSafe() {
 // the real handler with ONLY the Admin-SDK / auth / email seams replaced; the DB seam is the real Admin transport
 const dir = mkdtempSync(join(tmpdir(), "vf-admin-emu-"));
 cpSync(join(ROOT, "lib"), join(dir, "lib"), { recursive: true });
+cpSync(join(ROOT, "fincore", "v1"), join(dir, "fincore", "v1"), { recursive: true }); // P1 R1: lib/supplierCredits.js imports the shared core rules
 mkdirSync(join(dir, "api"), { recursive: true });
 cpSync(join(ROOT, "api", "admin.js"), join(dir, "api", "admin.js"));
 try { symlinkSync(join(ROOT, "node_modules"), join(dir, "node_modules"), "dir"); } catch (_) {}

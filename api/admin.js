@@ -30,10 +30,10 @@ import { isValidBusinessDate, isValidOperationId, isValidExpectedRevision,
 import { runEntryExceptionTxn, listEntryExceptions } from "../lib/repositories/entryExceptionsRepo.js";
 import { READ_ROLES, WRITE_ROLES, isValidId as scIsValidId } from "../lib/securityContext.js";
 import {
-  isValidCreditId, isValidRecordRevision, validateCreditInput, requestHash as scRequestHash, affectedIssueDates,
-  MAX_NOTE_LENGTH as SC_MAX_NOTE_LENGTH,
+  isValidCreditId, isValidSeq, validateCreditInput, validateVoidReason, requestHash as scRequestHash, datesOfOperation, storedIntentDigest,
+  CREDIT_REVIEW_DECIDER_ROLES,
 } from "../lib/supplierCredits.js";
-import { runSupplierCreditTxn, readSupplierCredits } from "../lib/repositories/supplierCreditsRepo.js";
+import { runSupplierCreditTxn, readSupplierCredits, readSupplierCreditsRaw, transitionReview, persistFlagRecord } from "../lib/repositories/supplierCreditsRepo.js";
 import { parsePolicyRecord, decideAdminAdmission } from "../lib/storagePolicy.js";
 import { readBizDoc, writeBizDoc, readBizDailyRange, getBizDocWithToken, setBizDocGuarded } from "../lib/repositories/bizDataRepo.js";
 import { canonicalizeChecklistDocument } from "../lib/checklistVersion.js";
@@ -119,6 +119,8 @@ export default async function handler(req, res) {
   if (action === "create-supplier-credit")   return handleCreateSupplierCredit(req, res);
   if (action === "void-supplier-credit")     return handleVoidSupplierCredit(req, res);
   if (action === "replace-supplier-credit")  return handleReplaceSupplierCredit(req, res);
+  if (action === "decide-supplier-credit-review")     return handleDecideSupplierCreditReview(req, res);
+  if (action === "reconcile-supplier-credit-reviews") return handleReconcileSupplierCreditReviews(req, res);
   if (action === "get-checklist-template-items") return handleGetChecklistTemplateItems(req, res);
   if (action === "set-checklist-template-items") return handleSetChecklistTemplateItems(req, res);
   if (action === "get-checklist-run")            return handleGetChecklistRun(req, res);
@@ -1962,13 +1964,16 @@ async function handleClearEntryException(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// P1 SUPPLIER CREDITS (MARJIN_CREDITS/1). A credit is its own document — never a negative
-// purchase — attributed to its issue date. Authorization follows the accepted structured
-// document writes (CD-M2): verified identity → tenant role (write: manager/owner/super_owner,
-// explicit set) → business access → version-fence admission; then ONE transaction on the
-// per-business node; then a post-commit re-check (owner DEC-AUTH-1 bounded window: a
-// revocation committed before the check denies the write; one landing between check and
-// commit leaves the immutable, flagged record — reported, never claimed as denied).
+// P1 SUPPLIER CREDITS (MARJIN_CREDITS/2, P1 R1). A credit is its own document — never a negative
+// purchase — attributed to its issue date; the document number is mandatory and unique per business +
+// canonical supplier + normalized number. Authorization (owner DEC-AUTH-1): verified identity → tenant
+// role (write: manager/owner/super_owner, explicit set) → business access → version-fence admission →
+// supplier check → a FRESH re-check of membership / role / business access IMMEDIATELY before the ONE
+// transaction (a revocation committed before it denies). The operation commits with a PENDING review
+// in the same transaction; a post-commit re-check then CLEARS it, or — on a definitive 401/403 —
+// persists an append-only audit flag and FLAGS it; any other failure leaves it PENDING (never
+// authoritative, reconcilable). A revocation landing between the re-check and the commit is DETECTED,
+// not prevented. Only the business owner may accept or reject a flagged operation.
 // ─────────────────────────────────────────────────────────────────────────────
 /** Non-empty, bounded, RTDB-safe ids; a business id never contains ":" (it is embedded in the `biz:{b}:supplier_credits` key). */
 function scValidIds(tenantId, bizId) {
@@ -2003,14 +2008,14 @@ async function handleListSupplierCredits(req, res) {
   }
 }
 
-async function scAuthorizeWrite(req, res) {
+async function scAuthorizeWrite(req, res, { needsCredit = true } = {}) {
   let claims;
   try { claims = await requireAuth(req); } catch { res.status(401).json({ error: "unauthorized" }); return null; }
   let body = req.body; if (typeof body === "string") { try { body = JSON.parse(body); } catch { res.status(400).json({ error: "invalid json" }); return null; } }
   body = body || {};
   const { tenantId, bizId, creditId, operationId } = body;
   if (!scValidIds(tenantId, bizId)) { res.status(400).json({ error: "invalid tenantId or bizId" }); return null; }
-  if (!isValidCreditId(creditId)) { res.status(400).json({ error: "invalid_credit_id" }); return null; }
+  if (needsCredit && !isValidCreditId(creditId)) { res.status(400).json({ error: "invalid_credit_id" }); return null; }
   if (!isValidOperationId(operationId)) { res.status(400).json({ error: "invalid_operation_id" }); return null; }
   let access;
   try { access = await scAccess(claims, tenantId, bizId, "write"); }
@@ -2043,24 +2048,69 @@ function scValidatedInput(res, body) {
   catch (e) { res.status(400).json({ error: e?.code || "invalid_input" }); return null; }
 }
 
-async function scRespond(res, ctx, outcome) {
-  if (outcome.outcome === "conflict") {
-    const map = { credit_not_found: 404, txn_failed: 502 };
-    res.status(map[outcome.code] || 409).json({ ok: false, error: outcome.code });
+const SC_STATUS = { credit_not_found: 404, review_not_found: 404, outcome_unknown: 503, role_not_allowed: 403 };
+
+/**
+ * DEC-AUTH-1 post-commit decision for the review of `operationId` (the request's own actor): authorized
+ * ⇒ cleared; definitive 401/403 ⇒ durable audit flag + flagged; anything else ⇒ stays pending.
+ */
+async function scPostCommit(ctx, { operationId, intentDigest, logicalId }) {
+  let decision = null, postCommitAccess, audit;
+  try { await scAccess(ctx.claims, ctx.tenantId, ctx.bizId, "write"); postCommitAccess = "current"; decision = { to: "cleared", resolution: "post_commit_authorized" }; }
+  catch (e) {
+    if (e && (e.status === 401 || e.status === 403)) {
+      postCommitAccess = "revoked_during_commit";
+      audit = await persistFlagRecord({ tenantId: ctx.tenantId, bizId: ctx.bizId, operationId, logicalId, actor: ctx.claims.uid, committedAt: ctx.now, outcome: "revoked_during_commit", detectedAt: Date.now() });
+      decision = { to: "flagged", resolution: "revoked_during_commit" };
+    } else postCommitAccess = "verification_unavailable";
+  }
+  let review = "pending", reviewResolution;
+  if (decision) {
+    const t = await transitionReview({ tenantId: ctx.tenantId, bizId: ctx.bizId, operationId, intentDigest, ...decision, now: Date.now() });
+    if (t.status === "resolved" || t.status === "already_" + decision.to) review = decision.to;
+    else reviewResolution = t.status;
+  }
+  return { review, postCommitAccess, ...(audit ? { audit } : {}), ...(reviewResolution ? { reviewResolution } : {}) };
+}
+
+/** Fresh re-check → ONE transaction → (credit operations) post-commit review decision → response. */
+async function scExecute(res, ctx, cmd) {
+  // DEC-AUTH-1: membership, role and business access are re-read IMMEDIATELY before the transaction,
+  // after every preparatory read (policy fence, supplier list); a revocation committed by now denies.
+  let fresh;
+  try { fresh = await scAccess(ctx.claims, ctx.tenantId, ctx.bizId, "write"); }
+  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "forbidden" }); return; }
+  if (cmd.action === "review_accept" || cmd.action === "review_reject") {
+    if (!CREDIT_REVIEW_DECIDER_ROLES.includes(fresh.role)) { res.status(403).json({ error: "role_not_allowed" }); return; }
+  }
+  cmd.actorRole = fresh.role;
+  cmd.requestHash = scRequestHash(cmd);
+  ctx.now = cmd.now;
+  const outcome = await runSupplierCreditTxn(cmd);
+  if (outcome.outcome === "conflict" || outcome.outcome === "unknown") {
+    const code = outcome.code;
+    res.status(SC_STATUS[code] || 409).json({ ok: false, error: code, ...(outcome.detail !== undefined ? { detail: outcome.detail } : {}), ...(outcome.outcome === "unknown" ? { outcomeUnknown: true, retryWithSameOperation: true } : {}) });
     return;
   }
   const applied = outcome.outcome === "applied";
-  let postCommitAccess = "unchanged";
-  if (applied) {
-    try { await scAccess(ctx.claims, ctx.tenantId, ctx.bizId, "write"); }
-    catch { postCommitAccess = "revoked_during_commit"; console.error("[supplier-credits] access revoked during commit", ctx.tenantId, ctx.bizId, outcome.result && outcome.result.creditId); }
+  const r = outcome.result;
+  const isCreditOp = cmd.action === "create" || cmd.action === "void" || cmd.action === "replace";
+  let reviewInfo = {};
+  if (isCreditOp) {
+    // a replay of the SAME actor's operation finishes an interrupted post-commit decision
+    const node = outcome.after;
+    const rv = node && node.review ? node.review[cmd.operationId] : undefined;
+    if (rv && rv.state === "pending") reviewInfo = await scPostCommit({ ...ctx, now: rv.committedAt }, { operationId: cmd.operationId, intentDigest: rv.intentDigest, logicalId: rv.logicalId });
+    else reviewInfo = { review: rv ? rv.state : "unknown" };
   }
+  const node = outcome.after;
+  const opForDates = isCreditOp ? cmd.operationId : cmd.targetOperationId;
+  const authoritative = isCreditOp ? reviewInfo.review === "cleared" : true;
   res.status(200).json({
-    ok: true, applied, replayed: !applied, result: outcome.result,
-    revision: outcome.result ? outcome.result.revision : undefined,
-    affectedDates: applied ? affectedIssueDates(outcome.before, outcome.after, outcome.result) : [],
-    rebuildRequired: applied,
-    postCommitAccess,
+    ok: true, applied, replayed: !applied, ...(outcome.resolvedBy ? { resolvedBy: outcome.resolvedBy } : {}), result: r,
+    revision: r ? r.revision : undefined, ...reviewInfo,
+    affectedDates: authoritative ? datesOfOperation(node, opForDates) : [],
+    rebuildRequired: authoritative && applied,
   });
 }
 
@@ -2069,40 +2119,86 @@ async function handleCreateSupplierCredit(req, res) {
   const ctx = await scAuthorizeWrite(req, res); if (!ctx) return;
   const input = scValidatedInput(res, ctx.body); if (!input) return;
   if (!(await scRequireSupplier(res, ctx.db, ctx.tenantId, ctx.bizId, input.supplierId))) return;
-  const cmd = { action: "create", tenantId: ctx.tenantId, bizId: ctx.bizId, creditId: ctx.creditId, input, operationId: ctx.operationId, actorUid: ctx.claims.uid, actorRole: ctx.role, now: Date.now() };
-  cmd.requestHash = scRequestHash(cmd);
-  await scRespond(res, ctx, await runSupplierCreditTxn(cmd));
+  const cmd = { action: "create", tenantId: ctx.tenantId, bizId: ctx.bizId, creditId: ctx.creditId, input, operationId: ctx.operationId, actorUid: ctx.claims.uid, now: Date.now() };
+  await scExecute(res, ctx, cmd);
+}
+
+function scExpectedSeq(res, body) {
+  const s = body.expectedSeq;
+  if (!isValidSeq(s)) { res.status(400).json({ error: "invalid_expected_seq" }); return null; }
+  return s;
 }
 
 async function handleVoidSupplierCredit(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
   const ctx = await scAuthorizeWrite(req, res); if (!ctx) return;
-  const rev = ctx.body.expectedRecordRevision;
-  if (!isValidRecordRevision(rev)) { res.status(400).json({ error: "invalid_expected_record_revision" }); return; }
+  const seq = scExpectedSeq(res, ctx.body); if (seq === null) return;
   let voidReason;
-  const vr = ctx.body.voidReason;
-  if (vr !== undefined && vr !== null) {
-    if (typeof vr !== "string" || /[\u0000-\u001f]/.test(vr)) { res.status(400).json({ error: "invalid_void_reason" }); return; }
-    if (vr.trim().length > SC_MAX_NOTE_LENGTH) { res.status(400).json({ error: "invalid_void_reason_too_long" }); return; }
-    voidReason = vr.trim() || undefined;
-  }
-  const cmd = { action: "void", tenantId: ctx.tenantId, bizId: ctx.bizId, creditId: ctx.creditId, expectedRecordRevision: rev, ...(voidReason ? { voidReason } : {}), operationId: ctx.operationId, actorUid: ctx.claims.uid, actorRole: ctx.role, now: Date.now() };
-  cmd.requestHash = scRequestHash(cmd);
-  await scRespond(res, ctx, await runSupplierCreditTxn(cmd));
+  try { voidReason = validateVoidReason(ctx.body.voidReason); } catch (e) { res.status(400).json({ error: e?.code || "invalid_void_reason" }); return; }
+  const cmd = { action: "void", tenantId: ctx.tenantId, bizId: ctx.bizId, creditId: ctx.creditId, expectedSeq: seq, ...(voidReason ? { voidReason } : {}), operationId: ctx.operationId, actorUid: ctx.claims.uid, now: Date.now() };
+  await scExecute(res, ctx, cmd);
 }
 
 async function handleReplaceSupplierCredit(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
   const ctx = await scAuthorizeWrite(req, res); if (!ctx) return;
-  const rev = ctx.body.expectedRecordRevision;
-  if (!isValidRecordRevision(rev)) { res.status(400).json({ error: "invalid_expected_record_revision" }); return; }
+  const seq = scExpectedSeq(res, ctx.body); if (seq === null) return;
   const newCreditId = ctx.body.newCreditId;
   if (!isValidCreditId(newCreditId) || newCreditId === ctx.creditId) { res.status(400).json({ error: "invalid_new_credit_id" }); return; }
+  const ic = ctx.body.identityCorrection;
+  if (ic !== undefined && ic !== true) { res.status(400).json({ error: "invalid_identity_correction" }); return; }
   const input = scValidatedInput(res, ctx.body); if (!input) return;
   if (!(await scRequireSupplier(res, ctx.db, ctx.tenantId, ctx.bizId, input.supplierId))) return;
-  const cmd = { action: "replace", tenantId: ctx.tenantId, bizId: ctx.bizId, creditId: ctx.creditId, newCreditId, expectedRecordRevision: rev, input, operationId: ctx.operationId, actorUid: ctx.claims.uid, actorRole: ctx.role, now: Date.now() };
-  cmd.requestHash = scRequestHash(cmd);
-  await scRespond(res, ctx, await runSupplierCreditTxn(cmd));
+  const cmd = { action: "replace", tenantId: ctx.tenantId, bizId: ctx.bizId, creditId: ctx.creditId, newCreditId, expectedSeq: seq, ...(ic === true ? { identityCorrection: true } : {}), input, operationId: ctx.operationId, actorUid: ctx.claims.uid, now: Date.now() };
+  await scExecute(res, ctx, cmd);
+}
+
+/** The OWNER's decision on a FLAGGED operation: accept (it becomes authoritative) or reject (it never counts). */
+async function handleDecideSupplierCreditReview(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const ctx = await scAuthorizeWrite(req, res, { needsCredit: false }); if (!ctx) return;
+  if (!CREDIT_REVIEW_DECIDER_ROLES.includes(ctx.role)) { res.status(403).json({ error: "role_not_allowed" }); return; }
+  const { targetOperationId, intentDigest, decision } = ctx.body;
+  if (!isValidOperationId(targetOperationId)) { res.status(400).json({ error: "invalid_target_operation_id" }); return; }
+  if (typeof intentDigest !== "string" || !/^[0-9a-f]{64}$/.test(intentDigest)) { res.status(400).json({ error: "invalid_intent_digest" }); return; }
+  if (decision !== "accept" && decision !== "reject") { res.status(400).json({ error: "invalid_decision" }); return; }
+  const cmd = { action: decision === "accept" ? "review_accept" : "review_reject", tenantId: ctx.tenantId, bizId: ctx.bizId, targetOperationId, intentDigest, decision, operationId: ctx.operationId, actorUid: ctx.claims.uid, now: Date.now() };
+  await scExecute(res, ctx, cmd);
+}
+
+/**
+ * Trusted reconciliation of PENDING reviews of one business (any writer may trigger it; the decision is
+ * made from the ORIGINAL ACTOR's CURRENT stored authorization — fresh membership, explicit write role,
+ * business access): authorized ⇒ cleared; definitive 403 ⇒ audit flag + flagged; unavailable ⇒ pending.
+ * Idempotent; never touches a flagged / decided entry.
+ */
+async function handleReconcileSupplierCreditReviews(req, res) {
+  if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
+  const ctx = await scAuthorizeWrite(req, res, { needsCredit: false }); if (!ctx) return;
+  let node;
+  try { node = await readSupplierCreditsRaw({ tenantId: ctx.tenantId, bizId: ctx.bizId }); }
+  catch { res.status(503).json({ error: "credits_unavailable" }); return; }
+  const results = [];
+  const review = node && node.review && typeof node.review === "object" ? node.review : {};
+  for (const operationId of Object.keys(review).sort()) {
+    const rv = review[operationId];
+    if (!rv || rv.state !== "pending") continue;
+    if (storedIntentDigest(node, operationId) !== rv.intentDigest) { results.push({ operationId, status: "review_identity_mismatch" }); continue; }
+    let decision;
+    try {
+      const role = await requireTenantAccess(rv.actor, ctx.tenantId, "manager");
+      if (!WRITE_ROLES.includes(role)) throw { status: 403 };
+      await requireBizAccess(ctx.db, ctx.tenantId, ctx.bizId, rv.actor, role);
+      decision = { to: "cleared", resolution: "reconciled_authorized" };
+    } catch (e) {
+      if (e && e.status === 403) decision = { to: "flagged", resolution: "reconciled_unauthorized" };
+      else { results.push({ operationId, status: "verification_unavailable" }); continue; }
+    }
+    const audit = decision.to === "flagged" ? await persistFlagRecord({ tenantId: ctx.tenantId, bizId: ctx.bizId, operationId, logicalId: rv.logicalId, actor: rv.actor, committedAt: rv.committedAt, outcome: "reconciled_unauthorized", detectedAt: Date.now() }) : undefined;
+    const t = await transitionReview({ tenantId: ctx.tenantId, bizId: ctx.bizId, operationId, intentDigest: rv.intentDigest, ...decision, now: Date.now() });
+    results.push({ operationId, status: t.status, state: t.state, ...(audit ? { audit } : {}), affectedDates: t.status === "resolved" && decision.to === "cleared" ? datesOfOperation(node, operationId) : [] });
+  }
+  res.status(200).json({ ok: true, results });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,7 @@
+{
+  "slice": "P1",
+  "consumers": [
+    "lib/supplierCredits.js"
+  ],
+  "serverApiConsumers": []
+}

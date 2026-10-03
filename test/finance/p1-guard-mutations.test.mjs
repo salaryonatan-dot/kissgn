@@ -51,7 +51,7 @@ test("P1G-04 negative controls OUTSIDE the P1 zones (C1 dashboard / history / se
 
 test("P1G-05 negative controls INSIDE the P1 zones: write path, negative-purchase substitution, formula duplication, block / identity / action shape", () => {
   const TAB = '          {fcTab==="credits" && (()=>{';
-  const BLOCK = '    function errorText(code) { return ERRORS[code] || ERRORS.failed; }';
+  const BLOCK = '    function errorText(code) { return ERRORS[code] || TXT.unknown; }';
   const cases = [
     ["a purchase write inside the credits tab (credit as a negative invoice)", TAB, TAB + "\n            const __neg = () => setSupPayDate(creditForm.supplierId, creditForm.issueDate, \"-\" + creditForm.amount);", "write_path_lines_changed"],
     ["supplier_payments written by the P1 block", BLOCK, BLOCK + "\n    function asPurchase(e, c) { e.supplier_payments = { [c.supplierId]: \"-\" + c.amount }; return e; }", "purchase_path_changed"],
@@ -59,7 +59,8 @@ test("P1G-05 negative controls INSIDE the P1 zones: write path, negative-purchas
     ["subAmounts net in the suppliers view", "        var creditBy = (A.purchases.credits && A.purchases.credits.bySupplier) || {};", "        var creditBy = (A.purchases.credits && A.purchases.credits.bySupplier) || {}; var __n = subAmounts(F, \"1\", \"0\");", "formula_duplication"],
     ["a second P1 block", BLOCK, BLOCK + "\n    // ── P1 supplier credits browser seam (copy)", "p1_block_shape"],
     ["bundle identity reverted", 'v.product !== "MARJIN_PRODUCT/3"', 'v.product !== "MARJIN_PRODUCT/2"', "bundle_identity"],
-    ["an extra credit-write call", '        : await creditMutation("create-supplier-credit", P1.createBody(ctx, v.input, creditId, operationId), ctx);', '        : await creditMutation("create-supplier-credit", P1.createBody(ctx, v.input, creditId, operationId), ctx) || await creditMutation("create-supplier-credit", {}, ctx);', "credit_action_shape"],
+    ["an extra credit-write call", '      else await runCreditOperation("create-supplier-credit", P1.createBody(ctx, v.input, creditId, operationId), ctx, P1.TXT.saved, after);', '      else await runCreditOperation("create-supplier-credit", P1.createBody(ctx, v.input, creditId, operationId), ctx, P1.TXT.saved, after) || await creditMutation("create-supplier-credit", {}, ctx);', "credit_action_shape"],
+    ["the P1 seam no longer names its R1 contract", 'var CREDITS_CONTRACT = "MARJIN_CREDITS/2";', 'var CREDITS_CONTRACT = "MARJIN_CREDITS/1";', "p1_contract_identity"],
     ["a hard-delete action", BLOCK, BLOCK + '\n    var DEL = "delete-supplier-credit"; var X = "void-supplier-credit";', "credit_action_shape"],
   ];
   for (const [label, from, to, want] of cases) assert.equal(reason(once(candidate, from, to)), want, label);
@@ -86,4 +87,21 @@ test("P1G-07 the pins are fixed literals, pending independent review, cover exac
     assert.equal(blobOf(readFileSync(join(REPO, f))), b, f + " = pinned blob");
   }
   assert.ok(!Object.keys(P1_PINS.blobs).some((f) => f === "database.rules.json" || f.startsWith("test/")), "no Rules change; no test file pinned as runtime");
+});
+
+test("P1G-08 owner decision 4: the legacy pending-credit card stays RETIRED — re-adding its subscription, state, input component, alert card or resolve action is refused (R6)", () => {
+  const SUB = "  // P1 R1: the legacy pending-credit card is retired (no state, no subscription, no write path).";
+  const CARD = "      {/* P1 R1 (owner decision 4): the legacy pending-credit alert card is retired; its stored";
+  const COMP = "// P1 R1 (owner decision 4): the legacy pending-credit input component is RETIRED. Supplier";
+  const cases = [
+    ["the legacy state", SUB, SUB + "\n  const [pendingCredits, setPendingCredits] = useState([]);"],
+    ["the legacy RTDB subscription", SUB, SUB + "\n  // sub(`biz:${currentBizId}:credits`, setPendingCredits);"],
+    ["the legacy alert card", CARD, "      {/* ═══ CREDIT ALERTS ═══ */}\n" + CARD],
+    ["the legacy resolve action", CARD, CARD + " resolveCredit(cr.id)"],
+    ["the legacy input component", COMP, COMP + "\nfunction CreditInput() { return null; }"],
+  ];
+  for (const [label, from, to] of cases) assert.equal(reason(once(candidate, from, to)), "legacy_credit_card_reactivated", label);
+  for (const t of ["pendingCredits", "CreditInput", "resolveCredit", ":credits`", "CREDIT ALERTS"]) assert.equal(candidate.includes(t), false, t + " is gone from the page");
+  // the stored legacy data is never read or rewritten by the page (no path names the legacy key)
+  assert.doesNotMatch(candidate, /biz:\$\{[^}]+\}:credits`/);
 });

@@ -235,10 +235,11 @@ export interface AnalyticsFinBlock {
   readonly derived?: { laborCostComplete: boolean; laborCost?: number; globalLaborCost?: number; laborPct?: number; foodCostPct?: number; conversion: string };
   readonly legacyHourlyPayroll?: { counted: false; recorded: boolean };
   /**
-   * P1 (MARJIN_CREDITS/1): supplier credits ISSUED on this date. Omitted when none were issued and
-   * the source was readable. `purchases` above is net of them; `purchasesGross` is the recorded gross.
+   * P1 (MARJIN_CREDITS/2): supplier credits ISSUED on this date. Omitted when none were issued and
+   * the source was complete. `purchases` above is net of them; `purchasesGross` is the recorded gross.
+   * `reason` names why the credit facts of the date are incomplete (invalid / unreadable / review).
    */
-  readonly supplierCredits?: { state: string; value?: string; count?: number; bySupplier?: Array<{ source: string; amount: string }> };
+  readonly supplierCredits?: { state: string; value?: string; count?: number; bySupplier?: Array<{ source: string; amount: string }>; reason?: string };
   readonly purchasesGross?: { state: string; value?: string };
   readonly timelineSource?: string;
   readonly configurationBasis?: string[];
@@ -265,9 +266,10 @@ function creditFields(day: CanonicalDay): Pick<AnalyticsFinBlock, "supplierCredi
   if (!c || (c.presence === "absent" && !c.partial)) return {};
   const state = c.presence === "present" ? (c.partial ? "partial_invalid" : "present") : c.presence;
   const bySupplier = Object.keys(c.bySupplier).sort().map((source) => ({ source, amount: c.bySupplier[source] }));
+  const reason = c.reason ? { reason: c.reason } : {};
   const credits: NonNullable<AnalyticsFinBlock["supplierCredits"]> = c.value === null
-    ? { state }
-    : { state, value: serializeDec(c.value), count: c.count, ...(bySupplier.length ? { bySupplier } : {}) };
+    ? { state, ...reason }
+    : { state, value: serializeDec(c.value), count: c.count, ...(bySupplier.length ? { bySupplier } : {}), ...reason };
   return { supplierCredits: credits, ...(day.purchasesGross ? { purchasesGross: stateOf(day.purchasesGross) } : {}) };
 }
 

@@ -1,0 +1,254 @@
+{
+ "id": "FZ-P1-04",
+ "version": "FZ-P1/1",
+ "owner": "P1 Supplier Credits (P1 R1)",
+ "artifact": "decoded supplier-credit state (MARJIN_CREDITS/2): records with document identity and review, logical credits, reviews, effective credits, issues",
+ "note": "shapes: keys and types only (JSON projection), never values; ids: frozen contract identifiers and observed enum values; derived from the P1 R1 code by test/support/fz-p1-producers.mjs",
+ "scenarios": [
+  "none",
+  "present",
+  "negative_net",
+  "invalid_record",
+  "corrupt_chain",
+  "unreadable",
+  "not_loaded",
+  "pending",
+  "flagged",
+  "accepted",
+  "rejected",
+  "voided",
+  "corrected_identity"
+ ],
+ "ids": {
+  "states": [
+   "absent",
+   "not_loaded",
+   "present",
+   "unreadable"
+  ],
+  "reviewStates": [
+   "acknowledged",
+   "cleared",
+   "flagged",
+   "pending",
+   "rejected"
+  ],
+  "recordStatus": [
+   "active",
+   "not_effective",
+   "replaced",
+   "voided"
+  ],
+  "logicalStatus": [
+   "active",
+   "rejected",
+   "unresolved_create",
+   "voided"
+  ],
+  "issueCodes": [
+   "invalid_amount",
+   "invalid_link",
+   "review_flagged",
+   "review_pending"
+  ],
+  "unreadableReasons": [
+   "node_shape"
+  ]
+ },
+ "shapes": {
+  "present": {
+   "bizId": "string",
+   "credits": [
+    {
+     "amount": "string",
+     "creditId": "string",
+     "issueDate": "string",
+     "logicalId": "string",
+     "supplierId": "string"
+    }
+   ],
+   "issues": [
+    {
+     "code": "string",
+     "dates": [
+      "string"
+     ],
+     "key": "string"
+    }
+   ],
+   "logical": [
+    {
+     "head": {
+      "creditId": "string",
+      "seq": "number"
+     },
+     "logicalId": "string",
+     "status": "string",
+     "unresolved": {
+      "$oneOf": [
+       "null",
+       {
+        "kind": "string",
+        "operationId": "string",
+        "state": "string"
+       }
+      ]
+     }
+    }
+   ],
+   "records": [
+    {
+     "amount": "string",
+     "createdAt": "number",
+     "createdBy": "string",
+     "createdRole": "string",
+     "creditId": "string",
+     "documentKey": "string",
+     "documentNumber": "string",
+     "identityCorrection": "boolean",
+     "issueDate": "string",
+     "logicalId": "string",
+     "note": "null",
+     "operationId": "string",
+     "replacedByCreditId": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     },
+     "replacesCreditId": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     },
+     "review": "string",
+     "seq": "number",
+     "status": "string",
+     "supplierId": "string",
+     "unresolved": {
+      "$oneOf": [
+       "null",
+       {
+        "kind": "string",
+        "operationId": "string",
+        "state": "string"
+       }
+      ]
+     }
+    }
+   ],
+   "reviews": [
+    {
+     "actor": "string",
+     "actorRole": "string",
+     "committedAt": "number",
+     "creditId": "string",
+     "intentDigest": "string",
+     "kind": "string",
+     "logicalId": "string",
+     "newCreditId": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     },
+     "operationId": "string",
+     "resolution": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     },
+     "seq": "number",
+     "state": "string"
+    }
+   ],
+   "revision": "number",
+   "state": "string",
+   "tenantId": "string",
+   "unresolved": {
+    "flagged": [
+     "string"
+    ],
+    "pending": [
+     "string"
+    ]
+   }
+  },
+  "tab": {
+   "activeCount?": "number",
+   "empty?": "boolean",
+   "emptyText?": "string",
+   "hasPending?": "boolean",
+   "invalidCount?": "number",
+   "invalidText?": {
+    "$oneOf": [
+     "null",
+     "string"
+    ]
+   },
+   "reason?": "string",
+   "reviewText?": {
+    "$oneOf": [
+     "null",
+     "string"
+    ]
+   },
+   "rows?": [
+    {
+     "amount": "string",
+     "amountText": "string",
+     "counted": "boolean",
+     "creditId": "string",
+     "documentKey": "string",
+     "documentNumber": "string",
+     "editable": "boolean",
+     "headSeq": "number",
+     "identityCorrection": "boolean",
+     "issueDate": "string",
+     "logicalId": "string",
+     "note": "null",
+     "pendingOp": {
+      "$oneOf": [
+       "null",
+       {
+        "intentDigest": "string",
+        "kind": "string",
+        "operationId": "string",
+        "state": "string"
+       }
+      ]
+     },
+     "replacedByCreditId": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     },
+     "replacesCreditId": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     },
+     "review": "string",
+     "status": "string",
+     "statusText": "string",
+     "supplierId": "string",
+     "supplierName": "string"
+    }
+   ],
+   "status": "string",
+   "text?": "string",
+   "total?": {
+    "$oneOf": [
+     "null",
+     "string"
+    ]
+   },
+   "totalText?": "string",
+   "unresolvedCount?": "number"
+  }
+ }
+}

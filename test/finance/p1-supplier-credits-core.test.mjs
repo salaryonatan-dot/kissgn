@@ -1,4 +1,4 @@
-// P1 Supplier Credits — Financial Core accounting (MARJIN_CREDITS/1, MARJIN_FIN/4, MARJIN_PRODUCT/3).
+// P1 Supplier Credits — Financial Core accounting (MARJIN_CREDITS/2 since P1 R1, MARJIN_FIN/4, MARJIN_PRODUCT/3).
 //
 // Owner contract (2026-09-29 HF-2 closed decisions; 2026-10-02 mandatory-for-pilot decision):
 //   a credit is its own document (never a negative purchase); net purchases = gross − credits;
@@ -7,6 +7,8 @@
 //   missing, invalid and unreadable stay distinct; a negative net is kept and flagged.
 // Every case runs on the server engine (tsc-compiled src), the freshly generated browser core and
 // the COMMITTED fincore/v1 artifact, and the three must serialize identically.
+// P1 R1: every fixture node is built by the REAL pure writer (test/support/p1-credit-fixtures.mjs) with
+// cleared reviews unless stated; invalid data is produced by mutating a valid stored node.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -16,6 +18,7 @@ import { pathToFileURL } from "node:url";
 import { REPO, loadCompiled, loadCommitted } from "../support/fincore-load.mjs";
 import { compileServer } from "../support/server-reader-harness.mjs";
 import { AS_OF, NOW_MS, entry, inputs, stableJson, uid } from "../support/b1-fixtures.mjs";
+import { cid, spec, creditNode, replaceIn, mutate } from "../support/p1-credit-fixtures.mjs";
 
 const BROWSER = await loadCompiled();
 const COMMITTED = await loadCommitted();
@@ -24,9 +27,10 @@ const ENGINES = [["server", SERVER], ["browser", BROWSER.product], ["committed",
 const ser = BROWSER.metrics.report.serializeReport;
 
 // ── fixtures ───────────────────────────────────────────────────────────────────
-export const cid = (n) => `c0000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-export const rec = (n, supplierId, issueDate, amount, extra = {}) => ({ creditId: cid(n), supplierId, issueDate, amount, status: "active", revision: 1, createdAt: 1, createdBy: "u", createdRole: "owner", updatedAt: 1, updatedBy: "u", ...extra });
-export const node = (...recs) => ({ schemaVersion: 1, revision: Math.max(1, recs.length), records: Object.fromEntries(recs.map((r) => [r.creditId, r])) });
+export { cid };
+export const rec = (n, supplierId, issueDate, amount, extra = {}) => spec(n, supplierId, issueDate, amount, extra);
+/** A MARJIN_CREDITS/2 node of the given credit specs (no spec ⇒ no node: null). */
+export const node = (...specs) => (specs.length ? creditNode(specs) : null);
 const pad = (n) => String(n).padStart(2, "0");
 /** A complete month: revenue 1000/day, payroll 100/day, supplier purchases per `sup(day)` (explicit "0" otherwise). */
 function monthRows(month, days, sup = () => ({ s1: "300" }), start = 1) {
@@ -53,8 +57,9 @@ test("P1C-01 no credit source / absent node / {} / node without records: identic
     const r = report(inputs(AUG()), raw);
     assert.equal(ser(r), ser(base), JSON.stringify(raw) + " ⇒ byte-identical to no credit source");
   }
-  const empty = report(inputs(AUG()), { schemaVersion: 1, revision: 1 });
-  assert.equal(P$(empty).value, "9000"); assert.equal(P$(empty).credits.state, "absent"); assert.equal(P$(empty).credits.value, null); assert.equal(P$(empty).complete, true);
+  // P1 R1: a node without records is no longer "no credits" — the writer never stores one, so it is unreadable
+  const empty = report(inputs(AUG()), { schemaVersion: 2, contract: "MARJIN_CREDITS/2", tenantId: "tenantA", bizId: "bizA", revision: 1, updatedAt: 1, records: {} });
+  assert.equal(P$(empty).complete, false); assert.equal(P$(empty).credits.state, "invalid");
   assert.equal(P$(base).value, "9000"); assert.equal(P$(base).gross.value, "9000"); assert.equal(P$(base).credits.state, "absent"); assert.equal(P$(base).credits.count, 0);
   assert.equal(base.actual.purchasesPct.state, "value");
 });
@@ -65,7 +70,7 @@ test("P1C-02 Coca-Cola: gross 9,000 − credit 300 = net 8,700; supplier, overal
   const p = P$(r);
   assert.equal(p.value, "8700"); assert.equal(p.gross.value, "9000");
   assert.deepEqual(p.bySource, { "supplier:s1": "8700" }); assert.deepEqual(p.grossBySource, { "supplier:s1": "9000" });
-  assert.deepEqual({ ...p.credits }, { contract: "MARJIN_CREDITS/1", state: "present", value: "300", count: 1, bySupplier: { "supplier:s1": "300" }, dates: ["2026-08-15"], invalidDates: [] });
+  assert.deepEqual({ ...p.credits }, { contract: "MARJIN_CREDITS/2", state: "present", value: "300", count: 1, bySupplier: { "supplier:s1": "300" }, dates: ["2026-08-15"], invalidDates: [], reviewPendingDates: [], reviewFlaggedDates: [] });
   assert.equal(p.complete, true);
   assert.deepEqual(r.actual.purchasesPct, { state: "value", value: "870/31", basisKind: "net_of_vat", comparability: "same_basis_as_revenue" }, "Food Cost = 8,700 / 31,000");
   const none = report(inputs(AUG()), undefined);
@@ -131,8 +136,8 @@ test("P1C-07 leap dates: 2028-02-29 is a valid issue date; 2027-02-29 / 2026-02-
   assert.equal(P$(ok).credits.value, "40"); assert.equal(P$(ok).complete, true);
   for (const bad of ["2027-02-29", "2026-02-30", "2026-13-01", "2026-8-01", "", 20260801]) {
     const st = SERVER.decodeSupplierCredits(node(rec(1, "s1", bad, "40")));
-    assert.equal(st.state, "present"); assert.equal(st.records.length, 0, String(bad));
-    assert.deepEqual(st.issues.map((i) => [i.code, i.issueDate]), [["invalid_issue_date", null]], String(bad));
+    assert.equal(st.state, "present"); assert.equal(st.records.length, 0, String(bad)); assert.equal(st.credits.length, 0);
+    assert.deepEqual(st.issues.map((i) => [i.code, i.dates]), [["invalid_issue_date", []]], String(bad));
     const r = report(inputs(AUG()), st);
     assert.equal(P$(r).complete, false, "an undatable credit could belong to any month: never complete");
     assert.equal(P$(r).credits.state, "invalid");
@@ -149,8 +154,8 @@ test("P1C-08 explicit zero purchases, a zero / invalid credit amount, missing pu
   assert.equal(P$(z).value, "0"); assert.equal(P$(z).complete, true);
   // a ZERO credit is not a credit: invalid (dated) ⇒ that month incomplete, other months untouched
   for (const amt of ["0", "0.00", "-300", "300.50", " 300", "3,000", "1e3", 300, null, "abc", "1234567890"]) {
-    const st = SERVER.decodeSupplierCredits(node(rec(1, "s1", "2026-08-12", amt)));
-    assert.deepEqual(st.issues.map((i) => [i.code, i.issueDate]), [["invalid_amount", "2026-08-12"]], JSON.stringify(amt));
+    const st = SERVER.decodeSupplierCredits(node(rec(1, "s1", "2026-08-12", "1", { raw: { amount: amt } })));
+    assert.deepEqual(st.issues.map((i) => [i.code, i.dates]), [["invalid_amount", ["2026-08-12"]]], JSON.stringify(amt));
     const r = report(inputs(AUG()), st);
     assert.equal(P$(r).complete, false); assert.equal(P$(r).credits.state, "invalid"); assert.deepEqual(P$(r).credits.invalidDates, ["2026-08-12"]);
     assert.equal(P$(r).value, "9000", "an invalid credit is never counted and never zeroes the purchases");
@@ -160,7 +165,13 @@ test("P1C-08 explicit zero purchases, a zero / invalid credit amount, missing pu
     assert.equal(P$(sep).credits.state, "absent", "a dated invalid credit only affects its own month");
   }
   // unreadable node ⇒ every window invalid (never "no credits")
-  for (const raw of ["x", 7, [], { schemaVersion: 2, revision: 1 }, { schemaVersion: 1, revision: 0 }, { schemaVersion: 1, revision: 1.5 }, { schemaVersion: 1, revision: 1, records: [] }, { schemaVersion: 1, revision: 1, records: "r" }]) {
+  const V = node(rec(1, "s1", "2026-08-12", "5"));
+  const unreadable = ["x", 7, [],
+    { schemaVersion: 1, revision: 1, records: {} },                                              // the rejected P1 schema is never reinterpreted
+    mutate(V, (n) => { n.contract = "MARJIN_CREDITS/1"; }), mutate(V, (n) => { n.revision = 0; }), mutate(V, (n) => { n.revision = 1.5; }),
+    mutate(V, (n) => { n.records = []; }), mutate(V, (n) => { n.records = "r"; }), mutate(V, (n) => { n.extra = 1; }), mutate(V, (n) => { delete n.tenantId; }),
+    mutate(V, (n) => { n.review = "x"; }), mutate(V, (n) => { n.records = {}; })];
+  for (const raw of unreadable) {
     const st = SERVER.decodeSupplierCredits(raw);
     assert.equal(st.state, "unreadable", JSON.stringify(raw));
     const r = report(inputs(AUG()), st);
@@ -177,40 +188,49 @@ test("P1C-08 explicit zero purchases, a zero / invalid credit amount, missing pu
   assert.equal(P$(m).value, String(9000 - 300 - 10), "the credit on a day without recorded purchases is still subtracted");
 });
 
-test("P1C-09 malformed records: id mismatch, invalid supplier, status, revision, links (incl. broken / active-with-successor) — reported as issues, never counted, never dropped silently", () => {
+test("P1C-09 malformed records: id mismatch, supplier, audit metadata, role, document identity, links, binding — reported as issues, never counted, never dropped silently", () => {
+  const V = node(rec(1, "s1", "2026-08-12", "5"));
+  const R = (fn) => mutate(V, (n) => fn(n.records[cid(1)], n));
   const cases = [
-    [{ ...rec(1, "s1", "2026-08-12", "5"), creditId: cid(9) }, "id_mismatch"],
-    [rec(1, "", "2026-08-12", "5"), "invalid_supplier"],
-    [rec(1, "a/b", "2026-08-12", "5"), "invalid_supplier"],
-    [rec(1, 7, "2026-08-12", "5"), "invalid_supplier"],
-    [rec(1, "s1", "2026-08-12", "5", { status: "deleted" }), "invalid_status"],
-    [rec(1, "s1", "2026-08-12", "5", { revision: 0 }), "invalid_revision"],
-    [rec(1, "s1", "2026-08-12", "5", { replacesCreditId: "nope" }), "invalid_link"],
-    [rec(1, "s1", "2026-08-12", "5", { replacedByCreditId: cid(2) }), "invalid_link"],               // active with a successor
-    [rec(1, "s1", "2026-08-12", "5", { status: "voided", replacedByCreditId: cid(2) }), "invalid_link"], // successor missing
+    [R((r) => { r.creditId = cid(9); }), "id_mismatch", ["2026-08-12"]],
+    [R((r) => { r.supplierId = ""; }), "invalid_supplier", ["2026-08-12"]],
+    [R((r) => { r.supplierId = "a/b"; }), "invalid_supplier", ["2026-08-12"]],
+    [R((r) => { r.supplierId = 7; }), "invalid_supplier", ["2026-08-12"]],
+    [R((r) => { delete r.createdBy; }), "invalid_record", ["2026-08-12"]],                 // missing audit metadata (P1 review finding 3)
+    [R((r) => { r.createdAt = "yesterday"; }), "invalid_audit", ["2026-08-12"]],          // malformed audit metadata
+    [R((r) => { r.createdBy = 42; }), "invalid_audit", ["2026-08-12"]],
+    [R((r) => { r.createdRole = "intern"; }), "invalid_audit", ["2026-08-12"]],
+    [R((r) => { r.seq = 0; }), "invalid_audit", ["2026-08-12"]],
+    [R((r) => { r.status = "active"; }), "invalid_record", ["2026-08-12"]],               // no mutable status field in MARJIN_CREDITS/2
+    [R((r) => { r.documentKey = "cr9"; }), "invalid_document", ["2026-08-12"]],
+    [R((r) => { delete r.documentNumber; }), "invalid_record", ["2026-08-12"]],             // the document number is mandatory
+    [R((r) => { r.replacesCreditId = "nope"; }), "invalid_link", ["2026-08-12"]],
+    [R((r) => { r.tenantId = "tenantB"; }), "binding_mismatch", []],                       // a record of another business: unattributable
   ];
-  for (const [r0, code] of cases) {
-    const st = SERVER.decodeSupplierCredits({ schemaVersion: 1, revision: 1, records: { [cid(1)]: r0 } });
-    assert.equal(st.state, "present"); assert.equal(st.records.length, 0, code);
-    assert.deepEqual(st.issues.map((i) => i.code), [code], JSON.stringify(r0));
+  for (const [raw, code, dates] of cases) {
+    const st = SERVER.decodeSupplierCredits(raw);
+    assert.equal(st.state, "present"); assert.equal(st.credits.length, 0, code); assert.equal(st.records.length, 0, code);
+    assert.ok(st.issues.some((i) => i.code === code && JSON.stringify(i.dates) === JSON.stringify(dates)), code + " " + JSON.stringify(st.issues));
+    // nothing else may be reported for an attributable defect; an unattributable one may orphan the entries it owned (never attributable)
+    if (dates.length) assert.equal(st.issues.length, 1, code); else assert.ok(st.issues.every((i) => i.dates.length === 0), code);
   }
-  const notObj = SERVER.decodeSupplierCredits({ schemaVersion: 1, revision: 1, records: { [cid(1)]: "x" } });
-  assert.deepEqual(notObj.issues.map((i) => [i.code, i.issueDate]), [["invalid_record", null]]);
-  const badKey = SERVER.decodeSupplierCredits({ schemaVersion: 1, revision: 1, records: { "not-a-uuid": rec(1, "s1", "2026-08-12", "5") } });
-  assert.deepEqual(badKey.issues.map((i) => i.code), ["id_mismatch"]);
+  const notObj = SERVER.decodeSupplierCredits(mutate(V, (n) => { n.records[cid(1)] = "x"; }));
+  assert.ok(notObj.issues.some((i) => i.code === "invalid_record" && i.dates.length === 0));
+  const badKey = SERVER.decodeSupplierCredits(mutate(V, (n) => { n.records["not-a-uuid"] = n.records[cid(1)]; delete n.records[cid(1)]; }));
+  assert.ok(badKey.issues.some((i) => i.code === "id_mismatch"));
 });
 
-test("P1C-10 duplicate identity and history: void / replace chains count ONLY the active successor; a valid replaced pair decodes cleanly", () => {
-  const old = rec(1, "s1", "2026-08-12", "500", { status: "voided", revision: 2, replacedByCreditId: cid(2), voidReason: "replaced" });
-  const neu = rec(2, "s1", "2026-08-14", "450", { replacesCreditId: cid(1) });
-  const voided = rec(3, "s1", "2026-08-15", "999", { status: "voided", revision: 2 });
-  const st = SERVER.decodeSupplierCredits(node(old, neu, voided));
+test("P1C-10 history: void / replace chains count ONLY the effective successor; a valid replaced pair decodes cleanly", () => {
+  const base = node(rec(1, "s1", "2026-08-12", "500"), rec(3, "s1", "2026-08-15", "999", { voided: true }));
+  const st = SERVER.decodeSupplierCredits(replaceIn(base, 1, 2, { issueDate: "2026-08-14", amount: "450" }));
   assert.equal(st.issues.length, 0); assert.equal(st.records.length, 3);
+  assert.deepEqual(st.records.map((x) => [x.creditId, x.status]), [[cid(1), "replaced"], [cid(2), "active"], [cid(3), "voided"]]);
   const r = report(inputs(AUG()), st);
   assert.equal(P$(r).credits.value, "450"); assert.equal(P$(r).credits.count, 1); assert.equal(P$(r).value, "8550");
   // the record key IS the identity: a second record claiming the same creditId under another key is refused
-  const dup = SERVER.decodeSupplierCredits({ schemaVersion: 1, revision: 1, records: { [cid(1)]: rec(1, "s1", "2026-08-12", "5"), [cid(2)]: { ...rec(1, "s1", "2026-08-12", "5") } } });
-  assert.equal(dup.records.length, 1); assert.deepEqual(dup.issues.map((i) => i.code), ["id_mismatch"]);
+  const dup = SERVER.decodeSupplierCredits(mutate(base, (n) => { n.records[cid(2)] = { ...n.records[cid(1)] }; }));
+  assert.ok(dup.issues.some((i) => i.code === "id_mismatch")); assert.equal(dup.credits.length, 0, "the corrupt logical credit 1 contributes nothing (credit 3 is voided)");
+  assert.ok(dup.issues.every((i) => i.dates.includes("2026-08-12")), "the defect is attributed to the corrupt credit's dates");
 });
 
 // ── P1C-11 negative net ──────────────────────────────────────────────────────
@@ -253,6 +273,7 @@ test("P1C-13 a credit issued on a declared CLOSED day counts (its period is its 
 test("P1C-14 Actual D-1: a credit issued TODAY or in the future is not counted; it counts once its date is completed", () => {
   const rows = monthRows("2026-09", 28);
   const credits = node(rec(1, "s1", AS_OF, "70"), rec(2, "s1", "2026-09-30", "80"), rec(3, "s1", "2026-09-28", "5"));
+  assert.ok(credits);
   const today = report(inputs(rows), credits, "2026-09", "open_month");
   assert.equal(P$(today).credits.value, "5", "only the completed date 2026-09-28 (asOf 2026-09-29)");
   const later = report(inputs(rows, { asOf: "2026-10-01" }), credits, "2026-09");
@@ -305,7 +326,8 @@ test("P1C-16 reconciliation: Σ grossBySource − Σ credits.bySupplier = Σ byS
 });
 
 test("P1C-17 the core decoder and the per-date facts are engine-identical (server ≡ browser ≡ committed)", () => {
-  const raws = [null, {}, node(), node(rec(1, "s1", "2026-08-15", "300")), node(rec(1, "s1", "2027-02-29", "5")), "x", { schemaVersion: 1, revision: 1, records: { [cid(1)]: rec(1, "s1", "2026-08-12", "0") } }];
+  const raws = [null, {}, node(rec(1, "s1", "2026-08-15", "300")), node(rec(1, "s1", "2027-02-29", "5")), "x", { schemaVersion: 1, revision: 1, records: {} },
+    node(rec(1, "s1", "2026-08-12", "1", { raw: { amount: "0" } })), node(rec(1, "s1", "2026-08-12", "3", { review: "pending" })), node(rec(1, "s1", "2026-08-15", "4", { review: "flagged" }))];
   const cores = [BROWSER, COMMITTED];
   for (const raw of raws) {
     const s = stableJson(SERVER.decodeSupplierCredits(raw));
@@ -315,8 +337,8 @@ test("P1C-17 the core decoder and the per-date facts are engine-identical (serve
     const ref = stableJson([...BROWSER.finance.supplierCredits.creditsByDate(st, dates)]);
     assert.equal(stableJson([...COMMITTED.finance.supplierCredits.creditsByDate(st, dates)]), ref);
   }
-  assert.equal(BROWSER.versions.credits, "MARJIN_CREDITS/1"); assert.equal(COMMITTED.versions.credits, "MARJIN_CREDITS/1");
-  assert.equal(SERVER.SUPPLIER_CREDITS_CONTRACT_VERSION, "MARJIN_CREDITS/1");
+  assert.equal(BROWSER.versions.credits, "MARJIN_CREDITS/2"); assert.equal(COMMITTED.versions.credits, "MARJIN_CREDITS/2");
+  assert.equal(SERVER.SUPPLIER_CREDITS_CONTRACT_VERSION, "MARJIN_CREDITS/2");
 });
 
 test("P1C-18 canonicalCreditAmount: only plain positive decimals (≤ 9 integer digits, ≤ 2 decimals) are amounts; output canonical", () => {
@@ -340,13 +362,13 @@ async function mutantCore(patches) {
 const COCA = () => [inputs(AUG()), node(rec(1, "s1", "2026-08-15", "300"))];
 const octCase = () => {
   const rows = [...monthRows("2026-09", 30), ...monthRows("2026-10", 31, undefined, 100)];
-  return [inputs(rows, { asOf: "2026-11-05" }), node(rec(1, "s1", "2026-10-02", "500", { createdAt: Date.UTC(2026, 8, 30) }))];
+  return [inputs(rows, { asOf: "2026-11-05" }), node(rec(1, "s1", "2026-10-02", "500"))];
 };
 const checks = {
   net: (C) => { const [i, n] = COCA(); return month(C.product, i, n).actual.purchases.value === "8700"; },
   issueMonth: (C) => { const [i, n] = octCase(); return month(C.product, i, n, "2026-09").actual.purchases.credits.state === "absent" && month(C.product, i, n, "2026-10").actual.purchases.credits.value === "500"; },
   negative: (C) => month(C.product, inputs(AUG()), node(rec(1, "s1", "2026-08-20", "9500"))).actual.purchases.value === "-500",
-  invalidNotZero: (C) => month(C.product, inputs(AUG()), node(rec(1, "s1", "2026-08-12", "0"))).actual.purchases.complete === false,
+  invalidNotZero: (C) => month(C.product, inputs(AUG()), node(rec(1, "s1", "2026-08-12", "1", { raw: { amount: "0" } }))).actual.purchases.complete === false,
   never_increase: (C) => { const [i, n] = COCA(); return Number(month(C.product, i, n).actual.purchases.value) < 9000; },
 };
 test("P1C-M0 positive control: the committed core passes every mutation check", () => {
@@ -354,7 +376,7 @@ test("P1C-M0 positive control: the committed core passes every mutation check", 
 });
 const MUTANTS = [
   ["formula duplication: credits subtracted twice (day + period)", [["metrics/report.js", "if (!grossPresent)\n            creditsOffGross", "if (true)\n            creditsOffGross"]], ["net"]],
-  ["issue-date reassignment: credits attributed to an earlier month (issue date − 1 month)", [["finance/supplierCredits.js", "if (r.status !== \"active\" || !wanted.has(r.issueDate))", "if (r.status !== \"active\" || !wanted.has(r.issueDate = (r.issueDate.slice(5,7)==='10' ? r.issueDate.replace('-10-','-09-') : r.issueDate)))"]], ["issueMonth"]],
+  ["issue-date reassignment: credits attributed to an earlier month (issue date − 1 month)", [["finance/supplierCredits.js", "if (!wanted.has(c.issueDate))", "if (!wanted.has(c = { ...c, issueDate: c.issueDate.slice(5,7)==='10' ? c.issueDate.replace('-10-','-09-') : c.issueDate }, c).issueDate)"]], ["issueMonth"]],
   ["negative-purchase substitution: credits ADDED as purchases (sign flip)", [["finance/supplierCredits.js", "value = decSub(value, credits.value);", "value = decAdd(value, credits.value);"]], ["net", "never_increase"]],
   ["silent floor at zero", [["finance/supplierCredits.js", "if (decIsNegative(value))", "if (decIsNegative(value) && (value = decFromPlainString(\"0\")))"]], ["negative"]],
   ["invalid credit read as zero (complete)", [["metrics/report.js", "complete: netOnPresent.total.complete && creditInvalidDates.length < 1", "complete: netOnPresent.total.complete"], ["finance/supplierCredits.js", "partial: gross.partial || creditsIncomplete", "partial: gross.partial"]], ["invalidNotZero"]],

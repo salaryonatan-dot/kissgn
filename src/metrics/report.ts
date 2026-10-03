@@ -180,17 +180,21 @@ export interface FinancialReport {
   readonly flags: readonly Flag[];
 }
 
-/** Supplier credits issued in the window (MARJIN_CREDITS/1, active records, keyed by issue date). */
+/** Supplier credits issued in the window (MARJIN_CREDITS/2, effective credits, keyed by issue date). */
 export interface SupplierCreditsTotal {
   readonly contract: string;
-  /** absent: none issued (zero, complete) · present: counted · invalid: at least one window date has an invalid / unreadable credit fact */
+  /** absent: none issued (zero, complete) · present: counted · invalid: at least one window date has an incomplete credit fact (invalid / unreadable / unresolved review) */
   readonly state: "absent" | "present" | "invalid";
   /** sum of the valid credits counted; null when none */
   readonly value: AmountString | null;
   readonly count: number;
   readonly bySupplier: Readonly<Record<string, AmountString>>;
   readonly dates: readonly BusinessDate[];
+  /** every window date whose credit facts are incomplete (data defect, unreadable source or unresolved review) */
   readonly invalidDates: readonly BusinessDate[];
+  /** MARJIN_CREDITS/2: the subsets of invalidDates whose (highest-precedence) reason is an unresolved review */
+  readonly reviewPendingDates: readonly BusinessDate[];
+  readonly reviewFlaggedDates: readonly BusinessDate[];
 }
 
 export interface ReportContext {
@@ -417,10 +421,16 @@ export function computePeriodReport(
   let creditCount = 0;
   const creditDates: BusinessDate[] = [];
   const creditInvalidDates: BusinessDate[] = [];
+  const creditPendingDates: BusinessDate[] = [];
+  const creditFlaggedDates: BusinessDate[] = [];
   for (const d of inWindow) {
     const c = d.supplierCredits;
     if (!c) continue;
-    if (c.presence === "invalid" || c.partial) creditInvalidDates.push(d.date);
+    if (c.presence === "invalid" || c.partial) {
+      creditInvalidDates.push(d.date);
+      if (c.reason === "supplier_credit_review_pending") creditPendingDates.push(d.date);
+      if (c.reason === "supplier_credit_review_flagged") creditFlaggedDates.push(d.date);
+    }
     if (c.presence !== "present" || c.value === null) continue;
     creditDates.push(d.date);
     creditCount += c.count;
@@ -487,11 +497,15 @@ export function computePeriodReport(
   const revenueIssues = metricIssues(inWindow, closed, "revenue", (d) => d.revenue, true);
   if (contradicted.length >= 1) revenueIssues.push({ component: "revenue", kind: "invalid", reason: "closed_day_has_recorded_values", dates: contradicted });
   const purchaseIssues = metricIssues(inWindow, closed, "purchases", (d) => d.purchases, true);
-  // MARJIN_CREDITS/1: an invalid / unreadable credit fact on ANY recognised date (closed dates
+  // MARJIN_CREDITS/2: an invalid / unreadable / review-unresolved credit fact on ANY recognised date (closed dates
   // included — a credit's period is its issue date, not the operating calendar) is an invalid
   // purchases component: purchases, Food Cost and every dependent figure are never complete.
   const creditOnlyInvalid = creditInvalidDates.filter((dt) => !purchaseIssues.some((i) => i.kind === "invalid" && i.dates.includes(dt)));
-  if (creditOnlyInvalid.length >= 1) purchaseIssues.push({ component: "purchases", kind: "invalid", reason: "supplier_credit_invalid_or_unreadable", dates: creditOnlyInvalid });
+  const reviewOnly = new Set([...creditPendingDates, ...creditFlaggedDates]);
+  const creditDefectDates = creditOnlyInvalid.filter((dt) => !reviewOnly.has(dt));
+  const creditReviewDates = creditOnlyInvalid.filter((dt) => reviewOnly.has(dt));
+  if (creditDefectDates.length >= 1) purchaseIssues.push({ component: "purchases", kind: "invalid", reason: "supplier_credit_invalid_or_unreadable", dates: creditDefectDates });
+  if (creditReviewDates.length >= 1) purchaseIssues.push({ component: "purchases", kind: "invalid", reason: "supplier_credit_review_unresolved", dates: creditReviewDates });
   if (netRat !== null && ratIsNegative(netRat)) flags.push({ code: "negative_net_purchases", key: "window" });
   for (const [k, r] of bySource) if (ratIsNegative(r)) flags.push({ code: "negative_supplier_net", key: k });
   const hourlyIssues = metricIssues(inWindow, closed, "hourly_employer_cost", (d) => d.hourlyLabor, true);
@@ -597,6 +611,8 @@ export function computePeriodReport(
           bySupplier: sortedOut(creditBy),
           dates: creditDates,
           invalidDates: creditInvalidDates,
+          reviewPendingDates: creditPendingDates,
+          reviewFlaggedDates: creditFlaggedDates,
         },
       },
       hourlyLabor: hourly.total,

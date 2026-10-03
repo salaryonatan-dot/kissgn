@@ -66,6 +66,9 @@ export type FlagCode =
   // MARJIN_CREDITS/1 (P1 supplier credits)
   | "supplier_credits_unreadable"
   | "invalid_supplier_credit"
+  // MARJIN_CREDITS/2 (P1 R1): a credit operation whose DEC-AUTH-1 authorization review is unresolved
+  | "supplier_credit_review_pending"
+  | "supplier_credit_review_flagged"
   | "negative_net_purchases"
   | "negative_supplier_net";
 
@@ -129,7 +132,7 @@ export interface CanonicalDay {
   readonly annotations: { readonly notes: ReadonlyArray<{ rowId: RowId; value: string }>; readonly securityEventRows: readonly RowId[] };
   readonly flags: readonly Flag[];
   /**
-   * MARJIN_CREDITS/1 (P1): set by the product composition (applySupplierCreditsToDay). When set,
+   * MARJIN_CREDITS/2 (P1 R1): set by the product composition (applySupplierCreditsToDay). When set,
    * `purchases` is NET of the supplier credits issued on this date and `purchasesGross` is the
    * purchases recorded in entries. Absent on days built without the credit source (core tests).
    */
@@ -137,11 +140,11 @@ export interface CanonicalDay {
   readonly supplierCredits?: DayCredits;
 }
 
-/** Supplier credits ISSUED on one date (active records only). value !== null ⇔ presence === "present". */
+/** Supplier credits ISSUED on one date (EFFECTIVE credits only). value !== null ⇔ presence === "present". */
 export interface DayCredits {
   /** absent: no credit issued that date (zero, complete) · present: credits counted · invalid: no valid credit and the source is invalid */
   readonly presence: Presence;
-  /** present credits counted, but at least one credit fact of this date is invalid / unreadable */
+  /** present credits counted, but at least one credit fact of this date is invalid / unreadable / under an unresolved review */
   readonly partial: boolean;
   readonly value: Dec | null;
   /** "supplier:<id>" → amount issued that date */

@@ -226,12 +226,19 @@ export function computePeriodReport(days, timeline, purchaseBasis, laborSource, 
     let creditCount = 0;
     const creditDates = [];
     const creditInvalidDates = [];
+    const creditPendingDates = [];
+    const creditFlaggedDates = [];
     for (const d of inWindow) {
         const c = d.supplierCredits;
         if (!c)
             continue;
-        if (c.presence === "invalid" || c.partial)
+        if (c.presence === "invalid" || c.partial) {
             creditInvalidDates.push(d.date);
+            if (c.reason === "supplier_credit_review_pending")
+                creditPendingDates.push(d.date);
+            if (c.reason === "supplier_credit_review_flagged")
+                creditFlaggedDates.push(d.date);
+        }
         if (c.presence !== "present" || c.value === null)
             continue;
         creditDates.push(d.date);
@@ -307,12 +314,17 @@ export function computePeriodReport(days, timeline, purchaseBasis, laborSource, 
     if (contradicted.length >= 1)
         revenueIssues.push({ component: "revenue", kind: "invalid", reason: "closed_day_has_recorded_values", dates: contradicted });
     const purchaseIssues = metricIssues(inWindow, closed, "purchases", (d) => d.purchases, true);
-    // MARJIN_CREDITS/1: an invalid / unreadable credit fact on ANY recognised date (closed dates
+    // MARJIN_CREDITS/2: an invalid / unreadable / review-unresolved credit fact on ANY recognised date (closed dates
     // included — a credit's period is its issue date, not the operating calendar) is an invalid
     // purchases component: purchases, Food Cost and every dependent figure are never complete.
     const creditOnlyInvalid = creditInvalidDates.filter((dt) => !purchaseIssues.some((i) => i.kind === "invalid" && i.dates.includes(dt)));
-    if (creditOnlyInvalid.length >= 1)
-        purchaseIssues.push({ component: "purchases", kind: "invalid", reason: "supplier_credit_invalid_or_unreadable", dates: creditOnlyInvalid });
+    const reviewOnly = new Set([...creditPendingDates, ...creditFlaggedDates]);
+    const creditDefectDates = creditOnlyInvalid.filter((dt) => !reviewOnly.has(dt));
+    const creditReviewDates = creditOnlyInvalid.filter((dt) => reviewOnly.has(dt));
+    if (creditDefectDates.length >= 1)
+        purchaseIssues.push({ component: "purchases", kind: "invalid", reason: "supplier_credit_invalid_or_unreadable", dates: creditDefectDates });
+    if (creditReviewDates.length >= 1)
+        purchaseIssues.push({ component: "purchases", kind: "invalid", reason: "supplier_credit_review_unresolved", dates: creditReviewDates });
     if (netRat !== null && ratIsNegative(netRat))
         flags.push({ code: "negative_net_purchases", key: "window" });
     for (const [k, r] of bySource)
@@ -429,6 +441,8 @@ export function computePeriodReport(days, timeline, purchaseBasis, laborSource, 
                     bySupplier: sortedOut(creditBy),
                     dates: creditDates,
                     invalidDates: creditInvalidDates,
+                    reviewPendingDates: creditPendingDates,
+                    reviewFlaggedDates: creditFlaggedDates,
                 },
             },
             hourlyLabor: hourly.total,

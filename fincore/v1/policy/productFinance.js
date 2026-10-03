@@ -9,12 +9,12 @@ import { applyProjection } from "../metrics/projected.js";
 import { computeRevenueForecastV2, REV_FORECAST_V2_FORMULA_ID } from "../metrics/revenueForecast.js";
 import { decIsZero } from "../finance/decimal.js";
 import { productPurchaseBasis } from "./purchaseBasis.js";
-import { applySupplierCreditsToDay, creditsByDate, decodeSupplierCredits, SUPPLIER_CREDITS_CONTRACT_VERSION } from "../finance/supplierCredits.js";
-export { decodeSupplierCredits, SUPPLIER_CREDITS_CONTRACT_VERSION };
+import { applySupplierCreditsToDay, creditsByDate, decodeSupplierCredits, REVIEW_ISSUE_CODES, SUPPLIER_CREDITS_CONTRACT_VERSION } from "../finance/supplierCredits.js";
+export { decodeSupplierCredits, REVIEW_ISSUE_CODES, SUPPLIER_CREDITS_CONTRACT_VERSION };
 import { productLaborSource } from "./laborSource.js";
 /**
  * MARJIN_PRODUCT/3 (P1 supplier credits): the composition applies the supplier credits issued on
- * each date (MARJIN_CREDITS/1, `ProductInputs.supplierCredits`) to that date's purchases, so the
+ * each date (MARJIN_CREDITS/2 since P1 R1, `ProductInputs.supplierCredits`) to that date's purchases, so the
  * report, the daily metrics, the day record and the projection are all NET of credits.
  * MARJIN_PRODUCT/2 (closed-days amendment) is otherwise unchanged.
  */

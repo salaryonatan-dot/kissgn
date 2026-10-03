@@ -424,10 +424,10 @@ test("B2G-05-P1b P1 tree: committed negative-purchase substitution, formula dupl
   const TAB = '          {fcTab==="credits" && (()=>{';
   const cases = [
     ["credit written as a negative supplier payment", (dir) => edit(dir, "index.html", TAB, TAB + "\n            const __neg = () => setSupPayDate(creditForm.supplierId, creditForm.issueDate, \"-\" + creditForm.amount);"), /write_path_lines_changed/],
-    ["net formula duplicated in the page", (dir) => edit(dir, "index.html", "    function errorText(code) { return ERRORS[code] || ERRORS.failed; }", "    function errorText(code) { return ERRORS[code] || ERRORS.failed; }\n    function net(F, g, c) { return F.finance.decimal.decSub(g, c); }"), /formula_duplication/],
+    ["net formula duplicated in the page", (dir) => edit(dir, "index.html", "    function errorText(code) { return ERRORS[code] || TXT.unknown; }", "    function errorText(code) { return ERRORS[code] || TXT.unknown; }\n    function net(F, g, c) { return F.finance.decimal.decSub(g, c); }"), /formula_duplication/],
     ["C1 dashboard calculation edited", (dir) => edit(dir, "index.html", FIN_OLD, FIN_NEW), /change_outside_p1_zones/],
     ["in-zone label edit", (dir) => edit(dir, "index.html", "הוספת זיכוי ספק", "הוספת זיכוי ספק (edited)"), /index\.html \(committed\) is not the pinned P1 candidate blob/],
-    ["core credit attribution edited", (dir) => edit(dir, "src/finance/supplierCredits.ts", "if (r.status !== \"active\" || !wanted.has(r.issueDate)) continue;", "if (r.status !== \"active\") continue;"), /src\/finance\/supplierCredits\.ts \(committed\) is not the pinned P1 candidate blob/],
+    ["core credit attribution edited", (dir) => edit(dir, "src/finance/supplierCredits.ts", "      if (!wanted.has(c.issueDate)) continue;", "      /* issue-date attribution removed */"), /src\/finance\/supplierCredits\.ts \(committed\) is not the pinned P1 candidate blob/],
     ["an unpinned protected file", (dir) => writeFileSync(join(dir, "lib", "creditsExtra.js"), "export const x = 1;\n"), /protected changes are exactly/],
     ["a pinned file reverted to the base", (dir) => writeFileSync(join(dir, "api", "admin.js"), blobBytes(dir, P1_BASE + ":api/admin.js")), /protected changes are exactly/],
     ["Rules changed", (dir) => appendTo(dir, "database.rules.json", " "), /protected changes are exactly/],

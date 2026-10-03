@@ -1,18 +1,87 @@
 import { decAdd, decFromPlainString, decIsNegative, decIsZero, decSub, serializeDec } from "./decimal.js";
 import { isBusinessDate } from "./businessDate.js";
 import { sortFlags } from "./normalize.js";
-export const SUPPLIER_CREDITS_CONTRACT_VERSION = "MARJIN_CREDITS/1";
-export const SUPPLIER_CREDITS_SCHEMA_VERSION = 1;
+export const SUPPLIER_CREDITS_CONTRACT_VERSION = "MARJIN_CREDITS/2";
+export const SUPPLIER_CREDITS_SCHEMA_VERSION = 2;
+export const CREDIT_REVIEW_SCHEMA = "MARJIN_CREDITR/1";
 /** Same identity grammar as entry rows (UUID v4, lower-case). */
 export const CREDIT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+/** Operation ids: the entry-exception grammar (RTDB-safe). */
+export const OPERATION_ID_RE = /^[A-Za-z0-9_-]{8,128}$/;
 /** Positive, at most 9 integer digits and 2 fraction digits, no sign, no grouping, no exponent. */
 const AMOUNT_RE = /^(?:0|[1-9][0-9]{0,8})(?:\.[0-9]{1,2})?$/;
 const SUPPLIER_ID_FORBIDDEN = /[.#$\[\]\/:]/;
+const ACTOR_FORBIDDEN = /[.#$\[\]\/]/;
+const DIGEST_RE = /^[0-9a-f]{64}$/;
 export const MAX_SUPPLIER_ID_LENGTH = 128;
+export const MAX_DOCUMENT_NUMBER_LENGTH = 64;
+export const MAX_NOTE_LENGTH = 500;
 export const SUPPLIER_SOURCE_PREFIX = "supplier:";
+/** The explicit write-role set of the server API (lib/securityContext.js WRITE_ROLES). */
+export const CREDIT_WRITER_ROLES = Object.freeze(["manager", "owner", "super_owner"]);
+/** Roles that may decide (accept / reject) a FLAGGED operation: the business owner only (owner decision 6). */
+export const CREDIT_REVIEW_DECIDER_ROLES = Object.freeze(["owner"]);
+// ── document identity (owner decisions 2 / 3) ────────────────────────────────────────────────────
+/**
+ * Separators: Unicode white space, the hyphen / dash family (U+002D, U+2010–U+2015, U+2212 minus,
+ * U+05BE Hebrew maqaf), slash, backslash, underscore, full stop, colon and number sign. Separators are
+ * REMOVED from the key (the Codex remediation contract), so separator-formatting differences merge
+ * ("CR001", "CR 001", "cr-001", "CR/001", "CR - 001" all share the key "cr001"). Accepted consequence:
+ * numbers that differ ONLY in separator placement ("12-3" / "1-23") are one identity. Nothing else
+ * (leading zeros, letters, digits) is ever rewritten.
+ */
+const SEPARATOR_CLASS = "\\s\\-\\u2010-\\u2015\\u2212\\u05BE\\/\\\\_.:#";
+const SEP_RUN = new RegExp("[" + SEPARATOR_CLASS + "]+", "gu");
+const ALLOWED_CHAR = new RegExp("^[\\p{L}\\p{M}\\p{N}" + SEPARATOR_CLASS + "]$", "u");
+const FORBIDDEN_CHAR = /[\p{Cc}\p{Cf}\p{Co}\p{Cs}\p{Zl}\p{Zp}]/u;
+const HAS_ALNUM = /[\p{L}\p{N}]/u;
+/**
+ * The ONE document-number rule (writer, browser and readers):
+ *   1. a string, NFKC-normalized; control / format (incl. bidi marks) / private-use / surrogate / line
+ *      or paragraph separator characters are refused (never stripped);
+ *   2. display = trimmed, every white-space run collapsed to one ASCII space; empty ⇒ required;
+ *      display length ≤ 64 UTF-16 units (rejected, never truncated);
+ *   3. every character is a letter, a combining mark, a digit or a separator (above);
+ *   4. key = NFKC(lowercase(display)) with every separator removed; the key must contain at least one
+ *      letter or digit (it is then letters / marks / digits only, hence RTDB-key-safe).
+ * Case folding is the locale-INDEPENDENT Unicode default (String.prototype.toLowerCase).
+ */
+export function normalizeDocumentNumber(raw) {
+    if (raw === undefined || raw === null)
+        return { ok: false, code: "document_number_required" };
+    if (typeof raw !== "string")
+        return { ok: false, code: "invalid_document_number" };
+    const n = raw.normalize("NFKC");
+    if (FORBIDDEN_CHAR.test(n))
+        return { ok: false, code: "invalid_document_number" };
+    const display = n.trim().replace(/\s+/gu, " ");
+    if (display === "")
+        return { ok: false, code: "document_number_required" };
+    if (display.length > MAX_DOCUMENT_NUMBER_LENGTH)
+        return { ok: false, code: "invalid_document_number_too_long" };
+    for (const ch of display)
+        if (!ALLOWED_CHAR.test(ch))
+            return { ok: false, code: "invalid_document_number_chars" };
+    const key = display.toLowerCase().normalize("NFKC").replace(SEP_RUN, "");
+    if (!HAS_ALNUM.test(key))
+        return { ok: false, code: "invalid_document_number_chars" };
+    return { ok: true, display, key };
+}
 function isPlainObject(v) {
     return typeof v === "object" && v !== null && !Array.isArray(v);
 }
+const isSafeInt = (v, min) => typeof v === "number" && Number.isSafeInteger(v) && v >= min;
+const isActor = (v) => typeof v === "string" && v.length > 0 && v.length <= 128 && !ACTOR_FORBIDDEN.test(v);
+const isCreditId = (v) => typeof v === "string" && CREDIT_ID_RE.test(v);
+const exactKeys = (o, required, optional = []) => {
+    for (const k of required)
+        if (!(k in o))
+            return false;
+    for (const k of Object.keys(o))
+        if (!required.includes(k) && !optional.includes(k))
+            return false;
+    return true;
+};
 /** Canonical credit amount ("300.50" → "300.5"), or null when the text is not a valid positive amount. */
 export function canonicalCreditAmount(raw) {
     if (typeof raw !== "string" || !AMOUNT_RE.test(raw))
@@ -25,84 +94,485 @@ export function canonicalCreditAmount(raw) {
 export function isValidSupplierId(v) {
     return typeof v === "string" && v.length > 0 && v.length <= MAX_SUPPLIER_ID_LENGTH && v.trim() === v && !SUPPLIER_ID_FORBIDDEN.test(v);
 }
-const isRevision = (v) => typeof v === "number" && Number.isSafeInteger(v) && v >= 1;
-const isLink = (v) => v === undefined || v === null || (typeof v === "string" && CREDIT_ID_RE.test(v));
-function decodeRecord(key, r) {
-    if (!isPlainObject(r))
-        return { key, code: "invalid_record", issueDate: null };
-    const issueDate = isBusinessDate(r.issueDate) ? r.issueDate : null;
-    if (!CREDIT_ID_RE.test(key) || r.creditId !== key)
-        return { key, code: "id_mismatch", issueDate };
-    if (issueDate === null)
-        return { key, code: "invalid_issue_date", issueDate: null };
+/** A stored note / void reason: trimmed, non-empty, bounded, no control characters. */
+export function isValidNote(v) {
+    return typeof v === "string" && v.length > 0 && v.length <= MAX_NOTE_LENGTH && v.trim() === v && !/[\u0000-\u001f]/.test(v);
+}
+// ── per-entry decoding (no cross-reference) ──────────────────────────────────────────────────────
+const RECORD_REQUIRED = ["creditId", "logicalId", "tenantId", "bizId", "supplierId", "issueDate", "amount", "documentNumber", "documentKey", "operationId", "seq", "createdAt", "createdBy", "createdRole"];
+const RECORD_OPTIONAL = ["note", "replacesCreditId", "identityCorrection"];
+function decodeRecord(key, r, bind) {
+    if (!exactKeys(r, RECORD_REQUIRED, RECORD_OPTIONAL))
+        return { code: "invalid_record" };
+    if (!isCreditId(key) || r.creditId !== key)
+        return { code: "id_mismatch" };
+    if (r.tenantId !== bind.tenantId || r.bizId !== bind.bizId)
+        return { code: "binding_mismatch" };
+    if (!isBusinessDate(r.issueDate))
+        return { code: "invalid_issue_date" };
     if (!isValidSupplierId(r.supplierId))
-        return { key, code: "invalid_supplier", issueDate };
+        return { code: "invalid_supplier" };
     const amount = canonicalCreditAmount(r.amount);
     // the stored amount must already be canonical (the writer canonicalizes): "300.50" is not a stored form
     if (amount === null || amount !== r.amount)
-        return { key, code: "invalid_amount", issueDate };
-    if (r.status !== "active" && r.status !== "voided")
-        return { key, code: "invalid_status", issueDate };
-    if (!isRevision(r.revision))
-        return { key, code: "invalid_revision", issueDate };
-    if (!isLink(r.replacesCreditId) || !isLink(r.replacedByCreditId))
-        return { key, code: "invalid_link", issueDate };
-    if (r.status === "active" && r.replacedByCreditId)
-        return { key, code: "invalid_link", issueDate };
-    const doc = typeof r.documentNumber === "string" && r.documentNumber !== "" ? r.documentNumber : null;
-    const note = typeof r.note === "string" && r.note !== "" ? r.note : null;
+        return { code: "invalid_amount" };
+    const doc = normalizeDocumentNumber(r.documentNumber);
+    if (!doc.ok || doc.display !== r.documentNumber || doc.key !== r.documentKey)
+        return { code: "invalid_document" };
+    if (r.note !== undefined && !isValidNote(r.note))
+        return { code: "invalid_record" };
+    if (typeof r.operationId !== "string" || !OPERATION_ID_RE.test(r.operationId) || !isSafeInt(r.seq, 1))
+        return { code: "invalid_audit" };
+    if (!isSafeInt(r.createdAt, 1) || !isActor(r.createdBy) || typeof r.createdRole !== "string" || !CREDIT_WRITER_ROLES.includes(r.createdRole))
+        return { code: "invalid_audit" };
+    const repl = r.replacesCreditId;
+    if (repl !== undefined && (!isCreditId(repl) || repl === key))
+        return { code: "invalid_link" };
+    // root ⇔ its logical id is its own id; a successor never names itself as its logical credit
+    if ((repl === undefined) !== (r.logicalId === key))
+        return { code: "invalid_link" };
+    if (r.identityCorrection !== undefined && (r.identityCorrection !== true || repl === undefined))
+        return { code: "invalid_link" };
     return {
-        creditId: key, supplierId: r.supplierId, issueDate, amount, status: r.status, documentNumber: doc, note, revision: r.revision,
-        replacesCreditId: r.replacesCreditId || null, replacedByCreditId: r.replacedByCreditId || null,
+        creditId: key, logicalId: r.logicalId, supplierId: r.supplierId, issueDate: r.issueDate, amount,
+        documentNumber: doc.display, documentKey: doc.key, note: r.note === undefined ? null : r.note,
+        replacesCreditId: repl === undefined ? null : repl, identityCorrection: r.identityCorrection === true,
+        operationId: r.operationId, seq: r.seq, createdAt: r.createdAt, createdBy: r.createdBy, createdRole: r.createdRole,
     };
 }
+function decodeVoid(key, v) {
+    if (!OPERATION_ID_RE.test(key) || v.operationId !== key)
+        return null;
+    const isReplace = v.kind === "replace";
+    if (v.kind !== "void" && !isReplace)
+        return null;
+    const base = ["operationId", "kind", "creditId", "logicalId", "seq", "voidedAt", "voidedBy", "voidedRole", "reasonCode"];
+    if (!exactKeys(v, isReplace ? [...base, "replacedByCreditId"] : base, isReplace ? [] : ["reasonText"]))
+        return null;
+    if (!isCreditId(v.creditId) || !isCreditId(v.logicalId) || !isSafeInt(v.seq, 2))
+        return null;
+    if (!isSafeInt(v.voidedAt, 1) || !isActor(v.voidedBy) || typeof v.voidedRole !== "string" || !CREDIT_WRITER_ROLES.includes(v.voidedRole))
+        return null;
+    if (v.reasonCode !== (isReplace ? "replaced" : "voided"))
+        return null;
+    if (isReplace && (!isCreditId(v.replacedByCreditId) || v.replacedByCreditId === v.creditId))
+        return null;
+    if (!isReplace && v.reasonText !== undefined && !isValidNote(v.reasonText))
+        return null;
+    return {
+        operationId: key, kind: isReplace ? "replace" : "void", creditId: v.creditId, logicalId: v.logicalId, seq: v.seq,
+        voidedAt: v.voidedAt, voidedBy: v.voidedBy, voidedRole: v.voidedRole,
+        reasonText: v.reasonText === undefined ? null : v.reasonText, replacedByCreditId: isReplace ? v.replacedByCreditId : null,
+    };
+}
+const REVIEW_BASE = ["schema", "state", "kind", "logicalId", "creditId", "seq", "intentDigest", "actor", "actorRole", "committedAt"];
+export const REVIEW_RESOLUTIONS = Object.freeze({
+    cleared: Object.freeze(["post_commit_authorized", "reconciled_authorized"]),
+    flagged: Object.freeze(["revoked_during_commit", "reconciled_unauthorized"]),
+});
+function decodeReview(key, e) {
+    if (!OPERATION_ID_RE.test(key) || e.schema !== CREDIT_REVIEW_SCHEMA)
+        return null;
+    const st = e.state, kind = e.kind;
+    if (kind !== "create" && kind !== "void" && kind !== "replace")
+        return null;
+    const base = [...REVIEW_BASE, ...(kind === "replace" ? ["newCreditId"] : [])];
+    const resolved = st === "cleared" || st === "flagged" ? ["resolvedAt", "resolution"] : st === "acknowledged" || st === "rejected" ? ["resolvedAt", "resolution", "decidedAt", "decidedBy"] : st === "pending" ? [] : null;
+    if (resolved === null || !exactKeys(e, [...base, ...resolved]))
+        return null;
+    if (!isCreditId(e.logicalId) || !isCreditId(e.creditId))
+        return null;
+    if (kind === "replace" && !isCreditId(e.newCreditId))
+        return null;
+    if (!isSafeInt(e.seq, 1) || typeof e.intentDigest !== "string" || !DIGEST_RE.test(e.intentDigest))
+        return null;
+    if (!isActor(e.actor) || typeof e.actorRole !== "string" || !CREDIT_WRITER_ROLES.includes(e.actorRole) || !isSafeInt(e.committedAt, 1))
+        return null;
+    if (st !== "pending") {
+        if (!isSafeInt(e.resolvedAt, 1) || e.resolvedAt < e.committedAt)
+            return null;
+        const family = st === "cleared" ? "cleared" : "flagged";
+        if (typeof e.resolution !== "string" || !REVIEW_RESOLUTIONS[family].includes(e.resolution))
+            return null;
+    }
+    if (st === "acknowledged" || st === "rejected") {
+        if (!isSafeInt(e.decidedAt, 1) || e.decidedAt < e.resolvedAt || !isActor(e.decidedBy))
+            return null;
+    }
+    return {
+        operationId: key, kind, state: st, logicalId: e.logicalId, creditId: e.creditId, newCreditId: kind === "replace" ? e.newCreditId : null,
+        seq: e.seq, intentDigest: e.intentDigest, actor: e.actor, actorRole: e.actorRole, committedAt: e.committedAt,
+        resolvedAt: st === "pending" ? null : e.resolvedAt, resolution: st === "pending" ? null : e.resolution,
+        decidedAt: st === "acknowledged" || st === "rejected" ? e.decidedAt : null, decidedBy: st === "acknowledged" || st === "rejected" ? e.decidedBy : null,
+    };
+}
+/** The RTDB keys of an identity reservation (prefixed: never array-like). */
+export const documentSupplierKey = (supplierId) => "s_" + supplierId;
+export const documentNumberKey = (documentKey) => "d_" + documentKey;
+function decodeDoc(sKey, dKey, d) {
+    if (!sKey.startsWith("s_") || !dKey.startsWith("d_"))
+        return null;
+    const supplierId = sKey.slice(2), documentKey = dKey.slice(2);
+    if (!isPlainObject(d) || !exactKeys(d, ["logicalId", "creditId", "operationId", "reservedAt", "reservedBy"]))
+        return null;
+    if (!isValidSupplierId(supplierId) || documentKey.length === 0)
+        return null;
+    if (!isCreditId(d.logicalId) || !isCreditId(d.creditId))
+        return null;
+    if (typeof d.operationId !== "string" || !OPERATION_ID_RE.test(d.operationId) || !isSafeInt(d.reservedAt, 1) || !isActor(d.reservedBy))
+        return null;
+    return { supplierId, documentKey, logicalId: d.logicalId, creditId: d.creditId, operationId: d.operationId, reservedAt: d.reservedAt, reservedBy: d.reservedBy };
+}
+const AUTHORITATIVE = ["cleared", "acknowledged"];
+const UNRESOLVED = ["pending", "flagged"];
+function foldGroup(g, reviews, docs) {
+    const byId = new Map(g.records.map((r) => [r.creditId, r]));
+    const root = byId.get(g.logicalId);
+    if (!root || root.replacesCreditId !== null)
+        return { code: "invalid_chain" };
+    const ops = [];
+    for (const r of g.records) {
+        const rv = reviews.get(r.operationId);
+        if (!rv)
+            return { code: "invalid_review" };
+        if (rv.actor !== r.createdBy || rv.actorRole !== r.createdRole || rv.committedAt !== r.createdAt || rv.logicalId !== g.logicalId || rv.seq !== r.seq)
+            return { code: "invalid_audit" };
+        if (r.replacesCreditId === null) {
+            if (rv.kind !== "create" || rv.creditId !== r.creditId || r.seq !== 1)
+                return { code: "invalid_review" };
+            ops.push({ seq: 1, kind: "create", operationId: r.operationId, review: rv, record: r });
+        }
+        else {
+            const pred = byId.get(r.replacesCreditId);
+            if (!pred)
+                return { code: "invalid_link" };
+            const ev = g.voids.find((v) => v.operationId === r.operationId);
+            // reciprocal: the replace event of the SAME operation voids the predecessor and names this record
+            if (!ev || ev.kind !== "replace" || ev.creditId !== pred.creditId || ev.replacedByCreditId !== r.creditId)
+                return { code: "invalid_link" };
+            if (ev.seq !== r.seq || ev.voidedAt !== r.createdAt || ev.voidedBy !== r.createdBy || ev.voidedRole !== r.createdRole)
+                return { code: "invalid_audit" };
+            if (rv.kind !== "replace" || rv.creditId !== pred.creditId || rv.newCreditId !== r.creditId)
+                return { code: "invalid_review" };
+            // identity: same supplier + document key, or an EXPLICIT audited corrected-identity replacement
+            const same = pred.supplierId === r.supplierId && pred.documentKey === r.documentKey;
+            if (same === r.identityCorrection)
+                return { code: "invalid_document" };
+            ops.push({ seq: r.seq, kind: "replace", operationId: r.operationId, review: rv, record: r, target: pred.creditId });
+        }
+    }
+    for (const ev of g.voids) {
+        const target = byId.get(ev.creditId);
+        if (!target)
+            return { code: "invalid_void" };
+        if (ev.voidedAt < target.createdAt)
+            return { code: "invalid_audit" };
+        if (ev.kind === "replace") {
+            const succ = byId.get(ev.replacedByCreditId);
+            if (!succ || succ.operationId !== ev.operationId)
+                return { code: "invalid_link" };
+            continue;
+        }
+        const rv = reviews.get(ev.operationId);
+        if (!rv)
+            return { code: "invalid_review" };
+        if (rv.kind !== "void" || rv.creditId !== ev.creditId || rv.seq !== ev.seq || rv.logicalId !== g.logicalId)
+            return { code: "invalid_review" };
+        if (rv.actor !== ev.voidedBy || rv.actorRole !== ev.voidedRole || rv.committedAt !== ev.voidedAt)
+            return { code: "invalid_audit" };
+        ops.push({ seq: ev.seq, kind: "void", operationId: ev.operationId, review: rv, target: ev.creditId });
+    }
+    // every review entry of this logical credit is one of its operations (no detached review)
+    const opIds = new Set(ops.map((o) => o.operationId));
+    if (opIds.size !== ops.length || g.reviewIds.some((id) => !opIds.has(id)))
+        return { code: "invalid_review" };
+    // sequence: exactly 1..n; commit time non-decreasing along it
+    ops.sort((a, b) => a.seq - b.seq);
+    for (let i = 0; i < ops.length; i++) {
+        if (ops[i].seq !== i + 1)
+            return { code: "invalid_chain" };
+        if (i > 0 && ops[i].review.committedAt < ops[i - 1].review.committedAt)
+            return { code: "invalid_audit" };
+    }
+    // every record is reachable from the root along its predecessor links (no cycle, no detached record)
+    for (const r of g.records) {
+        let cur = r;
+        const seen = new Set();
+        while (cur && cur.replacesCreditId !== null) {
+            if (seen.has(cur.creditId))
+                return { code: "invalid_chain" };
+            seen.add(cur.creditId);
+            cur = byId.get(cur.replacesCreditId);
+        }
+        if (!cur || cur.creditId !== g.logicalId)
+            return { code: "invalid_chain" };
+    }
+    // documents: every record's identity is reserved for THIS logical credit; the reservation names the
+    // first record that carried it (same operation, actor and commit time)
+    for (const r of g.records) {
+        const d = docs.get(r.supplierId + "\u0000" + r.documentKey);
+        if (!d || d.logicalId !== g.logicalId)
+            return { code: "invalid_document" };
+        const first = byId.get(d.creditId);
+        if (!first || first.supplierId !== r.supplierId || first.documentKey !== r.documentKey || d.operationId !== first.operationId || d.reservedAt !== first.createdAt || d.reservedBy !== first.createdBy || r.seq < first.seq)
+            return { code: "invalid_document" };
+    }
+    // the fold: at most ONE unresolved operation, and it is the latest; rejected operations are skipped
+    const unresolvedOps = ops.filter((o) => UNRESOLVED.includes(o.review.state));
+    if (unresolvedOps.length > 1 || (unresolvedOps.length === 1 && unresolvedOps[0].seq !== ops.length))
+        return { code: "invalid_review" };
+    const unresolvedOp = unresolvedOps[0] || null;
+    const status = new Map(g.records.map((r) => [r.creditId, "not_effective"]));
+    const successor = new Map();
+    const auth = { tip: null, active: false }; // authoritative (accounting) state
+    const struct = { tip: null, active: false }; // structural state: also the unresolved operation (the head points past it)
+    let createRejected = false;
+    const apply = (o, cur) => {
+        if (o.kind === "create") {
+            if (cur.tip !== null)
+                return false;
+            cur.tip = o.record.creditId;
+            cur.active = true;
+            return true;
+        }
+        if (cur.tip !== o.target || !cur.active)
+            return false;
+        if (o.kind === "void") {
+            cur.active = false;
+            return true;
+        }
+        cur.tip = o.record.creditId;
+        cur.active = true;
+        return true;
+    };
+    for (const o of ops) {
+        const st = o.review.state;
+        if (st === "rejected") {
+            if (o.kind === "create")
+                createRejected = true;
+            continue;
+        }
+        if (createRejected || !apply(o, struct))
+            return { code: "invalid_chain" };
+        if (o.kind === "replace")
+            successor.set(o.target, o.record.creditId);
+        if (AUTHORITATIVE.includes(st)) {
+            if (!apply(o, auth))
+                return { code: "invalid_chain" };
+            if (o.kind === "void")
+                status.set(o.target, "voided");
+            if (o.kind === "replace")
+                status.set(o.target, "replaced");
+        }
+    }
+    if (auth.tip !== null && auth.active)
+        status.set(auth.tip, "active");
+    // the current pointer: the structural tip (the root of a rejected creation) and the last sequence
+    const h = g.head;
+    const headCredit = createRejected ? g.logicalId : struct.tip;
+    if (!isPlainObject(h) || !exactKeys(h, ["creditId", "seq"]) || h.creditId !== headCredit || h.seq !== ops.length)
+        return { code: "invalid_head" };
+    const touched = [];
+    if (unresolvedOp) {
+        if (unresolvedOp.record)
+            touched.push(unresolvedOp.record.issueDate);
+        if (unresolvedOp.target)
+            touched.push(byId.get(unresolvedOp.target).issueDate);
+    }
+    const tipRec = auth.tip === null ? null : byId.get(auth.tip);
+    const effective = tipRec && auth.active ? { creditId: tipRec.creditId, logicalId: g.logicalId, supplierId: tipRec.supplierId, issueDate: tipRec.issueDate, amount: tipRec.amount } : null;
+    const lStatus = createRejected ? "rejected" : auth.tip === null ? "unresolved_create" : auth.active ? "active" : "voided";
+    const unres = unresolvedOp ? { operationId: unresolvedOp.operationId, kind: unresolvedOp.kind, state: unresolvedOp.review.state } : null;
+    return { ok: true, logical: { logicalId: g.logicalId, head: { creditId: headCredit, seq: ops.length }, status: lStatus, unresolved: unres }, effective, recordStatus: status, successor, unresolvedOp, touched };
+}
+const ENVELOPE_REQUIRED = ["schemaVersion", "contract", "tenantId", "bizId", "revision", "updatedAt", "records"];
+const ENVELOPE_OPTIONAL = ["voids", "documents", "heads", "review", "operations"];
 /**
- * Strict decoding of the stored node. null/undefined/{} ⇒ absent (zero credits, complete). A node
- * that is not `{schemaVersion:1, revision:int≥1, records?:object}` ⇒ unreadable. Every record is
- * validated on its own; invalid records are returned as issues (never silently dropped and never
- * counted). Records are returned sorted by creditId.
+ * Strict decoding of the stored node. null/undefined/{} ⇒ absent (zero credits, complete). `expect`
+ * (tenantId, bizId of the business being read) binds the node: a node of another business is
+ * UNREADABLE. Every defect is an issue (never silently dropped and never counted).
  */
-export function decodeSupplierCredits(raw) {
+export function decodeSupplierCredits(raw, expect) {
     if (raw === null || raw === undefined)
         return { state: "absent" };
     if (!isPlainObject(raw))
         return { state: "unreadable", reason: "node_shape" };
-    // an object without any key is no node (RTDB never stores one; same rule as decodeEnvelope)
     if (Object.keys(raw).length === 0)
         return { state: "absent" };
     if (raw.schemaVersion !== SUPPLIER_CREDITS_SCHEMA_VERSION)
         return { state: "unreadable", reason: "schema_version" };
-    if (!isRevision(raw.revision))
+    if (raw.contract !== SUPPLIER_CREDITS_CONTRACT_VERSION)
+        return { state: "unreadable", reason: "contract" };
+    if (!exactKeys(raw, ENVELOPE_REQUIRED, ENVELOPE_OPTIONAL))
+        return { state: "unreadable", reason: "envelope_keys" };
+    if (!isSafeInt(raw.revision, 1) || !isSafeInt(raw.updatedAt, 1))
         return { state: "unreadable", reason: "revision" };
+    if (!isActor(raw.tenantId) || !isActor(raw.bizId) || raw.bizId.includes(":"))
+        return { state: "unreadable", reason: "binding" };
+    if (expect && (raw.tenantId !== expect.tenantId || raw.bizId !== expect.bizId))
+        return { state: "unreadable", reason: "binding" };
+    for (const k of ["records", "voids", "documents", "heads", "review"])
+        if (raw[k] !== undefined && !isPlainObject(raw[k]))
+            return { state: "unreadable", reason: "section_shape" };
     const recs = raw.records;
-    if (recs !== undefined && recs !== null && !isPlainObject(recs))
-        return { state: "unreadable", reason: "records_shape" };
+    if (Object.keys(recs).length === 0)
+        return { state: "unreadable", reason: "section_shape" };
+    const bind = { tenantId: raw.tenantId, bizId: raw.bizId };
+    // Defects: [logicalId or null (unattributable), key, code]. Dates are attached at the end.
+    const defects = [];
+    const lidOf = (x) => (isPlainObject(x) && isCreditId(x.logicalId) ? x.logicalId : null);
+    // every logical credit named by a record object of THIS business, and the raw issue dates of its
+    // records (for attribution, even when a record is invalid)
+    const named = new Set();
+    const rawDates = new Map();
+    for (const r of Object.values(recs)) {
+        const lid = lidOf(r);
+        if (lid === null || !isPlainObject(r) || r.tenantId !== bind.tenantId || r.bizId !== bind.bizId)
+            continue;
+        named.add(lid);
+        if (isBusinessDate(r.issueDate))
+            rawDates.set(lid, (rawDates.get(lid) || new Set()).add(r.issueDate));
+    }
     const records = [];
-    const issues = [];
-    for (const key of Object.keys(recs || {}).sort()) {
-        const d = decodeRecord(key, recs[key]);
+    for (const key of Object.keys(recs).sort()) {
+        const r = recs[key];
+        if (!isPlainObject(r)) {
+            defects.push([null, key, "invalid_record"]);
+            continue;
+        }
+        const d = decodeRecord(key, r, bind);
+        // a record bound to ANOTHER business is unattributable (cross-business contamination)
         if ("code" in d)
-            issues.push(d);
+            defects.push([d.code === "binding_mismatch" ? null : lidOf(r), key, d.code]);
         else
             records.push(d);
     }
-    // A replacement link must point at an existing record of the node (both directions).
-    const byId = new Map(records.map((r) => [r.creditId, r]));
-    const linked = [];
-    for (const r of records) {
-        const broken = (r.replacesCreditId !== null && !byId.has(r.replacesCreditId)) || (r.replacedByCreditId !== null && !byId.has(r.replacedByCreditId));
-        if (broken)
-            issues.push({ key: r.creditId, code: "invalid_link", issueDate: r.issueDate });
-        else
-            linked.push(r);
+    // a logical credit with a defective record is already excluded: its other entries are not re-reported
+    const recordDefective = new Set(defects.map((d) => d[0]).filter((x) => x !== null));
+    const report = (lid, key, code) => { if (lid === null || !recordDefective.has(lid))
+        defects.push([lid, key, code]); };
+    const reviews = new Map();
+    for (const [k, e] of Object.entries(raw.review || {})) {
+        const r = isPlainObject(e) ? decodeReview(k, e) : null;
+        if (!r) {
+            report(lidOf(e), k, "invalid_review");
+            continue;
+        }
+        reviews.set(k, r);
     }
-    return { state: "present", revision: raw.revision, records: linked, issues };
+    const voidsByLogical = new Map();
+    for (const [k, v] of Object.entries(raw.voids || {})) {
+        const ev = isPlainObject(v) ? decodeVoid(k, v) : null;
+        if (!ev) {
+            report(lidOf(v), k, "invalid_void");
+            continue;
+        }
+        voidsByLogical.set(ev.logicalId, [...(voidsByLogical.get(ev.logicalId) || []), ev]);
+    }
+    const docs = new Map();
+    for (const [sid, inner] of Object.entries(raw.documents || {})) {
+        if (!isPlainObject(inner)) {
+            defects.push([null, sid, "invalid_document"]);
+            continue;
+        }
+        for (const [dk, d] of Object.entries(inner)) {
+            const doc = decodeDoc(sid, dk, d);
+            if (!doc) {
+                report(lidOf(d), sid + "/" + dk, "invalid_document");
+                continue;
+            }
+            docs.set(doc.supplierId + "\u0000" + doc.documentKey, doc);
+        }
+    }
+    const heads = raw.heads || {};
+    const groups = new Map();
+    for (const r of records) {
+        const g = groups.get(r.logicalId) || { logicalId: r.logicalId, records: [], voids: voidsByLogical.get(r.logicalId) || [], head: heads[r.logicalId], reviewIds: [] };
+        g.records.push(r);
+        groups.set(r.logicalId, g);
+    }
+    for (const [opId, rv] of reviews) {
+        const g = groups.get(rv.logicalId);
+        if (g)
+            g.reviewIds.push(opId);
+    }
+    // every void / review / document / head must belong to a logical credit that has records
+    const known = named;
+    for (const lid of voidsByLogical.keys())
+        if (!known.has(lid))
+            defects.push([null, lid, "orphan_entry"]);
+    for (const lid of Object.keys(heads))
+        if (!known.has(lid))
+            defects.push([null, lid, "orphan_entry"]);
+    for (const d of docs.values()) {
+        if (!known.has(d.logicalId))
+            defects.push([null, d.supplierId + "/" + d.documentKey, "orphan_entry"]);
+        // a reservation that no record of its logical credit carries is a detached identity
+        else if (!records.some((r) => r.logicalId === d.logicalId && r.supplierId === d.supplierId && r.documentKey === d.documentKey))
+            report(d.logicalId, d.supplierId + "/" + d.documentKey, "invalid_document");
+    }
+    for (const [opId, rv] of reviews)
+        if (!known.has(rv.logicalId))
+            defects.push([null, opId, "orphan_entry"]);
+    const badLogical = new Set(defects.map((d) => d[0]).filter((x) => x !== null));
+    const out = [];
+    const logical = [];
+    const credits = [];
+    const pending = [], flagged = [];
+    const issues = [];
+    for (const lid of [...groups.keys()].sort()) {
+        if (badLogical.has(lid))
+            continue;
+        const g = groups.get(lid);
+        const f = foldGroup(g, reviews, docs);
+        if (!("ok" in f)) {
+            defects.push([lid, lid, f.code]);
+            badLogical.add(lid);
+            continue;
+        }
+        logical.push(f.logical);
+        if (f.effective)
+            credits.push(f.effective);
+        if (f.unresolvedOp) {
+            const st = f.unresolvedOp.review.state;
+            (st === "pending" ? pending : flagged).push(f.unresolvedOp.operationId);
+            issues.push({ key: f.unresolvedOp.operationId, code: st === "pending" ? "review_pending" : "review_flagged", dates: [...new Set(f.touched)].sort() });
+        }
+        for (const r of g.records) {
+            const u = f.unresolvedOp;
+            const touches = !!u && ((u.record !== undefined && u.record.creditId === r.creditId) || u.target === r.creditId);
+            out.push({
+                creditId: r.creditId, logicalId: r.logicalId, supplierId: r.supplierId, issueDate: r.issueDate, amount: r.amount,
+                status: f.recordStatus.get(r.creditId), documentNumber: r.documentNumber, documentKey: r.documentKey, note: r.note,
+                replacesCreditId: r.replacesCreditId, replacedByCreditId: f.successor.get(r.creditId) || null, identityCorrection: r.identityCorrection,
+                operationId: r.operationId, seq: r.seq, createdAt: r.createdAt, createdBy: r.createdBy, createdRole: r.createdRole,
+                review: reviews.get(r.operationId).state, unresolved: touches ? f.logical.unresolved : null,
+            });
+        }
+    }
+    // a defective logical credit contributes NOTHING; its issue covers every issue date of its records
+    for (const [lid, key, code] of defects)
+        issues.push({ key, code, dates: lid === null ? [] : [...(rawDates.get(lid) || [])].sort() });
+    out.sort((a, b) => (a.creditId < b.creditId ? -1 : a.creditId > b.creditId ? 1 : 0));
+    const reviewList = [...reviews.values()]
+        .map((r) => ({ operationId: r.operationId, kind: r.kind, state: r.state, logicalId: r.logicalId, creditId: r.creditId, newCreditId: r.newCreditId, seq: r.seq, intentDigest: r.intentDigest, actor: r.actor, actorRole: r.actorRole, committedAt: r.committedAt, resolution: r.resolution }))
+        .sort((a, b) => (a.operationId < b.operationId ? -1 : 1));
+    credits.sort((a, b) => (a.creditId < b.creditId ? -1 : 1));
+    issues.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
+    return {
+        state: "present", revision: raw.revision, tenantId: bind.tenantId, bizId: bind.bizId,
+        records: out, logical, reviews: reviewList, credits, issues, unresolved: { pending: pending.sort(), flagged: flagged.sort() },
+    };
 }
+/** Issue codes that are NOT a data defect: the operation is valid but its authorization review is unresolved. */
+export const REVIEW_ISSUE_CODES = Object.freeze(["review_pending", "review_flagged"]);
 const ABSENT_CREDITS = Object.freeze({ presence: "absent", partial: false, value: null, bySupplier: Object.freeze({}), count: 0, reason: null });
 /**
- * Per-date credit facts for the given dates (active credits only, keyed by ISSUE date).
- * unreadable / not_loaded / an undated invalid record ⇒ every date is INVALID (never zero).
- * A dated invalid record ⇒ its date is partial (presence invalid when no valid credit is there).
+ * Per-date credit facts for the given dates (EFFECTIVE credits only, keyed by ISSUE date).
+ * unreadable / not_loaded / an unattributable issue ⇒ every date is INVALID (never zero).
+ * An attributable issue (a defective logical credit, or an unresolved review) ⇒ its dates are partial
+ * (presence invalid when no effective credit is there). Reason precedence on a date: a data defect
+ * (invalid_supplier_credit) over a flagged review over a pending review.
  */
 export function creditsByDate(state, dates) {
     const out = new Map();
@@ -112,45 +582,55 @@ export function creditsByDate(state, dates) {
             out.set(d, ABSENT_CREDITS);
         return out;
     }
-    const allInvalid = st.state !== "present" || st.issues.some((i) => i.issueDate === null);
+    const allInvalid = st.state !== "present" || st.issues.some((i) => i.dates.length === 0);
     const reasonAll = st.state === "unreadable" ? "supplier_credits_unreadable" : st.state === "not_loaded" ? "supplier_credits_not_loaded" : "invalid_supplier_credit";
     const wanted = new Set(dates);
     const sums = new Map();
-    const invalidDates = new Set();
+    const dateReason = new Map();
+    const rank = (r) => (r === "invalid_supplier_credit" ? 3 : r === "supplier_credit_review_flagged" ? 2 : 1);
     if (st.state === "present") {
-        for (const r of st.records) {
-            if (r.status !== "active" || !wanted.has(r.issueDate))
+        for (const c of st.credits) {
+            if (!wanted.has(c.issueDate))
                 continue;
-            const v = decFromPlainString(r.amount);
-            const s = sums.get(r.issueDate) || { value: decFromPlainString("0"), by: new Map(), count: 0 };
+            const v = decFromPlainString(c.amount);
+            const s = sums.get(c.issueDate) || { value: decFromPlainString("0"), by: new Map(), count: 0 };
             s.value = decAdd(s.value, v);
-            const k = SUPPLIER_SOURCE_PREFIX + r.supplierId;
+            const k = SUPPLIER_SOURCE_PREFIX + c.supplierId;
             s.by.set(k, s.by.has(k) ? decAdd(s.by.get(k), v) : v);
             s.count += 1;
-            sums.set(r.issueDate, s);
+            sums.set(c.issueDate, s);
         }
-        for (const i of st.issues)
-            if (i.issueDate !== null)
-                invalidDates.add(i.issueDate);
+        for (const i of st.issues) {
+            const r = i.code === "review_pending" ? "supplier_credit_review_pending" : i.code === "review_flagged" ? "supplier_credit_review_flagged" : "invalid_supplier_credit";
+            for (const d of i.dates) {
+                const prev = dateReason.get(d);
+                if (!prev || rank(r) > rank(prev))
+                    dateReason.set(d, r);
+            }
+        }
     }
     for (const d of dates) {
         const s = sums.get(d);
-        const invalid = allInvalid || invalidDates.has(d);
+        const reason = allInvalid ? reasonAll : dateReason.get(d) || null;
+        const invalid = reason !== null;
         if (!s && !invalid) {
             out.set(d, ABSENT_CREDITS);
             continue;
         }
         const bySupplier = s ? Object.fromEntries([...s.by.keys()].sort().map((k) => [k, serializeDec(s.by.get(k))])) : {};
-        out.set(d, {
-            presence: s ? "present" : "invalid",
-            partial: !!s && invalid,
-            value: s ? s.value : null,
-            bySupplier,
-            count: s ? s.count : 0,
-            reason: invalid ? (allInvalid ? reasonAll : "invalid_supplier_credit") : null,
-        });
+        out.set(d, { presence: s ? "present" : "invalid", partial: !!s && invalid, value: s ? s.value : null, bySupplier, count: s ? s.count : 0, reason });
     }
     return out;
+}
+/** The day flag that discloses an incomplete credit fact (by reason). */
+function creditFlagCode(reason) {
+    if (reason === "supplier_credits_unreadable" || reason === "supplier_credits_not_loaded")
+        return "supplier_credits_unreadable";
+    if (reason === "supplier_credit_review_pending")
+        return "supplier_credit_review_pending";
+    if (reason === "supplier_credit_review_flagged")
+        return "supplier_credit_review_flagged";
+    return "invalid_supplier_credit";
 }
 /**
  * Apply one date's credits to its canonical day (the ONE place gross becomes net).
@@ -159,19 +639,20 @@ export function creditsByDate(state, dates) {
  *                    of a supplier without gross that day is a negative entry); gross absent or
  *                    invalid stays absent/invalid (the credit is still carried in supplierCredits
  *                    and counted by the period report);
- *   an invalid / unreadable credit source marks present purchases partial (never complete).
+ *   an incomplete credit fact (invalid / unreadable / unresolved review) marks present purchases
+ *   partial (never complete).
  */
 export function applySupplierCreditsToDay(day, credits) {
     const gross = day.purchases;
     const flags = [...day.flags];
-    // no credit issued that date and a readable source: the day is unchanged (no added fields), so a
+    // no credit issued that date and a complete source: the day is unchanged (no added fields), so a
     // business without credits gives byte-identical days, reports and docs to MARJIN_PRODUCT/2.
     if (credits.presence === "absent" && !credits.partial)
         return day;
     const done = (d) => ({ ...d, flags: sortFlags(d.flags) });
     const creditsIncomplete = credits.presence === "invalid" || credits.partial;
     if (creditsIncomplete)
-        flags.push({ code: credits.reason === "supplier_credits_unreadable" || credits.reason === "supplier_credits_not_loaded" ? "supplier_credits_unreadable" : "invalid_supplier_credit", date: day.date, ...(credits.reason ? { reason: credits.reason } : {}) });
+        flags.push({ code: creditFlagCode(credits.reason), date: day.date, ...(credits.reason ? { reason: credits.reason } : {}) });
     if (gross.presence !== "present" || gross.value === null) {
         return done({ ...day, purchasesGross: gross, supplierCredits: credits, flags });
     }

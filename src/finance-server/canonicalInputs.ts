@@ -12,13 +12,13 @@
 // propagates (it is never treated as "absent"). No write.
 import { readEntriesNode, requireEntriesRows } from "../../lib/analytics/entriesReader.js";
 import { israelBusinessDate } from "../finance/businessDate.js";
-import { decodeEnvelope, decodeExceptionLedger, decodeSupplierCredits, exceptionsByDateOf } from "../policy/productFinance.js";
+import { decodeEnvelope, decodeExceptionLedger, decodeSupplierCredits, exceptionsByDateOf, REVIEW_ISSUE_CODES } from "../policy/productFinance.js";
 import type { EnvelopeState, ExceptionLedgerState, ProductInputs, SupplierCreditsState } from "../policy/productFinance.js";
 
 export const CANONICAL_SERVER_API_VERSION = "MARJIN_FIN_SERVER/1";
 
 export type InputState = EnvelopeState<unknown>["state"] | "not_loaded";
-export type InputIssue = "config_unreadable" | "fixed_unreadable" | "exceptions_unreadable" | "supplier_credits_unreadable" | "supplier_credits_invalid";
+export type InputIssue = "config_unreadable" | "fixed_unreadable" | "exceptions_unreadable" | "supplier_credits_unreadable" | "supplier_credits_invalid" | "supplier_credits_review_unresolved";
 
 export interface ServerInputs extends ProductInputs {
   readonly tenantId: string;
@@ -29,7 +29,7 @@ export interface ServerInputs extends ProductInputs {
   /** Structured exception ledger: not_loaded unless `need.exceptions`. */
   readonly exceptionsState: ExceptionLedgerState["state"] | "not_loaded";
   readonly inputIssues: readonly InputIssue[];
-  /** P1 (MARJIN_CREDITS/1): state of the supplier-credit node, ALWAYS read (purchases are net of credits). */
+  /** P1 (MARJIN_CREDITS/2): state of the supplier-credit node, ALWAYS read (purchases are net of credits). */
   readonly supplierCreditsState: SupplierCreditsState["state"];
 }
 
@@ -63,9 +63,11 @@ export async function loadCanonicalInputs(
   if (fixed.state === "unreadable") inputIssues.push("fixed_unreadable");
   const ledger: ExceptionLedgerState | null = exceptionsSnap ? decodeExceptionLedger(exceptionsSnap.val()) : null;
   if (ledger && ledger.state === "unreadable") inputIssues.push("exceptions_unreadable");
-  const supplierCredits: SupplierCreditsState = decodeSupplierCredits(creditsSnap.val());
+  // bound to the business being read: a node of another tenant / business is unreadable
+  const supplierCredits: SupplierCreditsState = decodeSupplierCredits(creditsSnap.val(), { tenantId, bizId });
   if (supplierCredits.state === "unreadable") inputIssues.push("supplier_credits_unreadable");
-  if (supplierCredits.state === "present" && supplierCredits.issues.length >= 1) inputIssues.push("supplier_credits_invalid");
+  if (supplierCredits.state === "present" && supplierCredits.issues.some((i) => !REVIEW_ISSUE_CODES.includes(i.code))) inputIssues.push("supplier_credits_invalid");
+  if (supplierCredits.state === "present" && supplierCredits.issues.some((i) => REVIEW_ISSUE_CODES.includes(i.code))) inputIssues.push("supplier_credits_review_unresolved");
   const nowMs = opts.nowMs === undefined ? Date.now() : opts.nowMs;
   return {
     tenantId,

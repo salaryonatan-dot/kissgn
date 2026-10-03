@@ -494,9 +494,21 @@ exactly-once for a duplicated operation. `p1-rendered-credits.mjs` boots the wor
 jsdom and drives the Supplier Credits tab (list, create, validation, void, edit = replace,
 unavailable + retry) through the real handler.
 
+P1 R1 (MARJIN_CREDITS/2, pending independent review): the rendered proof also drives the mandatory
+document number (client and server duplicate refusal), the review badges and the owner's acceptance of
+a flagged credit, the lost-response same-operation retry and the retired legacy pending-credit card
+(its stored node byte-identical). `p1-r1-review-emulator.mjs` runs TWO independent server instances (two
+copies of the actual handler, each on its own Admin app) against the real transport: lost
+acknowledgement ⇒ readback, in-window revocation ⇒ durable flagged review + audit record, unavailable
+post-check ⇒ pending ⇒ same-operation retry, reconciliation, owner-only exactly-once acceptance,
+rejection restoring the predecessor, cross-instance duplicate-identity and void / replace races, three
+weakened-Rules mutants (member write, member read, audit write) each detected by the denial probes,
+and client forge / clear / accept denial.
+
 ```
 ... "node test/emulator/p1-supplier-credits-emulator.mjs"
 ... "node test/emulator/p1-rendered-credits.mjs"
+... "node test/emulator/p1-r1-review-emulator.mjs"
 ```
 
-Expected: `total=8 passed=8 failed=0` for each — `ALL CASES PASSED`.
+Expected: `total=8 passed=8 failed=0`, `total=11 passed=11 failed=0` and `total=9 passed=9 failed=0` — `ALL CASES PASSED`.
