@@ -80,7 +80,7 @@ test("F1-P03 C1 browser and server use the same persisted cost-history snapshot"
     globalEmployees: [{ employeeKey: "g1", monthlyEmployerCost: "3000" }], fixedItemsCount: 0,
     rent: { mode: "none" }, royalty: { mode: "none" },
   } } };
-  rawHistory.review = reviewFor(rawHistory.versions);   // F1 R1: MARJIN_COSTH/2 resolved review entry
+  rawHistory.review = reviewFor(rawHistory.versions);   // F1 R1: MARJIN_COSTH/3 resolved review entry
   const db = seed({ rows });
   db.seed(`tenants/${T}/biz:${B}:cost_history`, rawHistory);
   const server = await coreOf(INV_NOW_MS);

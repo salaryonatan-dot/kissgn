@@ -18,13 +18,13 @@ const second = {
   ...first, versionId: b, predecessorVersionId: a, recordedAt: now + 1,
   fixedItemsCount: 1, fixedItems: [{ itemKey: "rent", monthlyAmount: "1000" }],
 };
-// F1 R1: MARJIN_COSTH/2 — every version carries a resolved (cleared) authorization review.
+// F1 R1: MARJIN_COSTH/3 — every version carries a resolved (cleared) authorization review.
 const history = (versions = { [a]: first, [b]: second }, head = { revision: 2, headVersionId: b }) => ({ head, versions, review: reviewFor(versions) });
 const read = (codec, value) => codec.decodeHistory({ exists: value !== null, value });
 
 test("F1-01 generated browser and fresh server core decode one coherent history identically", async () => {
   const server = await loadCompiled(), browser = await loadCommitted();
-  assert.equal(browser.versions.costHistory, "MARJIN_COSTH/2");
+  assert.equal(browser.versions.costHistory, "MARJIN_COSTH/3");
   for (const value of [null, history(), history({ [a]: first }, { revision: 1, headVersionId: a }),
     history({ [a]: first, [b]: { ...second, predecessorVersionId: "none" } }),
     history({ [a]: first, [b]: { ...second, fixedItemsCount: 0 } }),

@@ -1,4 +1,4 @@
-// F1 R1 — fail-closed authorization review of cost versions (DEC-AUTH-1 window), MARJIN_COSTH/2.
+// F1 R1 — fail-closed authorization review of cost versions (DEC-AUTH-1 window), MARJIN_COSTH/3.
 //   RV-C*  codec: pending / flagged withhold the WHOLE history; cleared / acknowledged are authoritative;
 //          strict review shape bound to its version; browser ≡ server ≡ committed
 //   RV-P*  consumers: product timeline, server loader and C1 seam never fall back to current settings
@@ -36,7 +36,7 @@ test("RV-C01 pending and flagged reviews withhold the WHOLE history (unreadable,
   assert.equal(dec(one("acknowledged")).state, "present");
   const s = codec.decodeHistoryStructure({ exists: true, value: one("pending") });
   assert.equal(s.state, "present"); assert.deepEqual(s.unresolved, { pending: [A], flagged: [] }, "the structural view (trusted writers only) reports it instead");
-  assert.equal(COMMITTED.versions.costHistory, "MARJIN_COSTH/2");
+  assert.equal(COMMITTED.versions.costHistory, "MARJIN_COSTH/3");
 });
 
 test("RV-C02 a pending review on an EARLIER version withholds the history even when the head is cleared", () => {
@@ -154,7 +154,7 @@ test("RV-W02 in-window revocation: durable FLAGGED state in the node + audit rec
   assert.deepEqual([res.status, res.postCommitAccess, res.review, res.audit], ["committed_current", "revoked_during_commit", "flagged", "flag_persisted"]);
   assert.equal(reviewOf(db).state, "flagged"); assert.equal(reviewOf(db).resolution, "revoked_during_commit");
   assert.equal(dec(stored(db)).reason, "authorization_review_flagged");
-  assert.ok(db.read(`tenants/${T}/audit/cost_history_flags/${A}`));
+  assert.ok(reviewOf(db).flagAudit, "flag audit is atomic with review inside cost_history");
 });
 
 test("RV-W03 audit AND review writes fail after an in-window revocation: the failure is not lost — the review stays PENDING (visible, non-authoritative)", async () => {
@@ -204,14 +204,14 @@ test("RV-W05 reconciliation with a revoked actor ⇒ FLAGGED (+ audit); a manage
   assert.equal(reviewOf(db).resolution, "reconciled_unauthorized"); assert.equal(dec(stored(db)).reason, "authorization_review_flagged");
   const digest = reviewOf(db).intentDigest;
   globalThis.__CLAIMS = { uid: "u_mgr2", email: "m2@x" };
-  assert.equal((await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: digest })).status, "role_not_allowed");
+  assert.equal((await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: digest, operationId: A })).status, "role_not_allowed");
   globalThis.__CLAIMS = { uid: "u_owner", email: "o@x" };
-  assert.equal((await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: DIGEST("b") })).status, "review_identity_mismatch", "a different payload digest can never resolve it");
-  const ack = await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: digest });
+  assert.equal((await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: DIGEST("b"), operationId: A })).status, "review_identity_mismatch", "a different payload digest can never resolve it");
+  const ack = await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: digest, operationId: A });
   assert.equal(ack.status, "resolved");
   assert.equal(reviewOf(db).state, "acknowledged"); assert.equal(reviewOf(db).acknowledgedBy, "u_owner"); assert.equal(reviewOf(db).resolution, "reconciled_unauthorized", "the flag evidence is kept");
   assert.equal(dec(stored(db)).state, "present");
-  assert.equal((await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: digest })).status, "already_acknowledged");
+  assert.equal((await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: digest, operationId: A })).status, "already_acknowledged");
 });
 
 test("RV-W06 lost acknowledgement of the REVIEW transition is resolved by full-payload readback (the write landed ⇒ resolved, not unknown)", async () => {
@@ -237,11 +237,11 @@ test("RV-W08 versions and head are immutable through every review transition; a 
   await w.saveCostVersion({ headers: {} }, { tenantId: T, bizId: B, body: body() });
   const before = JSON.parse(JSON.stringify(stored(db)));
   globalThis.__CLAIMS = { uid: "u_owner", email: "o@x" };
-  await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: before.review[A].intentDigest });
+  await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: before.review[A].intentDigest, operationId: A });
   const after = stored(db);
   assert.deepEqual(after.versions, before.versions); assert.deepEqual(after.head, before.head);
   assert.deepEqual(Object.keys(after.review), [A]);
-  assert.equal(JSON.stringify({ ...after.review[A], state: "flagged", acknowledgedAt: undefined, acknowledgedBy: undefined }), JSON.stringify({ ...before.review[A], acknowledgedAt: undefined, acknowledgedBy: undefined }));
+  assert.equal(JSON.stringify({ ...after.review[A], state: "flagged", acknowledgedAt: undefined, acknowledgedBy: undefined, acceptOperationId: undefined }), JSON.stringify({ ...before.review[A], acknowledgedAt: undefined, acknowledgedBy: undefined }));
 });
 
 test("RV-W09 an acknowledgement / clearance can never target a CLEARED or a different version, and a flagged review cannot be cleared", async () => {
@@ -249,8 +249,8 @@ test("RV-W09 an acknowledgement / clearance can never target a CLEARED or a diff
   await w.saveCostVersion({ headers: {} }, { tenantId: T, bizId: B, body: body() });           // cleared
   globalThis.__CLAIMS = { uid: "u_owner", email: "o@x" };
   const d = reviewOf(db).intentDigest;
-  assert.equal((await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: d })).status, "review_already_resolved:cleared");
-  assert.equal((await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: Bv, intentDigest: d })).status, "not_found");
+  assert.equal((await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: d, operationId: A })).status, "review_already_resolved:cleared");
+  assert.equal((await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: Bv, intentDigest: d, operationId: A })).status, "not_found");
   const db2 = world(); const w2 = writerFor(db2); revokeAfterCommit(db2);
   await w2.saveCostVersion({ headers: {} }, { tenantId: T, bizId: B, body: body() });          // flagged
   db2.seed(`tenants/${T}/members/u_mgr`, true);

@@ -4,7 +4,7 @@ import { israelBusinessDate, parseBusinessDate } from "./businessDate.js";
 // transaction as the version. A version whose review is unresolved (pending / flagged) makes the whole
 // history non-authoritative (unreadable), so a DEC-AUTH-1 in-window commit can never silently become
 // ordinary history when its post-commit audit fails. A /1 reader sees a /2 node as malformed (fail closed).
-export const COST_HISTORY_CAPABILITY = "MARJIN_COSTH/2";
+export const COST_HISTORY_CAPABILITY = "MARJIN_COSTH/3";
 //
 // PURE and browser-safe: no imports, no clock, no I/O. The approved core date functions are INJECTED
 // (server: fincore/v1/finance/businessDate.js; browser: window.MarjinFinance.finance.businessDate),
@@ -18,7 +18,8 @@ export const COST_HISTORY_CAPABILITY = "MARJIN_COSTH/2";
 // A failed or denied read is never "absent".
 export const HISTORY_KEY_RE = /^biz:[^:]+:cost_history$/; // the ONE storage key (R2)
 export const RECORD_SCHEMA = "MARJIN_COSTV/1";
-export const REVIEW_SCHEMA = "MARJIN_COSTR/1";
+export const REVIEW_SCHEMA = "MARJIN_COSTR/2";
+export const FLAG_AUDIT_SCHEMA = "MARJIN_COST_AUDIT/2";
 export const REVIEW_RESOLUTIONS = Object.freeze({
     cleared: ["post_commit_authorized", "reconciled_authorized"],
     flagged: ["revoked_during_commit", "reconciled_unauthorized"],
@@ -146,7 +147,8 @@ export function createHistoryCodec(core) {
         if (e.state !== "cleared" && e.state !== "flagged" && e.state !== "acknowledged")
             return { error: "review_state_invalid" };
         const resolved = [...base, "resolvedAt", "resolution"];
-        const fields = e.state === "acknowledged" ? [...resolved, "acknowledgedAt", "acknowledgedBy"] : resolved;
+        const flagged = e.state === "flagged" || e.state === "acknowledged";
+        const fields = e.state === "acknowledged" ? [...resolved, "flagAudit", "acknowledgedAt", "acknowledgedBy", "acceptOperationId"] : flagged ? [...resolved, "flagAudit"] : resolved;
         if (!only(e, fields) || !fields.every((f) => e[f] !== undefined))
             return { error: "review_fields_invalid" };
         if (!validInstant(e.resolvedAt) || e.resolvedAt < e.committedAt)
@@ -154,8 +156,21 @@ export function createHistoryCodec(core) {
         const allowed = e.state === "cleared" ? REVIEW_RESOLUTIONS.cleared : REVIEW_RESOLUTIONS.flagged;
         if (!allowed.includes(e.resolution))
             return { error: "review_resolution_invalid" };
+        if (flagged) {
+            const a = e.flagAudit;
+            const auditFields = ["schema", "operationId", "tenantId", "bizId", "versionId", "intentDigest", "recordedBy", "recordedAt", "outcome", "detectedAt"];
+            if (!isObj(a) || Object.keys(a).length !== auditFields.length || !only(a, auditFields) ||
+                a.schema !== FLAG_AUDIT_SCHEMA || typeof a.operationId !== "string" || !DIGEST.test(a.operationId) ||
+                typeof a.tenantId !== "string" || !a.tenantId || typeof a.bizId !== "string" || !a.bizId ||
+                a.versionId !== key || a.intentDigest !== e.intentDigest || a.recordedBy !== v.recordedBy ||
+                a.recordedAt !== v.recordedAt || a.outcome !== e.resolution || !validInstant(a.detectedAt) ||
+                a.detectedAt < v.recordedAt || a.detectedAt !== e.resolvedAt)
+                return { error: "flag_audit_invalid" };
+        }
         if (e.state === "acknowledged" && (!validInstant(e.acknowledgedAt) || e.acknowledgedAt < e.resolvedAt || typeof e.acknowledgedBy !== "string" || e.acknowledgedBy === ""))
             return { error: "review_ack_invalid" };
+        if (e.state === "acknowledged" && (typeof e.acceptOperationId !== "string" || !UUID4.test(e.acceptOperationId)))
+            return { error: "review_ack_operation_invalid" };
         return { review: { state: e.state, intentDigest: e.intentDigest, resolution: e.resolution } };
     }
     /** read = { exists, value } from ONE snapshot of the node, or { failed: error }. Authoritative decision. */

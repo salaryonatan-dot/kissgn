@@ -86,23 +86,27 @@ async function main() {
     eq((await clientDecode("u_mgr2")).state, "present", "client decode");
     return "cleared; client present";
   });
-  await run("FWE-2", "in-window revocation ⇒ durable FLAGGED review in the node + audit record; client decode withholds the history", async () => {
+  await run("FWE-2", "in-window revocation ⇒ FLAGGED review and matching audit in one node; client decode withholds the history", async () => {
     await seed();
     let done = false;
     overrides = [afterCommit(async (out) => { if (out.committed && !done) { done = true; await realDb().ref(`tenants/${T}/members/u_mgr`).set(false); } })];
     const r = await save(writer(), A);
     eq([r.postCommitAccess, r.review, r.audit], ["revoked_during_commit", "flagged", "flag_persisted"], "result");
-    eq((await nodeNow()).review[A].state, "flagged", "stored");
-    expect((await realDb().ref(`tenants/${T}/audit/cost_history_flags/${A}`).once("value")).exists(), "audit flag record");
+    const stored=await nodeNow();
+    eq(stored.review[A].state, "flagged", "stored");
+    eq([stored.review[A].flagAudit.versionId,stored.review[A].flagAudit.intentDigest,stored.review[A].flagAudit.recordedAt],
+      [A,stored.review[A].intentDigest,stored.versions[A].recordedAt],"same-snapshot flag audit binding");
+    expect(!(await realDb().ref(`tenants/${T}/audit/cost_history_flags/${A}`).once("value")).exists(), "no detached flag audit node");
+    const malformed=JSON.parse(JSON.stringify(stored));delete malformed.review[A].flagAudit;
+    eq(costHistoryCodec.decodeHistory({exists:true,value:malformed}).state,"unreadable","flagged without audit is malformed");
     eq((await clientDecode("u_mgr2")).reason, "authorization_review_flagged", "client decode");
     return "flagged, durable";
   });
-  await run("FWE-3", "revocation + audit write failure + review write failure ⇒ the review stays PENDING in the node; never authoritative for any reader", async () => {
+  await run("FWE-3", "revocation + atomic flag/audit transaction failure ⇒ the review stays PENDING in the node; never authoritative for any reader", async () => {
     await seed();
     let commits = 0;
     overrides = [
       { match: (p) => p === NODE, wrap: (r) => ({ get: () => r.get(), transaction: async (...a) => { commits++; if (commits >= 2) throw new Error("review write failed"); const out = await r.transaction(...a); await realDb().ref(`tenants/${T}/members/u_mgr`).set(false); return out; } }) },
-      { match: (p) => p.startsWith(`tenants/${T}/audit/cost_history_flags/`), wrap: () => ({ transaction: async () => { throw new Error("audit down"); }, get: async () => { throw new Error("audit down"); } }) },
     ];
     const r = await save(writer(), A);
     eq([r.postCommitAccess, r.audit, r.review], ["revoked_during_commit", "flag_unconfirmed", "pending"], "result");

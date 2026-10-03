@@ -882,7 +882,7 @@
       const api = mod && mod.default;
       const v = api && api.versions;
       if (!api || api !== window.MarjinFinance || !v || v.product !== "MARJIN_PRODUCT/2" || v.forecast !== "REV_FORECAST/v2" ||
-          v.costHistory !== "MARJIN_COSTH/2" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") {
+          v.costHistory !== "MARJIN_COSTH/3" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") {
         throw new Error("fincore_version_mismatch");
       }
       window.__marjinFinance = { state: "ready", error: null };
@@ -1099,7 +1099,7 @@
       if (!api || typeof api !== "object" || !api.versions || !api.product || !api.presenters) return { ok: false, reason: "fincore_shape" };
       if (api.versions.product !== EXPECT.product) return { ok: false, reason: "fincore_version_mismatch" };
       if (api.versions.forecast !== EXPECT.forecast) return { ok: false, reason: "fincore_version_mismatch" };
-      if (api.versions.costHistory !== "MARJIN_COSTH/2" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") return { ok: false, reason: "fincore_cost_history_incompatible" };
+      if (api.versions.costHistory !== "MARJIN_COSTH/3" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") return { ok: false, reason: "fincore_cost_history_incompatible" };
       return { ok: true };
     }
 

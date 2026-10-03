@@ -23,6 +23,8 @@ import { F1_INDEX_BASE, f1IndexVerdict } from "../support/f1-index-scope.mjs";
 import { F1_COMMIT, F1_INDEX_PIN } from "../support/f1-candidate-pin.mjs";
 import { R1_INDEX_BASE, r1IndexVerdict } from "../support/r1-index-scope.mjs";
 import { R1_COMMIT, R1_INDEX_PIN, R1_RUNTIME } from "../support/r1-candidate-pin.mjs";
+import { R2_INDEX_PIN, R2_RUNTIME_BLOBS } from "../support/r2-candidate-pin.mjs";
+import { r2IndexVerdict } from "../support/r2-index-scope.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -150,6 +152,10 @@ function assertB2Scope(root) {
     // EXACTLY the R1 runtime files are pinned to their R1_COMMIT blobs (all other F1 files keep the F1 pin),
     // and index.html is checked against the FIXED F1 page by the R1 scope contract + the R1 identity pin.
     const r1 = f1 && gitIn(root, ["merge-base", "--is-ancestor", R1_COMMIT, "HEAD"]).status === 0;
+    // R2 is recognized by its fixed committed MANIFEST identity, independent of a page mutation.
+    // Every changed runtime blob and the page then has its own fixed literal pin below;
+    // dirty/staged/committed page mutations fail at the page check rather than being misclassified.
+    const r2 = r1 && names(["rev-parse", "HEAD:fincore/v1/MANIFEST.json"])[0] === R2_RUNTIME_BLOBS["fincore/v1/MANIFEST.json"];
     const vd50Runtime = ["src/metrics/report.ts", "fincore/v1/metrics/report.js", "fincore/v1/MANIFEST.json"];
     const f1Runtime = ["database.rules.json", "fincore/v1/MANIFEST.json", "fincore/v1/browser/marjinFinanceGlobal.js", "fincore/v1/finance/costHistory.js", "fincore/v1/metrics/report.js", "fincore/v1/policy/productFinance.js", "lib/finance/costHistoryWriter.js", "src/browser/marjinFinanceGlobal.ts", "src/finance-server/canonicalInputs.ts", "src/finance/costHistory.ts", "src/finance/labor.ts", "src/finance/types.ts", "src/metrics/costTimeline.ts", "src/metrics/report.ts", "src/policy/productFinance.ts", "test/support/rules-authorized-delta.mjs"];
     const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : [])])] : CDM2_APPROVED;
@@ -173,7 +179,9 @@ function assertB2Scope(root) {
       [SB, blobBytes(root, B2 + ":" + SB), B2.slice(0, 8) + ":" + SB],
       [SE, blobBytes(root, B2 + ":" + SE), B2.slice(0, 8) + ":" + SE],
       ...(vd50 ? vd50Runtime.filter((f) => !f1 || !f1Runtime.includes(f)).map((f) => [f, blobBytes(root, VD50_COMMIT + ":" + f), "VD-50 candidate " + VD50_COMMIT.slice(0, 8) + ":" + f]) : []),
-      ...(f1 ? f1Runtime.map((f) => r1 && R1_RUNTIME.includes(f)
+      ...(f1 ? f1Runtime.map((f) => r2 && Object.prototype.hasOwnProperty.call(R2_RUNTIME_BLOBS, f)
+        ? [f, blobBytes(root, R2_RUNTIME_BLOBS[f]), "F1 R2 candidate fixed blob " + R2_RUNTIME_BLOBS[f]]
+        : r1 && R1_RUNTIME.includes(f)
         ? [f, blobBytes(root, R1_COMMIT + ":" + f), "F1 R1 candidate " + R1_COMMIT.slice(0, 8) + ":" + f]
         : [f, blobBytes(root, F1_COMMIT + ":" + f), "F1 candidate " + F1_COMMIT.slice(0, 8) + ":" + f]) : []),
       ...(assembled ? [
@@ -219,6 +227,16 @@ function assertB2Scope(root) {
               const f1Page = blobBytes(root, R1_INDEX_BASE + ":index.html");
               assert.deepEqual(f1IndexVerdict(vd50Page, f1Page), { ok: true }, "R1 base satisfies F1 scope");
               assert.equal(hashBytes(f1Page), F1_INDEX_PIN.blob, "R1 base is the fixed F1 identity");
+              if (r2) {
+                const r1Page = blobBytes(root, R1_COMMIT + ":index.html");
+                assert.deepEqual(r1IndexVerdict(f1Page, r1Page), { ok: true }, "R2 base satisfies R1 scope");
+                assert.equal(hashBytes(r1Page), R1_INDEX_PIN.blob, "R2 base is the fixed R1 identity");
+                for (const [label, bytes] of [["committed", committed], ["staged (index)", staged], ["checked-out", checkedOut]]) {
+                  assert.deepEqual(r2IndexVerdict(r1Page, bytes), { ok: true }, "index.html (" + label + ") violates R2 scope");
+                  assert.equal(hashBytes(bytes), R2_INDEX_PIN.blob, "index.html (" + label + ") differs from fixed R2 candidate pin");
+                }
+                return;
+              }
               for (const [label, bytes] of [["committed", committed], ["staged (index)", staged], ["checked-out", checkedOut]]) {
                 assert.deepEqual(r1IndexVerdict(f1Page, bytes), { ok: true }, "index.html (" + label + ") violates R1 scope");
                 assert.equal(hashBytes(bytes), R1_INDEX_PIN.blob, "index.html (" + label + ") differs from fixed R1 candidate pin");
@@ -292,11 +310,11 @@ const isC1Repo = isAssembledRepo && gitIn(REPO, ["merge-base", "--is-ancestor", 
 const isC2Repo = isC1Repo && gitIn(REPO, ["merge-base", "--is-ancestor", C2_BASE, "HEAD"]).status === 0 && HEAD_SHA !== C2_BASE;
 // On a C1 tree a non-approved index.html is refused by the C1 contract instead of the byte pin;
 // on a C2 tree by the C2 contract (the C1 surfaces are frozen at the reviewed C1 R2 bytes).
-const INDEX_REFUSED = isC2Repo ? /index\.html \(committed\) violates the C2 contract|index\.html \(committed\) is not the pinned C2 candidate blob|index\.html \(committed\) violates VD-50 scope|index\.html \(committed\) differs from fixed VD-50 candidate pin|index\.html \(committed\) violates F1 scope|index\.html \(committed\) differs from fixed F1 candidate pin|index\.html \(committed\) violates R1 scope|index\.html \(committed\) differs from fixed R1 candidate pin/
+const INDEX_REFUSED = isC2Repo ? /index\.html \(committed\) violates the C2 contract|index\.html \(committed\) is not the pinned C2 candidate blob|index\.html \(committed\) violates VD-50 scope|index\.html \(committed\) differs from fixed VD-50 candidate pin|index\.html \(committed\) violates F1 scope|index\.html \(committed\) differs from fixed F1 candidate pin|index\.html \(committed\) violates R1 scope|index\.html \(committed\) differs from fixed R1 candidate pin|index\.html \(committed\) violates R2 scope|index\.html \(committed\) differs from fixed R2 candidate pin/
   : isC1Repo ? /index\.html \(committed\) violates the C1 contract|index\.html \(committed\) is not the pinned C1 candidate blob/ : /index\.html is byte-identical to the approved merge/;
 // On a C2 tree every C1-zone mutation is OUTSIDE the two C2 zones: the C2 scope refuses it first.
-const C1_REASON = (re) => (isC2Repo ? /change_outside_c2_zones|vd50_scope_changed|f1_scope_changed|r1_scope_changed/ : re);
-const PIN_REFUSED = isC2Repo ? /index\.html \(committed\) violates the C2 contract|index\.html \(committed\) violates VD-50 scope|index\.html \(committed\) violates F1 scope|index\.html \(committed\) violates R1 scope/ : /index\.html \(committed\) is not the pinned C1 candidate blob/;
+const C1_REASON = (re) => (isC2Repo ? /change_outside_c2_zones|vd50_scope_changed|f1_scope_changed|r1_scope_changed|r2_scope_changed/ : re);
+const PIN_REFUSED = isC2Repo ? /index\.html \(committed\) violates the C2 contract|index\.html \(committed\) violates VD-50 scope|index\.html \(committed\) violates F1 scope|index\.html \(committed\) violates R1 scope|index\.html \(committed\) violates R2 scope/ : /index\.html \(committed\) is not the pinned C1 candidate blob/;
 const appendTo = (dir, f, text) => { writeFileSync(join(dir, f), readFileSync(join(dir, f), "utf8") + text); };
 
 test("B2G-05-M1 integrated tree: a WORKING-TREE-ONLY edit of an approved CD-M2 runtime file (history unchanged) fails the guard; the clean clone passes", { skip: !isIntegratedRepo && "standalone tree: the integrated exception does not apply" }, () => {
