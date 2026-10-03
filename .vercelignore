@@ -1,0 +1,46 @@
+# Marjin — Vercel deployment boundary (ALLOWLIST). Review: artifacts/p0-vercel-surface-hardening/
+#
+# Vercel project preset "Other", no build step, no `public/` directory: every uploaded file
+# outside api/, node_modules/ and the package/lock files becomes a STATIC file of the
+# deployment, and static files take precedence over the catch-all rewrite. So "uploaded"
+# means "publicly downloadable". Only runtime inputs are uploaded; everything else at the
+# project root is excluded. A new top-level file or directory is excluded by default and
+# must be classified in test/support/vercel-surface.mjs before it can be allowed here.
+#
+# Guarded by test/security/vercel-deployment-surface.test.mjs.
+
+# 1. Exclude everything at the project root …
+/*
+
+# 2. … then re-allow the runtime inputs.
+# Browser runtime (served statically; `/` → landing.html, `/app` → index.html)
+!/index.html
+!/landing.html
+# Financial Core browser bundle (slice C1 loads /fincore/v1/**; absent until B1)
+!/fincore
+# Serverless functions and the modules they import (traced by @vercel/nft)
+!/api
+!/src
+!/lib
+# Deployment and build inputs
+!/vercel.json
+!/package.json
+!/package-lock.json
+!/tsconfig.json
+
+# 3. Never upload these, even inside an allowed directory.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.crt
+**/*service-account*.json
+**/*serviceAccount*.json
+**/*credentials*.json
+**/*.log
+**/.DS_Store
+**/*.swp
+**/*~
+**/*.test.*
