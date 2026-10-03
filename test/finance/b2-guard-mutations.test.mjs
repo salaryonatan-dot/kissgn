@@ -26,6 +26,8 @@ import { R1_COMMIT, R1_INDEX_PIN, R1_RUNTIME } from "../support/r1-candidate-pin
 import { R2_INDEX_PIN, R2_RUNTIME_BLOBS } from "../support/r2-candidate-pin.mjs";
 import { r2IndexVerdict } from "../support/r2-index-scope.mjs";
 import { F2_PARENT, F2_INDEX_PIN, F2_RUNTIME_BLOBS } from "../support/f2-candidate-pin.mjs";
+import { R3_PARENT, R3_INDEX_PIN, R3_RUNTIME_BLOBS } from "../support/r3-candidate-pin.mjs";
+import { r3IndexVerdict } from "../support/r3-index-scope.mjs";
 import { f2IndexVerdict } from "../support/f2-index-scope.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
@@ -160,6 +162,10 @@ function assertB2Scope(root) {
     const r2 = r1 && (names(["rev-parse", "HEAD:fincore/v1/MANIFEST.json"])[0] === R2_RUNTIME_BLOBS["fincore/v1/MANIFEST.json"] ||
       gitIn(root,["merge-base","--is-ancestor",F2_PARENT,"HEAD"]).status===0);
     const f2 = r2 && gitIn(root,["cat-file","-e","HEAD:api/cost-history.js"]).status===0;
+    // R3 (Core/F1 R3 successor, pending independent Codex review): recognized by the fixed committed MANIFEST
+    // identity or by R3_PARENT being a STRICT ancestor; exactly the R3 runtime files then carry R3 pins.
+    const r3 = f2 && (names(["rev-parse", "HEAD:fincore/v1/MANIFEST.json"])[0] === R3_RUNTIME_BLOBS["fincore/v1/MANIFEST.json"] ||
+      (gitIn(root,["merge-base","--is-ancestor",R3_PARENT,"HEAD"]).status===0 && names(["rev-parse","HEAD"])[0] !== R3_PARENT));
     const vd50Runtime = ["src/metrics/report.ts", "fincore/v1/metrics/report.js", "fincore/v1/MANIFEST.json"];
     const f1Runtime = ["database.rules.json", "fincore/v1/MANIFEST.json", "fincore/v1/browser/marjinFinanceGlobal.js", "fincore/v1/finance/costHistory.js", "fincore/v1/metrics/report.js", "fincore/v1/policy/productFinance.js", "lib/finance/costHistoryWriter.js", "src/browser/marjinFinanceGlobal.ts", "src/finance-server/canonicalInputs.ts", "src/finance/costHistory.ts", "src/finance/labor.ts", "src/finance/types.ts", "src/metrics/costTimeline.ts", "src/metrics/report.ts", "src/policy/productFinance.ts", "test/support/rules-authorized-delta.mjs"];
     const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : [])])] : CDM2_APPROVED;
@@ -183,14 +189,16 @@ function assertB2Scope(root) {
       [SB, blobBytes(root, B2 + ":" + SB), B2.slice(0, 8) + ":" + SB],
       [SE, blobBytes(root, B2 + ":" + SE), B2.slice(0, 8) + ":" + SE],
       ...(vd50 ? vd50Runtime.filter((f) => !f1 || !f1Runtime.includes(f)).map((f) => [f, blobBytes(root, VD50_COMMIT + ":" + f), "VD-50 candidate " + VD50_COMMIT.slice(0, 8) + ":" + f]) : []),
-      ...(f1 ? f1Runtime.map((f) => f2 && Object.prototype.hasOwnProperty.call(F2_RUNTIME_BLOBS,f)
+      ...(f1 ? f1Runtime.map((f) => r3 && Object.prototype.hasOwnProperty.call(R3_RUNTIME_BLOBS,f)
+        ? [f, blobBytes(root,R3_RUNTIME_BLOBS[f]), "R3 candidate fixed blob " + R3_RUNTIME_BLOBS[f]]
+        : f2 && Object.prototype.hasOwnProperty.call(F2_RUNTIME_BLOBS,f)
         ? [f, blobBytes(root,F2_RUNTIME_BLOBS[f]), "F2 candidate fixed blob " + F2_RUNTIME_BLOBS[f]]
         : r2 && Object.prototype.hasOwnProperty.call(R2_RUNTIME_BLOBS, f)
         ? [f, blobBytes(root, R2_RUNTIME_BLOBS[f]), "F1 R2 candidate fixed blob " + R2_RUNTIME_BLOBS[f]]
         : r1 && R1_RUNTIME.includes(f)
         ? [f, blobBytes(root, R1_COMMIT + ":" + f), "F1 R1 candidate " + R1_COMMIT.slice(0, 8) + ":" + f]
         : [f, blobBytes(root, F1_COMMIT + ":" + f), "F1 candidate " + F1_COMMIT.slice(0, 8) + ":" + f]) : []),
-      ...(f2 ? [["api/cost-history.js",blobBytes(root,F2_RUNTIME_BLOBS["api/cost-history.js"]),"F2 trusted route fixed blob"]] : []),
+      ...(f2 ? [["api/cost-history.js",blobBytes(root,(r3?R3_RUNTIME_BLOBS:F2_RUNTIME_BLOBS)["api/cost-history.js"]),(r3?"R3":"F2")+" trusted route fixed blob"]] : []),
       ...(assembled ? [
         ...(c1 ? [] : [["index.html", approvedIndexMerge(root), "merge(" + CDM2R1.slice(0, 8) + ", " + HF1R1.slice(0, 8) + ")"]]),
         ...P0_APPROVED.map((f) => [f, blobBytes(root, P0 + ":" + f), P0.slice(0, 8) + ":" + f]),
@@ -242,6 +250,16 @@ function assertB2Scope(root) {
                   const r2Page=blobBytes(root,F2_PARENT+":index.html");
                   assert.deepEqual(r2IndexVerdict(r1Page,r2Page),{ok:true},"F2 base satisfies R2 scope");
                   assert.equal(hashBytes(r2Page),R2_INDEX_PIN.blob,"F2 base is the fixed R2 identity");
+                  if (r3) {
+                    const f2Page=blobBytes(root,R3_PARENT+":index.html");
+                    assert.deepEqual(f2IndexVerdict(r2Page,f2Page),{ok:true},"R3 base satisfies F2 scope");
+                    assert.equal(hashBytes(f2Page),F2_INDEX_PIN.blob,"R3 base is the fixed F2 identity");
+                    for(const [label,bytes] of [["committed",committed],["staged (index)",staged],["checked-out",checkedOut]]){
+                      assert.deepEqual(r3IndexVerdict(f2Page,bytes),{ok:true},"index.html ("+label+") violates R3 scope");
+                      assert.equal(hashBytes(bytes),R3_INDEX_PIN.blob,"index.html ("+label+") differs from fixed R3 candidate pin");
+                    }
+                    return;
+                  }
                   for(const [label,bytes] of [["committed",committed],["staged (index)",staged],["checked-out",checkedOut]]){
                     assert.deepEqual(f2IndexVerdict(r2Page,bytes),{ok:true},"index.html ("+label+") violates F2 scope");
                     assert.equal(hashBytes(bytes),F2_INDEX_PIN.blob,"index.html ("+label+") differs from fixed F2 candidate pin");

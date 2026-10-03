@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join,dirname} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {TextEncoder} from 'node:util';
+import {createHash} from 'node:crypto';
 import {bootHistoricalPage,depsStatus,click,textOf} from '../historical/historical-page-harness.mjs';
 import {loadFinance} from '../support/c1-seam.mjs';
 
@@ -118,6 +119,37 @@ try{
   await page.until(()=>page.document.querySelector('[data-f2="pending"]'),10000);
   check(!page.document.querySelector('[data-f2="save"]'),'pending version must withhold edits');
   results.push('pending state renders as non-authoritative');
+  // R3: a FLAGGED head (in-window revocation evidence) → the owner REJECTS it through the rendered UI and the real route;
+  // the version and its audit stay immutable, calculations exclude it, and a corrected successor continues the chain.
+  const stable=x=>JSON.stringify(x,(_,v)=>(v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v));
+  const sha=x=>createHash('sha256').update(stable(x)).digest('hex');
+  const flaggedNode=JSON.parse(JSON.stringify(hist));
+  const fv=flaggedNode.versions[id], resolvedAt=fv.recordedAt+1, resolution='revoked_during_commit';
+  flaggedNode.review[id]={schema:r.schema,state:'flagged',intentDigest:r.intentDigest,actor:r.actor,committedAt:r.committedAt,resolvedAt,resolution,
+    flagAudit:{schema:'MARJIN_COST_AUDIT/2',operationId:sha({tenantId:T,bizId:B,versionId:id,intentDigest:r.intentDigest,resolution}),tenantId:T,bizId:B,versionId:id,intentDigest:r.intentDigest,recordedBy:fv.recordedBy,recordedAt:fv.recordedAt,outcome:resolution,detectedAt:resolvedAt}};
+  await seedDb.ref(`tenants/${T}/biz:${B}:cost_history`).set(flaggedNode);
+  await page.until(()=>page.document.querySelector('[data-f2="reject-flag"]'),10000);
+  check(!page.document.querySelector('[data-f2="save"]'),'flagged version must withhold edits');
+  // a super_owner cannot reject through the real route (fresh identity check), the manager-free tenant owner can
+  await seedDb.ref(`tenants/${T}/members/u_super`).set(true);await seedDb.ref(`tenants/${T}/roles/u_super`).set('super_owner');
+  globalThis.__F2_CLAIMS={uid:'u_super',email:'super@demo.example'};
+  const superTry=await fetchImpl('/api/cost-history',{method:'POST',body:JSON.stringify({action:'reject_flag',tenantId:T,bizId:B,versionId:id,intentDigest:r.intentDigest,operationId:'11111111-1111-4111-8111-111111111111'})});
+  check(superTry.status===403&&(await node()).val().review[id].state==='flagged','super_owner rejection must be refused with 403 and no change');
+  globalThis.__F2_CLAIMS={uid:UID,email:USER.email};
+  click(page.document.querySelector('[data-f2="reject-flag"]'));
+  await page.until(()=>page.document.querySelector('[data-f2="rejected"]'),15000);
+  const rejectedNode=(await node()).val();
+  check(rejectedNode.review[id].state==='rejected'&&rejectedNode.review[id].rejectedBy===UID&&typeof rejectedNode.review[id].rejectOperationId==='string','owner rejection stored with decision evidence');
+  check(stable(rejectedNode.review[id].flagAudit)===stable(flaggedNode.review[id].flagAudit)&&stable(rejectedNode.versions)===stable(flaggedNode.versions),'audit and versions immutable through rejection');
+  check(F.costHistory.codec.decodeHistory({exists:true,value:rejectedNode},{tenantId:T,bizId:B}).versions.every(v=>v.versionId!==id),'rejected version excluded from the effective timeline');
+  results.push('owner rejection through rendered UI and real route; super_owner refused');
+  await page.until(()=>page.document.querySelector('[data-f2="save"]:not([disabled])'),10000);
+  const commitsBefore=commits;
+  click(page.document.querySelector('[data-f2="save"]'));
+  try{await page.until(()=>commits>commitsBefore,15000);}catch{throw Error('corrected successor did not commit: result='+textOf(page.document.querySelector('[data-f2="result"]')));}
+  const afterSucc=(await node()).val();
+  check(afterSucc.head.revision===rejectedNode.head.revision+1&&afterSucc.versions[afterSucc.head.headVersionId].predecessorVersionId===id&&afterSucc.review[id].state==='rejected','corrected successor continues the chain from the rejected head');
+  results.push('corrected successor after rejection through rendered UI');
   const malformed=JSON.parse(JSON.stringify(hist));malformed.head.revision=99;
   await seedDb.ref(`tenants/${T}/biz:${B}:cost_history`).set(malformed);
   await page.until(()=>page.document.querySelector('[data-f2="unreadable"]'),10000);

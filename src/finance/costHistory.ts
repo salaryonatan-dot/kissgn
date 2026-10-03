@@ -5,13 +5,24 @@ import { israelBusinessDate, parseBusinessDate } from "./businessDate.js";
 // transaction as the version. A version whose review is unresolved (pending / flagged) makes the whole
 // history non-authoritative (unreadable), so a DEC-AUTH-1 in-window commit can never silently become
 // ordinary history when its post-commit audit fails. A /1 reader sees a /2 node as malformed (fail closed).
-export const COST_HISTORY_CAPABILITY = "MARJIN_COSTH/4";
+// MARJIN_COSTH/5 (R3): the common review lifecycle gains the terminal `rejected` state (owner decision 2):
+// a rejected version stays immutable with its flag audit, is PERMANENTLY excluded from calculations, never
+// withholds the history, can never be reactivated, and the chain continues from it (a corrected successor
+// names it as predecessor). The reader can be BOUND to the expected tenant / business: a flag audit that
+// names another business is unreadable. A /4 reader sees a rejected entry as malformed (fail closed).
+export const COST_HISTORY_CAPABILITY = "MARJIN_COSTH/5";
 export type CostHistoryDecision =
   | { readonly state: "absent" }
-  | { readonly state: "present"; readonly head: { readonly revision: number; readonly headVersionId: string }; readonly versions: readonly any[]; readonly activationDate: string | null }
+  | { readonly state: "present"; readonly head: { readonly revision: number; readonly headVersionId: string }; readonly versions: readonly any[]; readonly activationDate: string | null; readonly rejected: readonly string[] }
   | { readonly state: "unreadable"; readonly reason: string; readonly detail?: unknown };
-/** Authorization-review states (MARJIN_COSTR/1). Only `cleared` and `acknowledged` are authoritative. */
-export type CostReviewState = "pending" | "cleared" | "flagged" | "acknowledged";
+/**
+ * Authorization-review states (MARJIN_COSTR/3). Only `cleared` and `acknowledged` (cleared BY THE OWNER
+ * after a flag; the flag audit is retained) are authoritative. `pending` / `flagged` are unresolved and
+ * withhold the history. `rejected` is terminal and never authoritative; it does not withhold the history.
+ */
+export type CostReviewState = "pending" | "cleared" | "flagged" | "acknowledged" | "rejected";
+/** Expected binding of a stored node (R3): every flag audit must name exactly this tenant and business. */
+export interface HistoryBinding { readonly tenantId: string; readonly bizId: string }
 //
 // PURE and browser-safe: no imports, no clock, no I/O. The approved core date functions are INJECTED
 // (server: fincore/v1/finance/businessDate.js; browser: window.MarjinFinance.finance.businessDate),
@@ -26,7 +37,7 @@ export type CostReviewState = "pending" | "cleared" | "flagged" | "acknowledged"
 export const HISTORY_KEY_RE = /^biz:[^:]+:cost_history$/;          // the ONE storage key (R2)
 export const RECORD_SCHEMA = "MARJIN_COSTV/1";
 export const ATTESTED_RECORD_SCHEMA = "MARJIN_COSTV/2";
-export const REVIEW_SCHEMA = "MARJIN_COSTR/2";
+export const REVIEW_SCHEMA = "MARJIN_COSTR/3";
 export const FLAG_AUDIT_SCHEMA = "MARJIN_COST_AUDIT/2";
 export const REVIEW_RESOLUTIONS = Object.freeze({
   cleared: ["post_commit_authorized", "reconciled_authorized"],
@@ -119,17 +130,19 @@ export function createHistoryCodec(core: { israelBusinessDate(ms: number): strin
    * One review entry, bound to its version: the actor and commit instant must be the version's own
    * recordedBy / recordedAt (a review cannot be re-pointed at another version or payload).
    */
-  function decodeReview(key: string, e: unknown, v: any): any {
+  function decodeReview(key: string, e: unknown, v: any, bind?: HistoryBinding | null): any {
     if (!isObj(e)) return { error: "review_not_object" };
     if (e.schema !== REVIEW_SCHEMA) return { error: "review_schema_invalid" };
     if (typeof e.intentDigest !== "string" || !DIGEST.test(e.intentDigest)) return { error: "review_digest_invalid" };
     if (e.actor !== v.recordedBy || e.committedAt !== v.recordedAt) return { error: "review_binding_mismatch" };
     const base = ["schema", "state", "intentDigest", "actor", "committedAt"];
     if (e.state === "pending") return only(e, base) ? { review: { state: "pending", intentDigest: e.intentDigest } } : { error: "review_extra_field" };
-    if (e.state !== "cleared" && e.state !== "flagged" && e.state !== "acknowledged") return { error: "review_state_invalid" };
+    if (e.state !== "cleared" && e.state !== "flagged" && e.state !== "acknowledged" && e.state !== "rejected") return { error: "review_state_invalid" };
     const resolved = [...base, "resolvedAt", "resolution"];
-    const flagged = e.state === "flagged" || e.state === "acknowledged";
-    const fields = e.state === "acknowledged" ? [...resolved, "flagAudit", "acknowledgedAt", "acknowledgedBy", "acceptOperationId"] : flagged ? [...resolved, "flagAudit"] : resolved;
+    const flagged = e.state === "flagged" || e.state === "acknowledged" || e.state === "rejected";
+    const fields = e.state === "acknowledged" ? [...resolved, "flagAudit", "acknowledgedAt", "acknowledgedBy", "acceptOperationId"]
+      : e.state === "rejected" ? [...resolved, "flagAudit", "rejectedAt", "rejectedBy", "rejectOperationId"]
+      : flagged ? [...resolved, "flagAudit"] : resolved;
     if (!only(e, fields) || !fields.every((f) => e[f] !== undefined)) return { error: "review_fields_invalid" };
     if (!validInstant(e.resolvedAt) || e.resolvedAt < e.committedAt) return { error: "review_resolved_at_invalid" };
     const allowed = e.state === "cleared" ? REVIEW_RESOLUTIONS.cleared : REVIEW_RESOLUTIONS.flagged;
@@ -143,20 +156,31 @@ export function createHistoryCodec(core: { israelBusinessDate(ms: number): strin
         a.versionId !== key || a.intentDigest !== e.intentDigest || a.recordedBy !== v.recordedBy ||
         a.recordedAt !== v.recordedAt || a.outcome !== e.resolution || !validInstant(a.detectedAt) ||
         a.detectedAt < v.recordedAt || a.detectedAt !== e.resolvedAt) return { error: "flag_audit_invalid" };
+      // R3: a bound reader refuses an audit that names another tenant or business
+      if (bind && (a.tenantId !== bind.tenantId || a.bizId !== bind.bizId)) return { error: "flag_audit_binding_mismatch" };
     }
     if (e.state === "acknowledged" && (!validInstant(e.acknowledgedAt) || e.acknowledgedAt < e.resolvedAt || typeof e.acknowledgedBy !== "string" || e.acknowledgedBy === "")) return { error: "review_ack_invalid" };
     if (e.state === "acknowledged" && (typeof e.acceptOperationId !== "string" || !UUID4.test(e.acceptOperationId))) return { error: "review_ack_operation_invalid" };
+    // R3: the owner's rejection carries the same decision evidence as an acceptance
+    if (e.state === "rejected" && (!validInstant(e.rejectedAt) || e.rejectedAt < e.resolvedAt || typeof e.rejectedBy !== "string" || e.rejectedBy === "")) return { error: "review_reject_invalid" };
+    if (e.state === "rejected" && (typeof e.rejectOperationId !== "string" || !UUID4.test(e.rejectOperationId))) return { error: "review_reject_operation_invalid" };
     return { review: { state: e.state, intentDigest: e.intentDigest, resolution: e.resolution } };
   }
 
-  /** read = { exists, value } from ONE snapshot of the node, or { failed: error }. Authoritative decision. */
-  function decodeHistory(read: { exists?: boolean; value?: unknown; failed?: unknown } | null): any {
-    const h = decodeHistoryStructure(read);
+  /**
+   * read = { exists, value } from ONE snapshot of the node, or { failed: error }. Authoritative decision.
+   * `bind` (R3, optional): the expected tenant / business; a flag audit naming another one is unreadable.
+   * `versions` holds ONLY the effective (non-rejected) versions, oldest → newest; `rejected` lists the
+   * rejected version ids. A history whose every version is rejected is present with no effective version
+   * (no activation date): cost outputs stay withheld until an owner activates again.
+   */
+  function decodeHistory(read: { exists?: boolean; value?: unknown; failed?: unknown } | null, bind?: HistoryBinding | null): any {
+    const h = decodeHistoryStructure(read, bind);
     if (h.state !== "present") return h;
     // F1 R1: an unresolved authorization review (DEC-AUTH-1 window) withholds the WHOLE history.
     if (h.unresolved.pending.length) return { state: "unreadable", reason: "authorization_review_pending", detail: h.unresolved.pending };
     if (h.unresolved.flagged.length) return { state: "unreadable", reason: "authorization_review_flagged", detail: h.unresolved.flagged };
-    return { state: "present", head: h.head, versions: h.versions, activationDate: h.activationDate };
+    return { state: "present", head: h.head, versions: h.effectiveVersions, activationDate: h.activationDate, rejected: h.rejected };
   }
 
   /**
@@ -164,7 +188,8 @@ export function createHistoryCodec(core: { israelBusinessDate(ms: number): strin
    * unresolved review is reported in `unresolved` instead of withholding the history. Never used to
    * compute financial outputs.
    */
-  function decodeHistoryStructure(read: { exists?: boolean; value?: unknown; failed?: unknown } | null): any {
+  function decodeHistoryStructure(read: { exists?: boolean; value?: unknown; failed?: unknown } | null, bind?: HistoryBinding | null): any {
+    if (bind !== undefined && bind !== null && (typeof bind.tenantId !== "string" || bind.tenantId === "" || typeof bind.bizId !== "string" || bind.bizId === "")) return { state: "unreadable", reason: "binding_invalid" };
     if (!read || read.failed !== undefined) {
       return { state: "unreadable", reason: "read_failed", detail: String((read && read.failed && typeof read.failed === "object" && "message" in read.failed && read.failed.message) || (read && read.failed) || "no_read") };
     }
@@ -201,20 +226,23 @@ export function createHistoryCodec(core: { israelBusinessDate(ms: number): strin
     // review map: exactly one valid entry per version (keys equal), bound to that version
     const rv = raw.review;
     if (!isObj(rv) || Object.keys(rv).length !== chain.length || !Object.keys(rv).every((k) => byId[k] !== undefined)) return { state: "unreadable", reason: "review_shape" };
-    const review: Record<string, any> = {}, pending: string[] = [], flagged: string[] = [];
+    const review: Record<string, any> = {}, pending: string[] = [], flagged: string[] = [], rejected: string[] = [];
     for (const v of chain) {
-      const r = decodeReview(v.versionId, rv[v.versionId], v);
+      const r = decodeReview(v.versionId, rv[v.versionId], v, bind);
       if (r.error) return { state: "unreadable", reason: "review_invalid", detail: { versionId: v.versionId, error: r.error } };
       review[v.versionId] = r.review;
       if (r.review.state === "pending") pending.push(v.versionId);
       if (r.review.state === "flagged") flagged.push(v.versionId);
+      if (r.review.state === "rejected") rejected.push(v.versionId);
     }
-    return { state: "present", head: { revision: raw.head.revision, headVersionId: raw.head.headVersionId }, versions: chain, activationDate: activationDate(chain), review, unresolved: { pending, flagged } };
+    // R3: a rejected version is structurally part of the chain but never part of the effective timeline
+    const effectiveVersions = chain.filter((v) => review[v.versionId].state !== "rejected");
+    return { state: "present", head: { revision: raw.head.revision, headVersionId: raw.head.headVersionId }, versions: chain, effectiveVersions, rejected, activationDate: activationDate(effectiveVersions), review, unresolved: { pending, flagged } };
   }
   return { decodeRecord, decodeHistory, decodeHistoryStructure, decodeReview, validHead };
 }
 
-/** First RECORDED version's effectiveFrom (attested versions never move activation). Unchanged from F1. */
+/** First RECORDED effective version's effectiveFrom (attested versions never move activation; rejected versions never count). */
 export function activationDate(versions: readonly any[]): string | null {
   const rec = versions.filter((v) => v.basis === "recorded").map((v) => v.effectiveFrom).sort();
   return rec.length ? rec[0] : null;

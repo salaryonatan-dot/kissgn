@@ -1,5 +1,6 @@
 // P0 — Vercel deployment surface. Proves, offline, that the .vercelignore allowlist
-//   (1) keeps every file the browser runtime, the 12 serverless functions (including the four
+//   (1) keeps every file the browser runtime, the 13 serverless functions (the 12 approved at
+//       55eb3712 plus the ONE reviewed F2 trusted route api/cost-history.js; including the four
 //       scheduled routes) and their transitive src/lib imports need, and
 //   (2) keeps docs, tests, artifacts, tooling, operator scripts, Rules, stray sources,
 //       secrets/env files and any unclassified new top-level entry out of the deployment.
@@ -64,9 +65,24 @@ test("4 Financial Core browser bundle paths (C1: /fincore/v1/**) are uploaded an
   }
 });
 
-test("5 every api/ function file is uploaded, and each scheduled route in vercel.json has an uploaded handler", () => {
+// Approved function inventory (12, Vercel hardening 55eb3712) + the F2 trusted route. The list is an
+// EXACT identity: a missing, renamed or extra function (a hidden fourteenth path) fails here.
+// Status: the 13-route inventory is a candidate adaptation, pending independent Codex review.
+const APPROVED_FUNCTIONS = Object.freeze([
+  "api/admin.js", "api/agent/ask.ts", "api/ai-chat.js", "api/alerts/run.ts", "api/analytics/daily-builder.ts",
+  "api/bootstrap-owner.js", "api/config.js", "api/create-tenant.js", "api/daily-snapshot/run.ts", "api/oref.js",
+  "api/proactive/run.ts", "api/whatsapp.js",
+]);
+const F2_TRUSTED_ROUTE = "api/cost-history.js";
+const EXPECTED_FUNCTIONS = Object.freeze([...APPROVED_FUNCTIONS, F2_TRUSTED_ROUTE].sort());
+
+test("5 the function inventory is EXACTLY the 12 approved functions + the F2 trusted route (13); each is uploaded, and each scheduled route in vercel.json has an uploaded handler", () => {
   const entries = functionEntrypoints(FILES);
-  assert.equal(entries.length, 12, `expected 12 functions, found ${entries.length}: ${entries.join(", ")}`);
+  assert.deepEqual(entries.slice().sort(), EXPECTED_FUNCTIONS, `function inventory differs from the approved 13: ${entries.join(", ")}`);
+  assert.equal(entries.length, 13);
+  assert.ok(entries.includes(F2_TRUSTED_ROUTE), "the F2 trusted route is present");
+  // every api/ file is a detected function: no helper, declaration, dotfile or underscore path hides under api/
+  assert.deepEqual(FILES.filter((f) => f.startsWith("api/") && !entries.includes(f)), [], "a non-function file under api/ is not allowed");
   for (const e of entries) assert.ok(keep(e), `${e} must be uploaded`);
   const crons = JSON.parse(readFileSync(join(ROOT, "vercel.json"), "utf8")).crons;
   assert.equal(crons.length, 4);

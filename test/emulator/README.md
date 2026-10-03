@@ -511,4 +511,20 @@ parallel reconciliations, lost acknowledgement ⇒ readback, and client forge/cl
 
 Expected: `total=8 passed=8 failed=0` — `ALL CASES PASSED — F1 review state is fail-closed over the real transport`.
 
-There are now SIXTEEN emulator scripts; all reseed the database root, so they must run one at a time.
+### F2 rendered editor (R3: owner rejection)
+
+`f2-rendered-editor.mjs` boots the real page in jsdom over the real local RTDB and drives the ACTUAL
+`api/cost-history.js` route: unactivated (no write), the activation confirmation gate, owner activation,
+a normal today edit, a separate attested historical edit, a pending head (non-authoritative), a
+FLAGGED head rejected by the owner through the rendered control (`super_owner` refused by the real
+route with 403; version and flag audit immutable; the rejected version excluded from calculations),
+a corrected successor after the rejection, a corrupt history (unavailable, no save) and a direct
+client write denied by the real Rules. Requires `bash test/historical/install-deps.sh`.
+
+```
+... "node test/emulator/f2-rendered-editor.mjs"
+```
+
+Expected: `{"status":"PASS","results":[…10 entries…]}`.
+
+There are now SEVENTEEN emulator scripts; all reseed the database root, so they must run one at a time.

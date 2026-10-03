@@ -49,6 +49,7 @@ const A = "00000000-0000-4000-8000-0000000000a1", Bv = "00000000-0000-4000-8000-
 const fixtures = () => ({ tenants: { [T]: {
   members: { u_mgr: true, u_owner: true, u_mgr2: true }, roles: { u_mgr: "manager", u_owner: "owner", u_mgr2: "manager" },
   biz_access: { [B]: { u_mgr: true, u_mgr2: true } },
+  app: { business: { _v: JSON.stringify([{ id: B, name: "A" }]) } },   // R3: the business registry (business must belong to the tenant)
 } } });
 const apps = {};
 const realDb = () => apps.seed.database();

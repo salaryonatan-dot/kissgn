@@ -16,6 +16,7 @@ function setup() {
     db.seed(`tenants/${T}/roles/${uid}`, role);
     db.seed(`tenants/${T}/biz_access/${B}/${uid}`, true);
   }
+  db.seed(`tenants/${T}/app/business`, { _v: JSON.stringify([{ id: B, name: "A" }]) });   // R3: business registry
   globalThis.__DB = db;
   globalThis.__CLAIMS = { uid:'u_mgr', email:'m@x' };
   const orig = db.ref;

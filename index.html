@@ -882,7 +882,7 @@
       const api = mod && mod.default;
       const v = api && api.versions;
       if (!api || api !== window.MarjinFinance || !v || v.product !== "MARJIN_PRODUCT/2" || v.forecast !== "REV_FORECAST/v2" ||
-          v.costHistory !== "MARJIN_COSTH/4" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") {
+          v.costHistory !== "MARJIN_COSTH/5" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") {
         throw new Error("fincore_version_mismatch");
       }
       window.__marjinFinance = { state: "ready", error: null };
@@ -1099,7 +1099,7 @@
       if (!api || typeof api !== "object" || !api.versions || !api.product || !api.presenters) return { ok: false, reason: "fincore_shape" };
       if (api.versions.product !== EXPECT.product) return { ok: false, reason: "fincore_version_mismatch" };
       if (api.versions.forecast !== EXPECT.forecast) return { ok: false, reason: "fincore_version_mismatch" };
-      if (api.versions.costHistory !== "MARJIN_COSTH/4" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") return { ok: false, reason: "fincore_cost_history_incompatible" };
+      if (api.versions.costHistory !== "MARJIN_COSTH/5" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") return { ok: false, reason: "fincore_cost_history_incompatible" };
       return { ok: true };
     }
 
@@ -5718,6 +5718,7 @@ function CostHistoryEditor({finF, historyNode, config, fixed, tenantId, bizId, t
   const [readback,setReadback] = useState(null);
   const intentRef = useRef(null);
   const acceptOpRef = useRef(null);
+  const rejectOpRef = useRef(null);
   const scopeRef = useRef("");
   const scope = `${tenantId||""}|${bizId||""}`;
   scopeRef.current = scope;
@@ -5726,18 +5727,21 @@ function CostHistoryEditor({finF, historyNode, config, fixed, tenantId, bizId, t
   const state = !codec ? {state:"unreadable",reason:"fincore_incompatible"}
     : node.kind === "loading" ? {state:"loading"}
     : node.kind === "failed" ? {state:"unreadable",reason:"read_failed"}
-    : codec.decodeHistoryStructure({exists:node.kind === "raw",value:node.raw});
+    : codec.decodeHistoryStructure({exists:node.kind === "raw",value:node.raw},tenantId&&bizId?{tenantId,bizId}:null);
   const head = state.state === "present" ? state.head : null;
   const review = head && node.raw.review[head.headVersionId];
   const unresolved = review && (review.state === "pending" || review.state === "flagged");
-  const current = state.state === "present" ? state.versions[state.versions.length-1] : null;
+  // R3: a rejected version is never the basis of an edit; a history whose every version was rejected needs a new owner activation
+  const current = state.state === "present" && state.effectiveVersions.length ? state.effectiveVersions[state.effectiveVersions.length-1] : null;
+  const needsActivation = state.state === "present" && !unresolved && state.effectiveVersions.length === 0;
+  const activating = state.state === "absent" || needsActivation;
   const compat = React.useMemo(() => {
-    if (!finF || state.state !== "absent" || config?.state !== "present" || fixed?.state !== "present") return null;
+    if (!finF || !activating || config?.state !== "present" || fixed?.state !== "present") return null;
     return finF.metrics.adapters.configCompat.costTimelineFromCurrentConfig(config.value,fixed.value);
-  },[finF,state.state,config,fixed]);
+  },[finF,activating,config,fixed]);
   const seed = current || (compat && compat.versions.length === 1 && !compat.flags.some(f => /^(invalid_|missing_|rent_fixed_and)/.test(f.code)) ? compat.versions[0] : null);
   useEffect(() => {
-    setReadback(null);setResult(null);intentRef.current=null;acceptOpRef.current=null;
+    setReadback(null);setResult(null);intentRef.current=null;acceptOpRef.current=null;rejectOpRef.current=null;
   },[tenantId,bizId]);
   useEffect(() => { setReadback(null); },[historyNode]);
   useEffect(() => {
@@ -5763,7 +5767,7 @@ function CostHistoryEditor({finF, historyNode, config, fixed, tenantId, bizId, t
   };
   const save = async (retry=false) => {
     if (!draft || busy || unresolved || !["absent","present"].includes(state.state)) return;
-    if (state.state==="absent" && (role!=="owner" || !activationConfirmed)) {setResult({status:"activation_confirmation_required"});return;}
+    if (activating && (role!=="owner" || !activationConfirmed)) {setResult({status:"activation_confirmation_required"});return;}
     if (mode==="historical" && (!reason.trim() || !typedDate || typedDate!==effectiveFrom || !confirmed)) {setResult({status:"attestation_missing"});return;}
     if (mode==="historical" && effectiveFrom>=today) {setResult({status:"attestation_not_past"});return;}
     if (mode!=="historical" && effectiveFrom<today) {setResult({status:"recorded_past_date"});return;}
@@ -5780,7 +5784,7 @@ function CostHistoryEditor({finF, historyNode, config, fixed, tenantId, bizId, t
           const v={effectiveFrom,basis,globalEmployees:body.globalEmployees,fixedItems:body.fixedItems,rent:body.rent,royalty:body.royalty,attestationReason:body.attestationReason};
           body.attestation={confirmed:true,typedEffectiveFrom:typedDate,confirmedSnapshotDigest:await f2Digest(v)};
         }
-        intent={signature,body,action:state.state==="absent"?"activate":mode==="historical"?"attest":"edit"};
+        intent={signature,body,action:activating?"activate":mode==="historical"?"attest":"edit"};
         intentRef.current=intent;
       }
       const out=await command(intent.action,intent.body);
@@ -5796,27 +5800,31 @@ function CostHistoryEditor({finF, historyNode, config, fixed, tenantId, bizId, t
     const requestedScope=scope;
     try {
       if(action==="accept_flag" && !acceptOpRef.current) acceptOpRef.current=f2Uuid();
-      const response=await window.apiFetch("/api/cost-history",{method:"POST",body:JSON.stringify({action,tenantId,bizId,versionId:head.headVersionId,intentDigest:review.intentDigest,operationId:acceptOpRef.current})});
+      if(action==="reject_flag" && !rejectOpRef.current) rejectOpRef.current=f2Uuid();
+      const operationId=action==="accept_flag"?acceptOpRef.current:action==="reject_flag"?rejectOpRef.current:undefined;
+      const response=await window.apiFetch("/api/cost-history",{method:"POST",body:JSON.stringify({action,tenantId,bizId,versionId:head.headVersionId,intentDigest:review.intentDigest,...(operationId?{operationId}:{})})});
       const out=await response.json();if(scopeRef.current!==requestedScope)return;setResult(out);await reload(true);
     } catch {if(scopeRef.current===requestedScope)setResult({status:"outcome_unknown"});}
     finally {setBusy(false);}
   };
-  const label={loading:"טוען היסטוריית עלויות",absent:"הגדרות נוכחיות — טרם הופעלה היסטוריית עלויות",present:review?.state==="pending"?"ממתין לבדיקת הרשאה":review?.state==="flagged"?"מסומן לבדיקה — אינו משפיע על חישובים":"היסטוריית עלויות פעילה",unreadable:"היסטוריית העלויות אינה זמינה"}[state.state];
-  const resultText={head_conflict:"התנגשות עריכה: יש לרענן ולהחיל מחדש את השינוי",review_unresolved:"בדיקת הרשאה פתוחה: לא ניתן לשמור גרסה חדשה",outcome_unknown:"תוצאת השמירה אינה ידועה: נסה לשחזר את אותה פעולה",committed_current:"נשמרה גרסה חדשה",resolved:"מצב הבדיקה עודכן",already_acknowledged:"האישור כבר נשמר",reloaded:"הנתונים רועננו",unreadable:"הקריאה נכשלה: הנתונים אינם זמינים",activation_confirmation_required:"יש לאשר את ההפעלה במפורש",attestation_missing:"יש להשלים סיבה, תאריך ואישור לתיקון ההיסטורי",attestation_not_past:"תיקון היסטורי מחייב תאריך עבר",recorded_past_date:"תאריך עבר מחייב תיקון היסטורי מאומת",role_not_allowed:"אין הרשאה לפעולה זו"};
+  const label={loading:"טוען היסטוריית עלויות",absent:"הגדרות נוכחיות — טרם הופעלה היסטוריית עלויות",present:review?.state==="pending"?"ממתין לבדיקת הרשאה":review?.state==="flagged"?"מסומן לבדיקה — אינו משפיע על חישובים":needsActivation?"הגרסה האחרונה נדחתה — נדרשת הפעלה מחדש על ידי בעלים":review?.state==="rejected"?"היסטוריית עלויות פעילה — הגרסה האחרונה נדחתה ואינה נספרת":"היסטוריית עלויות פעילה",unreadable:"היסטוריית העלויות אינה זמינה"}[state.state];
+  const resultText={head_conflict:"התנגשות עריכה: יש לרענן ולהחיל מחדש את השינוי",review_unresolved:"בדיקת הרשאה פתוחה: לא ניתן לשמור גרסה חדשה",outcome_unknown:"תוצאת השמירה אינה ידועה: נסה לשחזר את אותה פעולה",committed_current:"נשמרה גרסה חדשה",resolved:"מצב הבדיקה עודכן",already_acknowledged:"האישור כבר נשמר",already_rejected:"הדחייה כבר נשמרה",not_found:"הגרסה לא נמצאה",business_not_in_tenant:"העסק אינו שייך לחשבון זה",activation_required:"נדרשת הפעלה מחדש על ידי בעלים",already_activated:"ההיסטוריה כבר פעילה — יש לרענן",reloaded:"הנתונים רועננו",unreadable:"הקריאה נכשלה: הנתונים אינם זמינים",activation_confirmation_required:"יש לאשר את ההפעלה במפורש",attestation_missing:"יש להשלים סיבה, תאריך ואישור לתיקון ההיסטורי",attestation_not_past:"תיקון היסטורי מחייב תאריך עבר",recorded_past_date:"תאריך עבר מחייב תיקון היסטורי מאומת",role_not_allowed:"אין הרשאה לפעולה זו"};
   return <div data-f2="cost-editor" style={{padding:18,direction:"rtl",maxHeight:"85vh",overflowY:"auto",background:"#fff"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><h2 style={{margin:0}}>היסטוריית עלויות</h2><button onClick={onClose}>סגור</button></div>
     <p data-f2="state">{label}</p>
     {state.state==="absent"&&<p>עד להפעלה, הדוחות משתמשים בהגדרות הנוכחיות גם לתאריכים קודמים. ההפעלה אינה משחזרת עלויות עבר; ימים לפני תאריך ההפעלה עלולים להופיע כחסרים.</p>}
     {state.state==="unreadable"&&<p data-f2="unreadable">אין להשתמש בסכומי עלויות עד לשחזור קריאה תקינה. {state.reason}</p>}
     {review?.state==="pending"&&<p data-f2="pending">גרסה זו אינה סמכותית עד סיום בדיקת ההרשאה.</p>}
-    {review?.state==="flagged"&&<p data-f2="flagged">נדרש אישור בעלים לאחר בדיקת רשומת הביקורת. הגרסה אינה סמכותית.</p>}
+    {review?.state==="flagged"&&<p data-f2="flagged">נדרש אישור או דחייה של בעלים לאחר בדיקת רשומת הביקורת. הגרסה אינה סמכותית.</p>}
+    {review?.state==="rejected"&&<p data-f2="rejected">הגרסה האחרונה נדחתה על ידי בעלים: היא נשמרת לביקורת, אינה נספרת, ולא ניתן להפעילה מחדש. ניתן לשמור גרסה מתוקנת.</p>}
     {result&&<p data-f2="result">{resultText[result.status]||result.status}{result.reason?`: ${result.reason}`:""}</p>}
     <button onClick={()=>reload()} disabled={busy}>רענן מהשרת</button>
     {unresolved&&role==="owner"&&<button onClick={()=>reviewCommand(review.state==="flagged"?"accept_flag":"reconcile")} disabled={busy}>{review.state==="flagged"?"אשר לאחר בדיקה":"נסה להשלים בדיקת הרשאה"}</button>}
+    {review?.state==="flagged"&&role==="owner"&&<button data-f2="reject-flag" onClick={()=>reviewCommand("reject_flag")} disabled={busy}>דחה גרסה זו</button>}
     {result?.status==="outcome_unknown"&&intentRef.current&&<button onClick={()=>save(true)} disabled={busy}>נסה שוב את אותה שמירה</button>}
-    {(state.state==="absent"||state.state==="present"&&!unresolved)&&draft&&<>
+    {(activating||state.state==="present"&&!unresolved)&&draft&&<>
       <p>כל הסכומים הם חודשיים, נטו מע״מ. שכר עובדים גלובליים הוא עלות מעסיק מלאה.</p>
-      {state.state==="present"&&<div><button onClick={()=>{setMode("normal");setEffectiveFrom(today);setTypedDate("");setConfirmed(false);}}>עריכה רגילה</button><button onClick={()=>{setMode("historical");setEffectiveFrom("");setTypedDate("");setConfirmed(false);}}>תיקון היסטורי מאומת</button></div>}
+      {state.state==="present"&&!needsActivation&&<div><button onClick={()=>{setMode("normal");setEffectiveFrom(today);setTypedDate("");setConfirmed(false);}}>עריכה רגילה</button><button onClick={()=>{setMode("historical");setEffectiveFrom("");setTypedDate("");setConfirmed(false);}}>תיקון היסטורי מאומת</button></div>}
       <label>תאריך תחולה <input data-f2="effective-date" type="date" value={effectiveFrom} onChange={e=>{setEffectiveFrom(e.target.value);intentRef.current=null;}}/></label>
       <h3>עובדים גלובליים — עלות מעסיק מלאה</h3>
       {draft.globalEmployees.map((e,i)=><div key={e.employeeKey}><input aria-label="מזהה עובד" value={e.employeeKey} onChange={x=>updateList("globalEmployees",i,"employeeKey",x.target.value)}/><input aria-label="עלות מעסיק חודשית" value={e.monthlyEmployerCost} onChange={x=>updateList("globalEmployees",i,"monthlyEmployerCost",x.target.value)}/><button onClick={()=>update("globalEmployees",draft.globalEmployees.filter((_,j)=>j!==i))}>הסר</button></div>)}
@@ -5829,8 +5837,8 @@ function CostHistoryEditor({finF, historyNode, config, fixed, tenantId, bizId, t
       <h3>תמלוגים</h3><select value={draft.royalty.mode} onChange={e=>update("royalty",e.target.value==="none"?{mode:"none"}:{mode:"pct",ratePct:"0"})}><option value="none">ללא</option><option value="pct">אחוז</option></select>
       {draft.royalty.mode==="pct"&&<input aria-label="אחוז תמלוגים" value={draft.royalty.ratePct} onChange={e=>update("royalty",{mode:"pct",ratePct:e.target.value})}/>}
       {mode==="historical"&&<div data-f2="attestation"><p>תיקון היסטורי משנה תוצאות עבר. הזן מחדש את תאריך התחולה ואת הסיבה ואשר את תמונת העלויות.</p><input aria-label="הקלד שוב תאריך תחולה" type="date" value={typedDate} onChange={e=>{setTypedDate(e.target.value);intentRef.current=null;}}/><textarea aria-label="סיבת תיקון היסטורי" value={reason} onChange={e=>{setReason(e.target.value);intentRef.current=null;}}/><label><input type="checkbox" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/>אני מאשר/ת את התיקון ההיסטורי</label></div>}
-      {state.state==="absent"&&<label><input data-f2="activation-confirm" type="checkbox" checked={activationConfirmed} onChange={e=>setActivationConfirmed(e.target.checked)}/>אני מאשר/ת את העלויות הנוכחיות ואת השינוי בזמינות נתוני העבר</label>}
-      <button data-f2="save" onClick={()=>save(false)} disabled={busy||!effectiveFrom||(state.state==="absent"&&role!=="owner")}>{busy?"שומר…":state.state==="absent"?"הפעל היסטוריית עלויות":mode==="historical"?"שמור תיקון היסטורי":"שמור גרסת עלויות"}</button>
+      {activating&&<label><input data-f2="activation-confirm" type="checkbox" checked={activationConfirmed} onChange={e=>setActivationConfirmed(e.target.checked)}/>אני מאשר/ת את העלויות הנוכחיות ואת השינוי בזמינות נתוני העבר</label>}
+      <button data-f2="save" onClick={()=>save(false)} disabled={busy||!effectiveFrom||(activating&&role!=="owner")}>{busy?"שומר…":activating?"הפעל היסטוריית עלויות":mode==="historical"?"שמור תיקון היסטורי":"שמור גרסת עלויות"}</button>
     </>}
   </div>;
 }
@@ -6546,9 +6554,11 @@ function PilotDashboard() {
       : C1.nodeState(finF, n.raw, expect);
     const ledger = C1.ledgerFor(finLedger, finLedgerKey);
     const raw = finRaw.bizId === (currentBizId || null) ? finRaw : { config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING, costHistory: FIN_NODE_LOADING };
+    // R3: the decode is BOUND to the selected tenant / business (a flag audit naming another business is unreadable)
+    const histBind = typeof window._currentTenantId === "string" && window._currentTenantId && currentBizId ? { tenantId: window._currentTenantId, bizId: currentBizId } : null;
     const costHistory = raw.costHistory.kind === "loading" ? { state: "loading" }
       : raw.costHistory.kind === "failed" ? finF.costHistory.codec.decodeHistory({ failed: "read_failed" })
-      : finF.costHistory.codec.decodeHistory({ exists: raw.costHistory.kind !== "absent", value: raw.costHistory.raw });
+      : finF.costHistory.codec.decodeHistory({ exists: raw.costHistory.kind !== "absent", value: raw.costHistory.raw }, histBind);
     return { rows: entries, config: nodeOf(raw.config, "object"), fixed: nodeOf(raw.fixed, "array"), costHistory, asOf: finAsOf, ledger, rowsReady: finRowsReady };
   }, [finF, finAsOf, entries, finRaw, finLedger, finLedgerKey, finRowsReady, currentBizId]);
   const finStatus = finCoreState === "failed" ? "unavailable" : (finCoreState !== "ready" ? "loading" : null);

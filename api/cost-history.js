@@ -7,11 +7,14 @@ const ACTIONS = Object.freeze({
   edit: 'recordCostEdit',
   attest: 'attestHistoricalCostEdit',
   accept_flag: 'acknowledgeFlaggedVersion',
+  reject_flag: 'rejectFlaggedVersion',
 });
+const DECISIONS = new Set(['accept_flag', 'reject_flag']);
 const statusCode = (status) =>
   status === 'unauthenticated' ? 401 :
-  status === 'unauthorized' || status === 'role_not_allowed' ? 403 :
-  status === 'head_conflict' || status === 'review_unresolved' || status === 'identity_reused' || status === 'operation_identity_reused' ? 409 :
+  status === 'unauthorized' || status === 'role_not_allowed' || status === 'business_not_in_tenant' ? 403 :
+  status === 'not_found' ? 404 :
+  status === 'head_conflict' || status === 'review_unresolved' || status === 'identity_reused' || status === 'operation_identity_reused' || status === 'head_changed' || status === 'already_activated' || status === 'activation_required' || status.startsWith('review_already_resolved') ? 409 :
   status === 'outcome_unknown' || status === 'authorization_unavailable' || status === 'history_unavailable' || status === 'unreadable' || status.startsWith('history_unreadable') ? 503 :
   status === 'committed_current' || status === 'committed_superseded' || status === 'resolved' || status.startsWith('already_') || status === 'present' || status === 'absent' || status === 'reconciled' ? 200 : 400;
 
@@ -34,7 +37,7 @@ export default async function handler(req,res) {
           if(current.uid!==ctx.uid||current.role!=='owner') throw Object.assign(new Error('current owner required'),{status:403});
         };
         result=await writer.reconcilePendingReviews({tenantId,bizId,authorize});
-      } else if(action==='accept_flag') result=await writer.acknowledgeFlaggedVersion(req,{tenantId,bizId,versionId:source.versionId,intentDigest:source.intentDigest,operationId:source.operationId});
+      } else if(DECISIONS.has(action)) result=await writer[ACTIONS[action]](req,{tenantId,bizId,versionId:source.versionId,intentDigest:source.intentDigest,operationId:source.operationId});
       else if(Object.prototype.hasOwnProperty.call(ACTIONS,action)) result=await writer[ACTIONS[action]](req,{tenantId,bizId,body:source.body});
       else return res.status(400).json({status:'action_invalid'});
     }

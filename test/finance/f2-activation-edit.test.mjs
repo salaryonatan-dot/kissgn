@@ -21,6 +21,7 @@ function world({role='owner',now=NOW,module=W}={}){
     db.seed(`tenants/${T}/members/${uid}`,true);db.seed(`tenants/${T}/roles/${uid}`,r);
     db.seed(`tenants/${T}/biz_access/${B}/${uid}`,true);
   }
+  db.seed(`tenants/${T}/app/business`, { _v: JSON.stringify([{ id: B, name: "A" }]) });   // R3: business registry
   globalThis.__DB=db;globalThis.__CLAIMS={uid:'owner',email:'owner@x'};
   const writer=module.createCostHistoryWriter({db,clock:()=>now});
   return {db,writer,advance:(ms=10)=>{now+=ms;}};
@@ -54,7 +55,7 @@ test('F2-01 activation is explicit, owner-only, server-today, and exactly once',
   assert.equal(stored.head.revision,1);
   assert.equal((await act(writer,body(A,null))).status,'committed_current');
   assert.deepEqual(db.read(NODE),stored);
-  assert.equal((await act(writer,body(C,null))).status,'head_conflict');
+  assert.equal((await act(writer,body(C,null))).status,'already_activated');   // R3: activation over an effective history is refused by name
   assert.deepEqual(db.read(NODE),stored);
 });
 
@@ -121,18 +122,28 @@ test('F2-05 pending and flagged versions withhold calculations and writer refuse
 
 test('F2-M01 meaningful writer mutations reopen owner activation and command-separation defects',async()=>{
   const PATH='lib/finance/costHistoryWriter.js';
-  const ownerBypass=await loadWriter(REPO,{mutations:[[PATH,'return saveCostVersion(req, { tenantId, bizId, body, requiredRole: "owner" });','return saveCostVersion(req, { tenantId, bizId, body });']]});
+  const ownerBypass=await loadWriter(REPO,{mutations:[[PATH,'return saveCostVersion(req, { tenantId, bizId, body, requiredRole: "owner", command: "activate" });','return saveCostVersion(req, { tenantId, bizId, body, command: "activate" });']]});
   {
     const {db,writer}=world({module:ownerBypass});
     globalThis.__CLAIMS={uid:'manager',email:'manager@x'};
     assert.equal((await act(writer,body(A,null))).status,'committed_current','mutant allows manager to activate');
     assert.equal(db.read(NODE).head.revision,1);
   }
-  const normalBypass=await loadWriter(REPO,{mutations:[[PATH,'if (!body || body.expectedHead === null || body.basis !== "recorded") return { status: "edit_shape" };','if (!body || body.basis !== "recorded") return { status: "edit_shape" };']]});
+  const SHAPE=['if (!body || body.expectedHead === null || body.basis !== "recorded") return { status: "edit_shape" };','if (!body || body.basis !== "recorded") return { status: "edit_shape" };'];
+  const GATE=['if (command && command !== "activate" && (h.state !== "present" || effective === 0)) return "activation_required";','if (false) return "activation_required";'];
+  const normalBypass=await loadWriter(REPO,{mutations:[[PATH,...SHAPE]]});
   {
+    // R3 defence in depth: removing the edit-shape check alone is caught by the activation gate (an edit needs an EFFECTIVE version)
     const {db,writer}=world({module:normalBypass});
     globalThis.__CLAIMS={uid:'manager',email:'manager@x'};
-    assert.equal((await edit(writer,body(A,null))).status,'committed_current','mutant silently activates through normal edit');
+    assert.equal((await edit(writer,body(A,null))).status,'activation_required','the activation gate still refuses a silent activation');
+    assert.equal(db.read(NODE),null);
+  }
+  const doubleBypass=await loadWriter(REPO,{mutations:[[PATH,...SHAPE],[PATH,...GATE]]});
+  {
+    const {db,writer}=world({module:doubleBypass});
+    globalThis.__CLAIMS={uid:'manager',email:'manager@x'};
+    assert.equal((await edit(writer,body(A,null))).status,'committed_current','both lines removed ⇒ the mutant silently activates (each line is meaningful)');
     assert.equal(db.read(NODE).head.revision,1);
   }
   const attestBypass=await loadWriter(REPO,{mutations:[[PATH,'if (!body || body.expectedHead === null || body.basis !== "attested_retroactive") return { status: "attested_edit_shape" };','if (!body || body.expectedHead === null) return { status: "attested_edit_shape" };']]});
