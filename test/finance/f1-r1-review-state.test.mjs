@@ -36,7 +36,7 @@ test("RV-C01 pending and flagged reviews withhold the WHOLE history (unreadable,
   assert.equal(dec(one("acknowledged")).state, "present");
   const s = codec.decodeHistoryStructure({ exists: true, value: one("pending") });
   assert.equal(s.state, "present"); assert.deepEqual(s.unresolved, { pending: [A], flagged: [] }, "the structural view (trusted writers only) reports it instead");
-  assert.equal(COMMITTED.versions.costHistory, "MARJIN_COSTH/3");
+  assert.equal(COMMITTED.versions.costHistory, "MARJIN_COSTH/4");
 });
 
 test("RV-C02 a pending review on an EARLIER version withholds the history even when the head is cleared", () => {

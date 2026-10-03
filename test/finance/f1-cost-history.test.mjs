@@ -24,7 +24,7 @@ const read = (codec, value) => codec.decodeHistory({ exists: value !== null, val
 
 test("F1-01 generated browser and fresh server core decode one coherent history identically", async () => {
   const server = await loadCompiled(), browser = await loadCommitted();
-  assert.equal(browser.versions.costHistory, "MARJIN_COSTH/3");
+  assert.equal(browser.versions.costHistory, "MARJIN_COSTH/4");
   for (const value of [null, history(), history({ [a]: first }, { revision: 1, headVersionId: a }),
     history({ [a]: first, [b]: { ...second, predecessorVersionId: "none" } }),
     history({ [a]: first, [b]: { ...second, fixedItemsCount: 0 } }),

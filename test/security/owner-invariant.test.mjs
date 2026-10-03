@@ -217,9 +217,11 @@ T("S25 [static-rules] client cannot read/write owner guard (access_meta)", () =>
   assert.strictEqual(accessMeta[".read"], false);
   assert.strictEqual(accessMeta[".write"], false);
 });
-T("S26 no new Vercel function (api function-file count = 12)", () => {
+T("S26 only the reviewed F2 cost-history function is added (api function-file count = 13)", () => {
   const walk = (d) => readdirSync(d).flatMap((f) => { const fp = join(d, f); return statSync(fp).isDirectory() ? walk(fp) : [fp]; });
-  assert.strictEqual(walk(join(REPO, "api")).filter(f => f.endsWith(".js") || f.endsWith(".ts")).length, 12);
+  const apiFns = walk(join(REPO, "api")).filter(f => f.endsWith(".js") || f.endsWith(".ts")).map(f => f.slice(join(REPO, "api").length + 1));
+  assert.strictEqual(apiFns.length, 13);
+  assert.ok(apiFns.includes("cost-history.js"));
 });
 T("S27 tests + tooling do no external calls (firebase-admin only inside main())", () => {
   const init = readFileSync(join(REPO, "scripts", "init-owner-guard.mjs"), "utf8");

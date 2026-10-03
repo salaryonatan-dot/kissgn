@@ -71,7 +71,7 @@ const SRC = {
   finish: declaration("const finish = async () => {", "SetupWizard finish"),
   editOnComplete: editOnCompleteExpression(),
   saveEmp: declaration("const saveEmp = () => {", "EmployeesScreen saveEmp"),
-  removeEmp: (() => { const at = unique("const removeEmp = id => saveBusinessConfig(", "removeEmp"); return HTML.slice(at, HTML.indexOf("\n", at)); })(),
+  removeEmp: (() => { const at = unique("const removeEmp = id => { if (!financeLocked) saveBusinessConfig(", "removeEmp"); return HTML.slice(at, HTML.indexOf("\n", at)); })(),
   saveCats: declaration("const saveCats = async () => {", "PettyCash saveCats"),
   saveBusinessConfig: declaration("const saveBusinessConfig = async (cfg) => {", "saveBusinessConfig"),
 };
@@ -227,6 +227,10 @@ function makeEditEnv({ storage, bizId, tenantId = "tenantA", businesses, sel = s
   const window = { storage, MarjinConfigMerge: MERGE || undefined, _currentTenantId: tenantId };
   const sandbox = {
     window, currentBizId, businesses: businesses || [{ id: bizId, name: "Old name" }], setupEditOpRef: opRef,
+    // These HF-1 cases exercise the pre-activation wizard. F2 locks finance
+    // settings only when cost history is present or unreadable.
+    finRaw: { bizId: currentBizId, costHistory: { kind: "absent" } },
+    businessConfig: {},
     setBusinessConfig: (v) => spy.setBusinessConfig.push(JSON.parse(JSON.stringify(v))),
     setSuppliers: (v) => spy.setSuppliers.push(v), setFixedList: (v) => spy.setFixedList.push(v),
     setBusinesses: (v) => spy.setBusinesses.push(v), setShowSetup: (v) => spy.setShowSetup.push(v), setSetupDone: (v) => spy.setSetupDone.push(v),
@@ -308,7 +312,7 @@ test("4 editing employees (and petty-cash categories) after a wizard edit preser
   };
   const saveBusinessConfig = vm.runInNewContext(`(() => { ${SRC.saveBusinessConfig} return saveBusinessConfig; })()`, base);
   // add an employee through the REAL saveEmp
-  const empEnv = { ...base, saveBusinessConfig, get businessConfig() { return businessConfig; }, employees: businessConfig.employees, editId: null,
+  const empEnv = { ...base, saveBusinessConfig, get businessConfig() { return businessConfig; }, employees: businessConfig.employees, financeLocked: false, editId: null,
     form: { name: "רוני", role: "מלצר", type: "global", monthlySalary: "9000" }, setAdding: () => {}, setEditId: () => {}, setForm: () => {} };
   const saveEmp = vm.runInNewContext(`(() => { ${SRC.saveEmp} return saveEmp; })()`, empEnv);
   saveEmp();
@@ -318,8 +322,12 @@ test("4 editing employees (and petty-cash categories) after a wizard edit preser
   assert.equal(afterEmp.businessName, "X");
   assert.deepEqual(pick(afterEmp, ["pettyCashCategories", "shiftChecklists", "futureModule", "targets"]), pick({ ...before, targets: afterEmp.targets }, ["pettyCashCategories", "shiftChecklists", "futureModule", "targets"]));
   // remove one through the REAL removeEmp
-  const rmEnv = { ...base, saveBusinessConfig, businessConfig, employees: businessConfig.employees };
+  const rmEnv = { ...base, saveBusinessConfig, businessConfig, employees: businessConfig.employees, financeLocked: false };
   const removeEmp = vm.runInNewContext(`(() => { ${SRC.removeEmp}; return removeEmp; })()`, rmEnv);
+  rmEnv.financeLocked = true;
+  await removeEmp(1714000000002);
+  assert.equal(storage.config("biz_1").employees.length, 3, "activated finance locks employee removal");
+  rmEnv.financeLocked = false;
   await removeEmp(1714000000002);
   assert.deepEqual(storage.config("biz_1").employees.map((e) => e.name), ["דנה", "רוני"]);
   assert.deepEqual(storage.config("biz_1").futureModule, before.futureModule);

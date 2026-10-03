@@ -22,12 +22,15 @@ import { R1_INDEX_BASE, r1IndexVerdict } from "../support/r1-index-scope.mjs";
 import { R1_COMMIT, R1_INDEX_PIN, R1_RUNTIME } from "../support/r1-candidate-pin.mjs";
 import { R2_INDEX_PIN, R2_RUNTIME_BLOBS } from "../support/r2-candidate-pin.mjs";
 import { r2IndexVerdict } from "../support/r2-index-scope.mjs";
+import { F2_PARENT, F2_INDEX_PIN, F2_RUNTIME_BLOBS } from "../support/f2-candidate-pin.mjs";
+import { f2IndexVerdict } from "../support/f2-index-scope.mjs";
 
 const show = (spec) => gitIn(REPO, ["show", spec]).stdout;
 const hash = (s) => spawnSync("git", ["hash-object", "--stdin"], { input: s, encoding: "utf8" }).stdout.trim();
 const f1Page = show(`${R1_INDEX_BASE}:index.html`);
 const page = show(`${R1_COMMIT}:index.html`);
-const r2Page = readFileSync(join(REPO, "index.html"), "utf8");
+const r2Page = show(`${F2_PARENT}:index.html`);
+const f2Page = readFileSync(join(REPO, "index.html"), "utf8");
 
 test("R1G-01 R1 starts at the fixed F1 page; narrow page scope; literal pending identities", () => {
   assert.equal(R1_INDEX_BASE, F1_COMMIT);
@@ -36,10 +39,12 @@ test("R1G-01 R1 starts at the fixed F1 page; narrow page scope; literal pending 
   assert.equal(hash(f1Page), F1_INDEX_PIN.blob, "the R1 base is the F1 identity");
   assert.deepEqual(r1IndexVerdict(f1Page, page), { ok: true });
   assert.equal(hash(page), R1_INDEX_PIN.blob);
-  assert.deepEqual(r2IndexVerdict(page, r2Page), { ok: true }, "current R2 page stays within its narrow scope");
-  assert.equal(hash(r2Page), R2_INDEX_PIN.blob, "current R2 checked-out bytes have a fixed identity");
-  assert.equal(gitIn(REPO, ["rev-parse", ":index.html"]).stdout.trim(), R2_INDEX_PIN.blob, "current R2 staged page has the same identity");
-  assert.equal(gitIn(REPO, ["rev-parse", "HEAD:index.html"]).stdout.trim(), R2_INDEX_PIN.blob, "current R2 committed page has the same identity");
+  assert.deepEqual(r2IndexVerdict(page, r2Page), { ok: true }, "historical R2 page stays within its narrow scope");
+  assert.equal(hash(r2Page), R2_INDEX_PIN.blob, "historical R2 page has a fixed identity");
+  assert.deepEqual(f2IndexVerdict(r2Page,f2Page),{ok:true},"F2 page stays within its bounded scope");
+  assert.equal(hash(f2Page),F2_INDEX_PIN.blob,"F2 checked-out page has a fixed identity");
+  assert.equal(gitIn(REPO, ["rev-parse", ":index.html"]).stdout.trim(), F2_INDEX_PIN.blob, "current F2 staged page has the same identity");
+  assert.equal(gitIn(REPO, ["rev-parse", "HEAD:index.html"]).stdout.trim(), F2_INDEX_PIN.blob, "current F2 committed page has the same identity");
   assert.match(R1_INDEX_PIN.status, /pending independent Codex review/);
   assert.match(R1_COMMIT, /^[0-9a-f]{40}$/);
   assert.equal(gitIn(REPO, ["merge-base", "--is-ancestor", R1_COMMIT, "HEAD"]).status, 0, "R1_COMMIT is in this lineage");
@@ -76,9 +81,11 @@ test("R1G-03 runtime pins: exactly the R1 runtime files differ from the F1 candi
   assert.equal(rev(`${F1_COMMIT}:database.rules.json`), rev(`${R1_COMMIT}:database.rules.json`), "R1 does not change the Rules");
   for (const f of R1_RUNTIME) {
     assert.equal(hash(show(`${R1_COMMIT}:${f}`)), rev(`${R1_COMMIT}:${f}`), f + " historical R1 bytes");
-    assert.equal(rev("HEAD:" + f), R2_RUNTIME_BLOBS[f], f + " committed R2 identity");
-    assert.equal(rev(":" + f), R2_RUNTIME_BLOBS[f], f + " staged R2 identity");
-    assert.equal(hash(readFileSync(join(REPO, f), "utf8")), R2_RUNTIME_BLOBS[f], f + " checked-out R2 identity");
+    const currentPin=F2_RUNTIME_BLOBS[f]||R2_RUNTIME_BLOBS[f];
+    assert.equal(rev(`${F2_PARENT}:${f}`),R2_RUNTIME_BLOBS[f],f+" historical R2 identity");
+    assert.equal(rev("HEAD:" + f), currentPin, f + " committed F2 identity");
+    assert.equal(rev(":" + f), currentPin, f + " staged F2 identity");
+    assert.equal(hash(readFileSync(join(REPO, f), "utf8")), currentPin, f + " checked-out F2 identity");
   }
 });
 

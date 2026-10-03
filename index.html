@@ -882,7 +882,7 @@
       const api = mod && mod.default;
       const v = api && api.versions;
       if (!api || api !== window.MarjinFinance || !v || v.product !== "MARJIN_PRODUCT/2" || v.forecast !== "REV_FORECAST/v2" ||
-          v.costHistory !== "MARJIN_COSTH/3" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") {
+          v.costHistory !== "MARJIN_COSTH/4" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") {
         throw new Error("fincore_version_mismatch");
       }
       window.__marjinFinance = { state: "ready", error: null };
@@ -1099,7 +1099,7 @@
       if (!api || typeof api !== "object" || !api.versions || !api.product || !api.presenters) return { ok: false, reason: "fincore_shape" };
       if (api.versions.product !== EXPECT.product) return { ok: false, reason: "fincore_version_mismatch" };
       if (api.versions.forecast !== EXPECT.forecast) return { ok: false, reason: "fincore_version_mismatch" };
-      if (api.versions.costHistory !== "MARJIN_COSTH/3" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") return { ok: false, reason: "fincore_cost_history_incompatible" };
+      if (api.versions.costHistory !== "MARJIN_COSTH/4" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") return { ok: false, reason: "fincore_cost_history_incompatible" };
       return { ok: true };
     }
 
@@ -5243,7 +5243,7 @@ function LocationStep({ lat, setLat, lon, setLon, regionIds, setRegionIds, subre
   );
 }
 
-function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCancel, isFirstSetup=true }) {
+function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCancel, isFirstSetup=true, financeLocked=false }) {
   const [step, setStep] = useState(1);
   // Step 1 -- פרטי עסק
   const [bizName,      setBizName]      = useState(initial.businessName || "");
@@ -5369,6 +5369,7 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
             </div>
             <div className="card card-p">
               <label className="label">שכר דירה</label>
+              {financeLocked&&<p>העלויות מנוהלות בהיסטוריית העלויות. ערוך אותן שם.</p>}
               {/* toggle: % מחזור / קבוע */}
               <div style={{display:"flex",gap:6,marginBottom:14}}>
                 {[["pct","% ממחזור"],["fixed","סכום קבוע"]].map(([t,l])=>(
@@ -5376,17 +5377,17 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
                     background:rentType===t?"#111827":"#FFFFFF",
                     borderColor:rentType===t?"#111827":"#E5E7EB",
                     color:rentType===t?"#FFFFFF":"#6B7280"}}
-                    onClick={()=>setRentType(t)}>{l}</button>
+                    disabled={financeLocked} onClick={()=>setRentType(t)}>{l}</button>
                 ))}
               </div>
               {rentType==="pct" ? (
                 <div style={{display:"flex",alignItems:"center",gap:10}}>
-                  <input className="input input-sm input-num" type="number" placeholder="0" value={rentPct} onChange={e=>setRentPct(e.target.value)}/>
+                  <input className="input input-sm input-num" type="number" placeholder="0" value={rentPct} disabled={financeLocked} onChange={e=>setRentPct(e.target.value)}/>
                   <span style={{color:"#9CA3AF",fontSize:14}}>% מההכנסות החודשיות</span>
                 </div>
               ) : (
                 <div style={{display:"flex",alignItems:"center",gap:10}}>
-                  <input className="input input-sm" type="number" placeholder="0" value={rentFixed} onChange={e=>setRentFixed(e.target.value)}/>
+                  <input className="input input-sm" type="number" placeholder="0" value={rentFixed} disabled={financeLocked} onChange={e=>setRentFixed(e.target.value)}/>
                   <span style={{color:"#9CA3AF",fontSize:14}}>₪ בחודש</span>
                 </div>
               )}
@@ -5397,13 +5398,13 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
                   <div style={{fontSize:14,color:"#111827",fontWeight:600}}>תמלוגים לרשת</div>
                   <div style={{fontSize:12,color:"#9CA3AF",marginTop:2}}>רלוונטי לזיכיון / רשת</div>
                 </div>
-                <button className="toggle-wrap" style={{background:hasRoyalty?"#111827":"#E5E7EB"}} onClick={()=>setHasRoyalty(p=>!p)}>
+                <button className="toggle-wrap" disabled={financeLocked} style={{background:hasRoyalty?"#111827":"#E5E7EB"}} onClick={()=>setHasRoyalty(p=>!p)}>
                   <div className="toggle-knob" style={{left:hasRoyalty?21:3}}/>
                 </button>
               </div>
               {hasRoyalty && (
                 <div style={{display:"flex",alignItems:"center",gap:10}}>
-                  <input className="input input-sm input-num" type="number" placeholder="0" value={royaltyPct} onChange={e=>setRoyaltyPct(e.target.value)}/>
+                  <input className="input input-sm input-num" type="number" placeholder="0" value={royaltyPct} disabled={financeLocked} onChange={e=>setRoyaltyPct(e.target.value)}/>
                   <span style={{color:"#9CA3AF",fontSize:14}}>% ממחזור</span>
                 </div>
               )}
@@ -5518,6 +5519,7 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
         {/* ── STEP 4 ── */}
         {step===4 && (
           <>
+            {financeLocked&&<p>הסכומים הקבועים מנוהלים בהיסטוריית העלויות. כאן הם לקריאה בלבד.</p>}
             <p style={{color:"#9CA3AF",fontSize:13,marginBottom:16,textAlign:"center"}}>הזן סכומים חודשיים קבועים -- אפס = לא רלוונטי</p>
             {fixedList.filter(f=>!f.rentPct&&!f.royaltyPct).map(f=>(
               <div key={f.id} className="card card-p-sm" style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
@@ -5525,7 +5527,7 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
                   <div className="t-base fw5 c-ink">{f.name}</div>
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
-                  <input className="input input-sm" type="number" placeholder="0" value={f.amount||""} onChange={e=>updateFixed(f.id,"amount",e.target.value)}/>
+                  <input className="input input-sm" type="number" placeholder="0" value={f.amount||""} disabled={financeLocked} onChange={e=>updateFixed(f.id,"amount",e.target.value)}/>
                   <span style={{color:"#9CA3AF",fontSize:12}}>₪</span>
                 </div>
               </div>
@@ -5687,6 +5689,151 @@ function suppliersOnDay(dow, suppliers) {
 window.suppliersOnDay = suppliersOnDay;
 window.getDateDOW     = getDateDOW;
 window.fcColor        = fcColor;
+
+// F2 editor uses the shared history codec and shared compat adapter. It performs no financial
+// calculation and never writes cost_history with the browser SDK.
+const f2Stable = (value) => JSON.stringify(value, (_, v) => v && typeof v === "object" && !Array.isArray(v)
+  ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
+const f2Digest = async (value) => {
+  const bytes = new TextEncoder().encode(f2Stable(value));
+  return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), b => b.toString(16).padStart(2, "0")).join("");
+};
+const f2Uuid = () => crypto.randomUUID();
+const f2Snapshot = (v) => ({
+  globalEmployees: v.globalEmployees.map(e => ({employeeKey:e.employeeKey, ...(e.name?{name:e.name}:{}), monthlyEmployerCost:e.monthlyEmployerCost ?? e.monthlyAmount})),
+  fixedItems: v.fixedItems.map(f => ({itemKey:f.itemKey, ...(f.name?{name:f.name}:{}), monthlyAmount:f.monthlyAmount})),
+  rent: {...v.rent}, royalty: {...v.royalty},
+});
+
+function CostHistoryEditor({finF, historyNode, config, fixed, tenantId, bizId, today, role, onClose}) {
+  const [mode,setMode] = useState("normal");
+  const [draft,setDraft] = useState(null);
+  const [effectiveFrom,setEffectiveFrom] = useState(today || "");
+  const [typedDate,setTypedDate] = useState("");
+  const [reason,setReason] = useState("");
+  const [confirmed,setConfirmed] = useState(false);
+  const [activationConfirmed,setActivationConfirmed] = useState(false);
+  const [result,setResult] = useState(null);
+  const [busy,setBusy] = useState(false);
+  const [readback,setReadback] = useState(null);
+  const intentRef = useRef(null);
+  const acceptOpRef = useRef(null);
+  const scopeRef = useRef("");
+  const scope = `${tenantId||""}|${bizId||""}`;
+  scopeRef.current = scope;
+  const node = readback || historyNode;
+  const codec = finF && finF.costHistory && finF.costHistory.codec;
+  const state = !codec ? {state:"unreadable",reason:"fincore_incompatible"}
+    : node.kind === "loading" ? {state:"loading"}
+    : node.kind === "failed" ? {state:"unreadable",reason:"read_failed"}
+    : codec.decodeHistoryStructure({exists:node.kind === "raw",value:node.raw});
+  const head = state.state === "present" ? state.head : null;
+  const review = head && node.raw.review[head.headVersionId];
+  const unresolved = review && (review.state === "pending" || review.state === "flagged");
+  const current = state.state === "present" ? state.versions[state.versions.length-1] : null;
+  const compat = React.useMemo(() => {
+    if (!finF || state.state !== "absent" || config?.state !== "present" || fixed?.state !== "present") return null;
+    return finF.metrics.adapters.configCompat.costTimelineFromCurrentConfig(config.value,fixed.value);
+  },[finF,state.state,config,fixed]);
+  const seed = current || (compat && compat.versions.length === 1 && !compat.flags.some(f => /^(invalid_|missing_|rent_fixed_and)/.test(f.code)) ? compat.versions[0] : null);
+  useEffect(() => {
+    setReadback(null);setResult(null);intentRef.current=null;acceptOpRef.current=null;
+  },[tenantId,bizId]);
+  useEffect(() => { setReadback(null); },[historyNode]);
+  useEffect(() => {
+    if (seed) setDraft(f2Snapshot(seed)); else setDraft(null);
+    setMode("normal");setEffectiveFrom(today || "");setTypedDate("");setReason("");setConfirmed(false);
+    setActivationConfirmed(false);intentRef.current=null;
+  },[tenantId,bizId,head?.revision,today,seed?.versionId]);
+  const update = (part,value) => {setDraft(prev=>({...prev,[part]:value}));intentRef.current=null;};
+  const updateList = (part,i,field,value) => update(part,draft[part].map((x,j)=>j===i?{...x,[field]:value}:x));
+  const reload = async (keepResult=false) => {
+    const requestedScope=scope;
+    try {
+      const response=await window.apiFetch(`/api/cost-history?tenantId=${encodeURIComponent(tenantId)}&bizId=${encodeURIComponent(bizId)}`);
+      const data=await response.json();
+      if(scopeRef.current!==requestedScope)return;
+      if(response.ok && (data.status==="present"||data.status==="absent")) {setReadback(data.status==="present"?{kind:"raw",raw:data.history}:{kind:"absent"});if(!keepResult)setResult({status:"reloaded"});}
+      else {setReadback({kind:"failed"});setResult({status:"unreadable",reason:data.reason||data.status});}
+    } catch {if(scopeRef.current===requestedScope){setReadback({kind:"failed"});setResult({status:"unreadable",reason:"read_failed"});}}
+  };
+  const command = async (action,body) => {
+    const response=await window.apiFetch("/api/cost-history",{method:"POST",body:JSON.stringify({action,tenantId,bizId,body})});
+    return await response.json();
+  };
+  const save = async (retry=false) => {
+    if (!draft || busy || unresolved || !["absent","present"].includes(state.state)) return;
+    if (state.state==="absent" && (role!=="owner" || !activationConfirmed)) {setResult({status:"activation_confirmation_required"});return;}
+    if (mode==="historical" && (!reason.trim() || !typedDate || typedDate!==effectiveFrom || !confirmed)) {setResult({status:"attestation_missing"});return;}
+    if (mode==="historical" && effectiveFrom>=today) {setResult({status:"attestation_not_past"});return;}
+    if (mode!=="historical" && effectiveFrom<today) {setResult({status:"recorded_past_date"});return;}
+    setBusy(true);
+    const requestedScope=scope;
+    try {
+      const basis=mode==="historical"?"attested_retroactive":"recorded";
+      const signature=f2Stable({draft,effectiveFrom,basis,reason:mode==="historical"?reason:null,expectedHead:head});
+      let intent=retry?intentRef.current:null;
+      if (!intent || intent.signature!==signature) {
+        const body={versionId:f2Uuid(),expectedHead:head,effectiveFrom,basis,...draft};
+        if (mode==="historical") {
+          body.attestationReason=reason.trim();
+          const v={effectiveFrom,basis,globalEmployees:body.globalEmployees,fixedItems:body.fixedItems,rent:body.rent,royalty:body.royalty,attestationReason:body.attestationReason};
+          body.attestation={confirmed:true,typedEffectiveFrom:typedDate,confirmedSnapshotDigest:await f2Digest(v)};
+        }
+        intent={signature,body,action:state.state==="absent"?"activate":mode==="historical"?"attest":"edit"};
+        intentRef.current=intent;
+      }
+      const out=await command(intent.action,intent.body);
+      if(scopeRef.current!==requestedScope)return;
+      setResult(out);
+      if(out.status==="head_conflict"||out.status==="committed_current"||out.status==="resolved") await reload(true);
+    } catch {if(scopeRef.current===requestedScope)setResult({status:"outcome_unknown"});}
+    finally {setBusy(false);}
+  };
+  const reviewCommand=async(action) => {
+    if(busy || !review || role!=="owner") return;
+    setBusy(true);
+    const requestedScope=scope;
+    try {
+      if(action==="accept_flag" && !acceptOpRef.current) acceptOpRef.current=f2Uuid();
+      const response=await window.apiFetch("/api/cost-history",{method:"POST",body:JSON.stringify({action,tenantId,bizId,versionId:head.headVersionId,intentDigest:review.intentDigest,operationId:acceptOpRef.current})});
+      const out=await response.json();if(scopeRef.current!==requestedScope)return;setResult(out);await reload(true);
+    } catch {if(scopeRef.current===requestedScope)setResult({status:"outcome_unknown"});}
+    finally {setBusy(false);}
+  };
+  const label={loading:"טוען היסטוריית עלויות",absent:"הגדרות נוכחיות — טרם הופעלה היסטוריית עלויות",present:review?.state==="pending"?"ממתין לבדיקת הרשאה":review?.state==="flagged"?"מסומן לבדיקה — אינו משפיע על חישובים":"היסטוריית עלויות פעילה",unreadable:"היסטוריית העלויות אינה זמינה"}[state.state];
+  const resultText={head_conflict:"התנגשות עריכה: יש לרענן ולהחיל מחדש את השינוי",review_unresolved:"בדיקת הרשאה פתוחה: לא ניתן לשמור גרסה חדשה",outcome_unknown:"תוצאת השמירה אינה ידועה: נסה לשחזר את אותה פעולה",committed_current:"נשמרה גרסה חדשה",resolved:"מצב הבדיקה עודכן",already_acknowledged:"האישור כבר נשמר",reloaded:"הנתונים רועננו",unreadable:"הקריאה נכשלה: הנתונים אינם זמינים",activation_confirmation_required:"יש לאשר את ההפעלה במפורש",attestation_missing:"יש להשלים סיבה, תאריך ואישור לתיקון ההיסטורי",attestation_not_past:"תיקון היסטורי מחייב תאריך עבר",recorded_past_date:"תאריך עבר מחייב תיקון היסטורי מאומת",role_not_allowed:"אין הרשאה לפעולה זו"};
+  return <div data-f2="cost-editor" style={{padding:18,direction:"rtl",maxHeight:"85vh",overflowY:"auto",background:"#fff"}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><h2 style={{margin:0}}>היסטוריית עלויות</h2><button onClick={onClose}>סגור</button></div>
+    <p data-f2="state">{label}</p>
+    {state.state==="absent"&&<p>עד להפעלה, הדוחות משתמשים בהגדרות הנוכחיות גם לתאריכים קודמים. ההפעלה אינה משחזרת עלויות עבר; ימים לפני תאריך ההפעלה עלולים להופיע כחסרים.</p>}
+    {state.state==="unreadable"&&<p data-f2="unreadable">אין להשתמש בסכומי עלויות עד לשחזור קריאה תקינה. {state.reason}</p>}
+    {review?.state==="pending"&&<p data-f2="pending">גרסה זו אינה סמכותית עד סיום בדיקת ההרשאה.</p>}
+    {review?.state==="flagged"&&<p data-f2="flagged">נדרש אישור בעלים לאחר בדיקת רשומת הביקורת. הגרסה אינה סמכותית.</p>}
+    {result&&<p data-f2="result">{resultText[result.status]||result.status}{result.reason?`: ${result.reason}`:""}</p>}
+    <button onClick={()=>reload()} disabled={busy}>רענן מהשרת</button>
+    {unresolved&&role==="owner"&&<button onClick={()=>reviewCommand(review.state==="flagged"?"accept_flag":"reconcile")} disabled={busy}>{review.state==="flagged"?"אשר לאחר בדיקה":"נסה להשלים בדיקת הרשאה"}</button>}
+    {result?.status==="outcome_unknown"&&intentRef.current&&<button onClick={()=>save(true)} disabled={busy}>נסה שוב את אותה שמירה</button>}
+    {(state.state==="absent"||state.state==="present"&&!unresolved)&&draft&&<>
+      <p>כל הסכומים הם חודשיים, נטו מע״מ. שכר עובדים גלובליים הוא עלות מעסיק מלאה.</p>
+      {state.state==="present"&&<div><button onClick={()=>{setMode("normal");setEffectiveFrom(today);setTypedDate("");setConfirmed(false);}}>עריכה רגילה</button><button onClick={()=>{setMode("historical");setEffectiveFrom("");setTypedDate("");setConfirmed(false);}}>תיקון היסטורי מאומת</button></div>}
+      <label>תאריך תחולה <input data-f2="effective-date" type="date" value={effectiveFrom} onChange={e=>{setEffectiveFrom(e.target.value);intentRef.current=null;}}/></label>
+      <h3>עובדים גלובליים — עלות מעסיק מלאה</h3>
+      {draft.globalEmployees.map((e,i)=><div key={e.employeeKey}><input aria-label="מזהה עובד" value={e.employeeKey} onChange={x=>updateList("globalEmployees",i,"employeeKey",x.target.value)}/><input aria-label="עלות מעסיק חודשית" value={e.monthlyEmployerCost} onChange={x=>updateList("globalEmployees",i,"monthlyEmployerCost",x.target.value)}/><button onClick={()=>update("globalEmployees",draft.globalEmployees.filter((_,j)=>j!==i))}>הסר</button></div>)}
+      <button onClick={()=>update("globalEmployees",[...draft.globalEmployees,{employeeKey:f2Uuid(),monthlyEmployerCost:"0"}])}>הוסף עובד גלובלי</button>
+      <h3>הוצאות קבועות</h3>
+      {draft.fixedItems.map((f,i)=><div key={f.itemKey}><input aria-label="שם הוצאה" value={f.name||f.itemKey} onChange={x=>updateList("fixedItems",i,"name",x.target.value)}/><input aria-label="סכום חודשי" value={f.monthlyAmount} onChange={x=>updateList("fixedItems",i,"monthlyAmount",x.target.value)}/><button onClick={()=>update("fixedItems",draft.fixedItems.filter((_,j)=>j!==i))}>הסר</button></div>)}
+      <button onClick={()=>update("fixedItems",[...draft.fixedItems,{itemKey:f2Uuid(),name:"הוצאה חדשה",monthlyAmount:"0"}])}>הוסף הוצאה</button>
+      <h3>שכר דירה</h3><select value={draft.rent.mode} onChange={e=>update("rent",e.target.value==="none"?{mode:"none"}:e.target.value==="fixed"?{mode:"fixed",monthlyAmount:"0"}:{mode:"pct",ratePct:"0"})}><option value="none">ללא</option><option value="fixed">קבוע</option><option value="pct">אחוז</option></select>
+      {draft.rent.mode!=="none"&&<input aria-label="שכר דירה" value={draft.rent.mode==="fixed"?draft.rent.monthlyAmount:draft.rent.ratePct} onChange={e=>update("rent",{...draft.rent,[draft.rent.mode==="fixed"?"monthlyAmount":"ratePct"]:e.target.value})}/>}
+      <h3>תמלוגים</h3><select value={draft.royalty.mode} onChange={e=>update("royalty",e.target.value==="none"?{mode:"none"}:{mode:"pct",ratePct:"0"})}><option value="none">ללא</option><option value="pct">אחוז</option></select>
+      {draft.royalty.mode==="pct"&&<input aria-label="אחוז תמלוגים" value={draft.royalty.ratePct} onChange={e=>update("royalty",{mode:"pct",ratePct:e.target.value})}/>}
+      {mode==="historical"&&<div data-f2="attestation"><p>תיקון היסטורי משנה תוצאות עבר. הזן מחדש את תאריך התחולה ואת הסיבה ואשר את תמונת העלויות.</p><input aria-label="הקלד שוב תאריך תחולה" type="date" value={typedDate} onChange={e=>{setTypedDate(e.target.value);intentRef.current=null;}}/><textarea aria-label="סיבת תיקון היסטורי" value={reason} onChange={e=>{setReason(e.target.value);intentRef.current=null;}}/><label><input type="checkbox" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/>אני מאשר/ת את התיקון ההיסטורי</label></div>}
+      {state.state==="absent"&&<label><input data-f2="activation-confirm" type="checkbox" checked={activationConfirmed} onChange={e=>setActivationConfirmed(e.target.checked)}/>אני מאשר/ת את העלויות הנוכחיות ואת השינוי בזמינות נתוני העבר</label>}
+      <button data-f2="save" onClick={()=>save(false)} disabled={busy||!effectiveFrom||(state.state==="absent"&&role!=="owner")}>{busy?"שומר…":state.state==="absent"?"הפעל היסטוריית עלויות":mode==="historical"?"שמור תיקון היסטורי":"שמור גרסת עלויות"}</button>
+    </>}
+  </div>;
+}
 
 // ─── Count-up hook for hero number ────────────────────────────────────────────
 
@@ -7379,6 +7526,7 @@ function PilotDashboard() {
       initial={businessConfig}
       initialSuppliers={suppliers}
       initialFixed={fixedList}
+      financeLocked={finRaw.bizId!==currentBizId || finRaw.costHistory.kind!=="absent"}
       onComplete={async (wizardCfg, sups, fixed) => {
         // EDIT existing business — do NOT create new bizId
         // HF-1 R1: the wizard owns only some config keys. They are merged into the
@@ -7391,6 +7539,10 @@ function PilotDashboard() {
         const token = {};
         setupEditOpRef.current = token;
         if (!ctx || ctx.bizId !== currentBizId || !isSelectionLive(ctx)) return;
+        const financeLocked = finRaw.bizId !== currentBizId || finRaw.costHistory.kind !== "absent";
+        const safeWizardCfg = financeLocked ? { ...wizardCfg,
+          rentType:businessConfig.rentType, rentPct:businessConfig.rentPct, rentFixed:businessConfig.rentFixed,
+          hasRoyalty:businessConfig.hasRoyalty, royaltyPct:businessConfig.royaltyPct } : wizardCfg;
         let out;
         try {
           out = await window.MarjinConfigMerge.runSetupWizardEditSave({
@@ -7398,7 +7550,7 @@ function PilotDashboard() {
             isCurrentOp: (t) => setupEditOpRef.current === t,
             mutateFor: (tenantId, key, fn) => window.storage.mutateFor(tenantId, key, fn),
             setFor: (tenantId, key, value) => window.storage.setFor(tenantId, key, value, true),
-          }, { ctx, token, wizardCfg, suppliers: sups, fixed, businesses });
+          }, { ctx, token, wizardCfg:safeWizardCfg, suppliers: sups, fixed:financeLocked?null:fixed, businesses });
         } catch (_) {
           out = { status: "failed", stage: "unexpected", reason: "unexpected_error" };
         }
@@ -7414,7 +7566,7 @@ function PilotDashboard() {
         setBusinessConfig(out.config);
         setBusinesses(out.businesses);
         setSuppliers(sups);
-        if(fixed) setFixedList(fixed);
+        if(fixed && !financeLocked) setFixedList(fixed);
         setShowSetup(false);
         setSetupDone(true);
       }}
@@ -7540,54 +7692,9 @@ function PilotDashboard() {
             )}
             {showFixed && (
               <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.35)",zIndex:9999,display:"flex",alignItems:"flex-end"}} onClick={()=>setShowFixed(false)}>
-                <div style={{background:"#FFFFFF",width:"100%",maxHeight:"85vh",overflowY:"auto",borderRadius:"20px 20px 0 0",padding:"24px 20px 40px"}} onClick={e=>e.stopPropagation()}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-                    <div>
-                      <div style={{fontSize:16,fontWeight:700,color:"#0F172A",letterSpacing:"-.3px"}}>הוצאות קבועות</div>
-                      <div data-c1="fixed-modal-total" style={{fontSize:12,color:"#94A3B8",marginTop:3}}>קבועות + שכ״ד לחודש{finConfigured.status==="ready"&&finConfigured.basisLabel?` (${finConfigured.basisLabel})`:""}: <strong style={{color:"#1E293B"}}>{finConfigured.status==="ready"?finConfigured.text:"—"}</strong>{finConfigured.status==="ready"&&finConfigured.rentPctText!==null&&<span> + שכ״ד <strong style={{color:"#1E293B"}}>{finConfigured.rentPctText}</strong> ממחזור</span>}{finConfigured.status==="ready"&&finConfigured.royaltyText!==null&&<span> · תמלוגים: <strong style={{color:"#1E293B"}}>{finConfigured.royaltyText}</strong> ממחזור</span>}</div>
-                    </div>
-                    <button onClick={()=>setShowFixed(false)} style={{width:30,height:30,background:"#F1F5F9",border:"none",borderRadius:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",color:"#64748B"}}>
-                      <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                    </button>
-                  </div>
-                  {fixedList.map((f,i)=>(
-                    <div key={f.id} style={{marginBottom:10,padding:"12px 14px",background:f.disabled?"#F9FAFB":"#FFFFFF",borderRadius:12,border:"1px solid #E5E7EB",opacity:f.disabled?0.55:1}}>
-                      <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:f.rentPct||f.royaltyPct?0:8}}>
-                        <input style={{flex:1,border:"1px solid #E5E7EB",borderRadius:8,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:"#111827",background:"transparent",textDecoration:f.disabled?"line-through":"none"}}
-                          value={f.name}
-                          onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,name:e.target.value}:x);setFixedList(u);persistFixed(u,captureSelectionCtx());}}/>
-                        <button onClick={()=>{const u=fixedList.map((x,j)=>j===i?{...x,disabled:!x.disabled}:x);setFixedList(u);persistFixed(u,captureSelectionCtx());}}
-                          style={{padding:"6px 10px",background:"#F1F5F9",border:"none",borderRadius:7,fontSize:11,cursor:"pointer",color:"#64748B",fontFamily:"inherit",flexShrink:0,fontWeight:500}}>
-                          {f.disabled?"הפעל":"בטל"}
-                        </button>
-                        {!f.rentPct&&!f.royaltyPct&&(
-                          <button onClick={()=>{if(window.confirm(`למחוק "${f.name}"?`)){const u=fixedList.filter((_,j)=>j!==i);setFixedList(u);persistFixed(u,captureSelectionCtx());}}}
-                            style={{padding:"6px 8px",background:"#FEF2F2",border:"none",borderRadius:7,cursor:"pointer",color:"#EF4444",flexShrink:0}}>
-                            <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
-                          </button>
-                        )}
-                      </div>
-                      {!f.rentPct&&!f.royaltyPct&&(
-                        <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                          <span style={{fontSize:13,color:"#94A3B8",flexShrink:0}}>₪</span>
-                          <input style={{flex:1,border:"1px solid #E5E7EB",borderRadius:8,padding:"7px 10px",fontSize:13,fontFamily:"inherit",color:"#111827",background:"transparent"}}
-                            type="number" inputMode="decimal" placeholder="סכום חודשי" value={f.amount||""}
-                            onChange={e=>{const u=fixedList.map((x,j)=>j===i?{...x,amount:Number(e.target.value)}:x);setFixedList(u);persistFixed(u,captureSelectionCtx());}}/>
-                          <span style={{fontSize:11,color:"#94A3B8",flexShrink:0}}>/ חודש</span>
-                        </div>
-                      )}
-                      {(f.rentPct||f.royaltyPct)&&(
-                        <div style={{fontSize:12,color:"#94A3B8",marginTop:4}}>
-                          {f.rentPct&&`שכ״ד: ${businessConfig.rentType==="fixed"?fmt(businessConfig.rentFixed||0):(businessConfig.rentPct||0)+"%"}`}
-                          {f.royaltyPct&&businessConfig.hasRoyalty&&` · תמלוגים: ${businessConfig.royaltyPct||0}%`}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  <button onClick={()=>{const u=[...fixedList,{id:Date.now(),name:"הוצאה חדשה",amount:0,dueDay:1,rentPct:false}];setFixedList(u);persistFixed(u,captureSelectionCtx());}}
-                    style={{width:"100%",padding:"12px",background:"#F8FAFC",border:"1px dashed #CBD5E1",borderRadius:12,color:"#64748B",fontSize:13,fontWeight:500,cursor:"pointer",fontFamily:"inherit",marginTop:8}}>
-                    + הוסף הוצאה קבועה
-                  </button>
+                <div style={{background:"#FFFFFF",width:"100%",maxHeight:"85vh",overflowY:"auto",borderRadius:"20px 20px 0 0"}} onClick={e=>e.stopPropagation()}>
+                  <div data-c1="fixed-modal-total" style={{padding:"14px 18px 0",fontSize:12,color:"#64748B"}}>קבועות + שכ״ד לחודש{finConfigured.status==="ready"&&finConfigured.basisLabel?` (${finConfigured.basisLabel})`:""}: <strong>{finConfigured.status==="ready"?finConfigured.text:"—"}</strong>{finConfigured.status==="ready"&&finConfigured.rentPctText!==null&&<span> + שכ״ד {finConfigured.rentPctText} ממחזור</span>}{finConfigured.status==="ready"&&finConfigured.royaltyText!==null&&<span> · תמלוגים: {finConfigured.royaltyText} ממחזור</span>}</div>
+                  <CostHistoryEditor finF={finF} historyNode={finRaw.bizId===currentBizId?finRaw.costHistory:{kind:"loading"}} config={finSrc?.config} fixed={finSrc?.fixed} tenantId={window._currentTenantId} bizId={currentBizId} today={finAsOf} role={loggedInUser?.role} onClose={()=>setShowFixed(false)}/>
                 </div>
               </div>
             )}
@@ -9108,7 +9215,7 @@ function PilotDashboard() {
 
       {screen==="employees" && !currentUser && (
         <div className="screen">
-          <EmployeesScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig} entries={entries} submitLaborEntry={submitLaborEntry} finView={finView} finSrc={finSrc} finCoreState={finCoreState} todayStr={finTodayStr} requestFinanceFrom={requestFinanceFrom}/>
+          <EmployeesScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig} entries={entries} submitLaborEntry={submitLaborEntry} finView={finView} finSrc={finSrc} finCoreState={finCoreState} todayStr={finTodayStr} requestFinanceFrom={requestFinanceFrom} financeLocked={finRaw.bizId!==currentBizId || finRaw.costHistory.kind!=="absent"}/>
         </div>
       )}
 
@@ -9138,7 +9245,7 @@ function PilotDashboard() {
 
       {/* ═══ FIXED ═══ */}
       {/* ═══ FIXED SCREEN (legacy, kept for backward compat) ═══ */}
-      {screen==="fixed" && (
+      {screen==="fixed" && (finRaw.bizId===currentBizId && finRaw.costHistory.kind==="absent" ? (
         <div className="screen">
           <div className="card card-p">
             <div className="flex jbet icenter" style={{marginBottom:14}}>
@@ -9191,7 +9298,9 @@ function PilotDashboard() {
             </button>
           </div>
         </div>
-      )}
+      ) : (
+        <div className="screen"><CostHistoryEditor finF={finF} historyNode={finRaw.bizId===currentBizId?finRaw.costHistory:{kind:"loading"}} config={finSrc?.config} fixed={finSrc?.fixed} tenantId={window._currentTenantId} bizId={currentBizId} today={finAsOf} role={loggedInUser?.role} onClose={()=>setScreen("dashboard")}/></div>
+      ))}
 
       {/* ═══ ADMIN PANEL (super_owner only) ═══ */}
       {screen==="admin" && loggedInUser?.role==="super_owner" && (
@@ -9347,7 +9456,7 @@ function PilotDashboard() {
 
 
 // ─── Employees Screen ─────────────────────────────────────────────────────────
-function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLaborEntry, finView, finSrc, finCoreState, todayStr, requestFinanceFrom }) {
+function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLaborEntry, finView, finSrc, finCoreState, todayStr, requestFinanceFrom, financeLocked=false }) {
   const employees = businessConfig.employees || [];
   const ROLES_EMP = ["מנהל משמרת","טבח","עוזר טבח","מלצר","ברמן","קופאי","כלים","ניקיון","אחר"];
   // Management list (operational): every configured global employee, including ones whose
@@ -9403,6 +9512,7 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLa
   const inp = {width:"100%",border:"1px solid #D1D5DB",borderRadius:10,padding:"10px 12px",fontSize:14,fontFamily:"inherit",color:"#111827",background:"#FFFFFF",marginBottom:10,boxSizing:"border-box"};
 
   const saveEmp = () => {
+    if (financeLocked) return;
     if(!form.name.trim()) return;
     const updated = editId!==null
       ? employees.map(e=>e.id===editId?{...e,...form}:e)
@@ -9410,8 +9520,8 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLa
     saveBusinessConfig({...businessConfig, employees:updated});
     setAdding(false); setEditId(null); setForm({name:"",role:"מלצר",type:"global",monthlySalary:""});
   };
-  const removeEmp = id => saveBusinessConfig({...businessConfig, employees:employees.filter(e=>e.id!==id)});
-  const startEdit = emp => { setForm({name:emp.name,role:emp.role,type:"global",monthlySalary:emp.monthlySalary||""}); setEditId(emp.id); setAdding(true); setShowGlobal(true); };
+  const removeEmp = id => { if (!financeLocked) saveBusinessConfig({...businessConfig, employees:employees.filter(e=>e.id!==id)}); };
+  const startEdit = emp => { if (financeLocked) return; setForm({name:emp.name,role:emp.role,type:"global",monthlySalary:emp.monthlySalary||""}); setEditId(emp.id); setAdding(true); setShowGlobal(true); };
 
 
   return (
@@ -9493,23 +9603,24 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLa
         </div>
         {showGlobal && (
           <div style={{borderTop:"1px solid #F1F5F9",padding:"14px 16px"}}>
+            {financeLocked&&<p data-f2="global-locked">עלויות העובדים הגלובליים מנוהלות בהיסטוריית העלויות.</p>}
             {globalEmps.map(emp=>(
               <div key={emp.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",background:"#F8FAFC",borderRadius:10,marginBottom:8,border:"1px solid #E5E7EB"}}>
                 <div>
                   <div style={{fontWeight:700,color:"#111827",fontSize:14}}>{emp.name}</div>
                   <div style={{fontSize:12,color:"#6B7280",marginTop:1}}>{emp.role} · {(()=>{ const g = ev.status==="ready" ? ev.globalEmployees.find(x=>String(x.key)===String(emp.id)) : null; return g ? g.monthlyText : (ev.status==="ready" ? "סכום חסר או לא תקין" : "—"); })()}/חודש · עלות מעביד</div>
                 </div>
-                <div style={{display:"flex",gap:6}}>
+                {!financeLocked&&<div style={{display:"flex",gap:6}}>
                   <button onClick={()=>startEdit(emp)} style={{background:"#F1F5F9",border:"1px solid #E5E7EB",borderRadius:8,padding:"5px 10px",cursor:"pointer",fontFamily:"inherit",fontSize:12,color:"#6B7280"}}><IcoEdit/></button>
                   <button onClick={()=>removeEmp(emp.id)} style={{background:"none",border:"none",padding:"4px 6px",cursor:"pointer",fontFamily:"inherit",fontSize:12,color:"#9CA3AF"}}><IcoTrash/></button>
-                </div>
+                </div>}
               </div>
             ))}
-            {!adding && (
+            {!financeLocked&&!adding && (
               <button onClick={()=>{setAdding(true);setEditId(null);setForm({name:"",role:"מלצר",type:"global",monthlySalary:""});}}
                 style={{width:"100%",background:"#FFFFFF",border:"1px dashed #D1D5DB",borderRadius:6,color:"#6B7280",padding:"9px",fontWeight:500,cursor:"pointer",fontFamily:"inherit",fontSize:12,marginTop:4}}>הוסף עובד גלובלי</button>
             )}
-            {adding && (
+            {!financeLocked&&adding && (
               <div style={{background:"#F9FAFB",borderRadius:8,padding:"14px",border:"1px solid #BFDBFE",marginTop:8}}>
                 <div style={{fontWeight:700,color:"#6B7280",fontSize:13,marginBottom:10}}>{editId!==null?"עריכת עובד":"עובד חדש"}</div>
                 <input style={inp} placeholder="שם עובד" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} autoFocus/>

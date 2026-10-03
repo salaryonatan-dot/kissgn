@@ -1,0 +1,7 @@
+{
+  "slice": "F2",
+  "consumers": [
+    "api/cost-history.js"
+  ],
+  "serverApiConsumers": []
+}

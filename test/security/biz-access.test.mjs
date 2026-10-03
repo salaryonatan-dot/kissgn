@@ -217,10 +217,11 @@ T("M6 cleanup is an explicit, separately-confirmed mode", () => {
 
 // ── invariants ──
 T("I1 no role named 'admin'", () => { assert.strictEqual(isImplicitAllRole("admin"), false); assert.ok(!/role\s*===\s*["']admin["']/.test(admin)); assert.ok(!JSON.stringify(ba).includes("admin")); });
-T("I2 no new Vercel function (api function-file count = 12)", () => {
+T("I2 only the reviewed F2 cost-history function is added (api function-file count = 13)", () => {
   const walk = (d) => readdirSync(d).flatMap((f) => { const fp = join(d, f); return statSync(fp).isDirectory() ? walk(fp) : [fp]; });
-  const apiFns = walk(join(REPO, "api")).filter((f) => f.endsWith(".js") || f.endsWith(".ts"));
-  assert.strictEqual(apiFns.length, 12, "api function count = " + apiFns.length);
+  const apiFns = walk(join(REPO, "api")).filter((f) => f.endsWith(".js") || f.endsWith(".ts")).map(f => f.slice(join(REPO, "api").length + 1)).sort();
+  assert.strictEqual(apiFns.length, 13, "api function count = " + apiFns.length);
+  assert.ok(apiFns.includes("cost-history.js"), "reviewed F2 route is the added function");
 });
 T("I3 tests do no external/Firebase calls; migration imports firebase-admin only in main()", () => {
   const mig = readFileSync(join(REPO, "scripts", "backfill-biz-access.mjs"), "utf8");

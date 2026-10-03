@@ -5,7 +5,7 @@ import { israelBusinessDate, parseBusinessDate } from "./businessDate.js";
 // transaction as the version. A version whose review is unresolved (pending / flagged) makes the whole
 // history non-authoritative (unreadable), so a DEC-AUTH-1 in-window commit can never silently become
 // ordinary history when its post-commit audit fails. A /1 reader sees a /2 node as malformed (fail closed).
-export const COST_HISTORY_CAPABILITY = "MARJIN_COSTH/3";
+export const COST_HISTORY_CAPABILITY = "MARJIN_COSTH/4";
 export type CostHistoryDecision =
   | { readonly state: "absent" }
   | { readonly state: "present"; readonly head: { readonly revision: number; readonly headVersionId: string }; readonly versions: readonly any[]; readonly activationDate: string | null }
@@ -25,6 +25,7 @@ export type CostReviewState = "pending" | "cleared" | "flagged" | "acknowledged"
 // A failed or denied read is never "absent".
 export const HISTORY_KEY_RE = /^biz:[^:]+:cost_history$/;          // the ONE storage key (R2)
 export const RECORD_SCHEMA = "MARJIN_COSTV/1";
+export const ATTESTED_RECORD_SCHEMA = "MARJIN_COSTV/2";
 export const REVIEW_SCHEMA = "MARJIN_COSTR/2";
 export const FLAG_AUDIT_SCHEMA = "MARJIN_COST_AUDIT/2";
 export const REVIEW_RESOLUTIONS = Object.freeze({
@@ -37,7 +38,7 @@ const DEC = /^(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$/;
 const MAX_INSTANT_MS = 8640000000000000;                             // ECMAScript Date range
 const isObj = (x: unknown): x is Record<string, any> => x !== null && typeof x === "object" && !Array.isArray(x);
 const only = (o: Record<string, any>, allowed: readonly string[]) => Object.keys(o).every((k) => allowed.includes(k));
-const RECORD_FIELDS = ["versionId", "schema", "effectiveFrom", "recordedAt", "recordedBy", "basis", "globalEmployeesCount", "fixedItemsCount", "globalEmployees", "fixedItems", "rent", "royalty", "note", "predecessorVersionId"];
+const RECORD_FIELDS = ["versionId", "schema", "effectiveFrom", "recordedAt", "recordedBy", "basis", "globalEmployeesCount", "fixedItemsCount", "globalEmployees", "fixedItems", "rent", "royalty", "note", "predecessorVersionId", "attestationReason", "attestationDigest", "attestedBy", "attestedAt"];
 
 /**
  * @param core {{ israelBusinessDate(ms:number):string, parseBusinessDate(d:string):object|null }}
@@ -74,11 +75,16 @@ export function createHistoryCodec(core: { israelBusinessDate(ms: number): strin
     if (!isObj(r)) return { error: "record_not_object" };
     if (!only(r, RECORD_FIELDS)) return { error: "extra_field" };
     if (!UUID4.test(key) || r.versionId !== key) return { error: "version_id_mismatch" };
-    if (r.schema !== RECORD_SCHEMA) return { error: "schema_invalid" };
+    if (r.schema !== RECORD_SCHEMA && r.schema !== ATTESTED_RECORD_SCHEMA) return { error: "schema_invalid" };
     if (!validDate(r.effectiveFrom)) return { error: "effective_from_invalid" };
     if (!validInstant(r.recordedAt)) return { error: "recorded_at_invalid" };
     if (typeof r.recordedBy !== "string" || r.recordedBy === "") return { error: "recorded_by_invalid" };
     if (r.basis !== "recorded" && r.basis !== "attested_retroactive") return { error: "basis_invalid" };
+    if (r.basis === "recorded" && r.schema !== RECORD_SCHEMA) return { error: "recorded_schema_invalid" };
+    if (r.basis === "attested_retroactive") {
+      if (r.schema !== ATTESTED_RECORD_SCHEMA || typeof r.attestationReason !== "string" || !r.attestationReason.trim() || r.attestationReason.length > 500 ||
+        typeof r.attestationDigest !== "string" || !DIGEST.test(r.attestationDigest) || r.attestedBy !== r.recordedBy || r.attestedAt !== r.recordedAt) return { error: "attestation_record_invalid" };
+    } else if (r.attestationReason !== undefined || r.attestationDigest !== undefined || r.attestedBy !== undefined || r.attestedAt !== undefined) return { error: "attestation_on_recorded" };
     if (r.predecessorVersionId === undefined) return { error: "predecessor_missing" };
     if (r.predecessorVersionId !== "none" && (!UUID4.test(r.predecessorVersionId) || r.predecessorVersionId === key)) return { error: "predecessor_invalid" };
     // R2 C3: the authoritative server timestamp fixes the record's business date; FOD-4 basis rule.
@@ -100,6 +106,7 @@ export function createHistoryCodec(core: { israelBusinessDate(ms: number): strin
     const out: Record<string, any> = { versionId: key, effectiveFrom: r.effectiveFrom, recordedAt: r.recordedAt, recordedBy: r.recordedBy, basis: r.basis,
       predecessorVersionId: r.predecessorVersionId, globalEmployees: ge.items, fixedItems: fi.items, rent: { ...rent }, royalty: { ...roy } };
     if (r.note !== undefined) out.note = r.note;
+    if (r.basis === "attested_retroactive") { out.attestationReason = r.attestationReason; out.attestationDigest = r.attestationDigest; out.attestedBy = r.attestedBy; out.attestedAt = r.attestedAt; }
     return { record: out };
   }
 
