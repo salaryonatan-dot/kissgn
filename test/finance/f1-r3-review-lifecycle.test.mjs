@@ -1,5 +1,6 @@
-// Core/F1 R3 — the common review lifecycle (owner decision 2), the tenant-wide owner model (owner decision 1),
-// the bound strict reader and the activation rule over a rejected history.
+// Core/F1 R3 → R4 — the CANONICAL review lifecycle (pending / cleared / flagged / rejected; acceptance = cleared +
+// decision audit accepted), the tenant-wide owner model (owner decision 1), the bound strict reader and the
+// activation rule over a rejected history.
 //   RL-C*  core: `rejected` is terminal, non-authoritative, never withholds the history; malformed rejected entries;
 //          bound reader refuses a flag audit naming another tenant / business; effective versions exclude rejected
 //   RL-O*  owner authorization matrix under the authoritative tenant-owner contract
@@ -49,7 +50,7 @@ async function flagged(db, { clock = () => NOW, versionId = A, expectedHead = nu
   db.seed(`tenants/${T}/members/${uid}`, true);
   return { writer, result, node: clone(db.read(NODE())) };
 }
-const accept = (w, d, op = OP, biz = B, v = A) => w.acknowledgeFlaggedVersion(req, { tenantId: T, bizId: biz, versionId: v, intentDigest: d, operationId: op });
+const accept = (w, d, op = OP, biz = B, v = A) => w.acceptFlaggedVersion(req, { tenantId: T, bizId: biz, versionId: v, intentDigest: d, operationId: op });
 const reject = (w, d, op = OP, biz = B, v = A) => w.rejectFlaggedVersion(req, { tenantId: T, bizId: biz, versionId: v, intentDigest: d, operationId: op });
 const decode = (node, bind = { tenantId: T, bizId: B }) => codec.decodeHistory({ exists: node !== null, value: node }, bind);
 const structure = (node, bind = { tenantId: T, bizId: B }) => codec.decodeHistoryStructure({ exists: node !== null, value: node }, bind);
@@ -57,19 +58,20 @@ const ver = (vid, over = {}) => ({ versionId: vid, schema: "MARJIN_COSTV/1", eff
 const hist = (state, over = {}) => { const v = ver(A); return { head: { revision: 1, headVersionId: A }, versions: { [A]: v }, review: { [A]: reviewEntry(v, state, over) } }; };
 
 // ── core ─────────────────────────────────────────────────────────────────────────────────────────
-test("RL-C01 capability MARJIN_COSTH/5, review schema MARJIN_COSTR/3; browser bundle ≡ committed bundle ≡ server source", async () => {
-  assert.equal(F.versions.costHistory, "MARJIN_COSTH/5"); assert.equal(BROWSER.versions.costHistory, "MARJIN_COSTH/5");
-  assert.equal(F.costHistory.REVIEW_SCHEMA ?? (await import("../../fincore/v1/finance/costHistory.js")).REVIEW_SCHEMA, "MARJIN_COSTR/3");
-  for (const state of ["pending", "cleared", "flagged", "acknowledged", "rejected"]) {
+test("RL-C01 capability MARJIN_COSTH/6, review schema MARJIN_COSTR/4; browser bundle ≡ committed bundle ≡ server source", async () => {
+  assert.equal(F.versions.costHistory, "MARJIN_COSTH/6"); assert.equal(BROWSER.versions.costHistory, "MARJIN_COSTH/6");
+  assert.equal((await import("../../fincore/v1/finance/costHistory.js")).REVIEW_SCHEMA, "MARJIN_COSTR/4");
+  assert.deepEqual([...F.costHistory.contract.states], ["pending", "cleared", "flagged", "rejected"], "exactly four stored states");
+  for (const state of ["pending", "cleared", "flagged", "accepted", "rejected"]) {
     const h = hist(state);
     assert.deepEqual(BROWSER.costHistory.codec.decodeHistory({ exists: true, value: h }, { tenantId: T, bizId: B }), decode(h), state);
   }
 });
 
-test("RL-C02 lifecycle authority: pending / flagged withhold the history; cleared and acknowledged are authoritative; rejected is PRESENT with NO effective version", () => {
+test("RL-C02 lifecycle authority: pending / flagged withhold the history; cleared (plain or owner-accepted) is authoritative; rejected is PRESENT with NO effective version", () => {
   assert.equal(decode(hist("pending")).reason, "authorization_review_pending");
   assert.equal(decode(hist("flagged")).reason, "authorization_review_flagged");
-  for (const s of ["cleared", "acknowledged"]) { const d = decode(hist(s)); assert.equal(d.state, "present", s); assert.equal(d.versions.length, 1, s); assert.deepEqual(d.rejected, [], s); }
+  for (const s of ["cleared", "accepted"]) { const d = decode(hist(s)); assert.equal(d.state, "present", s); assert.equal(d.versions.length, 1, s); assert.deepEqual(d.rejected, [], s); }
   const d = decode(hist("rejected"));
   assert.deepEqual([d.state, d.versions, d.activationDate, d.rejected], ["present", [], null, [A]]);
   // the structural view keeps the rejected version in the chain (immutable, auditable) and reports it
@@ -89,33 +91,49 @@ test("RL-C02 lifecycle authority: pending / flagged withhold the history; cleare
 
 test("RL-C03 strict shape of a rejected entry: missing / malformed decision evidence, missing flag audit, wrong resolution, extra field ⇒ unreadable", () => {
   const cases = [
-    ["missing rejectedBy", (e) => { delete e.rejectedBy; }],
-    ["empty rejectedBy", (e) => { e.rejectedBy = ""; }],
-    ["rejectedAt before resolvedAt", (e) => { e.rejectedAt = e.resolvedAt - 1; }],
-    ["rejectedAt not an instant", (e) => { e.rejectedAt = "now"; }],
-    ["missing rejectOperationId", (e) => { delete e.rejectOperationId; }],
-    ["rejectOperationId not a UUID", (e) => { e.rejectOperationId = "op-1"; }],
+    ["missing decidedBy", (e) => { delete e.decisionAudit.decidedBy; }],
+    ["empty decidedBy", (e) => { e.decisionAudit.decidedBy = ""; }],
+    ["decidedAt before resolvedAt", (e) => { e.decisionAudit.decidedAt = e.resolvedAt - 1; }],
+    ["decidedAt not an instant", (e) => { e.decisionAudit.decidedAt = "now"; }],
+    ["missing decision operationId", (e) => { delete e.decisionAudit.operationId; }],
+    ["decision operationId not a UUID", (e) => { e.decisionAudit.operationId = "op-1"; }],
+    ["decision operationId numeric", (e) => { e.decisionAudit.operationId = 12345678; }],
+    ["missing decision audit", (e) => { delete e.decisionAudit; }],
+    ["missing top-level decision", (e) => { delete e.decision; }],
+    ["decision says accepted on a rejected entry", (e) => { e.decision = "accepted"; e.decisionAudit.decision = "accepted"; }],
+    ["decision audit names another business", (e) => { e.decisionAudit.bizId = B2; }],
+    ["decision audit names another tenant", (e) => { e.decisionAudit.tenantId = "tenantZ"; }],
+    ["decision audit names another version", (e) => { e.decisionAudit.versionId = id("b2"); }],
+    ["decision audit carries another digest", (e) => { e.decisionAudit.intentDigest = "f".repeat(64); }],
+    ["decision audit resulting state mismatch", (e) => { e.decisionAudit.resultingState = "cleared"; }],
+    ["decision audit schema", (e) => { e.decisionAudit.schema = "MARJIN_COST_DECISION/0"; }],
     ["missing flagAudit", (e) => { delete e.flagAudit; }],
     ["cleared resolution on a rejected entry", (e) => { e.resolution = "post_commit_authorized"; e.flagAudit.outcome = "post_commit_authorized"; }],
-    ["acknowledgement fields on a rejected entry", (e) => { e.acknowledgedAt = e.rejectedAt; e.acknowledgedBy = "owner"; e.acceptOperationId = OP; }],
+    ["R3 acknowledgement fields on a rejected entry", (e) => { e.acknowledgedAt = e.resolvedAt; e.acknowledgedBy = "owner"; e.acceptOperationId = OP; }],
     ["extra field", (e) => { e.note = "x"; }],
   ];
   for (const [label, mut] of cases) { const h = hist("rejected"); mut(h.review[A]); const d = decode(h); assert.equal(d.state, "unreadable", label); assert.equal(d.reason, "review_invalid", label); }
   assert.equal(decode(hist("rejected")).state, "present", "control: a well-formed rejected entry decodes");
 });
 
-test("RL-C04 bound reader: a flag audit naming another business or tenant is unreadable (flagged, acknowledged and rejected); an unbound decode and a correct binding accept it; a malformed binding is refused", () => {
-  for (const state of ["flagged", "acknowledged", "rejected"]) {
+test("RL-C04 bound reader: a flag audit naming another business or tenant is unreadable (flagged, accepted and rejected); there is NO unbound decode; a correct binding accepts; a malformed or missing binding is refused", () => {
+  for (const state of ["flagged", "accepted", "rejected"]) {
     for (const [k, v] of [["bizId", B2], ["tenantId", "tenantZ"]]) {
       const h = hist(state); h.review[A].flagAudit[k] = v;
       const d = decode(h);
       assert.deepEqual([d.state, d.reason, d.detail && d.detail.error], ["unreadable", "review_invalid", "flag_audit_binding_mismatch"], `${state} ${k}`);
-      assert.equal(codec.decodeHistoryStructure({ exists: true, value: h }).state, "present", `${state} ${k}: an UNBOUND structural decode cannot see the mismatch`);
+      assert.equal(codec.decodeHistoryStructure({ exists: true, value: h }).reason, "binding_required", `${state} ${k}: R4 — an UNBOUND structural decode is refused outright`);
     }
     assert.equal(structure(hist(state)).state, "present", state + " control: the correct binding accepts it");
+    // the SAME well-formed node read under another binding is unreadable (digest and audits are bound to tenant / business)
+    assert.equal(decode(hist(state), { tenantId: T, bizId: B2 }).state, "unreadable", state + ": another business");
+    assert.equal(decode(hist(state), { tenantId: "tenantZ", bizId: B }).state, "unreadable", state + ": another tenant");
   }
+  assert.equal(decode(hist("cleared"), { tenantId: T, bizId: B2 }).detail.error, "review_digest_mismatch", "a plain cleared review is bound through its digest");
   assert.equal(decode(hist("cleared"), { tenantId: "", bizId: B }).reason, "binding_invalid");
   assert.equal(decode(hist("cleared"), { tenantId: T }).reason, "binding_invalid");
+  assert.equal(decode(hist("cleared"), null).reason, "binding_required");
+  assert.equal(codec.decodeHistory({ exists: true, value: hist("cleared") }).reason, "binding_required");
 });
 
 test("RL-C05 the canonical server loader decodes BOUND to its tenant / business: a foreign-business flag audit is cost_history_unreadable", async () => {
@@ -123,7 +141,7 @@ test("RL-C05 the canonical server loader decodes BOUND to its tenant / business:
   const srv = compileServer();
   const CI = await srv.import("src/finance-server/canonicalInputs.js");
   for (const [label, mut, expectUnreadable] of [["foreign business audit", (h) => { h.review[A].flagAudit.bizId = B2; }, true], ["own business audit", () => {}, false]]) {
-    const db = makeServerDb(); const h = hist("acknowledged"); mut(h);
+    const db = makeServerDb(); const h = hist("accepted"); mut(h);
     db.seed(`tenants/${T}/biz:${B}:config`, { _v: JSON.stringify({ businessName: "x", employees: [] }) });
     db.seed(`tenants/${T}/biz:${B}:fixed`, { _v: JSON.stringify([]) });
     db.seed(`tenants/${T}/biz:${B}:entries`, { _v: JSON.stringify([]) });
@@ -138,9 +156,9 @@ test("RL-O01 a CURRENT TENANT OWNER accepts or rejects for any business of the t
   for (const [uid, decide] of [["owner", accept], ["ownerOther", accept], ["owner", reject], ["ownerOther", reject]]) {
     const db = world(); const { writer, node } = await flagged(db); actor(uid);
     const r = await decide(writer, node.review[A].intentDigest);
-    const to = decide === accept ? "acknowledged" : "rejected";
-    assert.equal(r.status, "resolved", `${uid} ${to}`); assert.equal(db.read(NODE()).review[A].state, to, `${uid} ${to}`);
-    assert.equal(db.read(NODE()).review[A][to === "acknowledged" ? "acknowledgedBy" : "rejectedBy"], uid);
+    const to = decide === accept ? "cleared" : "rejected", dec = decide === accept ? "accepted" : "rejected";
+    assert.equal(r.status, "resolved", `${uid} ${dec}`); assert.equal(db.read(NODE()).review[A].state, to, `${uid} ${dec}`);
+    assert.deepEqual([db.read(NODE()).review[A].decision, db.read(NODE()).review[A].decisionAudit.decidedBy, db.read(NODE()).review[A].decisionAudit.resultingState], [dec, uid, to]);
   }
 });
 
@@ -184,8 +202,8 @@ test("RL-R01 reject: ONE transaction moves flagged → rejected with the owner's
   assert.equal(r.status, "resolved"); assert.equal(r.state, "rejected");
   assert.deepEqual(after.review[A].flagAudit, node.review[A].flagAudit, "audit retained");
   assert.deepEqual(after.versions, node.versions, "version immutable"); assert.deepEqual(after.head, node.head, "head unchanged");
-  assert.deepEqual([after.review[A].state, after.review[A].rejectedBy, after.review[A].rejectOperationId, after.review[A].rejectedAt >= after.review[A].resolvedAt], ["rejected", "owner", OP, true]);
-  assert.equal(after.review[A].acknowledgedAt, undefined);
+  assert.deepEqual([after.review[A].state, after.review[A].decision, after.review[A].decisionAudit.decidedBy, after.review[A].decisionAudit.operationId, after.review[A].decisionAudit.decidedAt >= after.review[A].resolvedAt], ["rejected", "rejected", "owner", OP, true]);
+  assert.deepEqual(Object.keys(after.review[A]).sort(), ["actor", "committedAt", "decision", "decisionAudit", "flagAudit", "intentDigest", "resolution", "resolvedAt", "schema", "state"]);
   const d = decode(after); assert.deepEqual([d.state, d.versions.length, d.rejected], ["present", 0, [A]]);
 });
 
@@ -220,10 +238,11 @@ test("RL-R04 terminal: a rejected version can never be accepted, re-flagged, cle
   assert.equal(s.review, "cleared");
   assert.equal((await reject(w2, s.intentDigest)).status, "review_already_resolved:cleared");
   assert.equal((await accept(w2, s.intentDigest)).status, "review_already_resolved:cleared");
-  // acknowledged is terminal too
+  // an owner-accepted (cleared) version is terminal too
   const db3 = world(); const f3 = await flagged(db3); actor("owner");
   assert.equal((await accept(f3.writer, f3.node.review[A].intentDigest)).status, "resolved");
-  assert.equal((await reject(f3.writer, f3.node.review[A].intentDigest)).status, "review_already_resolved:acknowledged");
+  assert.equal((await reject(f3.writer, f3.node.review[A].intentDigest)).status, "review_already_resolved:cleared");
+  assert.deepEqual([db3.read(NODE()).review[A].state, db3.read(NODE()).review[A].decision], ["cleared", "accepted"]);
 });
 
 test("RL-R05 lost acknowledgement of the REJECT transition is resolved by full-payload readback; a failed transaction leaves flagged + audit unchanged; a timeout leaves flagged", async () => {

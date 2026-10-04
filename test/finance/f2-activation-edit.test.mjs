@@ -6,6 +6,7 @@ import {loadCommitted, loadCompiled, REPO} from '../support/fincore-load.mjs';
 import {attestationDigest} from '../../lib/finance/costHistoryWriter.js';
 
 const W=await loadWriter(REPO), F=await loadCommitted();
+const BIND={tenantId:'tenantA',bizId:'bizA'};   // R4: every authoritative decode is bound
 const T='tenantA', B='bizA', NODE=`tenants/${T}/biz:${B}:cost_history`;
 const A='00000000-0000-4000-8000-0000000000a1', C='00000000-0000-4000-8000-0000000000c3';
 const D='00000000-0000-4000-8000-0000000000d4';
@@ -51,7 +52,7 @@ test('F2-01 activation is explicit, owner-only, server-today, and exactly once',
   assert.equal((await act(writer,body(A,null,'2026-10-01'))).status,'activation_date_mismatch');
   await first(writer);
   const stored=clone(db.read(NODE));
-  assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:stored}).state,'present');
+  assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:stored},BIND).state,'present');
   assert.equal(stored.head.revision,1);
   assert.equal((await act(writer,body(A,null))).status,'committed_current');
   assert.deepEqual(db.read(NODE),stored);
@@ -71,7 +72,7 @@ test('F2-02 normal edit uses today/future, rejects past and cannot silently acti
   const r=await edit(writer,body(C,head(A,1),'2026-10-05'));
   assert.equal(r.status,'committed_current');assert.equal(r.review,'cleared');
   assert.equal(db.read(NODE).versions[C].predecessorVersionId,A);
-  assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:db.read(NODE)}).state,'present');
+  assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:db.read(NODE)},BIND).state,'present');
 });
 
 test('F2-03 historical edit is a separate attested path with durable reason, actor and digest',async()=>{
@@ -87,12 +88,12 @@ test('F2-03 historical edit is a separate attested path with durable reason, act
   const v=db.read(NODE).versions[C];
   assert.deepEqual([v.schema,v.attestationReason,v.attestationDigest,v.attestedBy,v.attestedAt],
     ['MARJIN_COSTV/2','invoice correction',b.attestation.confirmedSnapshotDigest,'owner',v.recordedAt]);
-  assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:db.read(NODE)}).state,'present');
+  assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:db.read(NODE)},BIND).state,'present');
   const fresh=await loadCompiled();
-  assert.deepEqual(fresh.costHistory.codec.decodeHistory({exists:true,value:db.read(NODE)}),
-    F.costHistory.codec.decodeHistory({exists:true,value:db.read(NODE)}),'fresh/server and browser artifact decode the same attested node');
+  assert.deepEqual(fresh.costHistory.codec.decodeHistory({exists:true,value:db.read(NODE)},BIND),
+    F.costHistory.codec.decodeHistory({exists:true,value:db.read(NODE)},BIND),'fresh/server and browser artifact decode the same attested node');
   const bad=clone(db.read(NODE));delete bad.versions[C].attestationReason;
-  assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:bad}).state,'unreadable');
+  assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:bad},BIND).state,'unreadable');
   assert.equal((await attest(writer,b)).status,'committed_current');
   const reused={...b,fixedItems:[{itemKey:'f1',monthlyAmount:'9000'}]};
   reused.attestation.confirmedSnapshotDigest=attestationDigest(reused);
@@ -115,7 +116,7 @@ test('F2-05 pending and flagged versions withhold calculations and writer refuse
   const r=await act(writer,body(A,null));
   assert.equal(r.review,'flagged');
   const raw=db.read(NODE);
-  assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:raw}).reason,'authorization_review_flagged');
+  assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:raw},BIND).reason,'authorization_review_flagged');
   db.seed(`tenants/${T}/members/owner`,true);
   assert.equal((await edit(writer,body(C,head(A,1)))).status,'review_unresolved');
 });

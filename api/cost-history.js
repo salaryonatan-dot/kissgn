@@ -1,4 +1,6 @@
 // F2 trusted cost-history command boundary. No browser RTDB write grant is introduced.
+// Core/F1 R4: owner decisions are accept_flag (stored cleared + decision audit accepted) and reject_flag
+// (stored rejected + decision audit rejected); the operation id must be a string UUID (a numeric id is request_shape, 400).
 import { createProductionCostHistoryWriter } from '../lib/finance/costHistoryWriter.js';
 import { requireBizContext } from '../lib/securityContext.js';
 
@@ -6,7 +8,7 @@ const ACTIONS = Object.freeze({
   activate: 'activateCostHistory',
   edit: 'recordCostEdit',
   attest: 'attestHistoricalCostEdit',
-  accept_flag: 'acknowledgeFlaggedVersion',
+  accept_flag: 'acceptFlaggedVersion',
   reject_flag: 'rejectFlaggedVersion',
 });
 const DECISIONS = new Set(['accept_flag', 'reject_flag']);

@@ -24,7 +24,8 @@ import * as forecast from "../forecast/revenueForecast.js";
 import * as revenueForecast from "../metrics/revenueForecast.js";
 // Slice B1 (AMEND-01): the product composition shared by server and browser.
 import * as product from "../policy/productFinance.js";
-import { COST_HISTORY_CAPABILITY, costHistoryCodec, timelineSourceFor } from "../finance/costHistory.js";
+import * as canonical from "../finance/canonical.js";
+import { COST_HISTORY_CAPABILITY, REVIEW_SCHEMA, FLAG_AUDIT_SCHEMA, DECISION_AUDIT_SCHEMA, INTENT_SCHEMA, COST_REVIEW_STATES, COST_REVIEW_DECISIONS, costHistoryCodec, timelineSourceFor, intentDigestOf, flagOperationIdOf } from "../finance/costHistory.js";
 const api = Object.freeze({
     versions: Object.freeze({
         fin: report.FINANCIAL_FORMULA_VERSION,
@@ -40,13 +41,18 @@ const api = Object.freeze({
         product: product.PRODUCT_FINANCE_VERSION,
         costHistory: COST_HISTORY_CAPABILITY,
     }),
-    finance: Object.freeze({ decimal, cells, businessDate, normalize, purchaseBasis, labor }),
+    finance: Object.freeze({ decimal, cells, businessDate, normalize, purchaseBasis, labor, canonical }),
     metrics: Object.freeze({ costTimeline, report, projected, revenueForecast, adapters: Object.freeze({ legacyNumber, configCompat }) }),
     policy: Object.freeze({ registry: policyRegistry, evaluate: policyEvaluate, purchaseBasis: productPurchaseBasis, laborSource: productLaborSource }),
     presenters: Object.freeze({ money, percent, labels }),
     forecast,
     product,
-    costHistory: Object.freeze({ codec: costHistoryCodec, timelineSourceFor }),
+    // Core/F1 R4: the canonical lifecycle contract and the shared integrity values are exposed to the page, so the
+    // browser recomputes exactly what the trusted writer stored (one digest procedure, no page-local copy).
+    costHistory: Object.freeze({
+        codec: costHistoryCodec, timelineSourceFor, intentDigestOf, flagOperationIdOf,
+        contract: Object.freeze({ review: REVIEW_SCHEMA, flagAudit: FLAG_AUDIT_SCHEMA, decisionAudit: DECISION_AUDIT_SCHEMA, intent: INTENT_SCHEMA, states: COST_REVIEW_STATES, decisions: COST_REVIEW_DECISIONS }),
+    }),
 });
 globalThis.MarjinFinance = api;
 export default api;

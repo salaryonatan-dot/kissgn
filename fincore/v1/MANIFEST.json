@@ -5,6 +5,7 @@
   "sources": [
     "src/browser/marjinFinanceGlobal.ts",
     "src/finance/businessDate.ts",
+    "src/finance/canonical.ts",
     "src/finance/cells.ts",
     "src/finance/costHistory.ts",
     "src/finance/decimal.ts",
@@ -29,15 +30,19 @@
     "src/presenters/money.ts",
     "src/presenters/percent.ts"
   ],
-  "sourceDigest": "238a710049a13870b0feae6c9956ecc4f85cce6fd0d71ce80087265a0b5c3eb8",
+  "sourceDigest": "6d1ea3aa694440730162464e0931889b593d02cac2ba540becfa8da1825e35cf",
   "files": [
     {
       "path": "browser/marjinFinanceGlobal.js",
-      "sha256": "32126be2aa4ed7f7d567c3c1a5d5bdeb34c7b5b2c7ac761e3ce736d7157429d9"
+      "sha256": "6e06a79d9cd158b71e3fc733cc0b96f18b61ed36918042929da8f92fa3f1edeb"
     },
     {
       "path": "finance/businessDate.js",
       "sha256": "9a5207e0581b28371426deb9a38844f0a4091cec27174bfb965df8a083eabf9a"
+    },
+    {
+      "path": "finance/canonical.js",
+      "sha256": "f25df591e94f16482fe28ea0ed6ea7c721ab83c9df93e81ad6ff14472691f065"
     },
     {
       "path": "finance/cells.js",
@@ -45,7 +50,7 @@
     },
     {
       "path": "finance/costHistory.js",
-      "sha256": "2907f4c271c3e67a0393bc16bc0fa3757ead654cff0a4379d4786d773cd58214"
+      "sha256": "ecb33bcf137f44add73737325d2858314526404c29d83e7a87f5b499d153ed72"
     },
     {
       "path": "finance/decimal.js",

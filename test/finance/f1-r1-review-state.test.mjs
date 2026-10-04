@@ -1,5 +1,6 @@
-// F1 R1 — fail-closed authorization review of cost versions (DEC-AUTH-1 window), MARJIN_COSTH/3.
-//   RV-C*  codec: pending / flagged withhold the WHOLE history; cleared / acknowledged are authoritative;
+// F1 R1 — fail-closed authorization review of cost versions (DEC-AUTH-1 window); Core/F1 R4: MARJIN_COSTH/6, the
+//   canonical four-state lifecycle (pending / cleared / flagged / rejected; owner acceptance = cleared + decision audit accepted).
+//   RV-C*  codec: pending / flagged withhold the WHOLE history; cleared (plain or owner-accepted) is authoritative;
 //          strict review shape bound to its version; browser ≡ server ≡ committed
 //   RV-P*  consumers: product timeline, server loader and C1 seam never fall back to current settings
 //   RV-W*  the REAL writer (lib/finance/costHistoryWriter.js, real securityContext/helpers) over an in-memory
@@ -26,17 +27,22 @@ const A = "00000000-0000-4000-8000-0000000000a1", Bv = "00000000-0000-4000-8000-
 const NOW = Date.parse("2026-10-02T09:00:00Z");
 const ver = (id, over = {}) => ({ versionId: id, schema: "MARJIN_COSTV/1", effectiveFrom: "2026-10-02", recordedAt: NOW, recordedBy: "u_mgr", basis: "recorded", predecessorVersionId: "none", globalEmployeesCount: 0, fixedItemsCount: 1, fixedItems: [{ itemKey: "f1", monthlyAmount: "3100" }], rent: { mode: "none" }, royalty: { mode: "none" }, ...over });
 const one = (state, over = {}) => { const v = ver(A); return { head: { revision: 1, headVersionId: A }, versions: { [A]: v }, review: { [A]: reviewEntry(v, state, over) } }; };
-const dec = (value) => codec.decodeHistory({ exists: value !== null, value });
+const BIND = { tenantId: "tenantA", bizId: "bizA" };   // R4: the fixtures are bound to tenantA / bizA; no unbound decode
+const dec = (value) => codec.decodeHistory({ exists: value !== null, value }, BIND);
 
 // ── codec ──────────────────────────────────────────────────────────────────────────────────────
-test("RV-C01 pending and flagged reviews withhold the WHOLE history (unreadable, typed reason); cleared and acknowledged are authoritative", () => {
+test("RV-C01 pending and flagged reviews withhold the WHOLE history (unreadable, typed reason); cleared — plain or owner-accepted — is authoritative", () => {
   assert.deepEqual([dec(one("pending")).state, dec(one("pending")).reason], ["unreadable", "authorization_review_pending"]);
   assert.deepEqual([dec(one("flagged")).state, dec(one("flagged")).reason], ["unreadable", "authorization_review_flagged"]);
   assert.equal(dec(one("cleared")).state, "present");
-  assert.equal(dec(one("acknowledged")).state, "present");
-  const s = codec.decodeHistoryStructure({ exists: true, value: one("pending") });
+  assert.equal(dec(one("accepted")).state, "present");
+  assert.equal(one("accepted").review[A].state, "cleared", "R4: acceptance is STORED as cleared");
+  assert.equal(one("accepted").review[A].decision, "accepted");
+  const s = codec.decodeHistoryStructure({ exists: true, value: one("pending") }, BIND);
   assert.equal(s.state, "present"); assert.deepEqual(s.unresolved, { pending: [A], flagged: [] }, "the structural view (trusted writers only) reports it instead");
-  assert.equal(COMMITTED.versions.costHistory, "MARJIN_COSTH/5");
+  assert.equal(COMMITTED.versions.costHistory, "MARJIN_COSTH/6");
+  assert.equal(codec.decodeHistory({ exists: true, value: one("cleared") }).reason, "binding_required", "R4: an unbound decode is refused");
+  assert.equal(codec.decodeHistoryStructure({ exists: true, value: one("cleared") }).reason, "binding_required");
 });
 
 test("RV-C02 a pending review on an EARLIER version withholds the history even when the head is cleared", () => {
@@ -65,15 +71,17 @@ test("RV-C03 strict review shape: missing / extra / re-pointed / malformed entri
     const h = JSON.parse(JSON.stringify(one("cleared"))); mut(h);
     assert.equal(dec(h).reason, reason, label);
   }
-  const ack = JSON.parse(JSON.stringify(one("acknowledged"))); delete ack.review[A].acknowledgedBy;
-  assert.equal(dec(ack).reason, "review_invalid", "acknowledged without acknowledgedBy");
+  const acc = JSON.parse(JSON.stringify(one("accepted"))); delete acc.review[A].decisionAudit;
+  assert.equal(dec(acc).reason, "review_invalid", "accepted without its decision audit");
+  const legacy = JSON.parse(JSON.stringify(one("accepted"))); legacy.review[A].state = "acknowledged";
+  assert.equal(dec(legacy).reason, "review_invalid", "R4: the R3 fifth state is never readable");
   const pend = JSON.parse(JSON.stringify(one("pending"))); pend.review[A].resolvedAt = NOW;
   assert.equal(dec(pend).reason, "review_invalid", "pending with resolution fields");
 });
 
 test("RV-C04 browser (committed fincore) ≡ fresh server compile on every review state", () => {
-  for (const v of [one("pending"), one("flagged"), one("cleared"), one("acknowledged"), null]) {
-    assert.deepEqual(JSON.parse(JSON.stringify(COMPILED.costHistory.codec.decodeHistory({ exists: v !== null, value: v }))), JSON.parse(JSON.stringify(dec(v))));
+  for (const v of [one("pending"), one("flagged"), one("cleared"), one("accepted"), one("rejected"), null]) {
+    assert.deepEqual(JSON.parse(JSON.stringify(COMPILED.costHistory.codec.decodeHistory({ exists: v !== null, value: v }, BIND))), JSON.parse(JSON.stringify(dec(v))));
   }
 });
 
@@ -106,10 +114,10 @@ test("RV-P03 the canonical server loader reports a pending history as cost_histo
   const srv = compileServer();
   const CI = await srv.import("src/finance-server/canonicalInputs.js");
   const db = makeDb();
-  db.seed("tenants/tA/biz:bA:entries", { _v: JSON.stringify([{ id: "00000000-0000-4000-8000-000000000001", date: "2026-10-01", sales: "100" }]) });
-  db.seed("tenants/tA/biz:bA:config", { _v: "{}" });
-  db.seed("tenants/tA/biz:bA:cost_history", one("pending"));
-  const i = await CI.loadCanonicalInputs(db, "tA", "bA", { site: "t", nowMs: Date.parse("2026-10-05T09:00:00Z"), need: { config: true, fixed: true, exceptions: true } });
+  db.seed("tenants/tenantA/biz:bizA:entries", { _v: JSON.stringify([{ id: "00000000-0000-4000-8000-000000000001", date: "2026-10-01", sales: "100" }]) });
+  db.seed("tenants/tenantA/biz:bizA:config", { _v: "{}" });
+  db.seed("tenants/tenantA/biz:bizA:cost_history", one("pending"));   // R4: the fixture is bound to tenantA / bizA
+  const i = await CI.loadCanonicalInputs(db, "tenantA", "bizA", { site: "t", nowMs: Date.parse("2026-10-05T09:00:00Z"), need: { config: true, fixed: true, exceptions: true } });
   assert.equal(i.costHistoryState, "unreadable"); assert.equal(i.costHistory.reason, "authorization_review_pending");
   assert.ok(i.inputIssues.includes("cost_history_unreadable"));
 });
@@ -171,10 +179,11 @@ test("RV-W03 audit AND review writes fail after an in-window revocation: the fai
 });
 
 test("RV-W04 post-commit verification UNAVAILABLE ⇒ pending (not authoritative); trusted reconciliation clears it when the actor is still authorized; then the next save works (no lockout)", async () => {
-  const db = world(); const w = writerFor(db);
+  // R4: revision 1 of a history is an ACTIVATION by chain semantics — reconciliation requires its actor to be an owner
+  const db = world({ uid: "u_owner", role: "owner" }); const w = writerFor(db);
   let committed = false;
   hook(db, (p) => p === NODE, (r) => ({ transaction: async (fn, ...a) => { const out = await r.transaction(fn, ...a); committed = committed || out.committed; return out; } }));
-  const restore = hook(db, (p) => committed && p === `tenants/${T}/biz_access/${B}/u_mgr`, () => ({ get: async () => { throw new Error("transport"); } }));
+  const restore = hook(db, (p) => committed && p === `tenants/${T}/roles/u_owner`, () => ({ get: async () => { throw new Error("transport"); } }));
   const res = await w.saveCostVersion({ headers: {} }, { tenantId: T, bizId: B, body: body() });
   assert.deepEqual([res.status, res.postCommitAccess, res.review], ["committed_current", "verification_unavailable", "pending"]);
   assert.equal(dec(stored(db)).reason, "authorization_review_pending");
@@ -183,7 +192,7 @@ test("RV-W04 post-commit verification UNAVAILABLE ⇒ pending (not authoritative
   const blocked = await writerFor(db, () => NOW + 500).saveCostVersion({ headers: {} }, { tenantId: T, bizId: B, body: body(Bv, { revision: 1, headVersionId: A }) });
   assert.equal(blocked.status, "review_unresolved"); assert.equal(stored(db).versions[Bv], undefined);
   const rec = await w.reconcilePendingReviews({ tenantId: T, bizId: B });
-  assert.deepEqual(rec.results.map((x) => [x.versionId, x.status, x.state]), [[A, "resolved", "cleared"]]);
+  assert.deepEqual(rec.results.map((x) => [x.versionId, x.status, x.state, x.requiredRole]), [[A, "resolved", "cleared", "owner"]], "the activation's owner requirement is derived from the chain");
   assert.equal(reviewOf(db).resolution, "reconciled_authorized"); assert.equal(dec(stored(db)).state, "present");
   const again = await w.reconcilePendingReviews({ tenantId: T, bizId: B });
   assert.deepEqual(again.results, [], "idempotent: nothing pending any more");
@@ -192,27 +201,28 @@ test("RV-W04 post-commit verification UNAVAILABLE ⇒ pending (not authoritative
   assert.equal(dec(stored(db)).state, "present"); assert.equal(dec(stored(db)).versions.length, 2);
 });
 
-test("RV-W05 reconciliation with a revoked actor ⇒ FLAGGED (+ audit); a manager cannot acknowledge; an owner acknowledges ⇒ authoritative again; retries are idempotent", async () => {
-  const db = world(); const w = writerFor(db);
+test("RV-W05 reconciliation with a revoked actor ⇒ FLAGGED (+ audit); a manager cannot accept; an owner accepts ⇒ stored cleared + decision audit accepted, authoritative again; retries are idempotent", async () => {
+  const db = world({ uid: "u_owner", role: "owner" }); const w = writerFor(db);
+  db.seed(`tenants/${T}/members/u_owner2`, true); db.seed(`tenants/${T}/roles/u_owner2`, "owner");
   let committed = false;
   hook(db, (p) => p === NODE, (r) => ({ transaction: async (fn, ...a) => { const out = await r.transaction(fn, ...a); committed = committed || out.committed; return out; } }));
-  const restore = hook(db, (p) => committed && p === `tenants/${T}/biz_access/${B}/u_mgr`, () => ({ get: async () => { throw new Error("transport"); } }));
+  const restore = hook(db, (p) => committed && p === `tenants/${T}/roles/u_owner`, () => ({ get: async () => { throw new Error("transport"); } }));
   await w.saveCostVersion({ headers: {} }, { tenantId: T, bizId: B, body: body() });
   restore();
-  db.seed(`tenants/${T}/roles/u_mgr`, "viewer");                                   // actor lost the write role
+  db.seed(`tenants/${T}/roles/u_owner`, "viewer");                                 // actor lost the write role
   const rec = await w.reconcilePendingReviews({ tenantId: T, bizId: B });
   assert.deepEqual(rec.results.map((x) => [x.status, x.state, x.audit]), [["resolved", "flagged", "flag_persisted"]]);
   assert.equal(reviewOf(db).resolution, "reconciled_unauthorized"); assert.equal(dec(stored(db)).reason, "authorization_review_flagged");
   const digest = reviewOf(db).intentDigest;
   globalThis.__CLAIMS = { uid: "u_mgr2", email: "m2@x" };
-  assert.equal((await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: digest, operationId: A })).status, "role_not_allowed");
-  globalThis.__CLAIMS = { uid: "u_owner", email: "o@x" };
-  assert.equal((await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: DIGEST("b"), operationId: A })).status, "review_identity_mismatch", "a different payload digest can never resolve it");
-  const ack = await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: digest, operationId: A });
-  assert.equal(ack.status, "resolved");
-  assert.equal(reviewOf(db).state, "acknowledged"); assert.equal(reviewOf(db).acknowledgedBy, "u_owner"); assert.equal(reviewOf(db).resolution, "reconciled_unauthorized", "the flag evidence is kept");
+  assert.equal((await w.acceptFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: digest, operationId: A })).status, "role_not_allowed");
+  globalThis.__CLAIMS = { uid: "u_owner2", email: "o2@x" };
+  assert.equal((await w.acceptFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: DIGEST("b"), operationId: A })).status, "review_identity_mismatch", "a different payload digest can never resolve it");
+  const acc = await w.acceptFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: digest, operationId: A });
+  assert.deepEqual([acc.status, acc.state, acc.decision], ["resolved", "cleared", "accepted"]);
+  assert.equal(reviewOf(db).state, "cleared"); assert.equal(reviewOf(db).decision, "accepted"); assert.equal(reviewOf(db).decisionAudit.decidedBy, "u_owner2"); assert.equal(reviewOf(db).resolution, "reconciled_unauthorized", "the flag evidence is kept");
   assert.equal(dec(stored(db)).state, "present");
-  assert.equal((await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: digest, operationId: A })).status, "already_acknowledged");
+  assert.equal((await w.acceptFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: digest, operationId: A })).status, "already_accepted");
 });
 
 test("RV-W06 lost acknowledgement of the REVIEW transition is resolved by full-payload readback (the write landed ⇒ resolved, not unknown)", async () => {
@@ -238,20 +248,22 @@ test("RV-W08 versions and head are immutable through every review transition; a 
   await w.saveCostVersion({ headers: {} }, { tenantId: T, bizId: B, body: body() });
   const before = JSON.parse(JSON.stringify(stored(db)));
   globalThis.__CLAIMS = { uid: "u_owner", email: "o@x" };
-  await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: before.review[A].intentDigest, operationId: A });
+  await w.acceptFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: before.review[A].intentDigest, operationId: A });
   const after = stored(db);
   assert.deepEqual(after.versions, before.versions); assert.deepEqual(after.head, before.head);
   assert.deepEqual(Object.keys(after.review), [A]);
-  assert.equal(JSON.stringify({ ...after.review[A], state: "flagged", acknowledgedAt: undefined, acknowledgedBy: undefined, acceptOperationId: undefined }), JSON.stringify({ ...before.review[A], acknowledgedAt: undefined, acknowledgedBy: undefined }));
+  const { decision, decisionAudit, ...rest } = after.review[A];
+  assert.deepEqual([decision, decisionAudit.decision, decisionAudit.resultingState], ["accepted", "accepted", "cleared"]);
+  assert.equal(JSON.stringify({ ...rest, state: "flagged" }), JSON.stringify(before.review[A]), "only the state and the decision evidence changed");
 });
 
-test("RV-W09 an acknowledgement / clearance can never target a CLEARED or a different version, and a flagged review cannot be cleared", async () => {
+test("RV-W09 an acceptance / clearance can never target a CLEARED or a different version, and a flagged review cannot be cleared", async () => {
   const db = world(); const w = writerFor(db);
   await w.saveCostVersion({ headers: {} }, { tenantId: T, bizId: B, body: body() });           // cleared
   globalThis.__CLAIMS = { uid: "u_owner", email: "o@x" };
   const d = reviewOf(db).intentDigest;
-  assert.equal((await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: d, operationId: A })).status, "review_already_resolved:cleared");
-  assert.equal((await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: Bv, intentDigest: d, operationId: A })).status, "not_found");
+  assert.equal((await w.acceptFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: d, operationId: A })).status, "review_already_resolved:cleared");
+  assert.equal((await w.acceptFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: Bv, intentDigest: d, operationId: A })).status, "not_found");
   const db2 = world(); const w2 = writerFor(db2); revokeAfterCommit(db2);
   await w2.saveCostVersion({ headers: {} }, { tenantId: T, bizId: B, body: body() });          // flagged
   db2.seed(`tenants/${T}/members/u_mgr`, true);

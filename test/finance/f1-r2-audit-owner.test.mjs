@@ -38,8 +38,9 @@ async function flagged(db,{fault=null,deadline=5000}={}) {
   const result=await writer.saveCostVersion({headers:{}},{tenantId:T,bizId:B,body});
   return {writer,result,node:db.read(NODE)};
 }
-const accept=(w,d,operationId=OP)=>w.acknowledgeFlaggedVersion({headers:{}},{tenantId:T,bizId:B,versionId:A,intentDigest:d,operationId});
-const structure=db=>F.costHistory.codec.decodeHistoryStructure({exists:true,value:db.read(NODE)});
+const BIND={tenantId:T,bizId:B};   // R4: every decode is bound
+const accept=(w,d,operationId=OP)=>w.acceptFlaggedVersion({headers:{}},{tenantId:T,bizId:B,versionId:A,intentDigest:d,operationId});
+const structure=db=>F.costHistory.codec.decodeHistoryStructure({exists:true,value:db.read(NODE)},BIND);
 
 test('R2-01 one atomic commit binds flag audit and review; no external flag node',async()=>{
   const db=world(), {result,node}=await flagged(db);
@@ -48,7 +49,7 @@ test('R2-01 one atomic commit binds flag audit and review; no external flag node
   assert.equal(node.review[A].flagAudit.intentDigest,node.review[A].intentDigest);
   assert.equal(db.read(`tenants/${T}/audit/cost_history_flags/${A}`),null);
   assert.equal(structure(db).state,'present');
-  assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:node}).reason,'authorization_review_flagged');
+  assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:node},BIND).reason,'authorization_review_flagged');
 });
 
 test('R2-02 failed flag transaction and finite timeout both preserve pending and no audit',async()=>{
@@ -82,14 +83,14 @@ test('R2-04 strict readers reject missing, partial, wrong-version, mismatched an
   ];
   for(const [i,mutate] of cases.entries()){
     const raw=clone(node);mutate(raw);
-    assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:raw}).state,'unreadable','malformed '+i);
-    assert.equal(F.costHistory.codec.decodeHistoryStructure({exists:true,value:raw}).state,'unreadable','structural '+i);
+    assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:raw},BIND).state,'unreadable','malformed '+i);
+    assert.equal(F.costHistory.codec.decodeHistoryStructure({exists:true,value:raw},BIND).state,'unreadable','structural '+i);
   }
   const pending=clone(node);pending.review[A].state='pending';
-  assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:pending}).state,'unreadable');
+  assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:pending},BIND).state,'unreadable');
 });
 
-test('R2-05 only a current TENANT owner accepts (super_owner / manager / removed owner denied); duplicate operation is idempotent',async()=>{
+test('R2-05 only a current TENANT owner accepts (super_owner / manager / removed owner denied); acceptance is stored cleared + accepted; duplicate operation is idempotent',async()=>{
   const db=world(), {writer,node}=await flagged(db), d=node.review[A].intentDigest;
   const before=clone(db.read(NODE));
   for(const uid of ['super','manager']){
@@ -101,9 +102,9 @@ test('R2-05 only a current TENANT owner accepts (super_owner / manager / removed
   db.seed(`tenants/${T}/members/owner`,true);
   assert.equal((await accept(writer,d)).status,'resolved');
   const accepted=clone(db.read(NODE));
-  assert.equal(accepted.review[A].acknowledgedBy,'owner');assert.equal(accepted.review[A].acceptOperationId,OP);
+  assert.deepEqual([accepted.review[A].state,accepted.review[A].decision,accepted.review[A].decisionAudit.decidedBy,accepted.review[A].decisionAudit.operationId],['cleared','accepted','owner',OP],'R4: stored cleared + decision audit accepted');
   assert.deepEqual(accepted.review[A].flagAudit,before.review[A].flagAudit);
-  assert.equal((await accept(writer,d)).status,'already_acknowledged');assert.deepEqual(db.read(NODE),accepted);
+  assert.equal((await accept(writer,d)).status,'already_accepted');assert.deepEqual(db.read(NODE),accepted);
   assert.equal((await accept(writer,d,'00000000-0000-4000-8000-0000000000ab')).status,'operation_identity_reused');
   assert.deepEqual(db.read(NODE),accepted);
 });
@@ -113,7 +114,7 @@ test('R2-06 lost acceptance acknowledgement resolves only through full payload r
   let once=true;refHook(db,r=>({...r,transaction:async(...args)=>{const out=await r.transaction(...args);if(once&&out.committed){once=false;throw Error('ack lost');}return out;}}));
   const out=await accept(writer,node.review[A].intentDigest);
   assert.equal(out.status,'resolved');assert.equal(out.resolvedBy,'readback');
-  assert.equal(db.read(NODE).review[A].state,'acknowledged');
+  assert.deepEqual([db.read(NODE).review[A].state,db.read(NODE).review[A].decision],['cleared','accepted']);
 });
 
 test('R2-07 acceptance transaction failure keeps flagged and full audit unchanged',async()=>{

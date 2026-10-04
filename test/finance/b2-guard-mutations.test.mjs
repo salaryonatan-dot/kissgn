@@ -28,6 +28,8 @@ import { r2IndexVerdict } from "../support/r2-index-scope.mjs";
 import { F2_PARENT, F2_INDEX_PIN, F2_RUNTIME_BLOBS } from "../support/f2-candidate-pin.mjs";
 import { R3_PARENT, R3_INDEX_PIN, R3_RUNTIME_BLOBS } from "../support/r3-candidate-pin.mjs";
 import { r3IndexVerdict } from "../support/r3-index-scope.mjs";
+import { R4_PARENT, R4_INDEX_PIN, R4_RUNTIME_BLOBS, R4_NEW_FILES } from "../support/r4-candidate-pin.mjs";
+import { r4IndexVerdict } from "../support/r4-index-scope.mjs";
 import { f2IndexVerdict } from "../support/f2-index-scope.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
@@ -166,9 +168,14 @@ function assertB2Scope(root) {
     // identity or by R3_PARENT being a STRICT ancestor; exactly the R3 runtime files then carry R3 pins.
     const r3 = f2 && (names(["rev-parse", "HEAD:fincore/v1/MANIFEST.json"])[0] === R3_RUNTIME_BLOBS["fincore/v1/MANIFEST.json"] ||
       (gitIn(root,["merge-base","--is-ancestor",R3_PARENT,"HEAD"]).status===0 && names(["rev-parse","HEAD"])[0] !== R3_PARENT));
+    // R4 (Core/F1 R4 successor of the REJECTED R3 candidate, pending independent Codex review): recognized by the fixed
+    // committed MANIFEST identity or by R4_PARENT (the rejected R3 commit) being a STRICT ancestor; exactly the R4 runtime
+    // files then carry R4 pins (the R3 pins are historical), and the R4 NEW files join the protected set.
+    const r4 = r3 && (names(["rev-parse", "HEAD:fincore/v1/MANIFEST.json"])[0] === R4_RUNTIME_BLOBS["fincore/v1/MANIFEST.json"] ||
+      (gitIn(root,["merge-base","--is-ancestor",R4_PARENT,"HEAD"]).status===0 && names(["rev-parse","HEAD"])[0] !== R4_PARENT));
     const vd50Runtime = ["src/metrics/report.ts", "fincore/v1/metrics/report.js", "fincore/v1/MANIFEST.json"];
     const f1Runtime = ["database.rules.json", "fincore/v1/MANIFEST.json", "fincore/v1/browser/marjinFinanceGlobal.js", "fincore/v1/finance/costHistory.js", "fincore/v1/metrics/report.js", "fincore/v1/policy/productFinance.js", "lib/finance/costHistoryWriter.js", "src/browser/marjinFinanceGlobal.ts", "src/finance-server/canonicalInputs.ts", "src/finance/costHistory.ts", "src/finance/labor.ts", "src/finance/types.ts", "src/metrics/costTimeline.ts", "src/metrics/report.ts", "src/policy/productFinance.ts", "test/support/rules-authorized-delta.mjs"];
-    const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : [])])] : CDM2_APPROVED;
+    const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : [])])] : CDM2_APPROVED;
     const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f));
     assert.deepEqual([...new Set(whole)].sort(), [...allowed].sort(), assembled
       ? "assembled tree: protected changes are exactly CD-M2 R1's approved runtime files + P0 Scheduled Auth's three API routes" + (c2 ? " + the C2-03 retirement of " + C2_RETIRED.join(", ") : "")
@@ -189,7 +196,9 @@ function assertB2Scope(root) {
       [SB, blobBytes(root, B2 + ":" + SB), B2.slice(0, 8) + ":" + SB],
       [SE, blobBytes(root, B2 + ":" + SE), B2.slice(0, 8) + ":" + SE],
       ...(vd50 ? vd50Runtime.filter((f) => !f1 || !f1Runtime.includes(f)).map((f) => [f, blobBytes(root, VD50_COMMIT + ":" + f), "VD-50 candidate " + VD50_COMMIT.slice(0, 8) + ":" + f]) : []),
-      ...(f1 ? f1Runtime.map((f) => r3 && Object.prototype.hasOwnProperty.call(R3_RUNTIME_BLOBS,f)
+      ...(f1 ? f1Runtime.map((f) => r4 && Object.prototype.hasOwnProperty.call(R4_RUNTIME_BLOBS,f)
+        ? [f, blobBytes(root,R4_RUNTIME_BLOBS[f]), "R4 candidate fixed blob " + R4_RUNTIME_BLOBS[f]]
+        : r3 && Object.prototype.hasOwnProperty.call(R3_RUNTIME_BLOBS,f)
         ? [f, blobBytes(root,R3_RUNTIME_BLOBS[f]), "R3 candidate fixed blob " + R3_RUNTIME_BLOBS[f]]
         : f2 && Object.prototype.hasOwnProperty.call(F2_RUNTIME_BLOBS,f)
         ? [f, blobBytes(root,F2_RUNTIME_BLOBS[f]), "F2 candidate fixed blob " + F2_RUNTIME_BLOBS[f]]
@@ -198,7 +207,8 @@ function assertB2Scope(root) {
         : r1 && R1_RUNTIME.includes(f)
         ? [f, blobBytes(root, R1_COMMIT + ":" + f), "F1 R1 candidate " + R1_COMMIT.slice(0, 8) + ":" + f]
         : [f, blobBytes(root, F1_COMMIT + ":" + f), "F1 candidate " + F1_COMMIT.slice(0, 8) + ":" + f]) : []),
-      ...(f2 ? [["api/cost-history.js",blobBytes(root,(r3?R3_RUNTIME_BLOBS:F2_RUNTIME_BLOBS)["api/cost-history.js"]),(r3?"R3":"F2")+" trusted route fixed blob"]] : []),
+      ...(f2 ? [["api/cost-history.js",blobBytes(root,(r4?R4_RUNTIME_BLOBS:r3?R3_RUNTIME_BLOBS:F2_RUNTIME_BLOBS)["api/cost-history.js"]),(r4?"R4":r3?"R3":"F2")+" trusted route fixed blob"]] : []),
+      ...(r4 ? R4_NEW_FILES.map((f) => [f, blobBytes(root, R4_RUNTIME_BLOBS[f]), "R4 candidate fixed blob " + R4_RUNTIME_BLOBS[f]]) : []),
       ...(assembled ? [
         ...(c1 ? [] : [["index.html", approvedIndexMerge(root), "merge(" + CDM2R1.slice(0, 8) + ", " + HF1R1.slice(0, 8) + ")"]]),
         ...P0_APPROVED.map((f) => [f, blobBytes(root, P0 + ":" + f), P0.slice(0, 8) + ":" + f]),
@@ -254,6 +264,18 @@ function assertB2Scope(root) {
                     const f2Page=blobBytes(root,R3_PARENT+":index.html");
                     assert.deepEqual(f2IndexVerdict(r2Page,f2Page),{ok:true},"R3 base satisfies F2 scope");
                     assert.equal(hashBytes(f2Page),F2_INDEX_PIN.blob,"R3 base is the fixed F2 identity");
+                    if (r4) {
+                      // the REJECTED R3 page is historical: exactly the R4 parent's page, within R3 scope, never the current page
+                      const r3Page=blobBytes(root,R4_PARENT+":index.html");
+                      assert.deepEqual(r3IndexVerdict(f2Page,r3Page),{ok:true},"R4 base satisfies the historical R3 scope");
+                      assert.equal(hashBytes(r3Page),R3_INDEX_PIN.blob,"R4 base is the fixed (rejected) R3 identity");
+                      for(const [label,bytes] of [["committed",committed],["staged (index)",staged],["checked-out",checkedOut]]){
+                        assert.deepEqual(r4IndexVerdict(r3Page,bytes),{ok:true},"index.html ("+label+") violates R4 scope");
+                        assert.equal(hashBytes(bytes),R4_INDEX_PIN.blob,"index.html ("+label+") differs from fixed R4 candidate pin");
+                        assert.notEqual(hashBytes(bytes),R3_INDEX_PIN.blob,"index.html ("+label+") is the rejected R3 page");
+                      }
+                      return;
+                    }
                     for(const [label,bytes] of [["committed",committed],["staged (index)",staged],["checked-out",checkedOut]]){
                       assert.deepEqual(r3IndexVerdict(f2Page,bytes),{ok:true},"index.html ("+label+") violates R3 scope");
                       assert.equal(hashBytes(bytes),R3_INDEX_PIN.blob,"index.html ("+label+") differs from fixed R3 candidate pin");

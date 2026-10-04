@@ -63,8 +63,8 @@ export async function loadCanonicalInputs(
   const ledger: ExceptionLedgerState | null = exceptionsSnap ? decodeExceptionLedger(exceptionsSnap.val()) : null;
   if (ledger && ledger.state === "unreadable") inputIssues.push("exceptions_unreadable");
   const costHistory = costHistoryRead ? ("failed" in costHistoryRead
-    ? costHistoryCodec.decodeHistory({ failed: costHistoryRead.failed })
-    : costHistoryCodec.decodeHistory({ exists: costHistoryRead.snap.val() !== null, value: costHistoryRead.snap.val() }, { tenantId, bizId })) : null;
+    ? costHistoryCodec.decodeHistory({ failed: costHistoryRead.failed }, { tenantId, bizId })
+    : costHistoryCodec.decodeHistory({ exists: costHistoryRead.snap.val() !== null, value: costHistoryRead.snap.val() }, { tenantId, bizId })) : null;   // R4: always BOUND
   if (costHistory?.state === "unreadable") inputIssues.push("cost_history_unreadable");
   const nowMs = opts.nowMs === undefined ? Date.now() : opts.nowMs;
   return {

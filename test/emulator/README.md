@@ -503,28 +503,37 @@ real `lib/securityContext.js` / `lib/helpers.js`; only the token verifier and Ad
 replaced) over the real Admin transport, and decodes as Rules-evaluated clients with the committed
 codec: cleared, flagged (+ audit record), audit/review write failure ⇒ pending, verification
 unavailable ⇒ pending → later version refused → reconciliation → next save, parallel saves,
-parallel reconciliations, lost acknowledgement ⇒ readback, and client forge/clear/overwrite denial.
+parallel reconciliations, lost acknowledgement ⇒ readback, client forge/clear/overwrite denial, and
+(Core/F1 R4) the business registry removed during priming (refused, no node), an owner downgraded after
+the commit (flagged with its bound audit; the downgraded owner cannot accept; a restored owner's
+acceptance stores `cleared` + decision audit `accepted`), a numeric operation id (`request_shape`),
+exact stored key sets, idempotent replay, and a ghost (unregistered) business refused on every operation.
 
 ```
 ... "node test/emulator/f1-cost-history-writer-emulator.mjs"
 ```
 
-Expected: `total=8 passed=8 failed=0` — `ALL CASES PASSED — F1 review state is fail-closed over the real transport`.
+Expected: `total=12 passed=12 failed=0` — `ALL CASES PASSED — F1 review state is fail-closed over the real transport`.
 
-### F2 rendered editor (R3: owner rejection)
+### F2 rendered editor (Core/F1 R4: the canonical lifecycle)
 
 `f2-rendered-editor.mjs` boots the real page in jsdom over the real local RTDB and drives the ACTUAL
 `api/cost-history.js` route: unactivated (no write), the activation confirmation gate, owner activation,
 a normal today edit, a separate attested historical edit, a pending head (non-authoritative), a
-FLAGGED head rejected by the owner through the rendered control (`super_owner` refused by the real
-route with 403; version and flag audit immutable; the rejected version excluded from calculations),
-a corrected successor after the rejection, a corrupt history (unavailable, no save) and a direct
-client write denied by the real Rules. Requires `bash test/historical/install-deps.sh`.
+FLAGGED head REJECTED by the owner through the rendered control (stored `rejected` + decision audit
+`rejected`; `super_owner` refused by the real route with 403; version and flag audit immutable; the
+rejected version excluded from calculations), a corrected successor after the rejection, a FLAGGED head
+ACCEPTED by the owner through the rendered control (stored `cleared` + decision audit `accepted`, flag
+evidence retained, the editor discloses the acceptance), a rejected ACTIVATION (every version rejected:
+outputs withheld until the owner explicitly re-activates through the rendered editor), a corrupt history
+(unavailable, no save), a direct client write denied by the real Rules, and a second real page as a
+MANAGER (no accept / reject / save / re-activation control rendered; accept, reject and re-activation
+refused by the real route with 403). Requires `bash test/historical/install-deps.sh`.
 
 ```
 ... "node test/emulator/f2-rendered-editor.mjs"
 ```
 
-Expected: `{"status":"PASS","results":[…10 entries…]}`.
+Expected: `{"status":"PASS","results":[…13 entries…]}`.
 
 There are now SEVENTEEN emulator scripts; all reseed the database root, so they must run one at a time.

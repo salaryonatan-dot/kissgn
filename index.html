@@ -882,7 +882,7 @@
       const api = mod && mod.default;
       const v = api && api.versions;
       if (!api || api !== window.MarjinFinance || !v || v.product !== "MARJIN_PRODUCT/2" || v.forecast !== "REV_FORECAST/v2" ||
-          v.costHistory !== "MARJIN_COSTH/5" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") {
+          v.costHistory !== "MARJIN_COSTH/6" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") {
         throw new Error("fincore_version_mismatch");
       }
       window.__marjinFinance = { state: "ready", error: null };
@@ -1099,7 +1099,7 @@
       if (!api || typeof api !== "object" || !api.versions || !api.product || !api.presenters) return { ok: false, reason: "fincore_shape" };
       if (api.versions.product !== EXPECT.product) return { ok: false, reason: "fincore_version_mismatch" };
       if (api.versions.forecast !== EXPECT.forecast) return { ok: false, reason: "fincore_version_mismatch" };
-      if (api.versions.costHistory !== "MARJIN_COSTH/5" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") return { ok: false, reason: "fincore_cost_history_incompatible" };
+      if (api.versions.costHistory !== "MARJIN_COSTH/6" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") return { ok: false, reason: "fincore_cost_history_incompatible" };
       return { ok: true };
     }
 
@@ -1130,6 +1130,23 @@
     function nodeState(F, raw, expect) { return F.product.decodeEnvelope(raw, expect); }
     /** A failed read is never "absent": the core treats it as an unreadable input (unavailable). */
     var READ_FAILED = Object.freeze({ state: "unreadable", reason: "read_failed" });
+    /**
+     * Core/F1 R4 — the ONLY way the page binds a cost-history decode. The raw node is held with the verified
+     * selection context it was subscribed for (tenant, business, generation); it may be decoded only when that
+     * context is the LIVE selection and the business is registered in the tenant's business list.
+     *   { ok:true, bind }                              decode bound to exactly this tenant / business
+     *   { ok:false, reason:"context_switching" }       a valid live selection whose node is being (re)subscribed
+     *   { ok:false, reason:"context_unbound" }         no verified tenant / business (never decode, never fall back)
+     *   { ok:false, reason:"business_unregistered" }   the selected business is not in the tenant's registry
+     */
+    function historyBinding(raw, sel, currentBizId, businesses) {
+      var bound = !!(sel && typeof sel.tenantId === "string" && sel.tenantId && typeof currentBizId === "string" && currentBizId && sel.bizId === currentBizId);
+      if (!bound) return { ok: false, reason: "context_unbound" };
+      var registered = Array.isArray(businesses) && businesses.some(function (b) { return !!b && String(b.id) === currentBizId; });
+      if (!registered) return { ok: false, reason: "business_unregistered" };
+      if (!raw || raw.tenantId !== sel.tenantId || raw.bizId !== currentBizId || raw.gen !== sel.gen) return { ok: false, reason: "context_switching" };
+      return { ok: true, bind: { tenantId: sel.tenantId, bizId: currentBizId } };
+    }
 
     /** Inclusive [from,to] → consecutive ranges of at most LEDGER_CHUNK_DAYS days. */
     function ledgerChunks(F, from, to) {
@@ -1855,7 +1872,7 @@
 
     window.MarjinC1 = Object.freeze({
       C1_VERSION: C1_VERSION, EXPECT: EXPECT, LEDGER_CHUNK_DAYS: LEDGER_CHUNK_DAYS, LEDGER_ATTEMPT_DEADLINE_MS: LEDGER_ATTEMPT_DEADLINE_MS, TXT: TXT, READ_FAILED: READ_FAILED,
-      checkBundle: checkBundle, nodeState: nodeState, ledgerChunks: ledgerChunks, structuredStates: structuredStates,
+      checkBundle: checkBundle, nodeState: nodeState, historyBinding: historyBinding, ledgerChunks: ledgerChunks, structuredStates: structuredStates,
       earliestRowDate: earliestRowDate, ledgerWindow: ledgerWindow, ledgerCovers: ledgerCovers, loadLedger: loadLedger,
       revisionOf: revisionOf, ledgerKey: ledgerKey, ledgerFor: ledgerFor, createLedgerSession: createLedgerSession, inputsFor: inputsFor,
       monthReport: monthReport, dashboard: dashboard, configView: configView, configuredMonthly: configuredMonthly, todayContext: todayContext, pnl: pnl, pnlGrossLineVD50: pnlGrossLineVD50,
@@ -5724,10 +5741,13 @@ function CostHistoryEditor({finF, historyNode, config, fixed, tenantId, bizId, t
   scopeRef.current = scope;
   const node = readback || historyNode;
   const codec = finF && finF.costHistory && finF.costHistory.codec;
+  // Core/F1 R4: the editor decodes ONLY bound to a verified tenant / business; without one the history is unavailable
+  const bound = typeof tenantId === "string" && !!tenantId && typeof bizId === "string" && !!bizId;
   const state = !codec ? {state:"unreadable",reason:"fincore_incompatible"}
+    : !bound ? {state:"unreadable",reason:"context_unbound"}
     : node.kind === "loading" ? {state:"loading"}
     : node.kind === "failed" ? {state:"unreadable",reason:"read_failed"}
-    : codec.decodeHistoryStructure({exists:node.kind === "raw",value:node.raw},tenantId&&bizId?{tenantId,bizId}:null);
+    : codec.decodeHistoryStructure({exists:node.kind === "raw",value:node.raw},{tenantId,bizId});
   const head = state.state === "present" ? state.head : null;
   const review = head && node.raw.review[head.headVersionId];
   const unresolved = review && (review.state === "pending" || review.state === "flagged");
@@ -5807,8 +5827,8 @@ function CostHistoryEditor({finF, historyNode, config, fixed, tenantId, bizId, t
     } catch {if(scopeRef.current===requestedScope)setResult({status:"outcome_unknown"});}
     finally {setBusy(false);}
   };
-  const label={loading:"טוען היסטוריית עלויות",absent:"הגדרות נוכחיות — טרם הופעלה היסטוריית עלויות",present:review?.state==="pending"?"ממתין לבדיקת הרשאה":review?.state==="flagged"?"מסומן לבדיקה — אינו משפיע על חישובים":needsActivation?"הגרסה האחרונה נדחתה — נדרשת הפעלה מחדש על ידי בעלים":review?.state==="rejected"?"היסטוריית עלויות פעילה — הגרסה האחרונה נדחתה ואינה נספרת":"היסטוריית עלויות פעילה",unreadable:"היסטוריית העלויות אינה זמינה"}[state.state];
-  const resultText={head_conflict:"התנגשות עריכה: יש לרענן ולהחיל מחדש את השינוי",review_unresolved:"בדיקת הרשאה פתוחה: לא ניתן לשמור גרסה חדשה",outcome_unknown:"תוצאת השמירה אינה ידועה: נסה לשחזר את אותה פעולה",committed_current:"נשמרה גרסה חדשה",resolved:"מצב הבדיקה עודכן",already_acknowledged:"האישור כבר נשמר",already_rejected:"הדחייה כבר נשמרה",not_found:"הגרסה לא נמצאה",business_not_in_tenant:"העסק אינו שייך לחשבון זה",activation_required:"נדרשת הפעלה מחדש על ידי בעלים",already_activated:"ההיסטוריה כבר פעילה — יש לרענן",reloaded:"הנתונים רועננו",unreadable:"הקריאה נכשלה: הנתונים אינם זמינים",activation_confirmation_required:"יש לאשר את ההפעלה במפורש",attestation_missing:"יש להשלים סיבה, תאריך ואישור לתיקון ההיסטורי",attestation_not_past:"תיקון היסטורי מחייב תאריך עבר",recorded_past_date:"תאריך עבר מחייב תיקון היסטורי מאומת",role_not_allowed:"אין הרשאה לפעולה זו"};
+  const label={loading:"טוען היסטוריית עלויות",absent:"הגדרות נוכחיות — טרם הופעלה היסטוריית עלויות",present:review?.state==="pending"?"ממתין לבדיקת הרשאה":review?.state==="flagged"?"מסומן לבדיקה — אינו משפיע על חישובים":needsActivation?"הגרסה האחרונה נדחתה — נדרשת הפעלה מחדש על ידי בעלים":review?.state==="rejected"?"היסטוריית עלויות פעילה — הגרסה האחרונה נדחתה ואינה נספרת":review?.decision==="accepted"?"היסטוריית עלויות פעילה — הגרסה האחרונה אושרה על ידי בעלים לאחר בדיקה":"היסטוריית עלויות פעילה",unreadable:state.reason==="context_unbound"?"היסטוריית העלויות אינה זמינה — לא נבחר חשבון ועסק מאומתים":"היסטוריית העלויות אינה זמינה"}[state.state];
+  const resultText={head_conflict:"התנגשות עריכה: יש לרענן ולהחיל מחדש את השינוי",review_unresolved:"בדיקת הרשאה פתוחה: לא ניתן לשמור גרסה חדשה",outcome_unknown:"תוצאת השמירה אינה ידועה: נסה לשחזר את אותה פעולה",committed_current:"נשמרה גרסה חדשה",resolved:"מצב הבדיקה עודכן",already_accepted:"האישור כבר נשמר",already_rejected:"הדחייה כבר נשמרה",request_shape:"הבקשה אינה תקינה",not_found:"הגרסה לא נמצאה",business_not_in_tenant:"העסק אינו שייך לחשבון זה",activation_required:"נדרשת הפעלה מחדש על ידי בעלים",already_activated:"ההיסטוריה כבר פעילה — יש לרענן",reloaded:"הנתונים רועננו",unreadable:"הקריאה נכשלה: הנתונים אינם זמינים",activation_confirmation_required:"יש לאשר את ההפעלה במפורש",attestation_missing:"יש להשלים סיבה, תאריך ואישור לתיקון ההיסטורי",attestation_not_past:"תיקון היסטורי מחייב תאריך עבר",recorded_past_date:"תאריך עבר מחייב תיקון היסטורי מאומת",role_not_allowed:"אין הרשאה לפעולה זו"};
   return <div data-f2="cost-editor" style={{padding:18,direction:"rtl",maxHeight:"85vh",overflowY:"auto",background:"#fff"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><h2 style={{margin:0}}>היסטוריית עלויות</h2><button onClick={onClose}>סגור</button></div>
     <p data-f2="state">{label}</p>
@@ -5817,12 +5837,14 @@ function CostHistoryEditor({finF, historyNode, config, fixed, tenantId, bizId, t
     {review?.state==="pending"&&<p data-f2="pending">גרסה זו אינה סמכותית עד סיום בדיקת ההרשאה.</p>}
     {review?.state==="flagged"&&<p data-f2="flagged">נדרש אישור או דחייה של בעלים לאחר בדיקת רשומת הביקורת. הגרסה אינה סמכותית.</p>}
     {review?.state==="rejected"&&<p data-f2="rejected">הגרסה האחרונה נדחתה על ידי בעלים: היא נשמרת לביקורת, אינה נספרת, ולא ניתן להפעילה מחדש. ניתן לשמור גרסה מתוקנת.</p>}
+    {review?.state==="cleared"&&review?.decision==="accepted"&&<p data-f2="accepted">גרסה זו סומנה לבדיקה ואושרה במפורש על ידי בעלים; רשומת הביקורת נשמרת.</p>}
+    {activating&&role!=="owner"&&<p data-f2="activation-owner-only">הפעלת היסטוריית עלויות (או הפעלה מחדש לאחר דחייה) מחייבת בעלים של החשבון.</p>}
     {result&&<p data-f2="result">{resultText[result.status]||result.status}{result.reason?`: ${result.reason}`:""}</p>}
     <button onClick={()=>reload()} disabled={busy}>רענן מהשרת</button>
     {unresolved&&role==="owner"&&<button onClick={()=>reviewCommand(review.state==="flagged"?"accept_flag":"reconcile")} disabled={busy}>{review.state==="flagged"?"אשר לאחר בדיקה":"נסה להשלים בדיקת הרשאה"}</button>}
     {review?.state==="flagged"&&role==="owner"&&<button data-f2="reject-flag" onClick={()=>reviewCommand("reject_flag")} disabled={busy}>דחה גרסה זו</button>}
     {result?.status==="outcome_unknown"&&intentRef.current&&<button onClick={()=>save(true)} disabled={busy}>נסה שוב את אותה שמירה</button>}
-    {(activating||state.state==="present"&&!unresolved)&&draft&&<>
+    {(activating?role==="owner":state.state==="present"&&!unresolved)&&draft&&<>
       <p>כל הסכומים הם חודשיים, נטו מע״מ. שכר עובדים גלובליים הוא עלות מעסיק מלאה.</p>
       {state.state==="present"&&!needsActivation&&<div><button onClick={()=>{setMode("normal");setEffectiveFrom(today);setTypedDate("");setConfirmed(false);}}>עריכה רגילה</button><button onClick={()=>{setMode("historical");setEffectiveFrom("");setTypedDate("");setConfirmed(false);}}>תיקון היסטורי מאומת</button></div>}
       <label>תאריך תחולה <input data-f2="effective-date" type="date" value={effectiveFrom} onChange={e=>{setEffectiveFrom(e.target.value);intentRef.current=null;}}/></label>
@@ -6465,14 +6487,20 @@ function PilotDashboard() {
   // {kind:"loading"} | {kind:"raw", raw} | {kind:"absent"} | {kind:"failed"} — a failed read is
   // never "absent" and an unreadable node is never replaced by defaults.
   const FIN_NODE_LOADING = { kind: "loading" };
-  const [finRaw, setFinRaw] = useState({ config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING, costHistory: FIN_NODE_LOADING, bizId: null });
+  // Core/F1 R4: the raw nodes are held WITH the verified selection context they were subscribed for
+  // (tenant + business + generation). A node delivered for another context is never applied, and the
+  // cost-history decode below is bound to exactly this context — never to a later global tenant.
+  const [finRaw, setFinRaw] = useState({ config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING, costHistory: FIN_NODE_LOADING, bizId: null, tenantId: null, gen: null });
+  // The LIVE selection (tenant, business, generation) this render binds to; every generation bump re-subscribes below.
+  const finSel = selectionCtrlRef.current.current();
   useEffect(() => {
-    setFinRaw({ config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING, costHistory: FIN_NODE_LOADING, bizId: currentBizId || null });
-    if (!currentBizId || !window.storage || !window.storage.subscribeNode) return;
-    let live = true;
     const ctx = captureSelectionCtx();
+    const bound = !!(currentBizId && ctx && typeof ctx.tenantId === "string" && ctx.tenantId && ctx.bizId === currentBizId);
+    setFinRaw({ config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING, costHistory: FIN_NODE_LOADING, bizId: currentBizId || null, tenantId: bound ? ctx.tenantId : null, gen: bound ? ctx.gen : null });
+    if (!bound || !window.storage || !window.storage.subscribeNode) return;
+    let live = true;
     const ok = () => live && isSelectionLive(ctx);
-    const put = (name, v) => { if (ok()) setFinRaw(prev => (prev.bizId === currentBizId ? { ...prev, [name]: v } : prev)); };
+    const put = (name, v) => { if (ok()) setFinRaw(prev => (prev.bizId === currentBizId && prev.tenantId === ctx.tenantId && prev.gen === ctx.gen ? { ...prev, [name]: v } : prev)); };
     const unsubs = [];
     ["config", "fixed"].forEach((name) => {
       const key = `biz:${currentBizId}:${name}`;
@@ -6492,7 +6520,7 @@ function PilotDashboard() {
       () => put("costHistory", { kind: "failed" })));
     else put("costHistory", { kind: "failed" });
     return () => { live = false; unsubs.forEach(u => typeof u === "function" && u()); };
-  }, [currentBizId]);
+  }, [currentBizId, finSel.gen, finSel.tenantId]);
   // Months a screen asked for that lie before the default ledger window (e.g. an old P&L month).
   const [finLedgerFloor, setFinLedgerFloor] = useState(null);
   useEffect(() => { setFinLedgerFloor(null); }, [currentBizId]);
@@ -6521,7 +6549,6 @@ function PilotDashboard() {
   const [finLedgerAttempt, setFinLedgerAttempt] = useState(0);
   const finLedgerSessionRef = useRef(null);
   if (!finLedgerSessionRef.current && finF) finLedgerSessionRef.current = window.MarjinC1.createLedgerSession(finF);
-  const finSel = selectionCtrlRef.current.current();
   const finLedgerKey = finF ? window.MarjinC1.ledgerKey(finSel, finLedgerWindow, window.MarjinC1.revisionOf(entryExceptions), finLedgerAttempt) : null;
   useEffect(() => {
     // a page returning to the foreground re-reads the closure history (another device may have
@@ -6554,13 +6581,18 @@ function PilotDashboard() {
       : C1.nodeState(finF, n.raw, expect);
     const ledger = C1.ledgerFor(finLedger, finLedgerKey);
     const raw = finRaw.bizId === (currentBizId || null) ? finRaw : { config: FIN_NODE_LOADING, fixed: FIN_NODE_LOADING, costHistory: FIN_NODE_LOADING };
-    // R3: the decode is BOUND to the selected tenant / business (a flag audit naming another business is unreadable)
-    const histBind = typeof window._currentTenantId === "string" && window._currentTenantId && currentBizId ? { tenantId: window._currentTenantId, bizId: currentBizId } : null;
-    const costHistory = raw.costHistory.kind === "loading" ? { state: "loading" }
-      : raw.costHistory.kind === "failed" ? finF.costHistory.codec.decodeHistory({ failed: "read_failed" })
-      : finF.costHistory.codec.decodeHistory({ exists: raw.costHistory.kind !== "absent", value: raw.costHistory.raw }, histBind);
+    // Core/F1 R4: the cost-history decode is BOUND to the VERIFIED context the raw node was subscribed for — the
+    // selection's tenant and business (never a later global tenant) — and that business must be REGISTERED in
+    // the tenant. Without that context the history is explicitly unavailable (unreadable, context_unbound):
+    // no unbound decode, no current-settings fallback, no complete-looking cost / Food Cost / labor / profit figures.
+    const histBind = window.MarjinC1.historyBinding(finRaw, finSel, currentBizId, businesses);
+    const costHistory = histBind.reason === "context_switching" ? { state: "loading" }
+      : !histBind.ok ? { state: "unreadable", reason: histBind.reason }
+      : raw.costHistory.kind === "loading" ? { state: "loading" }
+      : raw.costHistory.kind === "failed" ? finF.costHistory.codec.decodeHistory({ failed: "read_failed" }, histBind.bind)
+      : finF.costHistory.codec.decodeHistory({ exists: raw.costHistory.kind !== "absent", value: raw.costHistory.raw }, histBind.bind);
     return { rows: entries, config: nodeOf(raw.config, "object"), fixed: nodeOf(raw.fixed, "array"), costHistory, asOf: finAsOf, ledger, rowsReady: finRowsReady };
-  }, [finF, finAsOf, entries, finRaw, finLedger, finLedgerKey, finRowsReady, currentBizId]);
+  }, [finF, finAsOf, entries, finRaw, finLedger, finLedgerKey, finRowsReady, currentBizId, finSel.gen, finSel.tenantId, finSel.bizId, businesses]);
   const finStatus = finCoreState === "failed" ? "unavailable" : (finCoreState !== "ready" ? "loading" : null);
   /** Guarded view model: {status:"loading"|"unavailable"} unless the core and every input are ready. */
   const finView = (fn) => finStatus ? { status: finStatus, reason: "fincore_" + finCoreState } : (!finSrc ? { status: "loading" } : fn(finF, finSrc));
@@ -7704,7 +7736,7 @@ function PilotDashboard() {
               <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.35)",zIndex:9999,display:"flex",alignItems:"flex-end"}} onClick={()=>setShowFixed(false)}>
                 <div style={{background:"#FFFFFF",width:"100%",maxHeight:"85vh",overflowY:"auto",borderRadius:"20px 20px 0 0"}} onClick={e=>e.stopPropagation()}>
                   <div data-c1="fixed-modal-total" style={{padding:"14px 18px 0",fontSize:12,color:"#64748B"}}>קבועות + שכ״ד לחודש{finConfigured.status==="ready"&&finConfigured.basisLabel?` (${finConfigured.basisLabel})`:""}: <strong>{finConfigured.status==="ready"?finConfigured.text:"—"}</strong>{finConfigured.status==="ready"&&finConfigured.rentPctText!==null&&<span> + שכ״ד {finConfigured.rentPctText} ממחזור</span>}{finConfigured.status==="ready"&&finConfigured.royaltyText!==null&&<span> · תמלוגים: {finConfigured.royaltyText} ממחזור</span>}</div>
-                  <CostHistoryEditor finF={finF} historyNode={finRaw.bizId===currentBizId?finRaw.costHistory:{kind:"loading"}} config={finSrc?.config} fixed={finSrc?.fixed} tenantId={window._currentTenantId} bizId={currentBizId} today={finAsOf} role={loggedInUser?.role} onClose={()=>setShowFixed(false)}/>
+                  <CostHistoryEditor finF={finF} historyNode={finRaw.bizId===currentBizId&&finRaw.tenantId===finSel.tenantId&&finRaw.gen===finSel.gen?finRaw.costHistory:{kind:"loading"}} config={finSrc?.config} fixed={finSrc?.fixed} tenantId={finSel.tenantId} bizId={finSel.bizId===currentBizId?currentBizId:null} today={finAsOf} role={loggedInUser?.role} onClose={()=>setShowFixed(false)}/>
                 </div>
               </div>
             )}
@@ -9309,7 +9341,7 @@ function PilotDashboard() {
           </div>
         </div>
       ) : (
-        <div className="screen"><CostHistoryEditor finF={finF} historyNode={finRaw.bizId===currentBizId?finRaw.costHistory:{kind:"loading"}} config={finSrc?.config} fixed={finSrc?.fixed} tenantId={window._currentTenantId} bizId={currentBizId} today={finAsOf} role={loggedInUser?.role} onClose={()=>setScreen("dashboard")}/></div>
+        <div className="screen"><CostHistoryEditor finF={finF} historyNode={finRaw.bizId===currentBizId&&finRaw.tenantId===finSel.tenantId&&finRaw.gen===finSel.gen?finRaw.costHistory:{kind:"loading"}} config={finSrc?.config} fixed={finSrc?.fixed} tenantId={finSel.tenantId} bizId={finSel.bizId===currentBizId?currentBizId:null} today={finAsOf} role={loggedInUser?.role} onClose={()=>setScreen("dashboard")}/></div>
       ))}
 
       {/* ═══ ADMIN PANEL (super_owner only) ═══ */}

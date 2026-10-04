@@ -128,7 +128,7 @@ test("GUARD-08 fincore/v1 regenerates byte-identically; the browser closure is t
   const m = generate({ repo: REPO, outDir: tmp });
   for (const rel of ["MANIFEST.json", "browser/marjinFinanceGlobal.js", "policy/productFinance.js"]) assert.ok(readFileSync(join(tmp, rel)).equals(readFileSync(join(REPO, "fincore/v1", rel))), rel);
   const baseManifest = JSON.parse(gitIn(REPO, ["show", `${B1_BASE}:fincore/v1/MANIFEST.json`]).stdout);
-  assert.deepEqual([...closureSources(REPO)].sort(), [...baseManifest.sources, "src/policy/productFinance.ts", "src/metrics/revenueForecast.ts", "src/finance/costHistory.ts"].sort());
+  assert.deepEqual([...closureSources(REPO)].sort(), [...baseManifest.sources, "src/policy/productFinance.ts", "src/metrics/revenueForecast.ts", "src/finance/costHistory.ts", "src/finance/canonical.ts"].sort());
   assert.deepEqual(m.sources, closureSources(REPO));
   assert.equal(m.typescript, "5.9.3");
 });

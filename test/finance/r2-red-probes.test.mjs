@@ -56,7 +56,7 @@ test('R2: super_owner cannot accept a flagged cost version', async () => {
   const before = db.read(NODE);
   assert.equal(before.review[A].state, 'flagged');
   globalThis.__CLAIMS = { uid:'u_super', email:'s@x' };
-  const accept = await writer.acknowledgeFlaggedVersion({headers:{}}, {tenantId:T,bizId:B,versionId:A,intentDigest:before.review[A].intentDigest,operationId:'00000000-0000-4000-8000-0000000000aa'});
+  const accept = await writer.acceptFlaggedVersion({headers:{}}, {tenantId:T,bizId:B,versionId:A,intentDigest:before.review[A].intentDigest,operationId:'00000000-0000-4000-8000-0000000000aa'});
   const after = db.read(NODE);
   console.log('SUPER_OWNER', JSON.stringify({result, before:before.review[A], accept, after:after.review[A]}));
   assert.equal(accept.status, 'role_not_allowed');

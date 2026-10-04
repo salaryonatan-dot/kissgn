@@ -26,6 +26,8 @@ import { F2_PARENT, F2_INDEX_PIN, F2_RUNTIME_BLOBS } from "../support/f2-candida
 import { f2IndexVerdict } from "../support/f2-index-scope.mjs";
 import { R3_PARENT, R3_INDEX_PIN, R3_RUNTIME_BLOBS } from "../support/r3-candidate-pin.mjs";
 import { r3IndexVerdict } from "../support/r3-index-scope.mjs";
+import { R4_PARENT, R4_INDEX_PIN, R4_RUNTIME_BLOBS } from "../support/r4-candidate-pin.mjs";
+import { r4IndexVerdict } from "../support/r4-index-scope.mjs";
 
 const show = (spec) => gitIn(REPO, ["show", spec]).stdout;
 const hash = (s) => spawnSync("git", ["hash-object", "--stdin"], { input: s, encoding: "utf8" }).stdout.trim();
@@ -33,7 +35,8 @@ const f1Page = show(`${R1_INDEX_BASE}:index.html`);
 const page = show(`${R1_COMMIT}:index.html`);
 const r2Page = show(`${F2_PARENT}:index.html`);
 const f2Page = show(`${R3_PARENT}:index.html`);                 // R3: the F2 page is historical
-const r3Page = readFileSync(join(REPO, "index.html"), "utf8");
+const r3Page = show(`${R4_PARENT}:index.html`);                 // R4: the (rejected) R3 page is historical
+const r4Page = readFileSync(join(REPO, "index.html"), "utf8");
 
 test("R1G-01 R1 starts at the fixed F1 page; narrow page scope; literal pending identities", () => {
   assert.equal(R1_INDEX_BASE, F1_COMMIT);
@@ -46,10 +49,13 @@ test("R1G-01 R1 starts at the fixed F1 page; narrow page scope; literal pending 
   assert.equal(hash(r2Page), R2_INDEX_PIN.blob, "historical R2 page has a fixed identity");
   assert.deepEqual(f2IndexVerdict(r2Page,f2Page),{ok:true},"historical F2 page stays within its bounded scope");
   assert.equal(hash(f2Page),F2_INDEX_PIN.blob,"historical F2 page has a fixed identity");
-  assert.deepEqual(r3IndexVerdict(f2Page,r3Page),{ok:true},"R3 page stays within its bounded scope");
-  assert.equal(hash(r3Page),R3_INDEX_PIN.blob,"R3 checked-out page has a fixed identity");
-  assert.equal(gitIn(REPO, ["rev-parse", ":index.html"]).stdout.trim(), R3_INDEX_PIN.blob, "current R3 staged page has the same identity");
-  assert.equal(gitIn(REPO, ["rev-parse", "HEAD:index.html"]).stdout.trim(), R3_INDEX_PIN.blob, "current R3 committed page has the same identity");
+  assert.deepEqual(r3IndexVerdict(f2Page,r3Page),{ok:true},"historical (rejected) R3 page stays within its bounded scope");
+  assert.equal(hash(r3Page),R3_INDEX_PIN.blob,"historical R3 page has a fixed identity");
+  assert.deepEqual(r4IndexVerdict(r3Page,r4Page),{ok:true},"R4 page stays within its bounded scope");
+  assert.equal(hash(r4Page),R4_INDEX_PIN.blob,"R4 checked-out page has a fixed identity");
+  assert.equal(gitIn(REPO, ["rev-parse", ":index.html"]).stdout.trim(), R4_INDEX_PIN.blob, "current R4 staged page has the same identity");
+  assert.equal(gitIn(REPO, ["rev-parse", "HEAD:index.html"]).stdout.trim(), R4_INDEX_PIN.blob, "current R4 committed page has the same identity");
+  assert.notEqual(gitIn(REPO, ["rev-parse", "HEAD:index.html"]).stdout.trim(), R3_INDEX_PIN.blob, "the rejected R3 page is not the current page");
   assert.match(R1_INDEX_PIN.status, /pending independent Codex review/);
   assert.match(R1_COMMIT, /^[0-9a-f]{40}$/);
   assert.equal(gitIn(REPO, ["merge-base", "--is-ancestor", R1_COMMIT, "HEAD"]).status, 0, "R1_COMMIT is in this lineage");
@@ -86,12 +92,13 @@ test("R1G-03 runtime pins: exactly the R1 runtime files differ from the F1 candi
   assert.equal(rev(`${F1_COMMIT}:database.rules.json`), rev(`${R1_COMMIT}:database.rules.json`), "R1 does not change the Rules");
   for (const f of R1_RUNTIME) {
     assert.equal(hash(show(`${R1_COMMIT}:${f}`)), rev(`${R1_COMMIT}:${f}`), f + " historical R1 bytes");
-    const currentPin=R3_RUNTIME_BLOBS[f]||F2_RUNTIME_BLOBS[f]||R2_RUNTIME_BLOBS[f];
+    const currentPin=R4_RUNTIME_BLOBS[f]||R3_RUNTIME_BLOBS[f]||F2_RUNTIME_BLOBS[f]||R2_RUNTIME_BLOBS[f];
     assert.equal(rev(`${F2_PARENT}:${f}`),R2_RUNTIME_BLOBS[f],f+" historical R2 identity");
     assert.equal(rev(`${R3_PARENT}:${f}`),F2_RUNTIME_BLOBS[f]||R2_RUNTIME_BLOBS[f],f+" historical F2 identity");
-    assert.equal(rev("HEAD:" + f), currentPin, f + " committed R3 identity");
-    assert.equal(rev(":" + f), currentPin, f + " staged R3 identity");
-    assert.equal(hash(readFileSync(join(REPO, f), "utf8")), currentPin, f + " checked-out R3 identity");
+    assert.equal(rev(`${R4_PARENT}:${f}`),R3_RUNTIME_BLOBS[f]||F2_RUNTIME_BLOBS[f]||R2_RUNTIME_BLOBS[f],f+" historical (rejected) R3 identity");
+    assert.equal(rev("HEAD:" + f), currentPin, f + " committed R4 identity");
+    assert.equal(rev(":" + f), currentPin, f + " staged R4 identity");
+    assert.equal(hash(readFileSync(join(REPO, f), "utf8")), currentPin, f + " checked-out R4 identity");
   }
 });
 
@@ -104,7 +111,7 @@ const hist = (state, over = {}) => { const v = ver(A); return { head: { revision
 const codecOf = async (mutations) => (await loadWriter(REPO, { mutations, entry: CODEC })).costHistoryCodec;
 /** The targeted checks every codec must pass (each returns a failure label or null). */
 function codecChecks(c) {
-  const dec = (v) => c.decodeHistory({ exists: true, value: v });
+  const dec = (v) => c.decodeHistory({ exists: true, value: v }, { tenantId: "tenantA", bizId: "bizA" });   // R4: bound
   const out = [];
   if (dec(hist("pending")).reason !== "authorization_review_pending") out.push("pending_withheld");
   if (dec(hist("flagged", { resolvedAt: NOW + 1, resolution: "revoked_during_commit" })).reason !== "authorization_review_flagged") out.push("flagged_withheld");
@@ -162,31 +169,31 @@ async function writerChecks(W) {
     const later = await W.createCostHistoryWriter({ db, clock: () => NOW + 500 }).saveCostVersion({ headers: {} }, { tenantId: T, bizId: B, body: body(Bv, { revision: 1, headVersionId: A }) });
     if (later.status !== "review_unresolved") out.push("unresolved_refuses_later");
   }
-  // (c) cleared cannot be acknowledged (transition table) and (d) a different payload digest cannot resolve
+  // (c) a plain cleared version cannot be owner-accepted (transition table) and (d) a different payload digest cannot resolve
   {
     const db = world(); const w = W.createCostHistoryWriter({ db, clock: () => NOW });
     const saved = await w.saveCostVersion({ headers: {} }, { tenantId: T, bizId: B, body: body() });
     if (!db.read(NODE)) { out.push("setup_save:" + saved.status); return out; }
     const d = db.read(NODE).review[A].intentDigest;
     globalThis.__CLAIMS = { uid: "u_owner", email: "o@x" };
-    if ((await w.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: d, operationId: A })).status !== "review_already_resolved:cleared") out.push("transition_table");
+    if ((await w.acceptFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: d, operationId: A })).status !== "review_already_resolved:cleared") out.push("transition_table");
     const db2 = world(); const w2 = W.createCostHistoryWriter({ db: db2, clock: () => NOW });
     let done = false;
     hook(db2, (p) => p === NODE, (r) => ({ transaction: async (fn, ...a) => { const o = await r.transaction(fn, ...a); if (o.committed && !done) { done = true; db2.seed(`tenants/${T}/members/u_mgr`, false); } return o; } }));
     await w2.saveCostVersion({ headers: {} }, { tenantId: T, bizId: B, body: body() });
     globalThis.__CLAIMS = { uid: "u_owner", email: "o@x" };
-    if ((await w2.acknowledgeFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: DIGEST("b"), operationId: A })).status !== "review_identity_mismatch") out.push("digest_identity");
+    if ((await w2.acceptFlaggedVersion({ headers: {} }, { tenantId: T, bizId: B, versionId: A, intentDigest: DIGEST("b"), operationId: A })).status !== "review_identity_mismatch") out.push("digest_identity");
   }
   return out;
 }
 test("R1G-05 writer: the committed writer passes every targeted check; each mutant is caught", async () => {
   assert.deepEqual(await writerChecks(await loadWriter(REPO)), []);
   for (const [label, from, to, expected] of [
-    ["commit writes cleared instead of pending", 'state: "pending", intentDigest: auditIntent.intentDigest', 'state: "cleared", resolvedAt: wire.recordedAt, resolution: "post_commit_authorized", intentDigest: auditIntent.intentDigest', "pending_in_commit"],
-    ["unavailable treated as authorized", '} else r.postCommitAccess = "verification_unavailable";', '} else { r.postCommitAccess = "verification_unavailable"; decision = { to: "cleared", resolution: "post_commit_authorized" }; }', "unavailable_stays_pending"],
+    ["commit writes cleared instead of pending", 'state: "pending", intentDigest, actor: wire.recordedBy', 'state: "cleared", resolvedAt: wire.recordedAt, resolution: "post_commit_authorized", intentDigest, actor: wire.recordedBy', "pending_in_commit"],
+    ["unavailable treated as authorized", 'else r.postCommitAccess = "verification_unavailable";', 'else { r.postCommitAccess = "verification_unavailable"; decision = { to: "cleared", resolution: "post_commit_authorized" }; }', "unavailable_stays_pending"],
     ["no unresolved refusal (pre-read + transaction)", 'if (h.state === "present" && (h.unresolved.pending.length || h.unresolved.flagged.length)) { reason = "review_unresolved"; return; }', "", "unresolved_refuses_later"],
-    ["transition table bypassed", 'if (!TRANSITIONS[to].includes(e.state)) return { o: "review_already_resolved:" + e.state };', "", "transition_table"],
-    ["digest identity bypassed", 'if (e.intentDigest !== intentDigest || digest(intentOf(v)) !== intentDigest) return { o: "review_identity_mismatch" };', "", "digest_identity"],
+    ["transition table bypassed", 'if (e.state !== "flagged") return { o: "review_already_resolved:" + e.state };', "", "transition_table"],
+    ["digest identity bypassed", 'if (e.intentDigest !== intentDigest || intentDigestOf(tenantId, bizId, v) !== intentDigest) return { o: "review_identity_mismatch" };', "", "digest_identity"],
   ]) {
     const muts = [[WRITER, from, to]];
     // the commit-state mutant must ALSO remove the writer's own defence-in-depth check (else that check refuses it)

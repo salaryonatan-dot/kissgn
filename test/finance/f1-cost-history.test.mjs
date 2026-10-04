@@ -18,13 +18,14 @@ const second = {
   ...first, versionId: b, predecessorVersionId: a, recordedAt: now + 1,
   fixedItemsCount: 1, fixedItems: [{ itemKey: "rent", monthlyAmount: "1000" }],
 };
-// F1 R1: MARJIN_COSTH/3 — every version carries a resolved (cleared) authorization review.
+// R4: MARJIN_COSTH/6 — every version carries a resolved (cleared) authorization review bound to tenantA / bizA.
 const history = (versions = { [a]: first, [b]: second }, head = { revision: 2, headVersionId: b }) => ({ head, versions, review: reviewFor(versions) });
-const read = (codec, value) => codec.decodeHistory({ exists: value !== null, value });
+const BIND = { tenantId: T, bizId: B };   // R4: every authoritative decode is bound
+const read = (codec, value) => codec.decodeHistory({ exists: value !== null, value }, BIND);
 
 test("F1-01 generated browser and fresh server core decode one coherent history identically", async () => {
   const server = await loadCompiled(), browser = await loadCommitted();
-  assert.equal(browser.versions.costHistory, "MARJIN_COSTH/5");
+  assert.equal(browser.versions.costHistory, "MARJIN_COSTH/6");
   for (const value of [null, history(), history({ [a]: first }, { revision: 1, headVersionId: a }),
     history({ [a]: first, [b]: { ...second, predecessorVersionId: "none" } }),
     history({ [a]: first, [b]: { ...second, fixedItemsCount: 0 } }),
@@ -37,7 +38,8 @@ test("F1-01 generated browser and fresh server core decode one coherent history 
 test("F1-02 absent, failure, strict counts and predecessor chain retain distinct states", async () => {
   const F = await loadCommitted(), c = F.costHistory.codec;
   assert.equal(read(c, null).state, "absent");
-  assert.equal(c.decodeHistory({ failed: new Error("denied") }).reason, "read_failed");
+  assert.equal(c.decodeHistory({ failed: new Error("denied") }, BIND).reason, "read_failed");
+  assert.equal(c.decodeHistory({ exists: true, value: history() }).reason, "binding_required", "R4: no unbound authoritative decode");
   const valid = read(c, history());
   assert.equal(valid.state, "present");
   assert.equal(valid.versions.length, 2);
