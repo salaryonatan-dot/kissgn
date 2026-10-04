@@ -1,8 +1,8 @@
 // P1 R1 — strict reader: replacement / void / audit / identity / head / review validation (MARJIN_CREDITS/4)
 // and the accounting of DEC-AUTH-1 review states.
-//   CA-*  every corruption reproduced on the rejected candidate (Stage A probes A3a…A3k) is now an ISSUE:
-//         the corrupt logical credit contributes NOTHING (no earlier "valid-looking" record is used) and
-//         its dates — or, if unattributable, every date — are incomplete; untouched credits still count
+//   CA-*  every corruption reproduced on the rejected candidate (Stage A probes A3a…A3k) fails closed:
+//         missing digest evidence makes the business node unreadable; mismatched evidence is
+//         unattributable across dates; other defects preserve the prior attribution rules
 //   RS-*  review states: pending / flagged never counted and never silently absent; accept counts exactly
 //         once; reject never counts; a pending void / replace keeps the authoritative baseline (incomplete)
 // Every report runs on the server engine, the freshly generated browser core and the COMMITTED fincore
@@ -77,9 +77,18 @@ const CORRUPTIONS = [
 
 for (const [name, fn, code0, attributable] of CORRUPTIONS) {
   const allowed = [].concat(code0);
-  test("CA " + name + " ⇒ " + allowed.join("|") + "; a corrupt credit contributes nothing; its dates are incomplete; untouched credits still count", () => {
+  test("CA " + name + " ⇒ " + allowed.join("|") + " or unreadable digest; fail closed", () => {
     const raw = mutate(CHAIN(), fn);
     const st = dec(raw);
+    if (st.state === "unreadable") {
+      assert.equal(st.reason, "invalid_review_audit", name);
+      const r = report(raw);
+      assert.equal(P$(r).complete, false, name);
+      assert.equal(P$(r).credits.value, null, name);
+      assert.equal(P$(r).credits.invalidDates.length, 31, "untrusted date cannot limit incompleteness");
+      assert.equal(r.actual.purchasesPct.state, "invalid_components", name);
+      return;
+    }
     assert.equal(st.state, "present");
     assert.ok(st.issues.some((i) => allowed.includes(i.code)), name + ": " + JSON.stringify(st.issues));
     // NEVER use an earlier, apparently valid record of a corrupt chain: neither 100 (the predecessor) nor 90
@@ -87,7 +96,11 @@ for (const [name, fn, code0, attributable] of CORRUPTIONS) {
     const r = report(raw);
     assert.equal(P$(r).complete, false, "never complete");
     assert.equal(r.actual.purchasesPct.state, "invalid_components", "Food Cost never complete-looking");
-    if (attributable === "both") {
+    if (attributable === true && st.issues.some((i) => i.dates.length === 0)) {
+      // A failed content digest invalidates even the stored date used by older attribution checks.
+      assert.equal(P$(r).credits.invalidDates.length, 31, "untrusted dates cannot restrict incompleteness");
+      assert.equal(P$(r).credits.value, "40", "the untouched credit remains visible in the partial value");
+    } else if (attributable === "both") {
       // a reservation claimed by ANOTHER logical credit: both credits are excluded (fail closed), dates attributed
       assert.ok(st.issues.every((i) => i.dates.length > 0)); assert.equal(st.credits.length, 0); assert.equal(P$(r).credits.value, null);
     } else if (attributable) {

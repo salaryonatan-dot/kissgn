@@ -152,17 +152,17 @@ test("P1C-08 explicit zero purchases, a zero / invalid credit amount, missing pu
   const zeroRows = monthRows("2026-08", 31, () => ({ s1: "0" }));
   const z = report(inputs(zeroRows), undefined);
   assert.equal(P$(z).value, "0"); assert.equal(P$(z).complete, true);
-  // a ZERO credit is not a credit: invalid (dated) ⇒ that month incomplete, other months untouched
+  // A zero or malformed amount invalidates the digest. Its stored date cannot limit incompleteness.
   for (const amt of ["0", "0.00", "-300", "300.50", " 300", "3,000", "1e3", 300, null, "abc", "1234567890"]) {
     const st = SERVER.decodeSupplierCredits(node(rec(1, "s1", "2026-08-12", "1", { raw: { amount: amt } })));
-    assert.deepEqual(st.issues.map((i) => [i.code, i.dates]), [["invalid_amount", ["2026-08-12"]]], JSON.stringify(amt));
+    assert.deepEqual(st.issues.map((i) => [i.code, i.dates]), [["invalid_amount", []]], JSON.stringify(amt));
     const r = report(inputs(AUG()), st);
-    assert.equal(P$(r).complete, false); assert.equal(P$(r).credits.state, "invalid"); assert.deepEqual(P$(r).credits.invalidDates, ["2026-08-12"]);
+    assert.equal(P$(r).complete, false); assert.equal(P$(r).credits.state, "invalid"); assert.equal(P$(r).credits.invalidDates.length, 31);
     assert.equal(P$(r).value, "9000", "an invalid credit is never counted and never zeroes the purchases");
     assert.ok(r.actual.purchases.issues === undefined || true);
     assert.equal(r.actual.purchasesPct.state, "invalid_components");
     const sep = report(inputs([...AUG(), ...monthRows("2026-09", 28, undefined, 40)]), st, "2026-09", "open_month");
-    assert.equal(P$(sep).credits.state, "absent", "a dated invalid credit only affects its own month");
+    assert.equal(P$(sep).credits.state, "invalid", "an invalid digest cannot trust the stored date to exclude September");
   }
   // unreadable node ⇒ every window invalid (never "no credits")
   const V = node(rec(1, "s1", "2026-08-12", "5"));
@@ -192,19 +192,19 @@ test("P1C-09 malformed records: id mismatch, supplier, audit metadata, role, doc
   const V = node(rec(1, "s1", "2026-08-12", "5"));
   const R = (fn) => mutate(V, (n) => fn(n.records[cid(1)], n));
   const cases = [
-    [R((r) => { r.creditId = cid(9); }), "id_mismatch", ["2026-08-12"]],
-    [R((r) => { r.supplierId = ""; }), "invalid_supplier", ["2026-08-12"]],
-    [R((r) => { r.supplierId = "a/b"; }), "invalid_supplier", ["2026-08-12"]],
-    [R((r) => { r.supplierId = 7; }), "invalid_supplier", ["2026-08-12"]],
-    [R((r) => { delete r.createdBy; }), "invalid_record", ["2026-08-12"]],                 // missing audit metadata (P1 review finding 3)
+    [R((r) => { r.creditId = cid(9); }), "id_mismatch", []],
+    [R((r) => { r.supplierId = ""; }), "invalid_supplier", []],
+    [R((r) => { r.supplierId = "a/b"; }), "invalid_supplier", []],
+    [R((r) => { r.supplierId = 7; }), "invalid_supplier", []],
+    [R((r) => { delete r.createdBy; }), "invalid_record", []],                 // missing audit metadata also prevents digest evidence
     [R((r) => { r.createdAt = "yesterday"; }), "invalid_audit", ["2026-08-12"]],          // malformed audit metadata
-    [R((r) => { r.createdBy = 42; }), "invalid_audit", ["2026-08-12"]],
-    [R((r) => { r.createdRole = "intern"; }), "invalid_audit", ["2026-08-12"]],
+    [R((r) => { r.createdBy = 42; }), "invalid_audit", []],
+    [R((r) => { r.createdRole = "intern"; }), "invalid_audit", []],
     [R((r) => { r.seq = 0; }), "invalid_audit", ["2026-08-12"]],
     [R((r) => { r.status = "active"; }), "invalid_record", ["2026-08-12"]],               // no mutable status field in MARJIN_CREDITS/4
-    [R((r) => { r.documentKey = "cr9"; }), "invalid_document", ["2026-08-12"]],
-    [R((r) => { delete r.documentNumber; }), "invalid_record", ["2026-08-12"]],             // the document number is mandatory
-    [R((r) => { r.replacesCreditId = "nope"; }), "invalid_link", ["2026-08-12"]],
+    [R((r) => { r.documentKey = "cr9"; }), "invalid_document", []],
+    [R((r) => { delete r.documentNumber; }), "invalid_record", []],             // the document number is mandatory
+    [R((r) => { r.replacesCreditId = "nope"; }), "invalid_link", []],
     [R((r) => { r.tenantId = "tenantB"; }), "binding_mismatch", []],                       // a record of another business: unattributable
   ];
   for (const [raw, code, dates] of cases) {
@@ -215,9 +215,11 @@ test("P1C-09 malformed records: id mismatch, supplier, audit metadata, role, doc
     if (dates.length) assert.equal(st.issues.length, 1, code); else assert.ok(st.issues.every((i) => i.dates.length === 0), code);
   }
   const notObj = SERVER.decodeSupplierCredits(mutate(V, (n) => { n.records[cid(1)] = "x"; }));
-  assert.ok(notObj.issues.some((i) => i.code === "invalid_record" && i.dates.length === 0));
+  assert.deepEqual(notObj, { state: "unreadable", reason: "invalid_review_audit" }, "missing record evidence cannot be assigned a date");
+  assert.equal(P$(report(inputs(AUG()), notObj)).complete, false);
   const badKey = SERVER.decodeSupplierCredits(mutate(V, (n) => { n.records["not-a-uuid"] = n.records[cid(1)]; delete n.records[cid(1)]; }));
-  assert.ok(badKey.issues.some((i) => i.code === "id_mismatch"));
+  assert.ok(badKey.issues.some((i) => i.code === "id_mismatch" && i.dates.length === 0), "a detached record key has no trusted date");
+  assert.equal(P$(report(inputs(AUG()), badKey)).complete, false);
 });
 
 test("P1C-10 history: void / replace chains count ONLY the effective successor; a valid replaced pair decodes cleanly", () => {
@@ -230,7 +232,7 @@ test("P1C-10 history: void / replace chains count ONLY the effective successor; 
   // the record key IS the identity: a second record claiming the same creditId under another key is refused
   const dup = SERVER.decodeSupplierCredits(mutate(base, (n) => { n.records[cid(2)] = { ...n.records[cid(1)] }; }));
   assert.ok(dup.issues.some((i) => i.code === "id_mismatch")); assert.equal(dup.credits.length, 0, "the corrupt logical credit 1 contributes nothing (credit 3 is voided)");
-  assert.ok(dup.issues.every((i) => i.dates.includes("2026-08-12")), "the defect is attributed to the corrupt credit's dates");
+  assert.ok(dup.issues.every((i) => i.dates.length === 0 || i.dates.includes("2026-08-12")), "no failed digest is attributed using the corrupt record date");
 });
 
 // ── P1C-11 negative net ──────────────────────────────────────────────────────

@@ -517,6 +517,7 @@ export function decodeSupplierCredits(raw, expect) {
     }
     // a logical credit with a defective record is already excluded: its other entries are not re-reported
     const recordDefective = new Set(defects.map((d) => d[0]).filter((x) => x !== null));
+    const untrustedDates = new Set();
     const report = (lid, key, code) => { if (lid === null || !recordDefective.has(lid))
         defects.push([lid, key, code]); };
     for (const r of records)
@@ -531,6 +532,23 @@ export function decodeSupplierCredits(raw, expect) {
         }
     const reviews = new Map();
     for (const [k, e] of Object.entries(raw.review || {})) {
+        // A failed digest also invalidates the stored issue date. Never attach its defect to rawDates.
+        // Decided and flagged entries retain their existing unreadable-node behavior.
+        if (isPlainObject(e)) {
+            const evidence = creditEvidence(raw, k);
+            if (!evidence || e.intentDigest !== evidence.intentDigest) {
+                if (e.state === "flagged" || e.state === "rejected" || e.flagAudit !== undefined || e.decisionAudit !== undefined)
+                    return { state: "unreadable", reason: "invalid_review_audit" };
+                const lid = lidOf(e);
+                if (lid !== null && recordDefective.has(lid))
+                    untrustedDates.add(lid);
+                else if (!evidence)
+                    return { state: "unreadable", reason: "invalid_review_audit" };
+                else
+                    defects.push([null, k, "invalid_review"]);
+                continue;
+            }
+        }
         const r = isPlainObject(e) ? decodeReview(k, e, bind, raw) : null;
         if (!r) {
             if (isPlainObject(e) && (e.state === "flagged" || e.state === "rejected" || e.flagAudit !== undefined || e.decisionAudit !== undefined))
@@ -633,7 +651,7 @@ export function decodeSupplierCredits(raw, expect) {
     }
     // a defective logical credit contributes NOTHING; its issue covers every issue date of its records
     for (const [lid, key, code] of defects)
-        issues.push({ key, code, dates: lid === null ? [] : [...(rawDates.get(lid) || [])].sort() });
+        issues.push({ key, code, dates: lid === null || untrustedDates.has(lid) ? [] : [...(rawDates.get(lid) || [])].sort() });
     out.sort((a, b) => (a.creditId < b.creditId ? -1 : a.creditId > b.creditId ? 1 : 0));
     const reviewList = [...reviews.values()]
         .map((r) => ({ operationId: r.operationId, kind: r.kind, state: r.state, logicalId: r.logicalId, creditId: r.creditId, newCreditId: r.newCreditId, seq: r.seq, intentDigest: r.intentDigest, actor: r.actor, actorRole: r.actorRole, committedAt: r.committedAt, resolution: r.resolution }))

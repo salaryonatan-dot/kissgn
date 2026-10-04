@@ -149,10 +149,10 @@ test("P1B-07 month view states: loading, unavailable (not_loaded / unreadable �
   assert.equal(P1.monthView(F, st, "2026-09", SUPS).total, "1000", "issue-month listing: the September credit is listed only in September");
 });
 
-test("P1B-08 invalid records are surfaced in their issue month (undatable ones in every month) — never silently dropped", () => {
+test("P1B-08 invalid records are surfaced without trusting a failed digest's issue month", () => {
   const st = decoded(node(rec(1, "s1", "2026-10-02", "1", { raw: { amount: "0" } }), rec(2, "s1", "2026-10-03", "5")));
   const oct = P1.monthView(F, st, "2026-10", SUPS), sep = P1.monthView(F, st, "2026-09", SUPS);
-  assert.equal(oct.invalidCount, 1); assert.ok(oct.invalidText); assert.equal(sep.invalidCount, 0);
+  assert.equal(oct.invalidCount, 1); assert.ok(oct.invalidText); assert.equal(sep.invalidCount, 1, "a failed digest cannot be assigned only to the stored month");
   const und = decoded(node(rec(1, "s1", "2027-02-29", "5")));
   assert.equal(P1.monthView(F, und, "2026-01", SUPS).invalidCount, 1);
   // review states are shown as such — never as counted, never as invalid data
