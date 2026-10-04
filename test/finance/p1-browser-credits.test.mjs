@@ -38,7 +38,7 @@ const P1 = loadP1();
 const deq = (a, b, m) => assert.deepEqual(a === undefined ? a : JSON.parse(JSON.stringify(a)), b, m);
 const cid = (n) => `c0000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const rec = (n, supplierId, issueDate, amount, extra = {}) => spec(n, supplierId, issueDate, amount, extra);
-/** A MARJIN_CREDITS/3 node built by the real writer domain (cleared reviews unless stated). */
+/** A MARJIN_CREDITS/4 node built by the real writer domain (cleared reviews unless stated). */
 const node = (...specs) => creditNode(specs);
 const BIND = { tenantId: T, bizId: B };
 const SUPS = [{ id: "s1", name: "קוקה קולה" }, { id: 2, name: "ירקות" }];

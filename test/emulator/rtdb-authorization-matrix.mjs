@@ -265,7 +265,7 @@ const CASES = [
   W("A4-33","mgr-keys","shift",           `${TA}/biz:bizA:suppliers`,V,"deny"),
   W("A4-34","mgr-keys","manager",         `${TA}/biz:bizA:fixed`,V,"allow"),
   W("A4-35","mgr-keys","owner",           `${TA}/biz:bizA:lastyear`,V,"allow"),
-  W("A4-36","mgr-keys","manager",         `${TA}/biz:bizA:credits`,V,"allow"),
+  W("A4-36","mgr-keys","manager",         `${TA}/biz:bizA:credits`,V,"deny"),
   W("A4-37","mgr-keys","manager",         `${TA}/biz:bizA:pettycash`,V,"allow"),
   W("A4-38","mgr-keys","manager",         `${TA}/biz:bizA:customer_compensations`,V,"allow"),
   W("A4-39","mgr-keys","manager",         `${TA}/biz:bizA:checklist_templates`,V,"allow"),

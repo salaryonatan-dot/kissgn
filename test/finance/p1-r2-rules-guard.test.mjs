@@ -33,3 +33,15 @@ test('P1R2-G02 narrow guard rejects an extra grant, read change, ancestor grant,
   ];
   for(const change of mutants){const m=clone(after);change(m);assert.equal(authorizedLegacyCreditsDenialDelta(before,m).ok,false)}
 });
+
+// R3 retains the exact R2 delta; these controls prohibit accidental policy expansion.
+for (const [name, mutate] of [
+  ['client-write denial', x=>{dk(x)['.write']='auth != null'}],
+  ['ancestor bypass', x=>{x.rules.tenants['$tenantId']['.write']='auth != null'}],
+  ['multi-path bypass', x=>{x.rules.tenants['.write']='auth != null'}],
+  ['membership grant', x=>{dk(x)['.write']="root.child('tenants').child($tenantId).child('members').child(auth.uid).val() === true"}],
+  ['stale business-access instead of registry', x=>{dk(x)['.write']="root.child('tenants').child($tenantId).child('biz_access').child('ghost').child(auth.uid).val() === true"}],
+  ['role grant', x=>{dk(x)['.write']="root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner'"}],
+  ['legacy node', x=>{dk(x)['.write']=dk(x)['.write'].replace(P1_CREDITS_DENIAL_BRANCH,LEGACY_CREDITS_BRANCH)}],
+  ['duplicate registry child', x=>{dk(x).documents={'.write':'auth != null'}}],
+]) test('P1R3 semantic guard rejects '+name,()=>{const m=clone(after);mutate(m);assert.equal(authorizedLegacyCreditsDenialDelta(before,m).ok,false)});

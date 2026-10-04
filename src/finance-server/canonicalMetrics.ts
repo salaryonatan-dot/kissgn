@@ -235,7 +235,7 @@ export interface AnalyticsFinBlock {
   readonly derived?: { laborCostComplete: boolean; laborCost?: number; globalLaborCost?: number; laborPct?: number; foodCostPct?: number; conversion: string };
   readonly legacyHourlyPayroll?: { counted: false; recorded: boolean };
   /**
-   * P1 (MARJIN_CREDITS/3): supplier credits ISSUED on this date. Omitted when none were issued and
+   * P1 (MARJIN_CREDITS/4): supplier credits ISSUED on this date. Omitted when none were issued and
    * the source was complete. `purchases` above is net of them; `purchasesGross` is the recorded gross.
    * `reason` names why the credit facts of the date are incomplete (invalid / unreadable / review).
    */

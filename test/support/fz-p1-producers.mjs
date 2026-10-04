@@ -11,7 +11,7 @@ import { loadSeam, srcOf } from "./c1-seam.mjs";
 import { NOW_MS, T, B, asLegacy, entry, env, inputs, seedRaw, uid } from "./b1-fixtures.mjs";
 import { spec, creditNode, replaceIn, mutate } from "./p1-credit-fixtures.mjs";
 
-export const FZ_P1_VERSION = "FZ-P1/2";
+export const FZ_P1_VERSION = "FZ-P1/3";
 export const IDS = ["FZ-P1-01", "FZ-P1-02", "FZ-P1-03", "FZ-P1-04", "FZ-P1-05"];
 const pad = (n) => String(n).padStart(2, "0");
 const AUG = () => Array.from({ length: 31 }, (_, i) => entry(uid(1 + i), `2026-08-${pad(i + 1)}`, { sales: "1000", supplier_payments: { s1: i < 30 ? "300" : "0" }, payroll: "100" }));
@@ -29,7 +29,7 @@ export function scenarios() {
     ["not_loaded", { state: "not_loaded" }],
     ["pending", creditNode([S(1, 15, "300", { review: "pending" })])],
     ["flagged", creditNode([S(1, 15, "300", { review: "flagged" })])],
-    ["accepted", creditNode([S(1, 15, "300", { review: "acknowledged" })])],
+    ["accepted", creditNode([S(1, 15, "300", { review: "accepted" })])],
     ["rejected", creditNode([S(1, 15, "300", { review: "rejected" })])],
     ["voided", creditNode([S(1, 15, "300", { voided: true })])],
     ["corrected_identity", replaceIn(creditNode([S(1, 5, "100")]), 1, 2, { documentNumber: "CR-77" }, { identityCorrection: true })],
@@ -81,7 +81,7 @@ export async function produce() {
       shapes: { purchases: R.map((r) => { const p = r.actual.purchases; return { value: p.value, complete: p.complete, presentDays: p.presentDays, gross: p.gross, grossBySource: p.grossBySource, bySource: p.bySource }; }), purchasesPct: R.map((r) => r.actual.purchasesPct) },
     },
     "FZ-P1-04": {
-      artifact: "decoded supplier-credit state (MARJIN_CREDITS/3): records with document identity and review, logical credits, reviews, effective credits, issues",
+      artifact: "decoded supplier-credit state (MARJIN_CREDITS/4): records with document identity and review, logical credits, reviews, effective credits, issues",
       ids: { states: uniq(decoded.map(([, d]) => d.state)), reviewStates: uniq(decoded.flatMap(([, d]) => (d.reviews || []).map((r) => r.state))), recordStatus: uniq(decoded.flatMap(([, d]) => (d.records || []).map((r) => r.status))), logicalStatus: uniq(decoded.flatMap(([, d]) => (d.logical || []).map((l) => l.status))), issueCodes: uniq(decoded.flatMap(([, d]) => (d.issues || []).map((x) => x.code))), unreadableReasons: uniq(decoded.filter(([, d]) => d.state === "unreadable").map(([, d]) => d.reason)) },
       shapes: { present: decoded.filter(([, d]) => d.state === "present").map(([, d]) => d), tab: tab.map(([, v]) => v) },
     },

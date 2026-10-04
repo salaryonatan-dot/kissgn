@@ -18,7 +18,7 @@
 //   R6  (P1 R1, owner decision 4) while the legacy pending-credit card stays RETIRED: no legacy
 //       `biz:{b}:credits` subscription, no pending-credit state, no legacy input component, no
 //       `resolveCredit` action — new credits enter only through the Supplier Credits tab;
-//   R7  (P1 R1) while the P1 block names the MARJIN_P1/2 seam over the MARJIN_CREDITS/3 contract.
+//   R7  (P1 R1) while the P1 block names the MARJIN_P1/2 seam over the MARJIN_CREDITS/4 contract.
 // Everything outside the zones is byte-identical to the reviewed C1 R2 page. This is not an
 // exemption: content identity is the separate P1 pin layer (test/support/p1-candidate-pin.mjs).
 import { C1_PROTECTED, C1_WRITE_TOKENS, diffHunks } from "./c1-index-scope.mjs";
@@ -110,6 +110,6 @@ export function p1IndexVerdict(baseBytes, candidateBytes) {
   // R6
   for (const t of P1_RETIRED_LEGACY) if (countOf(B, t) !== 0) return { ok: false, reason: "legacy_credit_card_reactivated", detail: [t, countOf(B, t)] };
   // R7
-  if (countOf(B, 'var P1_VERSION = "MARJIN_P1/2";') !== 1 || countOf(B, 'var CREDITS_CONTRACT = "MARJIN_CREDITS/3";') !== 1) return { ok: false, reason: "p1_contract_identity" };
+  if (countOf(B, 'var P1_VERSION = "MARJIN_P1/2";') !== 1 || countOf(B, 'var CREDITS_CONTRACT = "MARJIN_CREDITS/4";') !== 1) return { ok: false, reason: "p1_contract_identity" };
   return { ok: true };
 }

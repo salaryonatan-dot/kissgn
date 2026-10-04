@@ -1047,7 +1047,7 @@
     };
   })();
   </script>
-  <!-- ═══ P1: Supplier Credits browser seam (MARJIN_P1/2 over MARJIN_CREDITS/3, P1 R1) ═══
+  <!-- ═══ P1: Supplier Credits browser seam (MARJIN_P1/2 over MARJIN_CREDITS/4, P1 R1) ═══
        A supplier credit is its own document (never a negative purchase), attributed to the
        credit document's ISSUE DATE, net of VAT and strictly positive, with a MANDATORY document
        number (unique per business + supplier + normalized number). The browser never reads or
@@ -1065,7 +1065,7 @@
   (function () {
     "use strict";
     var P1_VERSION = "MARJIN_P1/2";
-    var CREDITS_CONTRACT = "MARJIN_CREDITS/3";
+    var CREDITS_CONTRACT = "MARJIN_CREDITS/4";
     /** One deadline for the whole list read (same policy as the C1 closure-history read). */
     var CREDITS_DEADLINE_MS = 30000;
     var TXT = Object.freeze({
@@ -1093,6 +1093,7 @@
       voidedOk: "הזיכוי בוטל.",
       decidedOk: "ההכרעה נשמרה.",
       reconciledOk: "בדיקת ההרשאות הסתיימה.",
+      decisionPending: "ההחלטה טרם אושרה. הזיכוי עדיין אינו נכלל בחישוב; ניתן לנסות שוב.",
       savedPending: "הזיכוי נשמר אך ממתין לאימות הרשאה ואינו נספר עדיין. ניתן לבקש אימות מחדש.",
       rebuildWarning: "הזיכוי נשמר, אך עדכון התובנות היומיות נכשל. הנתונים יתעדכנו בהרצה הבאה.",
       revokedWarning: "הזיכוי נשמר, אך ההרשאה שלך לעסק בוטלה במהלך השמירה. הרשומה סומנה לבדיקת הבעלים ואינה נספרת.",
@@ -1236,7 +1237,7 @@
       var amount = SC.canonicalCreditAmount(typeof f.amount === "string" ? f.amount.trim() : f.amount);
       if (amount === null) errors.amount = ERRORS.invalid_amount;
       var supplier = (supplierList || []).find(function (s) { return s && String(s.id) === f.supplierId; });
-      var doc = SC.normalizeDocumentNumber(typeof f.documentNumber === "string" ? f.documentNumber : null, !!(supplier && supplier.documentNumberCaseSensitive === true));
+      var doc = SC.normalizeDocumentNumber(typeof f.documentNumber === "string" ? f.documentNumber : null);
       if (!doc.ok) errors.documentNumber = ERRORS[doc.code];
       var note = typeof f.note === "string" ? f.note.trim() : "";
       if (note.length > SC.MAX_NOTE_LENGTH) errors.note = ERRORS.invalid_note_too_long;
@@ -6661,7 +6662,7 @@ function PilotDashboard() {
   const afterCreditApplied = async (json, ctx, okText) => {
     setCreditsAttempt((n) => n + 1);
     const P1 = window.MarjinP1;
-    let warn = json.postCommitAccess === "revoked_during_commit" ? P1.TXT.revokedWarning : json.review === "pending" ? P1.TXT.savedPending : null;
+    let warn = json.decisionPending ? P1.TXT.decisionPending : json.postCommitAccess === "revoked_during_commit" ? P1.TXT.revokedWarning : json.review === "pending" ? P1.TXT.savedPending : null;
     if (json.rebuildRequired) {
       const yesterday = israelDateKey(-1);
       for (const d of (json.affectedDates || [])) {
@@ -6687,6 +6688,7 @@ function PilotDashboard() {
       if (["revision_conflict", "credit_not_active", "credit_not_current", "review_unresolved", "review_not_flagged", "review_identity_mismatch"].includes(r.code)) setCreditsAttempt((n) => n + 1);
       return;
     }
+    if (r.json.decisionPending) { setCreditRetry({ action, body, okText, after }); await afterCreditApplied(r.json, ctx, okText); return; }
     if (after) after();
     await afterCreditApplied(r.json, ctx, okText);
   };

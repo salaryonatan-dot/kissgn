@@ -42,12 +42,12 @@ test("P1S-01 loader: the credit node is read exactly once on every call; unreada
   assert.deepEqual(db.writes, [], "the loader never writes");
 });
 
-test("P1S-02 canonical month report: net purchases (8,700), Food Cost on net; provenance names MARJIN_CREDITS/3 and the node state", async () => {
+test("P1S-02 canonical month report: net purchases (8,700), Food Cost on net; provenance names MARJIN_CREDITS/4 and the node state", async () => {
   const i = await load(node(rec(1, "s1", "2026-08-15", "300")));
   const { report, provenance } = CM.canonicalMonthReport(i, { kind: "closed_month", month: "2026-08" });
   assert.equal(report.actual.purchases.value, "8700"); assert.equal(report.actual.purchases.gross.value, "9000");
   assert.equal(report.actual.purchasesPct.value, "870/31");
-  assert.equal(provenance.credits, "MARJIN_CREDITS/3"); assert.equal(provenance.supplierCreditsState, "present");
+  assert.equal(provenance.credits, "MARJIN_CREDITS/4"); assert.equal(provenance.supplierCreditsState, "present");
   assert.equal(provenance.product, "MARJIN_PRODUCT/3"); assert.equal(report.versions.fin, "MARJIN_FIN/4");
   const bad = CM.canonicalMonthReport(await load("garbage"), { kind: "closed_month", month: "2026-08" });
   assert.equal(bad.report.actual.purchases.complete, false); assert.equal(bad.report.actual.purchasesPct.state, "invalid_components");
@@ -86,5 +86,5 @@ test("P1S-04 analytics fin block: supplierCredits / purchasesGross appear ONLY o
 test("P1S-05 the daily series (analytics / Agent input) carries NET foodCost on the issue date and the credits provenance", async () => {
   const yes = await load(node(rec(1, "s1", "2026-08-15", "120")));
   const s = CM.canonicalDailySeries(yes, { from: "2026-08-15", to: "2026-08-15" });
-  assert.equal(s.days[0].foodCost, 180); assert.equal(s.days[0].fin.credits, "MARJIN_CREDITS/3");
+  assert.equal(s.days[0].foodCost, 180); assert.equal(s.days[0].fin.credits, "MARJIN_CREDITS/4");
 });

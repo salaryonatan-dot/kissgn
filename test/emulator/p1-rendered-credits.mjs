@@ -95,7 +95,7 @@ const qc = (page, k) => page.document.querySelector(`[data-c1="${k}"]`);
 const fatalErrors = (page) => page.console.errors.filter((e) => /ReferenceError|TypeError|is not defined|Minified React error/.test(e));
 
 // ── API double: credit actions → REAL handler; entry-exceptions list → REAL repository ──
-const ctl = { creditsList: "ok", calls: [], loseNextCreate: false };
+const ctl = { creditsList: "ok", calls: [], loseNextCreate: false, deferNextDecision: false };
 const resp = (code, body) => ({ ok: code >= 200 && code < 300, status: code, json: async () => body, text: async () => JSON.stringify(body) });
 async function callHandler(u, opts) {
   const url = new URL(u, "http://x"), query = Object.fromEntries(url.searchParams.entries());
@@ -121,6 +121,10 @@ function makeFetch() {
       if (m[1] === "create-supplier-credit" && ctl.loseNextCreate) {
         // the server COMMITS, the response is lost on the way back (network error at the client)
         ctl.loseNextCreate = false; await callHandler(u, opts); throw new TypeError("Failed to fetch");
+      }
+      if (m[1] === "decide-supplier-credit-review" && ctl.deferNextDecision) {
+        ctl.deferNextDecision = false;
+        return resp(200, { ok: true, applied: false, decisionPending: true, review: "flagged", postCommitAccess: "verification_unavailable", retryWithSameOperation: true });
       }
       return callHandler(u, opts);
     }
@@ -213,7 +217,7 @@ async function main() {
     eq(body.amount, "50.5", "canonical amount sent"); eq(body.issueDate, d(8), "issue date as typed"); eq(body.documentNumber, "cr 2", "normalized display number sent");
     const nd = await stored();
     const rec = nd.records[body.creditId];
-    expect(rec && rec.amount === "50.5" && rec.documentKey === "cr~20~2" && rec.documentCaseSensitive === false && rec.createdBy === USER.uid && rec.createdRole === "owner", "stored record " + JSON.stringify(rec));
+    expect(rec && rec.amount === "50.5" && rec.documentKey === "cr~20~2" && !("documentCaseSensitive" in rec) && rec.createdBy === USER.uid && rec.createdRole === "owner", "stored record " + JSON.stringify(rec));
     eq(nd.review[body.operationId].state, "cleared", "the post-commit check cleared the review");
     await page.until(() => qp(page, `credit-row-${body.creditId}`) !== null, 10000);
     const X = await expected(nd);
@@ -316,11 +320,20 @@ async function main() {
       const X = await expected(n1);
       eq(textOf(qp(p, "credits-total")), X.tab.totalText, "the total excludes pending / flagged");
       p.window.confirm = () => true;
+      ctl.deferNextDecision = true;
       click(qp(p, `credit-row-${cid(21)}`).querySelector('[data-p1="credit-accept"]'));
+      await p.until(() => qp(p, "credit-retry-same") !== null, 15000);
+      expect(/טרם אושרה/.test(textOf(qp(p, "credit-msg-warn"))), "pending decision is never displayed as accepted");
+      eq((await stored()).review[FIX.oid(21)].state, "flagged", "still withheld");
+      const decisionBody = ctl.calls.filter(c => c.action === "decide-supplier-credit-review").pop().body;
+      await p.until(() => qp(p, "credit-retry-same") && !qp(p, "credit-retry-same").disabled, 15000);
+      click(qp(p, "credit-retry-same"));
+      await p.until(() => qp(p, `credit-row-${cid(21)}`)?.getAttribute("data-p1-counted") === "1", 15000);
+      eq(JSON.stringify(ctl.calls.filter(c => c.action === "decide-supplier-credit-review").pop().body), JSON.stringify(decisionBody), "same decision operation retry");
       await p.until(() => ctl.calls.some((c) => c.action === "decide-supplier-credit-review") && (qp(p, "credit-msg-ok") || qp(p, "credit-msg-warn") || qp(p, "credit-msg-error")), 15000);
       expect(!qp(p, "credit-msg-error"), "no error: " + textOf(qp(p, "credit-msg-error")));
       const nd = await stored();
-      eq(nd.review[FIX.oid(21)].state, "acknowledged", "accepted"); eq(nd.review[FIX.oid(21)].decidedBy, USER.uid, "by the owner");
+      eq(nd.review[FIX.oid(21)].state, "cleared", "accepted"); eq(nd.review[FIX.oid(21)].decidedBy, USER.uid, "by the owner");
       await p.until(() => qp(p, `credit-row-${cid(21)}`) && qp(p, `credit-row-${cid(21)}`).getAttribute("data-p1-counted") === "1", 10000);
       const X2 = await expected(nd);
       eq(textOf(qp(p, "credits-total")), X2.tab.totalText, "counted once after acceptance");

@@ -1,4 +1,4 @@
-// P1 Supplier Credits — Financial Core accounting (MARJIN_CREDITS/3 since P1 R1, MARJIN_FIN/4, MARJIN_PRODUCT/3).
+// P1 Supplier Credits — Financial Core accounting (MARJIN_CREDITS/4 since P1 R1, MARJIN_FIN/4, MARJIN_PRODUCT/3).
 //
 // Owner contract (2026-09-29 HF-2 closed decisions; 2026-10-02 mandatory-for-pilot decision):
 //   a credit is its own document (never a negative purchase); net purchases = gross − credits;
@@ -29,7 +29,7 @@ const ser = BROWSER.metrics.report.serializeReport;
 // ── fixtures ───────────────────────────────────────────────────────────────────
 export { cid };
 export const rec = (n, supplierId, issueDate, amount, extra = {}) => spec(n, supplierId, issueDate, amount, extra);
-/** A MARJIN_CREDITS/3 node of the given credit specs (no spec ⇒ no node: null). */
+/** A MARJIN_CREDITS/4 node of the given credit specs (no spec ⇒ no node: null). */
 export const node = (...specs) => (specs.length ? creditNode(specs) : null);
 const pad = (n) => String(n).padStart(2, "0");
 /** A complete month: revenue 1000/day, payroll 100/day, supplier purchases per `sup(day)` (explicit "0" otherwise). */
@@ -58,7 +58,7 @@ test("P1C-01 no credit source / absent node / {} / node without records: identic
     assert.equal(ser(r), ser(base), JSON.stringify(raw) + " ⇒ byte-identical to no credit source");
   }
   // P1 R1: a node without records is no longer "no credits" — the writer never stores one, so it is unreadable
-  const empty = report(inputs(AUG()), { schemaVersion: 2, contract: "MARJIN_CREDITS/3", tenantId: "tenantA", bizId: "bizA", revision: 1, updatedAt: 1, records: {} });
+  const empty = report(inputs(AUG()), { schemaVersion: 2, contract: "MARJIN_CREDITS/4", tenantId: "tenantA", bizId: "bizA", revision: 1, updatedAt: 1, records: {} });
   assert.equal(P$(empty).complete, false); assert.equal(P$(empty).credits.state, "invalid");
   assert.equal(P$(base).value, "9000"); assert.equal(P$(base).gross.value, "9000"); assert.equal(P$(base).credits.state, "absent"); assert.equal(P$(base).credits.count, 0);
   assert.equal(base.actual.purchasesPct.state, "value");
@@ -70,7 +70,7 @@ test("P1C-02 Coca-Cola: gross 9,000 − credit 300 = net 8,700; supplier, overal
   const p = P$(r);
   assert.equal(p.value, "8700"); assert.equal(p.gross.value, "9000");
   assert.deepEqual(p.bySource, { "supplier:s1": "8700" }); assert.deepEqual(p.grossBySource, { "supplier:s1": "9000" });
-  assert.deepEqual({ ...p.credits }, { contract: "MARJIN_CREDITS/3", state: "present", value: "300", count: 1, bySupplier: { "supplier:s1": "300" }, dates: ["2026-08-15"], invalidDates: [], reviewPendingDates: [], reviewFlaggedDates: [] });
+  assert.deepEqual({ ...p.credits }, { contract: "MARJIN_CREDITS/4", state: "present", value: "300", count: 1, bySupplier: { "supplier:s1": "300" }, dates: ["2026-08-15"], invalidDates: [], reviewPendingDates: [], reviewFlaggedDates: [] });
   assert.equal(p.complete, true);
   assert.deepEqual(r.actual.purchasesPct, { state: "value", value: "870/31", basisKind: "net_of_vat", comparability: "same_basis_as_revenue" }, "Food Cost = 8,700 / 31,000");
   const none = report(inputs(AUG()), undefined);
@@ -201,7 +201,7 @@ test("P1C-09 malformed records: id mismatch, supplier, audit metadata, role, doc
     [R((r) => { r.createdBy = 42; }), "invalid_audit", ["2026-08-12"]],
     [R((r) => { r.createdRole = "intern"; }), "invalid_audit", ["2026-08-12"]],
     [R((r) => { r.seq = 0; }), "invalid_audit", ["2026-08-12"]],
-    [R((r) => { r.status = "active"; }), "invalid_record", ["2026-08-12"]],               // no mutable status field in MARJIN_CREDITS/3
+    [R((r) => { r.status = "active"; }), "invalid_record", ["2026-08-12"]],               // no mutable status field in MARJIN_CREDITS/4
     [R((r) => { r.documentKey = "cr9"; }), "invalid_document", ["2026-08-12"]],
     [R((r) => { delete r.documentNumber; }), "invalid_record", ["2026-08-12"]],             // the document number is mandatory
     [R((r) => { r.replacesCreditId = "nope"; }), "invalid_link", ["2026-08-12"]],
@@ -337,8 +337,8 @@ test("P1C-17 the core decoder and the per-date facts are engine-identical (serve
     const ref = stableJson([...BROWSER.finance.supplierCredits.creditsByDate(st, dates)]);
     assert.equal(stableJson([...COMMITTED.finance.supplierCredits.creditsByDate(st, dates)]), ref);
   }
-  assert.equal(BROWSER.versions.credits, "MARJIN_CREDITS/3"); assert.equal(COMMITTED.versions.credits, "MARJIN_CREDITS/3");
-  assert.equal(SERVER.SUPPLIER_CREDITS_CONTRACT_VERSION, "MARJIN_CREDITS/3");
+  assert.equal(BROWSER.versions.credits, "MARJIN_CREDITS/4"); assert.equal(COMMITTED.versions.credits, "MARJIN_CREDITS/4");
+  assert.equal(SERVER.SUPPLIER_CREDITS_CONTRACT_VERSION, "MARJIN_CREDITS/4");
 });
 
 test("P1C-18 canonicalCreditAmount: only plain positive decimals (≤ 9 integer digits, ≤ 2 decimals) are amounts; output canonical", () => {

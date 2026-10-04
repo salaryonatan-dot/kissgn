@@ -66,7 +66,7 @@ export type FlagCode =
   // MARJIN_CREDITS/1 (P1 supplier credits)
   | "supplier_credits_unreadable"
   | "invalid_supplier_credit"
-  // MARJIN_CREDITS/3 (P1 R1): a credit operation whose DEC-AUTH-1 authorization review is unresolved
+  // MARJIN_CREDITS/4 (P1 R1): a credit operation whose DEC-AUTH-1 authorization review is unresolved
   | "supplier_credit_review_pending"
   | "supplier_credit_review_flagged"
   | "negative_net_purchases"
@@ -132,7 +132,7 @@ export interface CanonicalDay {
   readonly annotations: { readonly notes: ReadonlyArray<{ rowId: RowId; value: string }>; readonly securityEventRows: readonly RowId[] };
   readonly flags: readonly Flag[];
   /**
-   * MARJIN_CREDITS/3 (P1 R1): set by the product composition (applySupplierCreditsToDay). When set,
+   * MARJIN_CREDITS/4 (P1 R1): set by the product composition (applySupplierCreditsToDay). When set,
    * `purchases` is NET of the supplier credits issued on this date and `purchasesGross` is the
    * purchases recorded in entries. Absent on days built without the credit source (core tests).
    */

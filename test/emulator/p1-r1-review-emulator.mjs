@@ -63,6 +63,7 @@ const env = (v) => ({ _v: JSON.stringify(v) });
 const fixtures = () => ({ tenants: {
   [T]: {
     members: { u_owner: true, u_mgr: true, u_mgr2: true, u_view: true }, roles: { u_owner: "owner", u_mgr: "manager", u_mgr2: "manager", u_view: "viewer" },
+    app: { business: env([{ id: B }]) },
     biz_access: { [B]: { u_mgr: true, u_mgr2: true, u_view: true } },
     [`biz:${B}:suppliers`]: env([{ id: "s1", name: "Coca" }, { id: "s2", name: "Veg" }]),
   },
@@ -247,7 +248,7 @@ async function main() {
     for (const [name, o] of [["owner", P("u_owner")], ["manager", P("u_mgr")], ["viewer", P("u_view")], ["cross", P("u_other")], ["anon", null]]) {
       const db = asUser("f-" + name, o);
       for (const op of [
-        () => db.ref(`${NODE}/review/${oid(1)}/state`).set("acknowledged"),
+        () => db.ref(`${NODE}/review/${oid(1)}/state`).set("cleared"),
         () => db.ref(`${NODE}/review/${oid(1)}`).remove(),
         () => db.ref(`${NODE}/heads/${cid(1)}/seq`).set(9),
         () => db.ref(`${NODE}/documents/s_s1/d_cr1`).remove(),

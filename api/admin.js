@@ -1964,7 +1964,7 @@ async function handleClearEntryException(req, res) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// P1 SUPPLIER CREDITS (MARJIN_CREDITS/3, P1 R1). A credit is its own document — never a negative
+// P1 SUPPLIER CREDITS (MARJIN_CREDITS/4, P1 R1). A credit is its own document — never a negative
 // purchase — attributed to its issue date; the document number is mandatory and unique per business +
 // canonical supplier + normalized number. Authorization (owner DEC-AUTH-1): verified identity → tenant
 // role (write: manager/owner/super_owner, explicit set) → business access → version-fence admission →
@@ -1980,11 +1980,26 @@ function scValidIds(tenantId, bizId) {
   return scIsValidId(tenantId) && scIsValidId(bizId) && !bizId.includes(":");
 }
 
+// P1-local registry boundary. Future shared extraction requires independent integration review.
+async function scRequireRegisteredBusiness(db, tenantId, bizId) {
+  let raw;
+  try { raw = (await db.ref(`tenants/${tenantId}/app/business`).get()).val(); }
+  catch { throw { status: 503, msg: "business_registry_unavailable" }; }
+  let businesses;
+  try { businesses = raw && typeof raw._v === "string" ? JSON.parse(raw._v) : null; } catch {}
+  if (!Array.isArray(businesses) || businesses.some(b => !b || typeof b !== "object" ||
+      !["string", "number"].includes(typeof b.id) || !scValidIds(tenantId, String(b.id))) ||
+      new Set(businesses.map(b => String(b.id))).size !== businesses.length)
+    throw { status: 503, msg: "business_registry_unreadable" };
+  if (!businesses.some(b => String(b.id) === bizId)) throw { status: 403, msg: "business_not_in_tenant" };
+}
+
 async function scAccess(claims, tenantId, bizId, mode) {
   const role = await requireTenantAccess(claims.uid, tenantId, mode === "write" ? "manager" : "viewer");
   if (mode === "write" && !WRITE_ROLES.includes(role)) throw { status: 403, msg: "role_not_allowed" };
   if (mode === "read" && !READ_ROLES.includes(role)) throw { status: 403, msg: "role_not_allowed" };
   const db = getAdminDb();
+  await scRequireRegisteredBusiness(db, tenantId, bizId);
   await requireBizAccess(db, tenantId, bizId, claims.uid, role);
   return { role, db };
 }
@@ -2045,8 +2060,7 @@ async function scRequireSupplier(res, db, tenantId, bizId, supplierId) {
 }
 
 function scValidatedInput(res, body, supplier) {
-  try { return validateCreditInput({ supplierId: body.supplierId, issueDate: body.issueDate, amount: body.amount, documentNumber: body.documentNumber, note: body.note,
-    documentCaseSensitive: supplier.documentNumberCaseSensitive === true }); }
+  try { return validateCreditInput({ supplierId: body.supplierId, issueDate: body.issueDate, amount: body.amount, documentNumber: body.documentNumber, note: body.note }); }
   catch (e) { res.status(400).json({ error: e?.code || "invalid_input" }); return null; }
 }
 
@@ -2088,7 +2102,24 @@ async function scExecute(res, ctx, cmd) {
   cmd.actorRole = fresh.role;
   cmd.requestHash = scRequestHash(cmd);
   ctx.now = cmd.now;
-  const outcome = await runSupplierCreditTxn(cmd);
+  const isDecision = cmd.action === "review_accept" || cmd.action === "review_reject";
+  if (isDecision) cmd.decisionPhase = "propose";
+  let outcome = await runSupplierCreditTxn(cmd);
+  if (isDecision && ["applied", "replayed"].includes(outcome.outcome) && outcome.result?.decisionPending) {
+    // Proposal is durable but leaves the credit flagged. Only a successful fresh post-check may
+    // finalize the owner's decision; a revoked/unavailable check cannot make the credit authoritative.
+    try {
+      const checked = await scAccess(ctx.claims, ctx.tenantId, ctx.bizId, "write");
+      if (!CREDIT_REVIEW_DECIDER_ROLES.includes(checked.role)) throw { status: 403, msg: "role_not_allowed" };
+      cmd.actorRole = checked.role;
+    } catch (e) {
+      res.status(200).json({ ok: true, applied: false, review: "flagged", decisionPending: true,
+        postCommitAccess: e?.status === 403 ? "revoked_during_commit" : "verification_unavailable", retryWithSameOperation: true });
+      return;
+    }
+    cmd.decisionPhase = "finalize";
+    outcome = await runSupplierCreditTxn(cmd);
+  }
   if (outcome.outcome === "conflict" || outcome.outcome === "unknown") {
     const code = outcome.code;
     res.status(SC_STATUS[code] || 409).json({ ok: false, error: code, ...(outcome.detail !== undefined ? { detail: outcome.detail } : {}), ...(outcome.outcome === "unknown" ? { outcomeUnknown: true, retryWithSameOperation: true } : {}) });
@@ -2192,9 +2223,7 @@ async function handleReconcileSupplierCreditReviews(req, res) {
     if (storedIntentDigest(node, operationId) !== rv.intentDigest) { results.push({ operationId, status: "review_identity_mismatch" }); continue; }
     let decision;
     try {
-      const role = await requireTenantAccess(rv.actor, ctx.tenantId, "manager");
-      if (!WRITE_ROLES.includes(role)) throw { status: 403 };
-      await requireBizAccess(ctx.db, ctx.tenantId, ctx.bizId, rv.actor, role);
+      await scAccess({ uid: rv.actor }, ctx.tenantId, ctx.bizId, "write");
       decision = { to: "cleared", resolution: "reconciled_authorized" };
     } catch (e) {
       if (e && e.status === 403) decision = { to: "flagged", resolution: "reconciled_unauthorized" };

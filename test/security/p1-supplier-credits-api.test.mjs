@@ -1,4 +1,4 @@
-// P1 Supplier Credits (P1 R1, MARJIN_CREDITS/3) — storage domain (lib/supplierCredits.js), repository and
+// P1 Supplier Credits (P1 R1, MARJIN_CREDITS/4) — storage domain (lib/supplierCredits.js), repository and
 // the REAL api/admin.js handlers with ONLY the Admin-SDK / auth / email seams replaced.
 //   SC-L*  pure domain: create / void / replace / owner decisions, idempotency, CAS, limits, fail-closed nodes
 //   SC-P*  parity: the writer's amount / id / document rules ≡ the Financial Core decoder; every write decodes VALID
@@ -38,6 +38,7 @@ const cid = (n) => `c0000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const oid = (n) => `0a000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 function seed({ role = "owner", uid = "u1", member = true, bizAccess = true, policy, suppliers = SUPPLIERS } = {}) {
   const db = installDb(makeDb());
+  db.seed(`tenants/${T}/app/business`, { _v: JSON.stringify([{id:B},{id:"bizB"}]) });
   db.seed(`tenants/${T}/members/${uid}`, member);
   db.seed(`tenants/${T}/roles/${uid}`, role);
   if (bizAccess) db.seed(`tenants/${T}/biz_access/${B}/${uid}`, true);
@@ -64,12 +65,12 @@ const input = (over = {}) => SC.validateCreditInput({ supplierId: "s1", issueDat
 const applied = (node, c) => { const r = SC.applyCreditOperation(node, c); assert.equal(r.outcome, "applied", JSON.stringify(r)); return r.node; };
 const cleared = (node, op, now = 1001) => SC.applyReviewTransition(node, { tenantId: T, bizId: B, operationId: op, intentDigest: node.review[op].intentDigest, to: "cleared", resolution: "post_commit_authorized", now }).node;
 
-test("SC-L01 create on an absent node: MARJIN_CREDITS/3 envelope bound to tenant + business, immutable record, identity reservation, head, PENDING review, ledger", () => {
+test("SC-L01 create on an absent node: MARJIN_CREDITS/4 envelope bound to tenant + business, immutable record, identity reservation, head, PENDING review, ledger", () => {
   const r = SC.applyCreditOperation(null, cmd({ action: "create", creditId: cid(1), operationId: oid(1), input: input() }));
   assert.equal(r.outcome, "applied");
   const n = r.node;
-  assert.deepEqual([n.schemaVersion, n.contract, n.tenantId, n.bizId, n.revision], [3, "MARJIN_CREDITS/3", T, B, 1]);
-  assert.deepEqual(n.records[cid(1)], { creditId: cid(1), logicalId: cid(1), tenantId: T, bizId: B, supplierId: "s1", issueDate: "2026-10-02", amount: "300", documentNumber: "CR-1", documentKey: "cr~2d~1", documentCaseSensitive: false, operationId: oid(1), seq: 1, createdAt: 1000, createdBy: "u1", createdRole: "owner" });
+  assert.deepEqual([n.schemaVersion, n.contract, n.tenantId, n.bizId, n.revision], [4, "MARJIN_CREDITS/4", T, B, 1]);
+  assert.deepEqual(n.records[cid(1)], { creditId: cid(1), logicalId: cid(1), tenantId: T, bizId: B, supplierId: "s1", issueDate: "2026-10-02", amount: "300", documentNumber: "CR-1", documentKey: "cr~2d~1", operationId: oid(1), seq: 1, createdAt: 1000, createdBy: "u1", createdRole: "owner" });
   assert.deepEqual(n.documents, { s_s1: { "d_cr~2d~1": { logicalId: cid(1), creditId: cid(1), operationId: oid(1), reservedAt: 1000, reservedBy: "u1" } } });
   assert.deepEqual(n.heads, { [cid(1)]: { creditId: cid(1), seq: 1 } });
   assert.equal(n.review[oid(1)].state, "pending"); assert.equal(n.review[oid(1)].kind, "create"); assert.match(n.review[oid(1)].intentDigest, /^[0-9a-f]{64}$/);
@@ -79,7 +80,7 @@ test("SC-L01 create on an absent node: MARJIN_CREDITS/3 envelope bound to tenant
 });
 
 test("SC-L02 validateCreditInput: supplier, issue date, positive canonical amount, MANDATORY document number, bounded note — rejected never truncated", () => {
-  assert.deepEqual(input({ amount: "300.50", documentNumber: "  CR   9 ", note: "  " }), { supplierId: "s1", issueDate: "2026-10-02", amount: "300.5", documentNumber: "CR 9", documentKey: "cr~20~9", documentFingerprint: "cr9", documentCaseSensitive: false });
+  assert.deepEqual(input({ amount: "300.50", documentNumber: "  CR   9 ", note: "  " }), { supplierId: "s1", issueDate: "2026-10-02", amount: "300.5", documentNumber: "CR 9", documentKey: "cr~20~9", documentFingerprint: "cr9" });
   const bad = [
     [{ supplierId: "" }, "invalid_supplier_id"], [{ supplierId: "a/b" }, "invalid_supplier_id"], [{ supplierId: 2 }, "invalid_supplier_id"],
     [{ issueDate: "2027-02-29" }, "invalid_issue_date"], [{ issueDate: "2026-10-2" }, "invalid_issue_date"], [{ issueDate: undefined }, "invalid_issue_date"],
@@ -154,7 +155,7 @@ test("SC-L07 fail-closed: no write over an unreadable node, a v1 node, or a node
   assert.equal(SC.safeNodeView(a).operations, undefined, "readers never see the operation ledger");
 });
 
-test("SC-L08 the owner's decision on a FLAGGED operation: accept ⇒ acknowledged; reject ⇒ rejected; never on pending / cleared; digest-bound; owner only", () => {
+test("SC-L08 the owner's decision on a FLAGGED operation: accept ⇒ cleared + accepted; reject ⇒ rejected; never on pending / cleared; digest-bound; owner only", () => {
   const a = applied(null, cmd({ action: "create", creditId: cid(1), operationId: oid(1), input: input() }));
   const d = a.review[oid(1)].intentDigest;
   const dec = (node, over) => SC.applyCreditOperation(node, cmd({ action: "review_accept", targetOperationId: oid(1), intentDigest: d, decision: "accept", operationId: oid(90), ...over }));
@@ -165,7 +166,7 @@ test("SC-L08 the owner's decision on a FLAGGED operation: accept ⇒ acknowledge
   assert.equal(dec(f, { intentDigest: "a".repeat(64) }).code, "review_identity_mismatch");
   assert.equal(dec(f, { targetOperationId: oid(77) }).code, "review_not_found");
   const acc = dec(f, {});
-  assert.equal(acc.outcome, "applied"); assert.equal(acc.node.review[oid(1)].state, "acknowledged"); assert.equal(acc.node.review[oid(1)].decidedBy, "u1");
+  assert.equal(acc.outcome, "applied"); assert.equal(acc.node.review[oid(1)].state, "cleared"); assert.equal(acc.node.review[oid(1)].decidedBy, "u1");
   assert.deepEqual(acc.node.records, f.records, "a decision changes no record");
   assert.equal(dec(acc.node, { operationId: oid(91) }).code, "review_not_flagged", "a second decision is refused");
   const rej = SC.applyCreditOperation(f, cmd({ action: "review_reject", targetOperationId: oid(1), intentDigest: d, decision: "reject", operationId: oid(92) }));

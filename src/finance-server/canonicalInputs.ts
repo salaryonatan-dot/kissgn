@@ -29,7 +29,7 @@ export interface ServerInputs extends ProductInputs {
   /** Structured exception ledger: not_loaded unless `need.exceptions`. */
   readonly exceptionsState: ExceptionLedgerState["state"] | "not_loaded";
   readonly inputIssues: readonly InputIssue[];
-  /** P1 (MARJIN_CREDITS/3): state of the supplier-credit node, ALWAYS read (purchases are net of credits). */
+  /** P1 (MARJIN_CREDITS/4): state of the supplier-credit node, ALWAYS read (purchases are net of credits). */
   readonly supplierCreditsState: SupplierCreditsState["state"];
 }
 

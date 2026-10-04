@@ -1,4 +1,4 @@
-// P1 R1 test support: MARJIN_CREDITS/3 nodes built with the REAL pure writer domain
+// P1 R1 test support: MARJIN_CREDITS/4 nodes built with the REAL pure writer domain
 // (lib/supplierCredits.js applyCreditOperation + applyReviewTransition) — never hand-written envelopes —
 // so every fixture is exactly what the server would store. Invalid shapes are produced by mutating a
 // valid node AFTER it was built (`mutate`).
@@ -12,7 +12,7 @@ export const clone = (v) => JSON.parse(JSON.stringify(v));
 /**
  * One credit spec: n (id), supplierId, issueDate, amount, plus optional
  *   documentNumber (default "CR-<n>"), note, actor / role,
- *   review: "cleared" (default) | "pending" | "flagged" | "acknowledged" | "rejected" — of its CREATE,
+ *   review: "cleared" (default) | "pending" | "flagged" | "accepted" | "rejected" — of its CREATE,
  *   voided: true | { review } — a later void operation (cleared unless its own review is given),
  *   raw: { field: value } — stored-record overrides applied AFTER the build (invalid data).
  */
@@ -36,8 +36,8 @@ export function resolve(node, operationId, state, { now = 100000, owner = "own" 
     if (t.o !== "applied") throw new Error("fixture transition refused: " + t.o);
     n = t.node;
   } else if (rv.state !== to) throw new Error("fixture: cannot move " + rv.state + " to " + state);
-  if (state === "acknowledged" || state === "rejected") {
-    n = run(n, { action: state === "acknowledged" ? "review_accept" : "review_reject", tenantId: n.tenantId, bizId: n.bizId, targetOperationId: operationId, intentDigest: rv.intentDigest, decision: state === "acknowledged" ? "accept" : "reject", operationId: "dec-" + operationId, actorUid: owner, actorRole: "owner", now: now + 1 });
+  if (state === "accepted" || state === "rejected") {
+    n = run(n, { action: state === "accepted" ? "review_accept" : "review_reject", tenantId: n.tenantId, bizId: n.bizId, targetOperationId: operationId, intentDigest: rv.intentDigest, decision: state === "accepted" ? "accept" : "reject", operationId: "dec-" + operationId, actorUid: owner, actorRole: "owner", now: now + 1 });
   }
   return n;
 }

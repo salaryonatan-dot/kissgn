@@ -44,7 +44,7 @@ import { productLaborSource } from "./laborSource.js";
 
 /**
  * MARJIN_PRODUCT/3 (P1 supplier credits): the composition applies the supplier credits issued on
- * each date (MARJIN_CREDITS/3 since P1 R1, `ProductInputs.supplierCredits`) to that date's purchases, so the
+ * each date (MARJIN_CREDITS/4 since P1 R1, `ProductInputs.supplierCredits`) to that date's purchases, so the
  * report, the daily metrics, the day record and the projection are all NET of credits.
  * MARJIN_PRODUCT/2 (closed-days amendment) is otherwise unchanged.
  */
@@ -123,7 +123,7 @@ export interface ProductInputs {
    */
   readonly exceptionLedgerState?: "present" | "absent" | "unreadable" | "not_loaded";
   /**
-   * P1 (MARJIN_CREDITS/3): the decoded supplier-credit node (decodeSupplierCredits). Every runtime
+   * P1 (MARJIN_CREDITS/4): the decoded supplier-credit node (decodeSupplierCredits). Every runtime
    * caller supplies it (server loader, browser C1 inputs). "unreadable" / "not_loaded" make every
    * date's purchases incomplete (never zero credits). Omitted ⇒ no credit source (core tests and
    * historical callers): purchases are the recorded gross, exactly as MARJIN_PRODUCT/2.

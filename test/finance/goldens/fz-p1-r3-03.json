@@ -1,0 +1,53 @@
+{
+ "id": "FZ-P1-03",
+ "version": "FZ-P1/3",
+ "owner": "P1 Supplier Credits (P1 R2 candidate)",
+ "artifact": "overall net purchases and Food Cost completeness with credits",
+ "note": "shapes: keys and types only (JSON projection), never values; ids: frozen contract identifiers and observed enum values; derived from the P1 R3 code by test/support/fz-p1-producers.mjs; P1 R1 goldens remain archived",
+ "scenarios": [
+  "none",
+  "present",
+  "negative_net",
+  "invalid_record",
+  "corrupt_chain",
+  "unreadable",
+  "not_loaded",
+  "pending",
+  "flagged",
+  "accepted",
+  "rejected",
+  "voided",
+  "corrected_identity"
+ ],
+ "ids": {
+  "purchasesPct": [
+   "invalid_components",
+   "value"
+  ]
+ },
+ "shapes": {
+  "purchases": {
+   "bySource": {
+    "supplier:s1": "string",
+    "supplier:s9?": "string"
+   },
+   "complete": "boolean",
+   "gross": {
+    "complete": "boolean",
+    "presentDays": "number",
+    "value": "string"
+   },
+   "grossBySource": {
+    "supplier:s1": "string"
+   },
+   "presentDays": "number",
+   "value": "string"
+  },
+  "purchasesPct": {
+   "basisKind?": "string",
+   "comparability?": "string",
+   "state": "string",
+   "value?": "string"
+  }
+ }
+}

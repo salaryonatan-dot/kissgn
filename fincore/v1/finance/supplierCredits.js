@@ -1,11 +1,45 @@
+// MARJIN_CREDITS/4 — supplier credit documents (P1 R1; owner decisions 2026-09-29 / 2026-10-02 / 2026-10-03).
+//
+// ACCOUNTING (unchanged from P1): a supplier credit is its OWN document, never a negative purchase. It
+// belongs to the period of the credit document's ISSUE DATE: a credit issued in October reduces October
+// even when it refers to a September invoice — the earlier month is never restated. Amounts are net of
+// VAT (BD-1), strictly positive, exact decimals with at most two fraction digits. For a period:
+//   supplier net purchases = gross purchases from the supplier − credits from the supplier,
+//   overall net purchases  = Σ gross purchases − Σ credits,
+// and Food Cost uses the net result. A net result may be negative: it is kept (never clamped) and flagged.
+//
+// P1 R3 (MARJIN_CREDITS/4) — the stored node (server-written only; client Rules deny the key):
+//   tenants/{t}/biz:{b}:supplier_credits = {
+//     schemaVersion: 4, contract: "MARJIN_CREDITS/4", tenantId, bizId, revision, updatedAt,
+//     records:   { [creditId]:    immutable credit document (payload + creation audit) },
+//     voids:     { [operationId]: immutable void / replace event (target, actor, reason) },
+//     documents: { ["s_" + supplierId]: { ["d_" + documentKey]: immutable document-identity reservation } },
+//                (prefixed keys: RTDB never turns them into arrays, whatever the supplier id / number)
+//     heads:     { [logicalId]:   { creditId, seq }  — the current pointer of one logical credit },
+//     review:    { [operationId]: DEC-AUTH-1 authorization review of the operation (MARJIN_CREDITR/3) },
+//     operations: …server-only idempotency ledger (never decoded here)
+//   }
+// A LOGICAL credit is one chain: its root record (logicalId === creditId) and the successors created by
+// replacements. Every mutation (create / void / replace) is one operation with a sequence number `seq`
+// on its logical credit and ONE review entry: pending → cleared | flagged; flagged → cleared (accepted) |
+// rejected (owner decision). Only cleared operations are AUTHORITATIVE. The accounting
+// state of a logical credit is the fold of its authoritative operations in seq order; a pending or
+// flagged operation (at most one, the latest) is NOT applied and makes the dates it touches INCOMPLETE —
+// an unresolved credit never reduces purchases and is never silently treated as absent.
+//
+// Decoding is strict and fail-closed: an undecodable envelope is UNREADABLE (never "no credits"); a
+// record / chain / audit / document / review defect is an ISSUE attributed to the dates of the logical
+// credit it belongs to (that credit contributes NOTHING — an earlier, apparently valid record of a
+// corrupt chain is never used); a defect that cannot be attributed makes EVERY date incomplete.
+import { creditEvidence } from "./creditEvidence.js";
 import { decAdd, decFromPlainString, decIsNegative, decIsZero, decSub, serializeDec } from "./decimal.js";
 import { isBusinessDate } from "./businessDate.js";
 import { sortFlags } from "./normalize.js";
-export const SUPPLIER_CREDITS_CONTRACT_VERSION = "MARJIN_CREDITS/3";
-export const SUPPLIER_CREDITS_SCHEMA_VERSION = 3;
-export const CREDIT_REVIEW_SCHEMA = "MARJIN_CREDITR/2";
-export const CREDIT_FLAG_AUDIT_SCHEMA = "MARJIN_CREDIT_AUDIT/2";
-export const CREDIT_DECISION_AUDIT_SCHEMA = "MARJIN_CREDIT_DECISION/1";
+export const SUPPLIER_CREDITS_CONTRACT_VERSION = "MARJIN_CREDITS/4";
+export const SUPPLIER_CREDITS_SCHEMA_VERSION = 4;
+export const CREDIT_REVIEW_SCHEMA = "MARJIN_CREDITR/3";
+export const CREDIT_FLAG_AUDIT_SCHEMA = "MARJIN_CREDIT_AUDIT/3";
+export const CREDIT_DECISION_AUDIT_SCHEMA = "MARJIN_CREDIT_DECISION/2";
 /** Same identity grammar as entry rows (UUID v4, lower-case). */
 export const CREDIT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 /** Operation ids: the entry-exception grammar (RTDB-safe). */
@@ -48,7 +82,7 @@ const HAS_ALNUM = /[\p{L}\p{N}]/u;
  *   5. fingerprint = the same canonical text with separators removed. It is a warning signal only.
  * Case folding is the locale-INDEPENDENT Unicode default (String.prototype.toLowerCase).
  */
-export function normalizeDocumentNumber(raw, caseSensitive = false) {
+export function normalizeDocumentNumber(raw) {
     if (raw === undefined || raw === null)
         return { ok: false, code: "document_number_required" };
     if (typeof raw !== "string")
@@ -64,7 +98,7 @@ export function normalizeDocumentNumber(raw, caseSensitive = false) {
     for (const ch of display)
         if (!ALLOWED_CHAR.test(ch))
             return { ok: false, code: "invalid_document_number_chars" };
-    const canonical = (caseSensitive ? display : display.toLowerCase()).normalize("NFKC");
+    const canonical = display.toLowerCase().normalize("NFKC");
     const fingerprint = display.toLowerCase().normalize("NFKC").replace(SEP_RUN, "");
     if (!HAS_ALNUM.test(fingerprint))
         return { ok: false, code: "invalid_document_number_chars" };
@@ -103,7 +137,7 @@ export function isValidNote(v) {
     return typeof v === "string" && v.length > 0 && v.length <= MAX_NOTE_LENGTH && v.trim() === v && !/[\u0000-\u001f]/.test(v);
 }
 // ── per-entry decoding (no cross-reference) ──────────────────────────────────────────────────────
-const RECORD_REQUIRED = ["creditId", "logicalId", "tenantId", "bizId", "supplierId", "issueDate", "amount", "documentNumber", "documentKey", "documentCaseSensitive", "operationId", "seq", "createdAt", "createdBy", "createdRole"];
+const RECORD_REQUIRED = ["creditId", "logicalId", "tenantId", "bizId", "supplierId", "issueDate", "amount", "documentNumber", "documentKey", "operationId", "seq", "createdAt", "createdBy", "createdRole"];
 const RECORD_OPTIONAL = ["note", "replacesCreditId", "identityCorrection", "similarityConfirmation"];
 function decodeRecord(key, r, bind) {
     if (!exactKeys(r, RECORD_REQUIRED, RECORD_OPTIONAL))
@@ -120,9 +154,7 @@ function decodeRecord(key, r, bind) {
     // the stored amount must already be canonical (the writer canonicalizes): "300.50" is not a stored form
     if (amount === null || amount !== r.amount)
         return { code: "invalid_amount" };
-    if (typeof r.documentCaseSensitive !== "boolean")
-        return { code: "invalid_document" };
-    const doc = normalizeDocumentNumber(r.documentNumber, r.documentCaseSensitive);
+    const doc = normalizeDocumentNumber(r.documentNumber);
     if (!doc.ok || doc.display !== r.documentNumber || doc.key !== r.documentKey)
         return { code: "invalid_document" };
     const sc = r.similarityConfirmation;
@@ -148,7 +180,7 @@ function decodeRecord(key, r, bind) {
         return { code: "invalid_link" };
     return {
         creditId: key, logicalId: r.logicalId, supplierId: r.supplierId, issueDate: r.issueDate, amount,
-        documentNumber: doc.display, documentKey: doc.key, documentCaseSensitive: r.documentCaseSensitive,
+        documentNumber: doc.display, documentKey: doc.key,
         similarityConfirmation: sc === undefined ? null : sc, note: r.note === undefined ? null : r.note,
         replacesCreditId: repl === undefined ? null : repl, identityCorrection: r.identityCorrection === true,
         operationId: r.operationId, seq: r.seq, createdAt: r.createdAt, createdBy: r.createdBy, createdRole: r.createdRole,
@@ -184,14 +216,16 @@ export const REVIEW_RESOLUTIONS = Object.freeze({
     cleared: Object.freeze(["post_commit_authorized", "reconciled_authorized"]),
     flagged: Object.freeze(["revoked_during_commit", "reconciled_unauthorized"]),
 });
-function decodeReview(key, e, bind) {
+function decodeReview(key, e, bind, node) {
     if (!OPERATION_ID_RE.test(key) || e.schema !== CREDIT_REVIEW_SCHEMA)
         return null;
     const st = e.state, kind = e.kind;
+    const decided = st === "rejected" || (st === "cleared" && e.decisionAudit !== undefined);
+    const evidence = creditEvidence(node, key);
     if (kind !== "create" && kind !== "void" && kind !== "replace")
         return null;
     const base = [...REVIEW_BASE, ...(kind === "replace" ? ["newCreditId"] : [])];
-    const resolved = st === "cleared" ? ["resolvedAt", "resolution"] : st === "flagged" ? ["resolvedAt", "resolution", "flagAudit"] : st === "acknowledged" || st === "rejected" ? ["resolvedAt", "resolution", "flagAudit", "decidedAt", "decidedBy", "decisionAudit"] : st === "pending" ? [] : null;
+    const resolved = decided ? ["resolvedAt", "resolution", "flagAudit", "decidedAt", "decidedBy", "decisionOperationId", "decisionAudit"] : st === "cleared" ? ["resolvedAt", "resolution"] : st === "flagged" ? ["resolvedAt", "resolution", "flagAudit"] : st === "pending" ? [] : null;
     if (resolved === null || !exactKeys(e, [...base, ...resolved]))
         return null;
     if (!isCreditId(e.logicalId) || !isCreditId(e.creditId))
@@ -205,33 +239,37 @@ function decodeReview(key, e, bind) {
     if (st !== "pending") {
         if (!isSafeInt(e.resolvedAt, 1) || e.resolvedAt < e.committedAt)
             return null;
-        const family = st === "cleared" ? "cleared" : "flagged";
+        const family = st === "cleared" && !decided ? "cleared" : "flagged";
         if (typeof e.resolution !== "string" || !REVIEW_RESOLUTIONS[family].includes(e.resolution))
             return null;
     }
-    if (st === "acknowledged" || st === "rejected") {
+    if (decided) {
         if (!isSafeInt(e.decidedAt, 1) || e.decidedAt < e.resolvedAt || !isActor(e.decidedBy))
             return null;
         const a = e.decisionAudit;
-        if (!isPlainObject(a) || !exactKeys(a, ["contract", "operationId", "targetOperationId", "tenantId", "bizId", "intentDigest", "decision", "by", "at"]) ||
-            a.contract !== CREDIT_DECISION_AUDIT_SCHEMA || !OPERATION_ID_RE.test(String(a.operationId)) || a.targetOperationId !== key ||
-            a.intentDigest !== e.intentDigest || a.decision !== st || a.by !== e.decidedBy || a.at !== e.decidedAt ||
-            a.tenantId !== bind.tenantId || a.bizId !== bind.bizId)
+        if (!isPlainObject(a) || !exactKeys(a, ["contract", "operationId", "targetOperationId", "tenantId", "bizId", "intentDigest", "decision", "state", "by", "at", "supplierId", "documentKey", "creditId", "versionId", "payloadDigest"]) ||
+            a.contract !== CREDIT_DECISION_AUDIT_SCHEMA || typeof a.operationId !== "string" || !OPERATION_ID_RE.test(a.operationId) || a.operationId !== e.decisionOperationId || a.targetOperationId !== key ||
+            a.intentDigest !== e.intentDigest || a.decision !== (st === "cleared" ? "accepted" : "rejected") || a.state !== st || a.by !== e.decidedBy || a.at !== e.decidedAt ||
+            a.tenantId !== bind.tenantId || a.bizId !== bind.bizId || !evidence ||
+            a.supplierId !== evidence.supplierId || a.documentKey !== evidence.documentKey || a.creditId !== e.creditId ||
+            a.versionId !== evidence.versionId || a.payloadDigest !== evidence.payloadDigest || e.intentDigest !== evidence.intentDigest)
             return null;
     }
-    if (st === "flagged" || st === "acknowledged" || st === "rejected") {
+    if (st === "flagged" || decided) {
         const a = e.flagAudit;
-        if (!isPlainObject(a) || !exactKeys(a, ["contract", "tenantId", "bizId", "operationId", "logicalId", "creditId", "intentDigest", "actor", "committedAt", "outcome", "detectedAt"]) ||
-            a.contract !== CREDIT_FLAG_AUDIT_SCHEMA || a.operationId !== key || a.logicalId !== e.logicalId || a.creditId !== e.creditId ||
+        if (!isPlainObject(a) || !exactKeys(a, ["contract", "tenantId", "bizId", "operationId", "logicalId", "creditId", "intentDigest", "actor", "committedAt", "outcome", "detectedAt", "decision", "state", "supplierId", "documentKey", "versionId", "payloadDigest"]) ||
+            a.contract !== CREDIT_FLAG_AUDIT_SCHEMA || a.decision !== "flagged" || a.state !== "flagged" || a.operationId !== key || a.logicalId !== e.logicalId || a.creditId !== e.creditId ||
             a.intentDigest !== e.intentDigest || a.actor !== e.actor || a.committedAt !== e.committedAt || a.outcome !== e.resolution || a.detectedAt !== e.resolvedAt ||
-            a.tenantId !== bind.tenantId || a.bizId !== bind.bizId)
+            a.tenantId !== bind.tenantId || a.bizId !== bind.bizId || !evidence ||
+            a.supplierId !== evidence.supplierId || a.documentKey !== evidence.documentKey || a.creditId !== e.creditId ||
+            a.versionId !== evidence.versionId || a.payloadDigest !== evidence.payloadDigest || e.intentDigest !== evidence.intentDigest)
             return null;
     }
     return {
         operationId: key, kind, state: st, logicalId: e.logicalId, creditId: e.creditId, newCreditId: kind === "replace" ? e.newCreditId : null,
         seq: e.seq, intentDigest: e.intentDigest, actor: e.actor, actorRole: e.actorRole, committedAt: e.committedAt,
         resolvedAt: st === "pending" ? null : e.resolvedAt, resolution: st === "pending" ? null : e.resolution,
-        decidedAt: st === "acknowledged" || st === "rejected" ? e.decidedAt : null, decidedBy: st === "acknowledged" || st === "rejected" ? e.decidedBy : null,
+        decidedAt: decided ? e.decidedAt : null, decidedBy: decided ? e.decidedBy : null,
     };
 }
 /** The RTDB keys of an identity reservation (prefixed: never array-like). */
@@ -251,7 +289,7 @@ function decodeDoc(sKey, dKey, d) {
         return null;
     return { supplierId, documentKey, logicalId: d.logicalId, creditId: d.creditId, operationId: d.operationId, reservedAt: d.reservedAt, reservedBy: d.reservedBy };
 }
-const AUTHORITATIVE = ["cleared", "acknowledged"];
+const AUTHORITATIVE = ["cleared"];
 const UNRESOLVED = ["pending", "flagged"];
 function foldGroup(g, reviews, docs) {
     const byId = new Map(g.records.map((r) => [r.creditId, r]));
@@ -481,19 +519,19 @@ export function decodeSupplierCredits(raw, expect) {
         defects.push([lid, key, code]); };
     for (const r of records)
         if (r.similarityConfirmation) {
-            const fp = normalizeDocumentNumber(r.documentNumber, r.documentCaseSensitive);
+            const fp = normalizeDocumentNumber(r.documentNumber);
             for (const logicalId of r.similarityConfirmation.confirmedAgainst) {
                 if (!records.some((other) => other.logicalId === logicalId && other.logicalId !== r.logicalId && other.supplierId === r.supplierId &&
-                    other.documentKey !== r.documentKey && normalizeDocumentNumber(other.documentNumber, other.documentCaseSensitive).ok &&
-                    normalizeDocumentNumber(other.documentNumber, other.documentCaseSensitive).fingerprint === fp.fingerprint))
+                    other.documentKey !== r.documentKey && normalizeDocumentNumber(other.documentNumber).ok &&
+                    normalizeDocumentNumber(other.documentNumber).fingerprint === fp.fingerprint))
                     report(r.logicalId, r.creditId, "invalid_document");
             }
         }
     const reviews = new Map();
     for (const [k, e] of Object.entries(raw.review || {})) {
-        const r = isPlainObject(e) ? decodeReview(k, e, bind) : null;
+        const r = isPlainObject(e) ? decodeReview(k, e, bind, raw) : null;
         if (!r) {
-            if (isPlainObject(e) && (e.state === "flagged" || e.state === "acknowledged" || e.state === "rejected"))
+            if (isPlainObject(e) && (e.state === "flagged" || e.state === "rejected" || e.flagAudit !== undefined || e.decisionAudit !== undefined))
                 return { state: "unreadable", reason: "invalid_review_audit" };
             report(lidOf(e), k, "invalid_review");
             continue;
@@ -584,7 +622,7 @@ export function decodeSupplierCredits(raw, expect) {
             out.push({
                 creditId: r.creditId, logicalId: r.logicalId, supplierId: r.supplierId, issueDate: r.issueDate, amount: r.amount,
                 status: f.recordStatus.get(r.creditId), documentNumber: r.documentNumber, documentKey: r.documentKey,
-                documentCaseSensitive: r.documentCaseSensitive, similarityConfirmation: r.similarityConfirmation, note: r.note,
+                similarityConfirmation: r.similarityConfirmation, note: r.note,
                 replacesCreditId: r.replacesCreditId, replacedByCreditId: f.successor.get(r.creditId) || null, identityCorrection: r.identityCorrection,
                 operationId: r.operationId, seq: r.seq, createdAt: r.createdAt, createdBy: r.createdBy, createdRole: r.createdRole,
                 review: reviews.get(r.operationId).state, unresolved: touches ? f.logical.unresolved : null,

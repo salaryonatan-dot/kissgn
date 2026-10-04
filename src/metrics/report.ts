@@ -180,7 +180,7 @@ export interface FinancialReport {
   readonly flags: readonly Flag[];
 }
 
-/** Supplier credits issued in the window (MARJIN_CREDITS/3, effective credits, keyed by issue date). */
+/** Supplier credits issued in the window (MARJIN_CREDITS/4, effective credits, keyed by issue date). */
 export interface SupplierCreditsTotal {
   readonly contract: string;
   /** absent: none issued (zero, complete) · present: counted · invalid: at least one window date has an incomplete credit fact (invalid / unreadable / unresolved review) */
@@ -192,7 +192,7 @@ export interface SupplierCreditsTotal {
   readonly dates: readonly BusinessDate[];
   /** every window date whose credit facts are incomplete (data defect, unreadable source or unresolved review) */
   readonly invalidDates: readonly BusinessDate[];
-  /** MARJIN_CREDITS/3: the subsets of invalidDates whose (highest-precedence) reason is an unresolved review */
+  /** MARJIN_CREDITS/4: the subsets of invalidDates whose (highest-precedence) reason is an unresolved review */
   readonly reviewPendingDates: readonly BusinessDate[];
   readonly reviewFlaggedDates: readonly BusinessDate[];
 }
@@ -497,7 +497,7 @@ export function computePeriodReport(
   const revenueIssues = metricIssues(inWindow, closed, "revenue", (d) => d.revenue, true);
   if (contradicted.length >= 1) revenueIssues.push({ component: "revenue", kind: "invalid", reason: "closed_day_has_recorded_values", dates: contradicted });
   const purchaseIssues = metricIssues(inWindow, closed, "purchases", (d) => d.purchases, true);
-  // MARJIN_CREDITS/3: an invalid / unreadable / review-unresolved credit fact on ANY recognised date (closed dates
+  // MARJIN_CREDITS/4: an invalid / unreadable / review-unresolved credit fact on ANY recognised date (closed dates
   // included — a credit's period is its issue date, not the operating calendar) is an invalid
   // purchases component: purchases, Food Cost and every dependent figure are never complete.
   const creditOnlyInvalid = creditInvalidDates.filter((dt) => !purchaseIssues.some((i) => i.kind === "invalid" && i.dates.includes(dt)));

@@ -35,6 +35,7 @@ const cid = (n) => `c0000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const oid = (n) => `0a000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 function seed() {
   const db = installDb(makeDb());
+  db.seed(`tenants/${T}/app/business`, { _v: JSON.stringify([{id:B}]) });
   for (const [u, r] of [["mgr", "manager"], ["own", "owner"], ["sup", "super_owner"], ["mgr2", "manager"]]) { db.seed(`tenants/${T}/members/${u}`, true); db.seed(`tenants/${T}/roles/${u}`, r); }
   db.seed(`tenants/${T}/biz_access/${B}/mgr`, true); db.seed(`tenants/${T}/biz_access/${B}/mgr2`, true);
   db.seed(`tenants/${T}/biz:${B}:suppliers`, { _v: JSON.stringify([{ id: "s1", name: "S1" }, { id: "s2", name: "S2" }]) });
@@ -276,7 +277,7 @@ test('P1R2-S02 same-tenant owner without explicit biz access decides flagged; su
   assert.equal(db.read(`tenants/${T}/biz_access/${B}/own`),null);
   const accepted=await call('decide-supplier-credit-review',body,{as:'own'});
   assert.equal(accepted.code,200,JSON.stringify(accepted.body));
-  assert.equal(stored(db).review[oid(1)].state,'acknowledged');
+  assert.equal(stored(db).review[oid(1)].state,'cleared');
   assert.equal(stored(db).review[oid(1)].decisionAudit.operationId,oid(80));
 });
 

@@ -1,4 +1,4 @@
-// P1 R1 — strict reader: replacement / void / audit / identity / head / review validation (MARJIN_CREDITS/3)
+// P1 R1 — strict reader: replacement / void / audit / identity / head / review validation (MARJIN_CREDITS/4)
 // and the accounting of DEC-AUTH-1 review states.
 //   CA-*  every corruption reproduced on the rejected candidate (Stage A probes A3a…A3k) is now an ISSUE:
 //         the corrupt logical credit contributes NOTHING (no earlier "valid-looking" record is used) and
@@ -127,12 +127,12 @@ test("RS-02 a FLAGGED credit is not counted until the OWNER decides; accepting c
   const flagged = creditNode([spec(1, "s1", "2026-08-05", "100", { review: "flagged" }), OTHER]);
   const rf = report(flagged);
   assert.equal(P$(rf).credits.value, "40"); assert.deepEqual(P$(rf).credits.reviewFlaggedDates, ["2026-08-05"]); assert.equal(P$(rf).complete, false);
-  const accepted = resolve(creditNode([spec(1, "s1", "2026-08-05", "100", { review: "flagged" }), OTHER]), oid(1), "acknowledged", { now: 900000 }); // flagged → acknowledged
+  const accepted = resolve(creditNode([spec(1, "s1", "2026-08-05", "100", { review: "flagged" }), OTHER]), oid(1), "accepted", { now: 900000 }); // flagged → acknowledged
   const cleared = creditNode([spec(1, "s1", "2026-08-05", "100"), OTHER]);
   const ra = report(accepted), rc = report(cleared);
   assert.equal(P$(ra).credits.value, "140"); assert.equal(P$(ra).complete, true);
   assert.equal(P$(ra).value, P$(rc).value, "an accepted credit counts exactly like a cleared one (once)");
-  assert.equal(dec(accepted).records.find((x) => x.creditId === cid(1)).review, "acknowledged");
+  assert.equal(dec(accepted).records.find((x) => x.creditId === cid(1)).review, "cleared");
   const rejected = creditNode([spec(1, "s1", "2026-08-05", "100", { review: "rejected" }), OTHER]);
   const rr = report(rejected);
   assert.equal(P$(rr).credits.value, "40", "a rejected credit never counts"); assert.equal(P$(rr).complete, true, "and its date is complete again");
@@ -163,7 +163,7 @@ test("RS-04 a PENDING / FLAGGED replacement: the predecessor still counts, the s
     assert.deepEqual(st0 === "pending" ? P$(r).credits.reviewPendingDates : P$(r).credits.reviewFlaggedDates, want);
     assert.equal(dec(raw).logical.find((l) => l.logicalId === cid(1)).head.creditId, cid(2), "the pointer already names the successor");
   }
-  const acc = replaceIn(base, 1, 2, { issueDate: "2026-08-07", amount: "90" }, { review: "acknowledged" });
+  const acc = replaceIn(base, 1, 2, { issueDate: "2026-08-07", amount: "90" }, { review: "accepted" });
   assert.equal(P$(report(acc)).credits.value, "130"); assert.equal(P$(report(acc)).complete, true);
   const rej = replaceIn(base, 1, 2, { issueDate: "2026-08-07", amount: "90" }, { review: "rejected" });
   const sr = dec(rej);
