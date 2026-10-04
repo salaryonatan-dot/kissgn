@@ -1,0 +1,76 @@
+{
+ "id": "FZ-P1-01",
+ "version": "FZ-P1/4",
+ "owner": "P1 Supplier Credits (P1 R4 candidate)",
+ "artifact": "FinancialReport.actual.purchases credit summary (supplier credits issued in the window)",
+ "note": "shapes: keys and types only (JSON projection), never values; ids: frozen contract identifiers and observed enum values; derived from the P1 R4 code by test/support/fz-p1-producers.mjs; prior goldens remain archived",
+ "scenarios": [
+  "none",
+  "present",
+  "negative_net",
+  "invalid_record",
+  "corrupt_chain",
+  "unreadable",
+  "not_loaded",
+  "pending",
+  "flagged",
+  "accepted",
+  "rejected",
+  "voided",
+  "corrected_identity"
+ ],
+ "ids": {
+  "credits": [
+   "MARJIN_CREDITS/4"
+  ],
+  "creditsState": [
+   "absent",
+   "invalid",
+   "present"
+  ],
+  "flags": [
+   "invalid_supplier_credit",
+   "negative_net_purchases",
+   "negative_supplier_net",
+   "supplier_credit_review_flagged",
+   "supplier_credit_review_pending",
+   "supplier_credits_unreadable"
+  ],
+  "issueReasons": [
+   "invalid_supplier_credit",
+   "supplier_credit_review_flagged",
+   "supplier_credit_review_pending",
+   "supplier_credits_not_loaded",
+   "supplier_credits_unreadable"
+  ]
+ },
+ "shapes": {
+  "credits": {
+   "bySupplier": {
+    "supplier:s1?": "string",
+    "supplier:s9?": "string"
+   },
+   "contract": "string",
+   "count": "number",
+   "dates": [
+    "string"
+   ],
+   "invalidDates": [
+    "string"
+   ],
+   "reviewFlaggedDates": [
+    "string"
+   ],
+   "reviewPendingDates": [
+    "string"
+   ],
+   "state": "string",
+   "value": {
+    "$oneOf": [
+     "null",
+     "string"
+    ]
+   }
+  }
+ }
+}

@@ -313,6 +313,7 @@ function decodeReview(key: string, e: Record<string, unknown>, bind: {tenantId:s
   const st = e.state, kind = e.kind;
   const decided = st === "rejected" || (st === "cleared" && e.decisionAudit !== undefined);
   const evidence = creditEvidence(node, key);
+  if (!evidence || e.intentDigest !== evidence.intentDigest) return null;
   if (kind !== "create" && kind !== "void" && kind !== "replace") return null;
   const base: string[] = [...REVIEW_BASE, ...(kind === "replace" ? ["newCreditId"] : [])];
   const resolved = decided ? ["resolvedAt", "resolution", "flagAudit", "decidedAt", "decidedBy", "decisionOperationId", "decisionAudit"] : st === "cleared" ? ["resolvedAt", "resolution"] : st === "flagged" ? ["resolvedAt", "resolution", "flagAudit"] : st === "pending" ? [] : null;
@@ -334,7 +335,7 @@ function decodeReview(key: string, e: Record<string, unknown>, bind: {tenantId:s
       a.intentDigest !== e.intentDigest || a.decision !== (st === "cleared" ? "accepted" : "rejected") || a.state !== st || a.by !== e.decidedBy || a.at !== e.decidedAt ||
       a.tenantId !== bind.tenantId || a.bizId !== bind.bizId || !evidence ||
       a.supplierId !== evidence.supplierId || a.documentKey !== evidence.documentKey || a.creditId !== e.creditId ||
-      a.versionId !== evidence.versionId || a.payloadDigest !== evidence.payloadDigest || e.intentDigest !== evidence.intentDigest) return null;
+      a.versionId !== evidence.versionId || a.payloadDigest !== evidence.payloadDigest) return null;
   }
   if (st === "flagged" || decided) {
     const a = e.flagAudit;
@@ -343,7 +344,7 @@ function decodeReview(key: string, e: Record<string, unknown>, bind: {tenantId:s
       a.intentDigest !== e.intentDigest || a.actor !== e.actor || a.committedAt !== e.committedAt || a.outcome !== e.resolution || a.detectedAt !== e.resolvedAt ||
       a.tenantId !== bind.tenantId || a.bizId !== bind.bizId || !evidence ||
       a.supplierId !== evidence.supplierId || a.documentKey !== evidence.documentKey || a.creditId !== e.creditId ||
-      a.versionId !== evidence.versionId || a.payloadDigest !== evidence.payloadDigest || e.intentDigest !== evidence.intentDigest) return null;
+      a.versionId !== evidence.versionId || a.payloadDigest !== evidence.payloadDigest) return null;
   }
   return {
     operationId: key, kind, state: st as ReviewState, logicalId: e.logicalId as string, creditId: e.creditId as string, newCreditId: kind === "replace" ? (e.newCreditId as string) : null,

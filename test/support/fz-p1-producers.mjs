@@ -11,7 +11,7 @@ import { loadSeam, srcOf } from "./c1-seam.mjs";
 import { NOW_MS, T, B, asLegacy, entry, env, inputs, seedRaw, uid } from "./b1-fixtures.mjs";
 import { spec, creditNode, replaceIn, mutate } from "./p1-credit-fixtures.mjs";
 
-export const FZ_P1_VERSION = "FZ-P1/3";
+export const FZ_P1_VERSION = "FZ-P1/4";
 export const IDS = ["FZ-P1-01", "FZ-P1-02", "FZ-P1-03", "FZ-P1-04", "FZ-P1-05"];
 const pad = (n) => String(n).padStart(2, "0");
 const AUG = () => Array.from({ length: 31 }, (_, i) => entry(uid(1 + i), `2026-08-${pad(i + 1)}`, { sales: "1000", supplier_payments: { s1: i < 30 ? "300" : "0" }, payroll: "100" }));
@@ -35,7 +35,7 @@ export function scenarios() {
     ["corrected_identity", replaceIn(creditNode([S(1, 5, "100")]), 1, 2, { documentNumber: "CR-77" }, { identityCorrection: true })],
   ];
 }
-const OWNER = "P1 Supplier Credits (P1 R2 candidate)";
+const OWNER = "P1 Supplier Credits (P1 R4 candidate)";
 const uniq = (xs) => [...new Set(xs)].sort();
 
 export async function produce() {
