@@ -59,9 +59,9 @@ const CORRUPTIONS = [
   ["A3j a record of ANOTHER business (tenant / business binding)", (n) => { n.records[cid(2)].bizId = "bizB"; }, "binding_mismatch", false],
   ["A3k the replace event's reason code is wrong / absent", (n) => { delete n.voids[oid(2)].reasonCode; }, "invalid_void", true],
   ["head: the current pointer is stale (still names the predecessor)", (n) => { n.heads[cid(1)].creditId = cid(1); }, "invalid_head", true],
-  ["head: the sequence is wrong", (n) => { n.heads[cid(1)].seq = 7; }, "invalid_head", true],
-  ["head: missing", (n) => { delete n.heads[cid(1)]; }, "invalid_head", true],
-  ["sequence: a gap in the chain sequence", (n) => { n.records[cid(2)].seq = 3; n.voids[oid(2)].seq = 3; n.review[oid(2)].seq = 3; n.heads[cid(1)].seq = 3; }, "invalid_chain", true],
+  ["head: the sequence is wrong", (n) => { n.heads[cid(1)].seq = 7; }, "invalid_head", false],
+  ["head: missing", (n) => { delete n.heads[cid(1)]; }, "invalid_head", false],
+  ["sequence: a gap in the chain sequence", (n) => { n.records[cid(2)].seq = 3; n.voids[oid(2)].seq = 3; n.review[oid(2)].seq = 3; n.heads[cid(1)].seq = 3; }, "invalid_chain", false],
   ["timestamps: the replacement precedes its predecessor's creation", (n) => { const t = n.records[cid(1)].createdAt - 5; n.records[cid(2)].createdAt = t; n.voids[oid(2)].voidedAt = t; n.review[oid(2)].committedAt = t; n.review[oid(2)].resolvedAt = t; }, "invalid_audit", true],
   ["review: missing for an operation", (n) => { delete n.review[oid(2)]; }, "invalid_review", false],
   ["review: actor differs from the record's creator", (n) => { n.review[oid(2)].actor = "intruder"; }, "invalid_audit", true],
@@ -69,7 +69,7 @@ const CORRUPTIONS = [
   ["review: malformed state fields (cleared without resolution)", (n) => { delete n.review[oid(2)].resolution; }, "invalid_review", true],
   ["review: TWO unresolved operations (an earlier one reopened)", (n) => { const r = n.review[oid(1)]; n.review[oid(1)] = { schema: r.schema, state: "pending", kind: r.kind, logicalId: r.logicalId, creditId: r.creditId, seq: r.seq, intentDigest: r.intentDigest, actor: r.actor, actorRole: r.actorRole, committedAt: r.committedAt }; const r2 = n.review[oid(2)]; n.review[oid(2)] = { schema: r2.schema, state: "pending", kind: r2.kind, logicalId: r2.logicalId, creditId: r2.creditId, newCreditId: r2.newCreditId, seq: r2.seq, intentDigest: r2.intentDigest, actor: r2.actor, actorRole: r2.actorRole, committedAt: r2.committedAt }; }, "invalid_review", true],
   ["review: an orphan entry for no operation", (n) => { n.review["orphan-op-0001"] = { ...n.review[oid(2)] }; }, "invalid_review", true],
-  ["identity: the reservation names another logical credit", (n) => { n.documents.s_s1["d_cr~2d~1"].logicalId = cid(9); }, "invalid_document", "both"],
+  ["identity: the reservation names another logical credit", (n) => { n.documents.s_s1["d_cr~2d~1"].logicalId = cid(9); }, "invalid_document", "both-unattributable"],
   ["identity: the record's normalized key does not match its number", (n) => { n.records[cid(2)].documentKey = "cr77"; }, "invalid_document", true],
   ["identity: an unflagged identity change on replacement", (n) => { Object.assign(n.records[cid(2)], { documentNumber: "CR-77", documentKey: "cr77" }); n.documents.s_s1["d_cr~2d~77"] = { ...n.documents.s_s1["d_cr~2d~1"], creditId: cid(2), operationId: oid(2), reservedAt: n.records[cid(2)].createdAt }; }, "invalid_document", true],
   ["identity: a reservation used by no record", (n) => { n.documents.s_s1["d_cr~2d~555"] = { ...n.documents.s_s1["d_cr~2d~1"] }; }, "invalid_document", true],
@@ -101,9 +101,10 @@ for (const [name, fn, code0, attributable] of CORRUPTIONS) {
       // A failed content digest invalidates even the stored date used by older attribution checks.
       assert.equal(P$(r).credits.invalidDates.length, 31, "untrusted dates cannot restrict incompleteness");
       assert.equal(P$(r).credits.value, "40", "the untouched credit remains visible in the partial value");
-    } else if (attributable === "both") {
-      // a reservation claimed by ANOTHER logical credit: both credits are excluded (fail closed), dates attributed
-      assert.ok(st.issues.every((i) => i.dates.length > 0)); assert.equal(st.credits.length, 0); assert.equal(P$(r).credits.value, null);
+    } else if (attributable === "both-unattributable") {
+      // The foreign reservation points outside its claimed lineage; both credits are excluded.
+      assert.ok(st.issues.some((i) => i.dates.length === 0)); assert.equal(st.credits.length, 0); assert.equal(P$(r).credits.value, null);
+      assert.equal(P$(r).credits.invalidDates.length, 31);
     } else if (attributable) {
       assert.ok(st.issues.every((i) => i.dates.length > 0), "attributed to dates");
       assert.ok(st.credits.some((c) => c.creditId === cid(9)), "the untouched credit 9 still counts");

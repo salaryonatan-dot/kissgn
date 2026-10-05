@@ -168,8 +168,14 @@ async function expected(node) {
 
 // ── reviewer main (P1 R4 review): rendered propagation of content-digest integrity failures ──────────────
 const prevMonth = (() => { const [y, m] = MONTH.split("-").map(Number); const p = m === 1 ? [y - 1, 12] : [y, m - 1]; return `${p[0]}-${String(p[1]).padStart(2, "0")}`; })();
-const tampered = (fn) => { const n = JSON.parse(JSON.stringify(CREDIT1)); fn(n); return n; };
+const tampered = (fn, base = CREDIT1) => { const n = JSON.parse(JSON.stringify(base)); fn(n); return n; };
 const OID1 = Object.keys(CREDIT1.review)[0];
+const ROOTPREV = FIX.creditNode([FIX.spec(1, "s1", `${prevMonth}-05`, "100", { documentNumber: "CR-100", actor: "u_owner", role: "owner" })], { tenantId: T, bizId: B });
+const CHAIN = FIX.replaceIn(ROOTPREV, 1, 2, { issueDate: d(5) }, { actor: "u_owner", role: "owner" });
+const ROOTYEAR = FIX.creditNode([FIX.spec(1, "s1", "2025-12-05", "100", { documentNumber: "CR-100", actor: "u_owner", role: "owner" })], { tenantId: T, bizId: B });
+const YEAR_CHAIN = FIX.replaceIn(ROOTYEAR, 1, 2, { issueDate: d(5) }, { actor: "u_owner", role: "owner" });
+const OID2 = FIX.oid(2);
+const lineageInvalid = (o) => o.tab.invalid && o.sup.incomplete && o.sup.pct === "—" && o.sup.total.includes("חלקי") && o.sup.total !== "₪3,300" && o.fatal === 0;
 async function observe(id, label, node, expectFn) {
   await apps.seed.database().ref("/").set({ ...fixtures(), tenants: { [T]: { ...fixtures().tenants[T], [`biz:${B}:supplier_credits`]: node } } });
   const X = await expected(node);
@@ -208,6 +214,22 @@ async function main() {
     tampered((n) => { delete n.review; n.records[cid(1)].issueDate = `${prevMonth}-05`; }), (o) => o.tab.invalid && o.sup.incomplete && o.sup.pct === "—" && o.sup.total.includes("חלקי") && o.fatal === 0);
   await observe("RVR-5", `cleared record issue date moved across a YEAR (${d(5)}→2025-12-05): the CURRENT month is not rendered complete`,
     tampered((n) => { n.records[cid(1)].issueDate = "2025-12-05"; }), (o) => (o.tab.invalid || o.sup.incomplete) && o.fatal === 0);
+  await observe("RVR-C0", "valid replaced chain: current Food Cost 29.1% and purchases ₪3,200", CHAIN,
+    (o) => !o.tab.invalid && !o.sup.incomplete && o.sup.pct === "29.1%" && o.sup.total === "₪3,200" && o.fatal === 0);
+  await observe("RVR-C1", "successor record and review deleted: current month must remain partial",
+    tampered((n) => { delete n.records[cid(2)]; delete n.review[OID2]; }, CHAIN), lineageInvalid);
+  await observe("RVR-C2", "successor, review and event deleted: current month must remain partial",
+    tampered((n) => { delete n.records[cid(2)]; delete n.review[OID2]; delete n.voids[OID2]; }, CHAIN), lineageInvalid);
+  await observe("RVR-C4", "successor, review, event and head deleted: current month must remain partial",
+    tampered((n) => { delete n.records[cid(2)]; delete n.review[OID2]; delete n.voids[OID2]; delete n.heads[cid(1)]; }, CHAIN), lineageInvalid);
+  await observe("RVR-Y0", "valid year-spanning replace: current Food Cost 29.1% and purchases ₪3,200", YEAR_CHAIN,
+    (o) => !o.tab.invalid && !o.sup.incomplete && o.sup.pct === "29.1%" && o.sup.total === "₪3,200" && o.fatal === 0);
+  await observe("RVR-Y1", "year-spanning successor and review deleted: current month must remain partial",
+    tampered((n) => { delete n.records[cid(2)]; delete n.review[OID2]; }, YEAR_CHAIN), lineageInvalid);
+  await observe("RVR-Y2", "year-spanning successor, review and event deleted: current month must remain partial",
+    tampered((n) => { delete n.records[cid(2)]; delete n.review[OID2]; delete n.voids[OID2]; }, YEAR_CHAIN), lineageInvalid);
+  await observe("RVR-Y4", "year-spanning successor, review, event and head deleted: current month must remain partial",
+    tampered((n) => { delete n.records[cid(2)]; delete n.review[OID2]; delete n.voids[OID2]; delete n.heads[cid(1)]; }, YEAR_CHAIN), lineageInvalid);
   console.log(`\n${"case".padEnd(7)} ${"status".padEnd(6)} notes`); console.log("-".repeat(120));
   for (const r of results) console.log(`${r.id.padEnd(7)} ${r.status.padEnd(6)} ${r.description}\n        ${r.notes}`);
   console.log("\n=== TOTALS ===");

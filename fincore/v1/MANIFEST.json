@@ -30,7 +30,7 @@
     "src/presenters/money.ts",
     "src/presenters/percent.ts"
   ],
-  "sourceDigest": "d69b041deee7e853a7251a762532b832e3af656e1b377c6e9ba16b71c6518a6f",
+  "sourceDigest": "4395321cacbf3c5c23ae105446a5fb5844bf8240d95b94e380380c6bc368db50",
   "files": [
     {
       "path": "browser/marjinFinanceGlobal.js",
@@ -66,7 +66,7 @@
     },
     {
       "path": "finance/supplierCredits.js",
-      "sha256": "49efa36b80ffa075174cb25f1e437687c43e1378cf40d0a7fdc0da4c381239b7"
+      "sha256": "7efb0e572d7463766609d966239e9632220bc6dafc741dca47a65ceaf5be57a8"
     },
     {
       "path": "finance/types.js",

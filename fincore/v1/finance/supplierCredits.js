@@ -558,16 +558,6 @@ export function decodeSupplierCredits(raw, expect) {
         }
         reviews.set(k, r);
     }
-    // A review section can be absent while records remain. Only a successfully decoded,
-    // digest-verified review can establish a record's issue date for defect attribution.
-    // Check the records themselves so deleting evidence cannot make a moved date trustworthy.
-    for (const r of Object.values(recs)) {
-        const lid = lidOf(r);
-        if (lid === null || !isPlainObject(r) || r.tenantId !== bind.tenantId || r.bizId !== bind.bizId)
-            continue;
-        if (typeof r.operationId !== "string" || !reviews.has(r.operationId))
-            untrustedDates.add(lid);
-    }
     const voidsByLogical = new Map();
     for (const [k, v] of Object.entries(raw.voids || {})) {
         const ev = isPlainObject(v) ? decodeVoid(k, v) : null;
@@ -593,6 +583,58 @@ export function decodeSupplierCredits(raw, expect) {
         }
     }
     const heads = raw.heads || {};
+    // Dates from surviving records can localize a defect only when the entire stored lineage is
+    // accounted for. A deleted successor can have a different (now unknowable) issue date. The
+    // checks use raw entries, including malformed ones: decoding may already have reported a defect,
+    // but that defect alone does not establish that its surviving dates are exhaustive.
+    const rawEvents = raw.voids || {};
+    const rawReviews = raw.review || {};
+    const rawDocuments = raw.documents || {};
+    for (const lid of named) {
+        const lineageRecords = Object.entries(recs).filter(([, r]) => isPlainObject(r) && lidOf(r) === lid &&
+            r.tenantId === bind.tenantId && r.bizId === bind.bizId);
+        const lineageEvents = Object.entries(rawEvents).filter(([, v]) => lidOf(v) === lid);
+        // (a) A present record without verified, decoded review evidence cannot authenticate its date.
+        if (lineageRecords.some(([, r]) => typeof r.operationId !== "string" || !reviews.has(r.operationId)))
+            untrustedDates.add(lid);
+        // (b) A void or replace event may point to a deleted record whose date is no longer present.
+        if (lineageEvents.some(([operationId]) => !reviews.has(operationId)))
+            untrustedDates.add(lid);
+        // (c) Every reference must name an actual record object belonging to this lineage.
+        const recordIds = new Set(lineageRecords.filter(([key, r]) => r.creditId === key).map(([key]) => key));
+        const references = [];
+        const head = heads[lid];
+        if (isPlainObject(head))
+            references.push(head.creditId);
+        for (const [, v] of lineageEvents)
+            if (isPlainObject(v)) {
+                references.push(v.creditId);
+                if (v.replacedByCreditId !== undefined && v.replacedByCreditId !== null)
+                    references.push(v.replacedByCreditId);
+            }
+        for (const [, r] of lineageRecords)
+            if (r.replacesCreditId !== undefined && r.replacesCreditId !== null)
+                references.push(r.replacesCreditId);
+        for (const e of Object.values(rawReviews))
+            if (lidOf(e) === lid && isPlainObject(e)) {
+                references.push(e.creditId);
+                if (e.newCreditId !== undefined && e.newCreditId !== null)
+                    references.push(e.newCreditId);
+            }
+        for (const inner of Object.values(rawDocuments))
+            if (isPlainObject(inner))
+                for (const d of Object.values(inner))
+                    if (lidOf(d) === lid && isPlainObject(d))
+                        references.push(d.creditId);
+        if (references.some((creditId) => typeof creditId !== "string" || !recordIds.has(creditId)))
+            untrustedDates.add(lid);
+        // (d) The head and operation cardinality prove that no operation is missing from this node.
+        const operationIds = new Set([
+            ...lineageRecords.map(([, r]) => r.operationId), ...lineageEvents.map(([operationId]) => operationId),
+        ]);
+        if (!isPlainObject(head) || !exactKeys(head, ["creditId", "seq"]) || head.seq !== operationIds.size)
+            untrustedDates.add(lid);
+    }
     const groups = new Map();
     for (const r of records) {
         const g = groups.get(r.logicalId) || { logicalId: r.logicalId, records: [], voids: voidsByLogical.get(r.logicalId) || [], head: heads[r.logicalId], reviewIds: [] };
