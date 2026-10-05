@@ -1,15 +1,15 @@
-// P1 R5 fixed candidate identity — pending independent Claude review.
+// P1 R6 fixed candidate identity — pending independent Claude review.
 // Refused R1/R2/R3 identities remain in p1-refused-identities.json; R4 requires remediation.
 export const P1_PINS = Object.freeze({
-  status: "CANDIDATE (P1 R5) — pending independent review (Claude)",
-  lineage: "P1 R5 sole parent 5a0183bb34d26dd9958400002e76660dd97001b8; approved C1 R2 base 358ce56be97a4222609a02f1a126e261744ee6fa",
+  status: "CANDIDATE (P1 R6) — pending independent review (Claude)",
+  lineage: "P1 R6 sole parent b81c84b7a858dd4c9bea52f9c4d3d07f881624b6; approved C1 R2 base 358ce56be97a4222609a02f1a126e261744ee6fa",
   blobs: Object.freeze({
     "api/admin.js": "c042127d1a9a73e4a05a65a93f68e8f8e20b3de7",
     "database.rules.json": "d8650f2343d63c7b5679b3e7481345e6fe571e98",
-    "fincore/v1/MANIFEST.json": "32bcd701fc50c7d1e3a6badaec828b4b3b86d1d4",
+    "fincore/v1/MANIFEST.json": "ed2973ff1977c8a6d59f846f005d09a16f58497c",
     "fincore/v1/browser/marjinFinanceGlobal.js": "b512ea5b3835f1e8cf7985942c513e64b5f73cec",
     "fincore/v1/finance/creditEvidence.js": "6e62eb310894b973962856960c00fc14d27ea7d0",
-    "fincore/v1/finance/supplierCredits.js": "c9323a9e05cf9b3ddcd8feafbcde27d5a25f6e45",
+    "fincore/v1/finance/supplierCredits.js": "3e0482af4d40ad2490e0e746d33cdf54b30ec69b",
     "fincore/v1/metrics/report.js": "5d7922ebfc5b3bc497a772e79bb6347d4a4cd619",
     "fincore/v1/policy/productFinance.js": "e2dc6dafff8a6cdf0417a1eef1e3c618ee0d3f2c",
     "index.html": "3eaeb430ae688b2a97d51c2709a409ab2de0fc0b",
@@ -19,7 +19,7 @@ export const P1_PINS = Object.freeze({
     "src/finance-server/canonicalInputs.ts": "d2f0cf4bac5446626964cd850eb1f090dd6f58e6",
     "src/finance-server/canonicalMetrics.ts": "a558351db763630d717460c1ae8f40b21b9a65ee",
     "src/finance/creditEvidence.ts": "dbcf2dc113f03e4e51e13ddc8ac08d5bdbba8e75",
-    "src/finance/supplierCredits.ts": "9fd3125a92061f84d014e60a3c368653e5cb4a4c",
+    "src/finance/supplierCredits.ts": "077e1afa2affe194912ec4353ba7cb069240a9d1",
     "src/finance/types.ts": "ccb3daf5307f0b76f332e2285a531aee6d1bd3d9",
     "src/metrics/report.ts": "c446b8c947d56e33924cddd3d53ef7be0b8c9310",
     "src/policy/productFinance.ts": "981dd3b1d7610e92e5c52d791bc3b932a45fd4d1",

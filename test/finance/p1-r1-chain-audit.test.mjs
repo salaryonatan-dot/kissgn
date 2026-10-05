@@ -2,7 +2,8 @@
 // and the accounting of DEC-AUTH-1 review states.
 //   CA-*  every corruption reproduced on the rejected candidate (Stage A probes A3a…A3k) fails closed:
 //         missing digest evidence makes the business node unreadable; mismatched evidence is
-//         unattributable across dates; other defects preserve the prior attribution rules
+//         unattributable across dates; absent review evidence is also unattributable because the
+//         record date has no digest proof; other defects preserve the prior attribution rules
 //   RS-*  review states: pending / flagged never counted and never silently absent; accept counts exactly
 //         once; reject never counts; a pending void / replace keeps the authoritative baseline (incomplete)
 // Every report runs on the server engine, the freshly generated browser core and the COMMITTED fincore
@@ -62,7 +63,7 @@ const CORRUPTIONS = [
   ["head: missing", (n) => { delete n.heads[cid(1)]; }, "invalid_head", true],
   ["sequence: a gap in the chain sequence", (n) => { n.records[cid(2)].seq = 3; n.voids[oid(2)].seq = 3; n.review[oid(2)].seq = 3; n.heads[cid(1)].seq = 3; }, "invalid_chain", true],
   ["timestamps: the replacement precedes its predecessor's creation", (n) => { const t = n.records[cid(1)].createdAt - 5; n.records[cid(2)].createdAt = t; n.voids[oid(2)].voidedAt = t; n.review[oid(2)].committedAt = t; n.review[oid(2)].resolvedAt = t; }, "invalid_audit", true],
-  ["review: missing for an operation", (n) => { delete n.review[oid(2)]; }, "invalid_review", true],
+  ["review: missing for an operation", (n) => { delete n.review[oid(2)]; }, "invalid_review", false],
   ["review: actor differs from the record's creator", (n) => { n.review[oid(2)].actor = "intruder"; }, "invalid_audit", true],
   ["review: kind / target do not match the operation", (n) => { n.review[oid(2)].kind = "void"; delete n.review[oid(2)].newCreditId; }, "invalid_review", true],
   ["review: malformed state fields (cleared without resolution)", (n) => { delete n.review[oid(2)].resolution; }, "invalid_review", true],

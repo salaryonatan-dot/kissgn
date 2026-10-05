@@ -23,7 +23,8 @@ function report(core, node, year, month) {
 const base = (state, date = '2026-10-05') => creditNode([spec(1, 's1', date, '100', { review: state })]);
 function incomplete(r, label) {
   assert.equal(r.purchases.complete, false, `${label}: purchases`);
-  assert.notEqual(r.foodCost.state, 'ok', `${label}: Food Cost`);
+  assert.equal(r.foodCost.state, 'invalid_components', `${label}: Food Cost must be unavailable`);
+  assert.equal('value' in r.foodCost, false, `${label}: no Food Cost percentage`);
   assert.equal(r.purchases.credits.value, null, `${label}: credits cannot become zero`);
 }
 

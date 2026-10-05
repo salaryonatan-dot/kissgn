@@ -563,6 +563,14 @@ export function decodeSupplierCredits(raw: unknown, expect?: { readonly tenantId
     }
     reviews.set(k, r);
   }
+  // A review section can be absent while records remain. Only a successfully decoded,
+  // digest-verified review can establish a record's issue date for defect attribution.
+  // Check the records themselves so deleting evidence cannot make a moved date trustworthy.
+  for (const r of Object.values(recs)) {
+    const lid = lidOf(r);
+    if (lid === null || !isPlainObject(r) || r.tenantId !== bind.tenantId || r.bizId !== bind.bizId) continue;
+    if (typeof r.operationId !== "string" || !reviews.has(r.operationId)) untrustedDates.add(lid);
+  }
   const voidsByLogical = new Map<string, RawVoid[]>();
   for (const [k, v] of Object.entries((raw.voids as Record<string, unknown>) || {})) {
     const ev = isPlainObject(v) ? decodeVoid(k, v) : null;
