@@ -57,7 +57,8 @@ export function yesterdayInIsrael(){ return "2026-09-28"; }`,
     stubs: {
       "src/snapshot/snapshotBuilder.js": `export async function buildSnapshotForAll(){ ${rec("buildSnapshotForAll", "[]")} }
 export async function buildSnapshotForBiz(t,b){ ${rec("buildSnapshotForBiz", "{tenantId:t,bizId:b,bizName:'Biz'}")} }`,
-      "src/snapshot/snapshotEmail.js": `export async function sendSnapshotEmail(){ ${rec("sendSnapshotEmail", "undefined")} }`,
+      "src/snapshot/snapshotEmail.js": `import { currentDeliveryAttempt } from "../../lib/emailDelivery.js";
+export async function sendSnapshotEmail(to){ const a = currentDeliveryAttempt(); if (a) { await a.beforeTransport(); a.info = { messageId: "<stub>", accepted: [to], rejected: [] }; } ${rec("sendSnapshotEmail", "undefined")} }`,
     },
   },
   "proactive": {
@@ -89,6 +90,8 @@ function build(route) {
   const put = (rel, content) => { const abs = join(dir, rel); mkdirSync(dirname(abs), { recursive: true }); writeFileSync(abs, content); };
   mkdirSync(join(dir, "lib"), { recursive: true });
   for (const f of ["securityContext.js", "bizAccess.js", ...(route.realLib || [])]) copyFileSync(join(REPO, "lib", f), join(dir, "lib", f));
+  // daily e-mail reliability: the snapshot route's delivery receipts / outcome classification (real, dependency-free)
+  if (existsSync(join(REPO, "lib", "emailDelivery.js"))) copyFileSync(join(REPO, "lib", "emailDelivery.js"), join(dir, "lib", "emailDelivery.js"));
   for (const [rel, c] of Object.entries({ ...COMMON, ...route.stubs })) put(rel, c);
   const routeAbs = join(dir, route.src);
   mkdirSync(dirname(routeAbs), { recursive: true });

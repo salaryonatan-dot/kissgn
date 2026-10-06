@@ -1,0 +1,43 @@
+// DE1 — daily e-mail delivery reliability layer (LOCAL checkpoint; pending independent review). Never derived from HEAD: every
+// identity is a literal in de1-daily-email.json (recorded by the author tool gen-layer-record.py).
+//
+//   DE1_PARENT   the M1 integration R1 author candidate the layer is built on (itself pending independent review)
+//   DE1_PINS     the literal blob of EVERY protected runtime file the DE1 commit changes relative to its parent
+//   DE1_EDITS    the exact { from, to } edits that turn each changed parent blob into its DE1 pin (each `from` unique when it
+//                applies); a new file has no edits (its pin is its identity)
+//
+// Scope (DE1G-03): the scheduled snapshot route's delivery orchestration (api/daily-snapshot/run.ts), the SMTP transport
+// wrapper (lib/sendEmail.js + .d.ts) and the new receipt module (lib/emailDelivery.js + .d.ts). A changed pin is a new
+// candidate and inherits no approval.
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+
+const RECORD = JSON.parse(readFileSync(new URL("./de1-daily-email.json", import.meta.url), "utf8"));
+export const DE1_PARENT = RECORD.parent;
+export const DE1_STATUS = "CHECKPOINT (daily e-mail delivery reliability) — pending independent review";
+export const DE1_PINS = Object.freeze({ ...RECORD.pins });
+export const DE1_NEW_FILES = Object.freeze([...RECORD.newFiles]);
+export const DE1_EDITS = Object.freeze(RECORD.edits);
+export const DE1_SCOPE = Object.freeze(["api/daily-snapshot/run.ts", "lib/emailDelivery.d.ts", "lib/emailDelivery.js", "lib/sendEmail.d.ts", "lib/sendEmail.js"]);
+
+const git = (repo, args, opts = {}) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 1 << 28, ...opts });
+/** The DE1 tree: its parent (the R1 candidate) is a STRICT ancestor of HEAD. */
+export function isDE1Tree(repo) {
+  if (git(repo, ["merge-base", "--is-ancestor", DE1_PARENT, "HEAD"]).status !== 0) return false;
+  return git(repo, ["rev-parse", "HEAD"]).stdout.trim() !== DE1_PARENT;
+}
+const parentBytes = (repo, f) => { const r = git(repo, ["cat-file", "blob", `${DE1_PARENT}:${f}`], { encoding: "buffer" }); if (r.status !== 0) throw new Error(`${DE1_PARENT}:${f}`); return r.stdout; };
+
+/** Apply the recorded DE1 edits of `file` to `bytes`; each `from` must occur exactly once when it applies. */
+export function applyDE1Edits(file, bytes, edits = DE1_EDITS) {
+  const list = edits[file];
+  if (!Array.isArray(list) || list.length === 0) return { ok: false, reason: "no_recorded_edits", detail: file };
+  let s = Buffer.isBuffer(bytes) ? bytes.toString("utf8") : String(bytes);
+  for (const [k, e] of list.entries()) {
+    if (typeof e.from !== "string" || typeof e.to !== "string" || e.from === "") return { ok: false, reason: "edit_shape", detail: `${file}#${k}` };
+    if (s.split(e.from).length !== 2) return { ok: false, reason: "edit_anchor_not_unique", detail: `${file}#${k}` };
+    s = s.replace(e.from, () => e.to);
+  }
+  return { ok: true, bytes: Buffer.from(s, "utf8") };
+}
+export function deriveDE1(repo, file, edits = DE1_EDITS) { return applyDE1Edits(file, parentBytes(repo, file), edits); }

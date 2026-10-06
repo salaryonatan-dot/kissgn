@@ -1,0 +1,206 @@
+{
+ "parent": "45e760c893f682b71d8e8e8e962528c385206609",
+ "pins": {
+  "api/daily-snapshot/run.ts": "ee4127a4a1be3e18c58e8c97c01bce764398b371",
+  "lib/emailDelivery.d.ts": "cd78a13164bf10df08c9acf0902264727a0c7504",
+  "lib/emailDelivery.js": "8484bffc1dc3d085c7100ff9c8994a822e87d4ca",
+  "lib/sendEmail.d.ts": "75b10519f7e4442aab5acd60407a1ab8632c3968",
+  "lib/sendEmail.js": "5ca6a6f45b22d4988ccb1723913468598d3e6367"
+ },
+ "newFiles": [
+  "lib/emailDelivery.d.ts",
+  "lib/emailDelivery.js"
+ ],
+ "edits": {
+  "api/daily-snapshot/run.ts": [
+   {
+    "from": "      message: String(error),\n",
+    "to": ""
+   },
+   {
+    "from": "    console.error(\"Error in daily-snapshot/run:\", error);\n",
+    "to": "    console.error(`[daily-snapshot] run failed: ${String((error as any)?.name ?? \"Error\")}: ${String((error as any)?.message ?? \"\").slice(0, 200)}`);\n"
+   },
+   {
+    "from": "\n      await sendSnapshotEmail(ownerEmail, snapshot);\n",
+    "to": "\n      const r = await deliverWithoutReceipt({ recipient: ownerEmail, send: () => sendSnapshotEmail(ownerEmail, snapshot) });\n      if (r.outcome === \"failed\") return res.status(502).json({ error: \"email_not_sent\", code: r.code });\n      if (r.outcome !== \"accepted\") return res.status(504).json({ error: \"email_outcome_unknown\", code: r.code });\n"
+   },
+   {
+    "from": "        return res.status(404).json({ error: \"No owner email found for this tenant\" });\n      }\n",
+    "to": "        return res.status(404).json({ error: \"No owner email found for this tenant\" });\n      }\n      const ownerEmail = recipient.email;\n"
+   },
+   {
+    "from": "      if (!ownerEmail) {\n        return res.status(404).json({ error: \"No owner email found for this tenant\" });\n",
+    "to": "      if (!recipient.ok) {\n        return recipient.code === \"no_recipient\"\n          ? res.status(404).json({ error: \"No owner email found for this tenant\" })\n          : res.status(503).json({ error: \"Owner email temporarily unavailable\", code: recipient.code });\n"
+   },
+   {
+    "from": "      const ownerEmail = await getOwnerEmail(tenantId);\n",
+    "to": "      const recipient = await resolveOwnerRecipient(tenantId);\n"
+   },
+   {
+    "from": "    // POST = manual trigger for single business (authorized above).\n",
+    "to": "    // POST = manual trigger for single business (authorized above). A manual send is an explicit owner request: it is not\n    // de-duplicated against the scheduled receipt, but its provider outcome is classified (never a false success).\n"
+   },
+   {
+    "from": "        failures: failures.length > 0 ? failures : undefined,\n        skipped: skipped.length > 0 ? skipped : undefined,\n",
+    "to": "        receiptWriteFailures,\n        results,\n"
+   },
+   {
+    "from": "        failureCount,\n",
+    "to": "        failureCount,\n        unknownCount,\n"
+   },
+   {
+    "from": "        successCount,\n",
+    "to": "        successCount: sentCount,\n        alreadyAcceptedCount,\n        inProgressCount,\n"
+   },
+   {
+    "from": "      return res.status(200).json({\n        status: \"completed\",\n",
+    "to": "      const count = (pred: (x: Row) => boolean) => results.filter(pred).length;\n      const sentCount = count((x) => x.outcome === \"accepted\");\n      const alreadyAcceptedCount = count((x) => x.outcome === \"skipped\" && x.code === \"already_accepted\");\n      const inProgressCount = count((x) => x.outcome === \"skipped\" && x.code === \"in_progress\");\n      const unknownCount = count((x) => x.outcome === \"unknown\" || (x.outcome === \"skipped\" && x.code === \"unknown_requires_reconciliation\"));\n      const failureCount = count((x) => x.outcome === \"failed\" || (x.outcome === \"skipped\" && (x.code === \"failed_final\" || x.code === \"receipt_unreadable\" || x.code === \"claim_not_confirmed\")));\n      const skippedCount = count((x) => x.outcome === \"skipped\" && x.code === \"unknown_business_name\");\n      const receiptWriteFailures = count((x) => x.receipt === \"write_failed\" || x.receipt === \"unavailable\");\n      const clean = failureCount === 0 && unknownCount === 0 && receiptWriteFailures === 0;\n\n      // A run with any undelivered, ambiguous or unrecorded message is NOT reported as success to the scheduler.\n      return res.status(clean ? 200 : 500).json({\n        status: clean ? \"completed\" : \"completed_with_failures\",\n"
+   },
+   {
+    "from": "          });\n        }\n",
+    "to": "          });\n        }\n\n        const recipient = await resolveOwnerRecipient(snapshot.tenantId);\n        if (!recipient.ok) {\n          console.warn(`[daily-snapshot] no deliverable recipient for ${snapshot.tenantId}:${snapshot.bizId} (${recipient.code})`);\n          results.push({ ...base, outcome: \"failed\", code: recipient.code });\n          continue;\n        }\n\n        const r = await deliverWithReceipt({\n          db,\n          kind: DAILY_SNAPSHOT_KIND,\n          tenantId: snapshot.tenantId,\n          bizId: snapshot.bizId,\n          businessDate: snapshot.date,\n          recipient: recipient.email,\n          send: () => sendSnapshotEmail(recipient.email, snapshot),\n        });\n        if (r.outcome !== \"accepted\" && !(r.outcome === \"skipped\" && (r.code === \"already_accepted\" || r.code === \"in_progress\"))) {\n          console.error(`[daily-snapshot] delivery ${r.outcome} for ${snapshot.tenantId}:${snapshot.bizId}:${snapshot.date} code=${r.code} attempt=${r.attempt ?? \"-\"} receipt=${r.receipt}`);\n        }\n        results.push({ ...base, outcome: r.outcome, code: r.code, attempt: r.attempt, receipt: r.receipt });\n"
+   },
+   {
+    "from": "            error: String(error),\n          });\n",
+    "to": "            error: String(error),\n          });\n          results.push({ ...base, outcome: \"skipped\", code: \"unknown_business_name\" });\n          continue;\n"
+   },
+   {
+    "from": "            error: String(error),\n",
+    "to": "            reason: \"unknown_business_name\",\n"
+   },
+   {
+    "from": "        try {\n          if (isUnknownBusinessName(snapshot.bizName)) {\n            console.warn(\"[daily-snapshot] skipping snapshot email for unknown business\", {\n              tenantId: snapshot.tenantId,\n              bizId: snapshot.bizId,\n              reason: \"unknown_business_name\",\n            });\n            skippedCount++;\n            skipped.push({\n              tenantId: snapshot.tenantId,\n              bizId: snapshot.bizId,\n              reason: \"unknown_business_name\",\n            });\n            continue;\n          }\n\n          const ownerEmail = await getOwnerEmail(snapshot.tenantId);\n\n          if (!ownerEmail) {\n            console.warn(\n              `No owner email found for tenant ${snapshot.tenantId}, skipping snapshot email`\n            );\n            failureCount++;\n            failures.push({\n              tenantId: snapshot.tenantId,\n              bizId: snapshot.bizId,\n              error: \"No owner email found\",\n            });\n            continue;\n          }\n\n          await sendSnapshotEmail(ownerEmail, snapshot);\n          successCount++;\n        } catch (error) {\n          console.error(\n            `Error sending snapshot email for ${snapshot.tenantId}:${snapshot.bizId}:`,\n            error\n          );\n          failureCount++;\n          failures.push({\n",
+    "to": "        const base = { tenantId: snapshot.tenantId, bizId: snapshot.bizId, businessDate: snapshot.date ?? null };\n        if (isUnknownBusinessName(snapshot.bizName)) {\n          console.warn(\"[daily-snapshot] skipping snapshot email for unknown business\", {\n"
+   },
+   {
+    "from": "      let successCount = 0;\n      let failureCount = 0;\n      let skippedCount = 0;\n      const failures: Array<{ tenantId: string; bizId: string; error: string }> = [];\n      const skipped: Array<{ tenantId: string; bizId: string; reason: string }> = [];\n",
+    "to": "      // Daily e-mail reliability: every business ends in exactly one recorded outcome. A message is sent at most once per\n      // (business, business date) by automation: a receipt (lib/emailDelivery.js) is claimed before the provider is\n      // called, so a duplicate, concurrent or re-run invocation never re-sends an accepted or possibly-accepted message.\n      type Row = { tenantId: string; bizId: string; businessDate: string | null; outcome: string; code: string | null; attempt?: number; receipt?: string };\n      const results: Row[] = [];\n"
+   },
+   {
+    "from": "      const snapshots = await buildSnapshotForAll();\n",
+    "to": "      const snapshots = await buildSnapshotForAll();\n      const db = getDb();\n"
+   },
+   {
+    "from": "    return null;\n  } catch (error) {\n    console.error(`Error getting owner email for tenant ${tenantId}:`, error);\n    return null;\n  }\n",
+    "to": "  return { ok: false, code: \"no_recipient\" };\n"
+   },
+   {
+    "from": "    // Fallback to first user with email\n    const firstWithEmail = users.find((u) => u.email && !u.email.endsWith(\"@temp.marjin.app\"));\n    if (firstWithEmail) {\n      return firstWithEmail.email;\n    }\n",
+    "to": "  // Fallback to first user with email\n  const firstWithEmail = users.find((u) => u && u.email && !u.email.endsWith(\"@temp.marjin.app\"));\n  if (firstWithEmail) {\n    return { ok: true, email: firstWithEmail.email };\n  }\n"
+   },
+   {
+    "from": "    // Find owner or super_owner\n    const owner = users.find((u) => u.role === \"owner\" || u.role === \"super_owner\");\n    if (owner && owner.email && !owner.email.endsWith(\"@temp.marjin.app\")) {\n      return owner.email;\n    }\n",
+    "to": "  // Find owner or super_owner\n  const owner = users.find((u) => u && (u.role === \"owner\" || u.role === \"super_owner\"));\n  if (owner && owner.email && !owner.email.endsWith(\"@temp.marjin.app\")) {\n    return { ok: true, email: owner.email };\n  }\n"
+   },
+   {
+    "from": "      users = usersData;\n    }\n",
+    "to": "      users = usersData;\n    }\n  } else if ((usersData as any)._v && typeof (usersData as any)._v === \"string\") {\n    try {\n      users = JSON.parse((usersData as any)._v);\n    } catch {\n      return { ok: false, code: \"recipient_unavailable\" };\n    }\n  } else if (Array.isArray(usersData)) {\n    users = usersData;\n  }\n  if (!Array.isArray(users)) return { ok: false, code: \"recipient_unavailable\" };\n"
+   },
+   {
+    "from": "    if (typeof usersData === \"string\") {\n      try {\n        users = JSON.parse(usersData);\n      } catch {\n        return null;\n      }\n    } else if (usersData._v && typeof usersData._v === \"string\") {\n      try {\n        users = JSON.parse(usersData._v);\n      } catch {\n        return null;\n      }\n    } else if (Array.isArray(usersData)) {\n      users = usersData;\n",
+    "to": "  if (typeof usersData === \"string\") {\n    try {\n      users = JSON.parse(usersData);\n    } catch {\n      return { ok: false, code: \"recipient_unavailable\" };\n"
+   },
+   {
+    "from": "    let users: Array<{ name: string; email: string; role: string }> = [];\n",
+    "to": "  let users: Array<{ name: string; email: string; role: string }> = [];\n"
+   },
+   {
+    "from": "    if (!usersData) return null;\n",
+    "to": "  if (!usersData) return { ok: false, code: \"no_recipient\" };\n"
+   },
+   {
+    "from": "    const usersData = usersSnap.val();\n",
+    "to": "    usersData = usersSnap.val();\n  } catch (error) {\n    console.error(`[daily-snapshot] recipient read failed for tenant ${tenantId}: ${(error as any)?.code ?? \"read_error\"}`);\n    return { ok: false, code: \"recipient_unavailable\" };\n  }\n"
+   },
+   {
+    "from": "async function getOwnerEmail(tenantId: string): Promise<string | null> {\n  const db = getDb();\n\n",
+    "to": "async function getOwnerEmail(tenantId: string): Promise<string | null> {\n  const db = getDb();\n\n  let usersData: unknown;\n"
+   },
+   {
+    "from": "async function getOwnerEmail(tenantId: string): Promise<string | null> {\n",
+    "to": "// Recipient resolution — the SAME selection as before (owner / super_owner with a real address, else the first user with a\n// real address; never a @temp.marjin.app placeholder). Daily e-mail reliability: a failed READ is no longer reported as\n// \"no owner e-mail\" — it is `recipient_unavailable` (transient), distinct from `no_recipient` (nothing to send to).\ntype RecipientResult = { ok: true; email: string } | { ok: false; code: \"no_recipient\" | \"recipient_unavailable\" };\nasync function resolveOwnerRecipient(tenantId: string): Promise<RecipientResult> {\n"
+   },
+   {
+    "from": "import { requireCron, requireBizContext } from \"../../lib/securityContext.js\";\n",
+    "to": "import { requireCron, requireBizContext } from \"../../lib/securityContext.js\";\nimport { deliverWithReceipt, deliverWithoutReceipt, DAILY_SNAPSHOT_KIND } from \"../../lib/emailDelivery.js\";\n"
+   }
+  ],
+  "lib/sendEmail.d.ts": [
+   {
+    "from": "}\n\n",
+    "to": "}\n\n/** Bounded SMTP session timeouts passed to nodemailer (ms). */\nexport const SMTP_TIMEOUTS: Readonly<{ connectionTimeout: number; greetingTimeout: number; socketTimeout: number; dnsTimeout: number }>;\n/** Backstop deadline for one provider call (ms); its outcome is then unknown. */\nexport const SEND_DEADLINE_MS: number;\n\n"
+   }
+  ],
+  "lib/sendEmail.js": [
+   {
+    "from": "        × ×©×× ××××××××ª ×-Marjin Â· <a href=\"https://kissgn.vercel.app\" style=\"color:#6366f1;\">×× ××¡× ×××¢×¨××ª</a>\n",
+    "to": "        נשלח אוטומטית מ-Marjin · <a href=\"https://kissgn.vercel.app\" style=\"color:#6366f1;\">כניסה למערכת</a>\n"
+   },
+   {
+    "from": "      ${summaryText} Â· ×¡××´× ${alerts.length} ×ª××× ××ª\n",
+    "to": "      ${summaryText} · סה״כ ${alerts.length} תובנות\n"
+   },
+   {
+    "from": "      <h1 style=\"margin:0;font-size:22px;\">ð ××× ×××§×¨ â Marjin</h1>\n      <p style=\"margin:6px 0 0;opacity:0.8;font-size:14px;\">${bizName} Â· ${today}</p>\n",
+    "to": "      <h1 style=\"margin:0;font-size:22px;\">📊 דוח בוקר — Marjin</h1>\n      <p style=\"margin:6px 0 0;opacity:0.8;font-size:14px;\">${bizName} · ${today}</p>\n"
+   },
+   {
+    "from": "    ? `ð´ ${criticalCount} ××ª×¨×××ª ×§×¨×××××ª â ${bizName}`\n    : `ð ××× ×××§×¨ â ${bizName} â ${alerts.length} ×ª××× ××ª`;\n",
+    "to": "    ? `🔴 ${criticalCount} התראות קריטיות — ${bizName}`\n    : `📊 דוח בוקר — ${bizName} — ${alerts.length} תובנות`;\n"
+   },
+   {
+    "from": "  if (criticalCount > 0) summaryParts.push(`ð´ ${criticalCount} ×§×¨×××`);\n  if (warningCount > 0)  summaryParts.push(`ð¡ ${warningCount} ××××¨×`);\n  if (infoCount > 0)     summaryParts.push(`ðµ ${infoCount} ××××¢`);\n  const summaryText = summaryParts.join(\"  Â·  \");\n",
+    "to": "  if (criticalCount > 0) summaryParts.push(`🔴 ${criticalCount} קריטי`);\n  if (warningCount > 0)  summaryParts.push(`🟡 ${warningCount} אזהרה`);\n  if (infoCount > 0)     summaryParts.push(`🔵 ${infoCount} מידע`);\n  const summaryText = summaryParts.join(\"  ·  \");\n"
+   },
+   {
+    "from": "    s === \"critical\" ? \"ð´\" : s === \"warning\" ? \"ð¡\" : \"ðµ\";\n",
+    "to": "    s === \"critical\" ? \"🔴\" : s === \"warning\" ? \"🟡\" : \"🔵\";\n"
+   },
+   {
+    "from": " * @param {string} to         â recipient email\n * @param {string} bizName    â business name\n * @param {Array}  alerts     â array of FiredAlert objects\n",
+    "to": " * @param {string} to         — recipient email\n * @param {string} bizName    — business name\n * @param {Array}  alerts     — array of FiredAlert objects\n"
+   },
+   {
+    "from": "  const info = await transporter.sendMail({\n    from: `${fromName} <${fromAddr}>`,\n    to,\n    subject,\n    html,\n  });\n\n  console.log(`[sendEmail] sent to ${to}, id: ${info.messageId}`);\n",
+    "to": "  if (attempt) await attempt.beforeTransport();\n  let info;\n  try {\n    info = await withDeadline(transporter.sendMail({\n      from: `${fromName} <${fromAddr}>`,\n      to,\n      subject,\n      html,\n      ...(attempt ? { messageId: attempt.messageId } : {}),\n    }), sendDeadlineMs());\n  } catch (err) {\n    if (attempt) attempt.error = err;\n    console.error(`[sendEmail] provider error code=${(err && err.code) || \"none\"} smtp=${(err && err.responseCode) || \"none\"} command=${(err && err.command) || \"none\"} ${recipientRef(to)}`);\n    throw err;\n  }\n  if (attempt) attempt.info = info;\n  console.log(`[sendEmail] provider answered for ${recipientRef(to)}, id: ${info.messageId}`);\n"
+   },
+   {
+    "from": "export async function sendEmail(to, subject, html) {\n",
+    "to": "export async function sendEmail(to, subject, html) {\n  const attempt = currentDeliveryAttempt();\n"
+   },
+   {
+    "from": " * @param {string} to       â recipient email address\n * @param {string} subject  â email subject\n * @param {string} html     â email body (HTML)\n",
+    "to": " * When called inside a delivery attempt (lib/emailDelivery.js deliverWithReceipt), the attempt is marked as handed to the\n * provider BEFORE the message leaves (a failure there aborts the send), the message carries the attempt's deterministic\n * Message-ID (for reconciliation only — SMTP does not de-duplicate on it), and the provider result or error is recorded\n * on the attempt. Logs never contain the recipient address or provider response text.\n * @param {string} to       — recipient email address\n * @param {string} subject  — email subject\n * @param {string} html     — email body (HTML)\n"
+   },
+   {
+    "from": "  return _transporter;\n}\n\n",
+    "to": "  return _transporter;\n}\n\nfunction withDeadline(promise, ms) {\n  let timer;\n  const deadline = new Promise((_, reject) => {\n    timer = setTimeout(() => { const e = new Error(\"no provider answer within \" + ms + \" ms\"); e.code = \"EDEADLINE\"; reject(e); }, ms);\n  });\n  return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));\n}\n\n"
+   },
+   {
+    "from": "    auth: { user, pass },\n",
+    "to": "    auth: { user, pass },\n    ...SMTP_TIMEOUTS,\n"
+   },
+   {
+    "from": "    throw new Error(\"Missing SMTP_EMAIL or SMTP_APP_PASSWORD env vars\");\n",
+    "to": "    const e = new Error(\"Missing SMTP_EMAIL or SMTP_APP_PASSWORD env vars\");\n    e.code = \"ECONFIG\";\n    throw e;\n"
+   },
+   {
+    "from": "import nodemailer from \"nodemailer\";\n",
+    "to": "import nodemailer from \"nodemailer\";\nimport { currentDeliveryAttempt, recipientRef } from \"./emailDelivery.js\";\n\n// Bounded SMTP session (daily e-mail reliability). nodemailer's defaults are a 2-minute connection timeout and a ONE-HOUR\n// socket inactivity timeout, so a stalled Gmail session could hold a scheduled run until the platform killed it — with every\n// later business left unsent and nothing recorded. These bounds make every send settle; SEND_DEADLINE_MS is the backstop\n// for a promise that still never settles (its outcome is then UNKNOWN, see lib/emailDelivery.js).\nexport const SMTP_TIMEOUTS = Object.freeze({ connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 30000, dnsTimeout: 10000 });\nexport const SEND_DEADLINE_MS = 60000;\n/** The effective backstop: EMAIL_SEND_DEADLINE_MS may only LOWER it (1 ms … SEND_DEADLINE_MS); anything else is ignored. */\nfunction sendDeadlineMs() {\n  const v = Number(process.env.EMAIL_SEND_DEADLINE_MS);\n  return Number.isInteger(v) && v >= 1 && v <= SEND_DEADLINE_MS ? v : SEND_DEADLINE_MS;\n}\n"
+   },
+   {
+    "from": " *   GMAIL_FROM_NAME    â (optional) Display name, defaults to \"Marjin\"\n",
+    "to": " *   GMAIL_FROM_NAME    — (optional) Display name, defaults to \"Marjin\"\n"
+   },
+   {
+    "from": " *   SMTP_EMAIL         â Gmail address, e.g. \"appmarjin@gmail.com\"\n *   SMTP_APP_PASSWORD  â App Password (NOT the regular password).\n",
+    "to": " *   SMTP_EMAIL         — Gmail address, e.g. \"appmarjin@gmail.com\"\n *   SMTP_APP_PASSWORD  — App Password (NOT the regular password).\n"
+   },
+   {
+    "from": " * lib/sendEmail.js â send email via Gmail SMTP (nodemailer).\n",
+    "to": " * lib/sendEmail.js — send email via Gmail SMTP (nodemailer).\n"
+   }
+  ]
+ }
+}

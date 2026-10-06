@@ -17,7 +17,10 @@ import { join, dirname, normalize } from "node:path";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { M1_PINS, M1_CORE_COMMIT, M1_P1_COMMIT } from "../support/m1-integration-pin.mjs";
-import { M1_R1_PARENT, M1_R1_PINS, M1_R1_NEW_FILES, M1_R1_EDITS, isM1R1Tree, m1EffectivePins, deriveR1, applyR1Edits, m1EffectivePageVerdict, gitBlobId } from "../support/m1-r1-remediation.mjs";
+import { M1_R1_PARENT, M1_R1_PINS, M1_R1_NEW_FILES, M1_R1_EDITS, isM1R1Tree, m1EffectivePins, m1R1Pins, deriveR1, applyR1Edits, m1EffectivePageVerdict, gitBlobId } from "../support/m1-r1-remediation.mjs";
+// A later layer (DE1, daily e-mail delivery) built on the R1 commit: R1G-01 then verifies the R1 commit from git objects, and the
+// HEAD / index / checkout identity is held by the layer's own guard (test/delivery/de1-daily-email-guard.test.mjs DE1G-01).
+import { isDE1Tree, DE1_PARENT } from "../support/de1-daily-email.mjs";
 
 const PROTECTED = /^(src\/(finance|metrics|policy|presenters|browser|finance-server)\/|fincore\/|api\/|lib\/|database\.rules\.json$|test\/support\/rules-authorized-delta\.mjs$|index\.html$)/;
 const SKIP = !isM1R1Tree(REPO) && "not an M1 R1 tree";
@@ -29,15 +32,21 @@ const R1_MODIFIED = Object.keys(M1_R1_PINS).filter((f) => !M1_R1_NEW_FILES.inclu
 test("R1G-01 the R1 change set relative to the rejected parent is exactly the recorded set; committed / staged / checked-out bytes are the effective pins", { skip: SKIP }, () => {
   assert.equal(M1_R1_PARENT, "8511d7b2d3e4c89659b1ae006f6bdb1e9670b826", "the R1 parent is the rejected M1 candidate");
   for (const [f, pin] of Object.entries(M1_R1_PINS)) assert.match(pin, /^[0-9a-f]{40}$/, f + ": literal blob id");
-  const committed = lines(gitIn(REPO, ["diff", "--name-only", M1_R1_PARENT, "HEAD", "--"])).filter((f) => PROTECTED.test(f));
-  const staged = lines(gitIn(REPO, ["diff", "--name-only", "--cached", M1_R1_PARENT, "--"])).filter((f) => PROTECTED.test(f));
-  const working = [...lines(gitIn(REPO, ["diff", "--name-only", M1_R1_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => PROTECTED.test(f));
-  for (const [label, set] of [["committed", committed], ["staged", staged], ["working tree", working]])
+  const layered = isDE1Tree(REPO);
+  const R1_TREE = layered ? DE1_PARENT : "HEAD";            // the R1 commit itself when a later layer is checked out
+  const committed = lines(gitIn(REPO, ["diff", "--name-only", M1_R1_PARENT, R1_TREE, "--"])).filter((f) => PROTECTED.test(f));
+  const sets = [["committed", committed]];
+  if (!layered) {
+    sets.push(["staged", lines(gitIn(REPO, ["diff", "--name-only", "--cached", M1_R1_PARENT, "--"])).filter((f) => PROTECTED.test(f))]);
+    sets.push(["working tree", [...lines(gitIn(REPO, ["diff", "--name-only", M1_R1_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => PROTECTED.test(f))]);
+  }
+  for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), Object.keys(M1_R1_PINS).sort(), label + ": protected changes vs the rejected parent = the recorded R1 set");
-  const eff = m1EffectivePins(REPO);
+  const eff = layered ? m1R1Pins() : m1EffectivePins(REPO);
   assert.deepEqual(Object.keys(eff).sort(), [...new Set([...Object.keys(M1_PINS.blobs), ...Object.keys(M1_R1_PINS)])].sort());
   for (const [f, pin] of Object.entries(eff)) {
-    assert.equal(blobId("HEAD:" + f), pin, f + " committed");
+    assert.equal(blobId(R1_TREE + ":" + f), pin, f + " committed" + (layered ? " (at the R1 commit)" : ""));
+    if (layered) continue;
     assert.equal(blobId(":" + f), pin, f + " staged");
     assert.equal(gitBlobId(readFileSync(join(REPO, f))), pin, f + " checked out");
   }

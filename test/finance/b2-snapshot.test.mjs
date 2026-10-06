@@ -10,6 +10,7 @@ import { compileServer, makeDb, installDb, offlineFetch } from "../support/serve
 import { seedRaw, env, entry, uid, configWithGlobal, fixedItems, T, B, nowMsFor, recordingDb, stableJson, badValues, entriesKey } from "../support/b1-fixtures.mjs";
 import { INVARIANTS, INV_NOW_MS, completeSeptember, fullDay, GLOBAL_3000, FIXED_3100, MONTH_LENGTHS, monthDates } from "../support/financial-invariants.mjs";
 import { gitIn } from "../support/git-context.mjs";
+import { isDE1Tree, DE1_PINS } from "../support/de1-daily-email.mjs";
 
 offlineFetch();
 const srv = compileServer();
@@ -238,9 +239,12 @@ test("B2-T14 run.ts compatibility: the endpoint file is byte-identical (pre-B2, 
   const P0 = "05bf5a59cd62bcfde2bc74f3ab0b9d38ba619661", RUN = "api/daily-snapshot/run.ts";
   const p0In = gitIn(REPO, ["merge-base", "--is-ancestor", P0, "HEAD"]).status === 0;
   if (p0In) {
-    const want = gitIn(REPO, ["rev-parse", `${P0}:${RUN}`]).stdout.trim();
-    assert.equal(gitIn(REPO, ["rev-parse", `HEAD:${RUN}`]).stdout.trim(), want, "committed run.ts = approved P0 blob");
-    assert.equal(gitIn(REPO, ["hash-object", RUN]).stdout.trim(), want, "checked-out run.ts = approved P0 blob");
+    // DE1 (daily e-mail delivery reliability, pending independent review) changes ONLY the delivery orchestration of run.ts: on a
+    // DE1 tree the file is held to its literal DE1 pin, which DE1G-02 re-derives from the P0 bytes by recorded exact edits and
+    // DE1G-03 proves leaves the authorization section byte-identical to P0.
+    const want = isDE1Tree(REPO) ? DE1_PINS[RUN] : gitIn(REPO, ["rev-parse", `${P0}:${RUN}`]).stdout.trim();
+    assert.equal(gitIn(REPO, ["rev-parse", `HEAD:${RUN}`]).stdout.trim(), want, "committed run.ts = approved P0 blob (or the DE1 pin)");
+    assert.equal(gitIn(REPO, ["hash-object", RUN]).stdout.trim(), want, "checked-out run.ts = approved P0 blob (or the DE1 pin)");
     const src = readFileSync(join(REPO, RUN), "utf8");
     assert.match(src, /import \{ buildSnapshotForBiz, buildSnapshotForAll \} from "\.\.\/\.\.\/src\/snapshot\/snapshotBuilder\.js";/);
     assert.match(src, /import \{ sendSnapshotEmail \} from "\.\.\/\.\.\/src\/snapshot\/snapshotEmail\.js";/);

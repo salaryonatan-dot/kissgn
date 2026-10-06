@@ -38,6 +38,9 @@ import { m1PageVerdict } from "../support/m1-index-scope.mjs";
 // M1 R1 (successor of the rejected M1 candidate): on an R1 tree the M1 pins are overlaid with the recorded R1 pins and the
 // page contract is the M1 page + exactly the recorded R1 page edits (test/support/m1-r1-remediation.mjs).
 import { m1EffectivePins, m1EffectivePageVerdict, isM1R1Tree, M1_R1_NEW_FILES } from "../support/m1-r1-remediation.mjs";
+// DE1 (daily e-mail delivery reliability, built on R1): EXACTLY the DE1 files carry DE1 pins — the P0 route
+// api/daily-snapshot/run.ts is then held to its DE1 pin (no longer the P0 bytes), and the DE1 lib files join the protected set.
+import { isDE1Tree, DE1_PINS, DE1_SCOPE } from "../support/de1-daily-email.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -191,9 +194,11 @@ function assertB2Scope(root) {
     const M1_EFFECTIVE = m1 ? m1EffectivePins(root) : {};
     const M1_FILES = m1 ? Object.keys(M1_EFFECTIVE).filter((f) => f !== "index.html") : [];
     const M1_R1_ADDED = m1 && isM1R1Tree(root) ? M1_R1_NEW_FILES : [];
+    const de1 = m1 && isDE1Tree(root);
+    const DE1_ADDED = de1 ? DE1_SCOPE.filter((f) => !P0_APPROVED.includes(f)) : [];
     const vd50Runtime = ["src/metrics/report.ts", "fincore/v1/metrics/report.js", "fincore/v1/MANIFEST.json"];
     const f1Runtime = ["database.rules.json", "fincore/v1/MANIFEST.json", "fincore/v1/browser/marjinFinanceGlobal.js", "fincore/v1/finance/costHistory.js", "fincore/v1/metrics/report.js", "fincore/v1/policy/productFinance.js", "lib/finance/costHistoryWriter.js", "src/browser/marjinFinanceGlobal.ts", "src/finance-server/canonicalInputs.ts", "src/finance/costHistory.ts", "src/finance/labor.ts", "src/finance/types.ts", "src/metrics/costTimeline.ts", "src/metrics/report.ts", "src/policy/productFinance.ts", "test/support/rules-authorized-delta.mjs"];
-    const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES, ...M1_R1_ADDED])] : CDM2_APPROVED;
+    const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES, ...M1_R1_ADDED, ...DE1_ADDED])] : CDM2_APPROVED;
     const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f));
     assert.deepEqual([...new Set(whole)].sort(), [...allowed].sort(), assembled
       ? "assembled tree: protected changes are exactly CD-M2 R1's approved runtime files + P0 Scheduled Auth's three API routes" + (c2 ? " + the C2-03 retirement of " + C2_RETIRED.join(", ") : "") + (m1 ? " + the pinned P1 Supplier Credits files (M1 integration)" : "")
@@ -236,7 +241,9 @@ function assertB2Scope(root) {
       ...(r4 && !m1 ? R4_NEW_FILES.map((f) => [f, blobBytes(root, R4_RUNTIME_BLOBS[f]), "R4 candidate fixed blob " + R4_RUNTIME_BLOBS[f]]) : []),
       ...(assembled ? [
         ...(c1 ? [] : [["index.html", approvedIndexMerge(root), "merge(" + CDM2R1.slice(0, 8) + ", " + HF1R1.slice(0, 8) + ")"]]),
-        ...P0_APPROVED.map((f) => [f, blobBytes(root, P0 + ":" + f), P0.slice(0, 8) + ":" + f]),
+        ...P0_APPROVED.map((f) => (de1 && DE1_PINS[f]
+          ? [f, blobBytes(root, DE1_PINS[f]), "DE1 checkpoint fixed blob " + DE1_PINS[f].slice(0, 8)]
+          : [f, blobBytes(root, P0 + ":" + f), P0.slice(0, 8) + ":" + f])),
       ] : []),
     ];
     // RC hardening (independent RC review, B2G-05 checkout-content finding): the committed blob is
@@ -667,6 +674,13 @@ test("B2G-05-M1b M1 tree: committed substitutions of either input, page edits, r
       ["R1: the page = the rejected parent page (coercing registry rule back)", put("index.html", "8511d7b2d3e4c89659b1ae006f6bdb1e9670b826:index.html"), PAGE],
       ["R1: the shared registry module removed", (dir) => rmSync(join(dir, "lib", "businessRegistry.js")), /protected changes are exactly/],
       ["R1: the shared registry module edited", (dir) => appendTo(dir, "lib/businessRegistry.js", "\n// edit\n"), PIN("lib/businessRegistry.js")],
+    ] : []),
+    // DE1 overlay (only on a DE1 tree): the delivery files cannot fall back to their R1 bytes, and the receipt module cannot vanish
+    ...(isDE1Tree(REPO) ? [
+      ["DE1: run.ts = the approved P0 bytes (receipts dropped)", put("api/daily-snapshot/run.ts", P0 + ":api/daily-snapshot/run.ts"), /api\/daily-snapshot\/run\.ts \(committed\) is not the pinned M1 integration blob|api\/daily-snapshot\/run\.ts is byte-identical to the approved DE1/],
+      ["DE1: sendEmail.js = the R1 bytes (unbounded transport back)", put("lib/sendEmail.js", "45e760c893f682b71d8e8e8e962528c385206609:lib/sendEmail.js"), /protected changes are exactly|lib\/sendEmail\.js \(committed\) is not the pinned M1 integration blob/],
+      ["DE1: the receipt module removed", (dir) => rmSync(join(dir, "lib", "emailDelivery.js")), /protected changes are exactly/],
+      ["DE1: the receipt module edited", (dir) => appendTo(dir, "lib/emailDelivery.js", "\n// edit\n"), PIN("lib/emailDelivery.js")],
     ] : []),
   ];
   for (const [label, mut, re] of cases) {

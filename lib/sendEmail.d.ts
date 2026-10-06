@@ -9,6 +9,11 @@ export interface DigestAlertLike {
   message: string;
 }
 
+/** Bounded SMTP session timeouts passed to nodemailer (ms). */
+export const SMTP_TIMEOUTS: Readonly<{ connectionTimeout: number; greetingTimeout: number; socketTimeout: number; dnsTimeout: number }>;
+/** Backstop deadline for one provider call (ms); its outcome is then unknown. */
+export const SEND_DEADLINE_MS: number;
+
 export function sendEmail(to: string, subject: string, html: string): Promise<{ messageId: string }>;
 export function sendAlertDigest(
   to: string,

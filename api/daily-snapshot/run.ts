@@ -3,6 +3,7 @@ import { getDb } from "../../src/firebase/admin.js";
 import { buildSnapshotForBiz, buildSnapshotForAll } from "../../src/snapshot/snapshotBuilder.js";
 import { sendSnapshotEmail } from "../../src/snapshot/snapshotEmail.js";
 import { requireCron, requireBizContext } from "../../lib/securityContext.js";
+import { deliverWithReceipt, deliverWithoutReceipt, DAILY_SNAPSHOT_KIND } from "../../lib/emailDelivery.js";
 
 function setCorsHeaders(req: VercelRequest, res: VercelResponse): void {
   const origin = (req.headers.origin as string) || "";
@@ -14,50 +15,56 @@ function setCorsHeaders(req: VercelRequest, res: VercelResponse): void {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 }
 
-async function getOwnerEmail(tenantId: string): Promise<string | null> {
+// Recipient resolution — the SAME selection as before (owner / super_owner with a real address, else the first user with a
+// real address; never a @temp.marjin.app placeholder). Daily e-mail reliability: a failed READ is no longer reported as
+// "no owner e-mail" — it is `recipient_unavailable` (transient), distinct from `no_recipient` (nothing to send to).
+type RecipientResult = { ok: true; email: string } | { ok: false; code: "no_recipient" | "recipient_unavailable" };
+async function resolveOwnerRecipient(tenantId: string): Promise<RecipientResult> {
   const db = getDb();
 
+  let usersData: unknown;
   try {
     const usersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
-    const usersData = usersSnap.val();
-
-    if (!usersData) return null;
-
-    let users: Array<{ name: string; email: string; role: string }> = [];
-
-    if (typeof usersData === "string") {
-      try {
-        users = JSON.parse(usersData);
-      } catch {
-        return null;
-      }
-    } else if (usersData._v && typeof usersData._v === "string") {
-      try {
-        users = JSON.parse(usersData._v);
-      } catch {
-        return null;
-      }
-    } else if (Array.isArray(usersData)) {
-      users = usersData;
-    }
-
-    // Find owner or super_owner
-    const owner = users.find((u) => u.role === "owner" || u.role === "super_owner");
-    if (owner && owner.email && !owner.email.endsWith("@temp.marjin.app")) {
-      return owner.email;
-    }
-
-    // Fallback to first user with email
-    const firstWithEmail = users.find((u) => u.email && !u.email.endsWith("@temp.marjin.app"));
-    if (firstWithEmail) {
-      return firstWithEmail.email;
-    }
-
-    return null;
+    usersData = usersSnap.val();
   } catch (error) {
-    console.error(`Error getting owner email for tenant ${tenantId}:`, error);
-    return null;
+    console.error(`[daily-snapshot] recipient read failed for tenant ${tenantId}: ${(error as any)?.code ?? "read_error"}`);
+    return { ok: false, code: "recipient_unavailable" };
   }
+
+  if (!usersData) return { ok: false, code: "no_recipient" };
+
+  let users: Array<{ name: string; email: string; role: string }> = [];
+
+  if (typeof usersData === "string") {
+    try {
+      users = JSON.parse(usersData);
+    } catch {
+      return { ok: false, code: "recipient_unavailable" };
+    }
+  } else if ((usersData as any)._v && typeof (usersData as any)._v === "string") {
+    try {
+      users = JSON.parse((usersData as any)._v);
+    } catch {
+      return { ok: false, code: "recipient_unavailable" };
+    }
+  } else if (Array.isArray(usersData)) {
+    users = usersData;
+  }
+  if (!Array.isArray(users)) return { ok: false, code: "recipient_unavailable" };
+
+  // Find owner or super_owner
+  const owner = users.find((u) => u && (u.role === "owner" || u.role === "super_owner"));
+  if (owner && owner.email && !owner.email.endsWith("@temp.marjin.app")) {
+    return { ok: true, email: owner.email };
+  }
+
+  // Fallback to first user with email
+  const firstWithEmail = users.find((u) => u && u.email && !u.email.endsWith("@temp.marjin.app"));
+  if (firstWithEmail) {
+    return { ok: true, email: firstWithEmail.email };
+  }
+
+  return { ok: false, code: "no_recipient" };
 }
 
 function isUnknownBusinessName(value?: string | null): boolean {
@@ -116,73 +123,75 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // GET = cron trigger (run for all businesses)
     if (req.method === "GET") {
       const snapshots = await buildSnapshotForAll();
+      const db = getDb();
 
-      let successCount = 0;
-      let failureCount = 0;
-      let skippedCount = 0;
-      const failures: Array<{ tenantId: string; bizId: string; error: string }> = [];
-      const skipped: Array<{ tenantId: string; bizId: string; reason: string }> = [];
+      // Daily e-mail reliability: every business ends in exactly one recorded outcome. A message is sent at most once per
+      // (business, business date) by automation: a receipt (lib/emailDelivery.js) is claimed before the provider is
+      // called, so a duplicate, concurrent or re-run invocation never re-sends an accepted or possibly-accepted message.
+      type Row = { tenantId: string; bizId: string; businessDate: string | null; outcome: string; code: string | null; attempt?: number; receipt?: string };
+      const results: Row[] = [];
 
       for (const snapshot of snapshots) {
-        try {
-          if (isUnknownBusinessName(snapshot.bizName)) {
-            console.warn("[daily-snapshot] skipping snapshot email for unknown business", {
-              tenantId: snapshot.tenantId,
-              bizId: snapshot.bizId,
-              reason: "unknown_business_name",
-            });
-            skippedCount++;
-            skipped.push({
-              tenantId: snapshot.tenantId,
-              bizId: snapshot.bizId,
-              reason: "unknown_business_name",
-            });
-            continue;
-          }
-
-          const ownerEmail = await getOwnerEmail(snapshot.tenantId);
-
-          if (!ownerEmail) {
-            console.warn(
-              `No owner email found for tenant ${snapshot.tenantId}, skipping snapshot email`
-            );
-            failureCount++;
-            failures.push({
-              tenantId: snapshot.tenantId,
-              bizId: snapshot.bizId,
-              error: "No owner email found",
-            });
-            continue;
-          }
-
-          await sendSnapshotEmail(ownerEmail, snapshot);
-          successCount++;
-        } catch (error) {
-          console.error(
-            `Error sending snapshot email for ${snapshot.tenantId}:${snapshot.bizId}:`,
-            error
-          );
-          failureCount++;
-          failures.push({
+        const base = { tenantId: snapshot.tenantId, bizId: snapshot.bizId, businessDate: snapshot.date ?? null };
+        if (isUnknownBusinessName(snapshot.bizName)) {
+          console.warn("[daily-snapshot] skipping snapshot email for unknown business", {
             tenantId: snapshot.tenantId,
             bizId: snapshot.bizId,
-            error: String(error),
+            reason: "unknown_business_name",
           });
+          results.push({ ...base, outcome: "skipped", code: "unknown_business_name" });
+          continue;
         }
+
+        const recipient = await resolveOwnerRecipient(snapshot.tenantId);
+        if (!recipient.ok) {
+          console.warn(`[daily-snapshot] no deliverable recipient for ${snapshot.tenantId}:${snapshot.bizId} (${recipient.code})`);
+          results.push({ ...base, outcome: "failed", code: recipient.code });
+          continue;
+        }
+
+        const r = await deliverWithReceipt({
+          db,
+          kind: DAILY_SNAPSHOT_KIND,
+          tenantId: snapshot.tenantId,
+          bizId: snapshot.bizId,
+          businessDate: snapshot.date,
+          recipient: recipient.email,
+          send: () => sendSnapshotEmail(recipient.email, snapshot),
+        });
+        if (r.outcome !== "accepted" && !(r.outcome === "skipped" && (r.code === "already_accepted" || r.code === "in_progress"))) {
+          console.error(`[daily-snapshot] delivery ${r.outcome} for ${snapshot.tenantId}:${snapshot.bizId}:${snapshot.date} code=${r.code} attempt=${r.attempt ?? "-"} receipt=${r.receipt}`);
+        }
+        results.push({ ...base, outcome: r.outcome, code: r.code, attempt: r.attempt, receipt: r.receipt });
       }
 
-      return res.status(200).json({
-        status: "completed",
+      const count = (pred: (x: Row) => boolean) => results.filter(pred).length;
+      const sentCount = count((x) => x.outcome === "accepted");
+      const alreadyAcceptedCount = count((x) => x.outcome === "skipped" && x.code === "already_accepted");
+      const inProgressCount = count((x) => x.outcome === "skipped" && x.code === "in_progress");
+      const unknownCount = count((x) => x.outcome === "unknown" || (x.outcome === "skipped" && x.code === "unknown_requires_reconciliation"));
+      const failureCount = count((x) => x.outcome === "failed" || (x.outcome === "skipped" && (x.code === "failed_final" || x.code === "receipt_unreadable" || x.code === "claim_not_confirmed")));
+      const skippedCount = count((x) => x.outcome === "skipped" && x.code === "unknown_business_name");
+      const receiptWriteFailures = count((x) => x.receipt === "write_failed" || x.receipt === "unavailable");
+      const clean = failureCount === 0 && unknownCount === 0 && receiptWriteFailures === 0;
+
+      // A run with any undelivered, ambiguous or unrecorded message is NOT reported as success to the scheduler.
+      return res.status(clean ? 200 : 500).json({
+        status: clean ? "completed" : "completed_with_failures",
         totalSnapshots: snapshots.length,
-        successCount,
+        successCount: sentCount,
+        alreadyAcceptedCount,
+        inProgressCount,
         failureCount,
+        unknownCount,
         skippedCount,
-        failures: failures.length > 0 ? failures : undefined,
-        skipped: skipped.length > 0 ? skipped : undefined,
+        receiptWriteFailures,
+        results,
       });
     }
 
-    // POST = manual trigger for single business (authorized above).
+    // POST = manual trigger for single business (authorized above). A manual send is an explicit owner request: it is not
+    // de-duplicated against the scheduled receipt, but its provider outcome is classified (never a false success).
     if (req.method === "POST" && snapshotCtx) {
       const { tenantId, bizId } = snapshotCtx;
 
@@ -200,13 +209,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
       }
 
-      const ownerEmail = await getOwnerEmail(tenantId);
+      const recipient = await resolveOwnerRecipient(tenantId);
 
-      if (!ownerEmail) {
-        return res.status(404).json({ error: "No owner email found for this tenant" });
+      if (!recipient.ok) {
+        return recipient.code === "no_recipient"
+          ? res.status(404).json({ error: "No owner email found for this tenant" })
+          : res.status(503).json({ error: "Owner email temporarily unavailable", code: recipient.code });
       }
+      const ownerEmail = recipient.email;
 
-      await sendSnapshotEmail(ownerEmail, snapshot);
+      const r = await deliverWithoutReceipt({ recipient: ownerEmail, send: () => sendSnapshotEmail(ownerEmail, snapshot) });
+      if (r.outcome === "failed") return res.status(502).json({ error: "email_not_sent", code: r.code });
+      if (r.outcome !== "accepted") return res.status(504).json({ error: "email_outcome_unknown", code: r.code });
 
       return res.status(200).json({
         status: "success",
@@ -224,10 +238,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(405).json({ error: "Method not allowed" });
   } catch (error) {
-    console.error("Error in daily-snapshot/run:", error);
+    console.error(`[daily-snapshot] run failed: ${String((error as any)?.name ?? "Error")}: ${String((error as any)?.message ?? "").slice(0, 200)}`);
     return res.status(500).json({
       error: "Internal server error",
-      message: String(error),
     });
   }
 }
