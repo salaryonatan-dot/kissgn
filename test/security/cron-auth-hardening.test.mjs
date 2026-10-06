@@ -43,6 +43,8 @@ function build(routeRel, outRel, extraStubs) {
   mkdirSync(join(dir, "lib"), { recursive: true });
   copyFileSync(join(REPO, "lib", "securityContext.js"), join(dir, "lib", "securityContext.js"));
   copyFileSync(join(REPO, "lib", "bizAccess.js"), join(dir, "lib", "bizAccess.js"));
+  // M1 R2: the analytics endpoint resolves its target through the REAL shared registry rule
+  copyFileSync(join(REPO, "lib", "businessRegistry.js"), join(dir, "lib", "businessRegistry.js"));
   // lazy deps of requireBizContext
   mk("lib/verifyToken.js", STUB_VERIFYTOKEN);
   mk("lib/helpers.js", STUB_HELPERS);
@@ -89,7 +91,7 @@ function setH(o = {}) {
   const calls = [];
   const state = {
     bizAccessVal: o.bizAccessVal !== undefined ? o.bizAccessVal : true,
-    business: o.business || [{ id: "b1", name: "Biz" }],
+    business: o.business || { _v: JSON.stringify([{ id: "b1", name: "Biz" }]) },   // the runtime registry node (M1 R2: the only shape that establishes identity)
     users: o.users || [{ firebaseUid: "u1", role: "owner", email: "owner@x.com", allowedBizIds: ["b1"] }],
     insights: o.insights !== undefined ? o.insights : null,
   };

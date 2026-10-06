@@ -42,7 +42,7 @@ export async function isRateLimited(){ return false; }`,
 };
 const ROUTES = {
   "daily-builder": {
-    src: "api/analytics/daily-builder.ts", out: "api/analytics/daily-builder.js", job: "buildAnalyticsForAll",
+    src: "api/analytics/daily-builder.ts", out: "api/analytics/daily-builder.js", job: "buildAnalyticsForAll", realLib: ["businessRegistry.js"],
     stubs: {
       "src/analytics/dailyBuilder.js": `export async function buildAnalyticsForBiz(t,b,d){ ${rec("buildAnalyticsForBiz", "{meta:{builtAt:1}}")} }
 export async function buildAnalyticsForAll(d){ ${rec("buildAnalyticsForAll", "{docs:[],failures:[]}")} }
@@ -123,7 +123,8 @@ function setH(o = {}) {
     calls: [], throwIn: o.throwIn,
     requireAuth: async () => ({ uid: "u1", email: "owner@example.test" }),
     requireTenantAccess: async () => "owner",
-    db: () => ({ ref: () => ({ get: async () => ({ val: () => true }), once: async () => ({ val: () => null, exists: () => false }) }) }),
+    // M1 R2: the operator backfill now establishes the target in the registry (runtime node shape) before building
+    db: () => ({ ref: (p) => ({ get: async () => ({ val: () => true }), once: async () => (String(p).endsWith("/app/business") ? { val: () => ({ _v: JSON.stringify([{ id: "b1", name: "Biz" }]) }), exists: () => true } : { val: () => null, exists: () => false }) }) }),
   };
   globalThis.__H = H;
   return H;

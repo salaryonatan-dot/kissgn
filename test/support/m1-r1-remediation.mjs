@@ -15,6 +15,9 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { M1_PINS } from "./m1-integration-pin.mjs";
 import { m1PageVerdict } from "./m1-index-scope.mjs";
+// M1 R2 (successor of the rejected R1 candidate): its pins overlay the M1 ⊕ R1 pins on an R2 tree, and its page is the R1 page
+// + exactly the recorded R2 page edits (test/support/m1-r2-remediation.mjs).
+import { isM1R2Tree, M1_R2_PINS, applyR2Edits } from "./m1-r2-remediation.mjs";
 
 const RECORD = JSON.parse(readFileSync(new URL("./m1-r1-remediation.json", import.meta.url), "utf8"));
 export const M1_R1_PARENT = RECORD.parent;
@@ -29,10 +32,14 @@ export function isM1R1Tree(repo) {
   if (git(repo, ["merge-base", "--is-ancestor", M1_R1_PARENT, "HEAD"]).status !== 0) return false;
   return git(repo, ["rev-parse", "HEAD"]).stdout.trim() !== M1_R1_PARENT;
 }
-/** The pins that hold the tree under test: the M1 pins, with the R1 pins (and new files) overlaid on an R1 tree. */
+/** The pins that hold the tree under test: the M1 pins, with the R1 pins (and new files) overlaid on an R1 tree, and the R2
+ *  pins overlaid on an R2 tree (an R2 tree is always an R1 tree). */
 export function m1EffectivePins(repo) {
-  return isM1R1Tree(repo) ? { ...M1_PINS.blobs, ...M1_R1_PINS } : { ...M1_PINS.blobs };
+  if (!isM1R1Tree(repo)) return { ...M1_PINS.blobs };
+  return isM1R2Tree(repo) ? { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS } : { ...M1_PINS.blobs, ...M1_R1_PINS };
 }
+/** The pins of the R1 commit itself (M1 ⊕ R1), whatever later layer is checked out. */
+export function m1R1Pins() { return { ...M1_PINS.blobs, ...M1_R1_PINS }; }
 export const gitBlobId = (buf) => { const h = createHash("sha1"); h.update(`blob ${buf.length}\0`); h.update(buf); return h.digest("hex"); };
 const parentBytes = (repo, f) => { const r = git(repo, ["cat-file", "blob", `${M1_R1_PARENT}:${f}`], { encoding: "buffer" }); if (r.status !== 0) throw new Error(`${M1_R1_PARENT}:${f}`); return r.stdout; };
 
@@ -68,7 +75,10 @@ export function m1EffectivePageVerdict(repo, candidateBytes, edits = M1_R1_EDITS
   if (!base.ok) return { ok: false, reason: "r1_parent_page_not_m1", detail: base };
   const d = applyR1Edits("index.html", parent, edits);
   if (!d.ok) return d;
+  // R2 tree: the candidate page is the R1 page + exactly the recorded R2 page edits
+  let want = d.bytes;
+  if (isM1R2Tree(repo)) { const d2 = applyR2Edits("index.html", d.bytes); if (!d2.ok) return d2; want = d2.bytes; }
   const B = Buffer.isBuffer(candidateBytes) ? candidateBytes : Buffer.from(String(candidateBytes), "utf8");
-  if (!d.bytes.equals(B)) return { ok: false, reason: "not_the_recorded_derivation" };
+  if (!want.equals(B)) return { ok: false, reason: "not_the_recorded_derivation" };
   return { ok: true };
 }

@@ -39,6 +39,7 @@ import { getAdminDb } from "../../lib/adminSdk.js";
 import { requireAuth } from "../../lib/verifyToken.js";
 import { requireTenantAccess, isRateLimited } from "../../lib/helpers.js";
 import { requireCron } from "../../lib/securityContext.js";
+import { resolveRegistryTarget } from "../../lib/businessRegistry.js";
 
 function setCorsHeaders(req: VercelRequest, res: VercelResponse): void {
   const origin = (req.headers.origin as string) || "";
@@ -70,6 +71,11 @@ type AppUser = {
 
 function isSafeId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value.trim());
+}
+
+// M1 R2: a request id is EXACT. A padded id is malformed (400) — it is never trimmed into another business's id.
+function isExactId(value: unknown): value is string {
+  return isSafeId(value) && value === value.trim();
 }
 
 function isRealBusinessDate(value: unknown): value is string {
@@ -107,22 +113,23 @@ function isExplicitlyInactive(value: unknown): boolean {
   return false;
 }
 
-function findBusiness(rawBusiness: unknown, bizId: string): AppBusiness | null {
-  const data = unwrapEnvelope<unknown>(rawBusiness, null);
-  if (Array.isArray(data)) {
-    return (data.find((b) => b && typeof b === "object" && (b as AppBusiness).id === bizId) as AppBusiness | undefined) || null;
-  }
-  if (data && typeof data === "object") {
-    const record = data as Record<string, unknown>;
-    const direct = record[bizId];
-    if (direct && typeof direct === "object") return direct as AppBusiness;
-    for (const value of Object.values(record)) {
-      if (value && typeof value === "object" && (value as AppBusiness).id === bizId) {
-        return value as AppBusiness;
-      }
-    }
-  }
-  return null;
+/**
+ * M1 R2 — the analytics builder's target identity is THE shared target-scoped registry rule (lib/businessRegistry.js,
+ * the rule the Core cost-history writer and the P1 supplier-credit routes apply), never a first match among records:
+ *   registered       exactly one record carries the requested id → its settings (the inactive flag) are read from it
+ *   not_registered   404 business_not_found (definitive, as before)
+ *   ambiguous        503 business_registry_ambiguous — duplicated or colliding records: no build, no write
+ *   unreadable       503 business_registry_unreadable — not the runtime `{ _v: "<JSON array>" }` node: no build, no write
+ * A defect confined to an unrelated record never refuses the requested business.
+ */
+type TargetVerdict = { ok: true; record: Record<string, unknown> } | { ok: false; status: number; error: string };
+function registryTargetVerdict(rawBusiness: unknown, bizId: string): TargetVerdict {
+  const target = resolveRegistryTarget(rawBusiness, bizId);
+  if (target.state === "registered" && target.record) return { ok: true, record: target.record };
+  if (target.state === "not_registered") return { ok: false, status: 404, error: "business_not_found" };
+  if (target.state === "ambiguous") return { ok: false, status: 503, error: "business_registry_ambiguous" };
+  if (target.state === "invalid_request") return { ok: false, status: 400, error: "invalid_tenant_or_biz_id" };
+  return { ok: false, status: 503, error: "business_registry_unreadable" };
 }
 
 function parseAppUsers(rawUsers: unknown): AppUser[] {
@@ -359,12 +366,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         date?: unknown;
       };
 
-      if (!isSafeId(tenantId) || !isSafeId(bizId)) {
+      if (!isExactId(tenantId) || !isExactId(bizId)) {
         return res.status(400).json({ ok: false, error: "invalid_tenant_or_biz_id" });
       }
 
-      const safeTenantId = tenantId.trim();
-      const safeBizId = bizId.trim();
+      const safeTenantId = tenantId;
+      const safeBizId = bizId;
 
       if (safeTenantId === safeBizId) {
         return res.status(400).json({ ok: false, error: "invalid_self_business" });
@@ -393,17 +400,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       const db = getAdminDb();
-      const [businessSnap, usersSnap] = await Promise.all([
-        db.ref(`tenants/${safeTenantId}/app/business`).once("value"),
-        db.ref(`tenants/${safeTenantId}/app/users`).once("value"),
-      ]);
+      let businessRaw: unknown, usersRaw: unknown;
+      try {
+        const [businessSnap, usersSnap] = await Promise.all([
+          db.ref(`tenants/${safeTenantId}/app/business`).once("value"),
+          db.ref(`tenants/${safeTenantId}/app/users`).once("value"),
+        ]);
+        businessRaw = businessSnap.val();
+        usersRaw = usersSnap.val();
+      } catch {
+        // the authorization inputs could not be read: not a definitive "not found", and nothing is built
+        return res.status(503).json({ ok: false, error: "authorization_unavailable" });
+      }
 
-      const business = findBusiness(businessSnap.val(), safeBizId);
-      if (!business || isExplicitlyInactive(business)) {
+      const target = registryTargetVerdict(businessRaw, safeBizId);
+      if (!target.ok) {
+        return res.status(target.status).json({ ok: false, error: target.error });
+      }
+      if (isExplicitlyInactive(target.record)) {
         return res.status(404).json({ ok: false, error: "business_not_found" });
       }
 
-      if (!hasBusinessAccess(role, claims.uid, parseAppUsers(usersSnap.val()), safeBizId)) {
+      if (!hasBusinessAccess(role, claims.uid, parseAppUsers(usersRaw), safeBizId)) {
         return res.status(403).json({ ok: false, error: "business_access_denied" });
       }
 
@@ -487,10 +505,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!tenantId || !bizId) {
         return res.status(400).json({ error: "Missing tenantId or bizId" });
       }
+      // M1 R2: exact ids only (never trimmed or coerced into another business's id)
+      if (!isExactId(tenantId) || !isExactId(bizId)) {
+        return res.status(400).json({ error: "invalid tenantId or bizId" });
+      }
       const targetDate = date || yesterdayInIsrael();
       // Sanity-check the format so we don't write garbage paths.
       if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
         return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+      }
+      // M1 R2: the operator backfill builds only a business whose identity the registry establishes (the shared rule).
+      // An explicitly inactive business stays backfillable by the operator (unchanged): the flag is a setting, not identity.
+      let businessRaw: unknown;
+      try {
+        businessRaw = (await getAdminDb().ref(`tenants/${tenantId}/app/business`).once("value")).val();
+      } catch {
+        return res.status(503).json({ error: "authorization_unavailable" });
+      }
+      const target = registryTargetVerdict(businessRaw, bizId);
+      if (!target.ok) {
+        return res.status(target.status).json({ error: target.error });
       }
 
       const doc = await buildAnalyticsForBiz(tenantId, bizId, targetDate);

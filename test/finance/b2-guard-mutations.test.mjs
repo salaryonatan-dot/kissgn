@@ -38,6 +38,9 @@ import { m1PageVerdict } from "../support/m1-index-scope.mjs";
 // M1 R1 (successor of the rejected M1 candidate): on an R1 tree the M1 pins are overlaid with the recorded R1 pins and the
 // page contract is the M1 page + exactly the recorded R1 page edits (test/support/m1-r1-remediation.mjs).
 import { m1EffectivePins, m1EffectivePageVerdict, isM1R1Tree, M1_R1_NEW_FILES } from "../support/m1-r1-remediation.mjs";
+// M1 R2 (successor of the rejected R1 candidate): EXACTLY the R2 files carry R2 pins — the P0 route api/analytics/daily-builder.ts
+// is then held to its R2 pin (no longer the P0 bytes), the R2 new file joins the protected set, and the page is R1 + the R2 edits.
+import { isM1R2Tree, M1_R2_PINS, M1_R2_NEW_FILES, M1_R2_PARENT } from "../support/m1-r2-remediation.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -191,9 +194,11 @@ function assertB2Scope(root) {
     const M1_EFFECTIVE = m1 ? m1EffectivePins(root) : {};
     const M1_FILES = m1 ? Object.keys(M1_EFFECTIVE).filter((f) => f !== "index.html") : [];
     const M1_R1_ADDED = m1 && isM1R1Tree(root) ? M1_R1_NEW_FILES : [];
+    const r2m = m1 && isM1R2Tree(root);
+    const M1_R2_ADDED = r2m ? M1_R2_NEW_FILES.filter((f) => PROTECTED.test(f)) : [];
     const vd50Runtime = ["src/metrics/report.ts", "fincore/v1/metrics/report.js", "fincore/v1/MANIFEST.json"];
     const f1Runtime = ["database.rules.json", "fincore/v1/MANIFEST.json", "fincore/v1/browser/marjinFinanceGlobal.js", "fincore/v1/finance/costHistory.js", "fincore/v1/metrics/report.js", "fincore/v1/policy/productFinance.js", "lib/finance/costHistoryWriter.js", "src/browser/marjinFinanceGlobal.ts", "src/finance-server/canonicalInputs.ts", "src/finance/costHistory.ts", "src/finance/labor.ts", "src/finance/types.ts", "src/metrics/costTimeline.ts", "src/metrics/report.ts", "src/policy/productFinance.ts", "test/support/rules-authorized-delta.mjs"];
-    const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES, ...M1_R1_ADDED])] : CDM2_APPROVED;
+    const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES, ...M1_R1_ADDED, ...M1_R2_ADDED])] : CDM2_APPROVED;
     const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f));
     assert.deepEqual([...new Set(whole)].sort(), [...allowed].sort(), assembled
       ? "assembled tree: protected changes are exactly CD-M2 R1's approved runtime files + P0 Scheduled Auth's three API routes" + (c2 ? " + the C2-03 retirement of " + C2_RETIRED.join(", ") : "") + (m1 ? " + the pinned P1 Supplier Credits files (M1 integration)" : "")
@@ -236,7 +241,9 @@ function assertB2Scope(root) {
       ...(r4 && !m1 ? R4_NEW_FILES.map((f) => [f, blobBytes(root, R4_RUNTIME_BLOBS[f]), "R4 candidate fixed blob " + R4_RUNTIME_BLOBS[f]]) : []),
       ...(assembled ? [
         ...(c1 ? [] : [["index.html", approvedIndexMerge(root), "merge(" + CDM2R1.slice(0, 8) + ", " + HF1R1.slice(0, 8) + ")"]]),
-        ...P0_APPROVED.map((f) => [f, blobBytes(root, P0 + ":" + f), P0.slice(0, 8) + ":" + f]),
+        ...P0_APPROVED.map((f) => (r2m && M1_R2_PINS[f]
+          ? [f, blobBytes(root, M1_R2_PINS[f]), "M1 R2 candidate fixed blob " + M1_R2_PINS[f].slice(0, 8)]
+          : [f, blobBytes(root, P0 + ":" + f), P0.slice(0, 8) + ":" + f])),
       ] : []),
     ];
     // RC hardening (independent RC review, B2G-05 checkout-content finding): the committed blob is
@@ -667,6 +674,14 @@ test("B2G-05-M1b M1 tree: committed substitutions of either input, page edits, r
       ["R1: the page = the rejected parent page (coercing registry rule back)", put("index.html", "8511d7b2d3e4c89659b1ae006f6bdb1e9670b826:index.html"), PAGE],
       ["R1: the shared registry module removed", (dir) => rmSync(join(dir, "lib", "businessRegistry.js")), /protected changes are exactly/],
       ["R1: the shared registry module edited", (dir) => appendTo(dir, "lib/businessRegistry.js", "\n// edit\n"), PIN("lib/businessRegistry.js")],
+    ] : []),
+    // M1 R2 overlay (only on an R2 tree): neither repair can fall back to the rejected R1 bytes, and the new declarations cannot vanish
+    ...(isM1R2Tree(REPO) ? [
+      ["R2: the page = the rejected R1 page (null-dereferencing business-list loader back)", put("index.html", M1_R2_PARENT + ":index.html"), PAGE],
+      ["R2: the analytics endpoint = the P0 / R1 bytes (first-match target back)", put("api/analytics/daily-builder.ts", M1_R2_PARENT + ":api/analytics/daily-builder.ts"), /api\/analytics\/daily-builder\.ts \(committed\) is not the pinned M1 integration blob|api\/analytics\/daily-builder\.ts is byte-identical to the approved/],
+      ["R2: the analytics builder = the approved B1 bytes (null-dereferencing name lookup, ambiguous discovery back)", put("src/analytics/dailyBuilder.ts", M1_R2_PARENT + ":src/analytics/dailyBuilder.ts"), PIN("src/analytics/dailyBuilder.ts")],
+      ["R2: the shared registry module = the R1 bytes (resolveRegistryTarget gone)", put("lib/businessRegistry.js", M1_R2_PARENT + ":lib/businessRegistry.js"), PIN("lib/businessRegistry.js")],
+      ["R2: the registry declarations removed", (dir) => rmSync(join(dir, "lib", "businessRegistry.d.ts")), /protected changes are exactly/],
     ] : []),
   ];
   for (const [label, mut, re] of cases) {

@@ -1,0 +1,167 @@
+{
+ "parent": "45e760c893f682b71d8e8e8e962528c385206609",
+ "pins": {
+  "api/analytics/daily-builder.ts": "b3c1c889132a55dba56771bc19b4d7be6364d00e",
+  "index.html": "b0d6af711a6efda949190cf1ef9991010e3ae36d",
+  "lib/businessRegistry.d.ts": "4e52c03a703bcdead58ee4025a1f16e7ea28b69e",
+  "lib/businessRegistry.js": "4d062695213265a2eb0cdd789bb4e3b184e75780",
+  "src/analytics/dailyBuilder.ts": "3fd7368b446173d6617d9f3ce34d96091cde8f8d"
+ },
+ "newFiles": [
+  "lib/businessRegistry.d.ts"
+ ],
+ "edits": {
+  "api/analytics/daily-builder.ts": [
+   {
+    "from": "        return res.status(400).json({ error: \"date must be YYYY-MM-DD\" });\n",
+    "to": "        return res.status(400).json({ error: \"date must be YYYY-MM-DD\" });\n      }\n      // M1 R2: the operator backfill builds only a business whose identity the registry establishes (the shared rule).\n      // An explicitly inactive business stays backfillable by the operator (unchanged): the flag is a setting, not identity.\n      let businessRaw: unknown;\n      try {\n        businessRaw = (await getAdminDb().ref(`tenants/${tenantId}/app/business`).once(\"value\")).val();\n      } catch {\n        return res.status(503).json({ error: \"authorization_unavailable\" });\n      }\n      const target = registryTargetVerdict(businessRaw, bizId);\n      if (!target.ok) {\n        return res.status(target.status).json({ error: target.error });\n"
+   },
+   {
+    "from": "        return res.status(400).json({ error: \"Missing tenantId or bizId\" });\n      }\n",
+    "to": "        return res.status(400).json({ error: \"Missing tenantId or bizId\" });\n      }\n      // M1 R2: exact ids only (never trimmed or coerced into another business's id)\n      if (!isExactId(tenantId) || !isExactId(bizId)) {\n        return res.status(400).json({ error: \"invalid tenantId or bizId\" });\n      }\n"
+   },
+   {
+    "from": "      if (!hasBusinessAccess(role, claims.uid, parseAppUsers(usersSnap.val()), safeBizId)) {\n",
+    "to": "      if (!hasBusinessAccess(role, claims.uid, parseAppUsers(usersRaw), safeBizId)) {\n"
+   },
+   {
+    "from": "      const business = findBusiness(businessSnap.val(), safeBizId);\n      if (!business || isExplicitlyInactive(business)) {\n",
+    "to": "      const target = registryTargetVerdict(businessRaw, safeBizId);\n      if (!target.ok) {\n        return res.status(target.status).json({ ok: false, error: target.error });\n      }\n      if (isExplicitlyInactive(target.record)) {\n"
+   },
+   {
+    "from": "      const [businessSnap, usersSnap] = await Promise.all([\n        db.ref(`tenants/${safeTenantId}/app/business`).once(\"value\"),\n        db.ref(`tenants/${safeTenantId}/app/users`).once(\"value\"),\n      ]);\n",
+    "to": "      let businessRaw: unknown, usersRaw: unknown;\n      try {\n        const [businessSnap, usersSnap] = await Promise.all([\n          db.ref(`tenants/${safeTenantId}/app/business`).once(\"value\"),\n          db.ref(`tenants/${safeTenantId}/app/users`).once(\"value\"),\n        ]);\n        businessRaw = businessSnap.val();\n        usersRaw = usersSnap.val();\n      } catch {\n        // the authorization inputs could not be read: not a definitive \"not found\", and nothing is built\n        return res.status(503).json({ ok: false, error: \"authorization_unavailable\" });\n      }\n"
+   },
+   {
+    "from": "      const safeTenantId = tenantId.trim();\n      const safeBizId = bizId.trim();\n",
+    "to": "      const safeTenantId = tenantId;\n      const safeBizId = bizId;\n"
+   },
+   {
+    "from": "      if (!isSafeId(tenantId) || !isSafeId(bizId)) {\n",
+    "to": "      if (!isExactId(tenantId) || !isExactId(bizId)) {\n"
+   },
+   {
+    "from": "function findBusiness(rawBusiness: unknown, bizId: string): AppBusiness | null {\n  const data = unwrapEnvelope<unknown>(rawBusiness, null);\n  if (Array.isArray(data)) {\n    return (data.find((b) => b && typeof b === \"object\" && (b as AppBusiness).id === bizId) as AppBusiness | undefined) || null;\n  }\n  if (data && typeof data === \"object\") {\n    const record = data as Record<string, unknown>;\n    const direct = record[bizId];\n    if (direct && typeof direct === \"object\") return direct as AppBusiness;\n    for (const value of Object.values(record)) {\n      if (value && typeof value === \"object\" && (value as AppBusiness).id === bizId) {\n        return value as AppBusiness;\n      }\n    }\n  }\n  return null;\n",
+    "to": "/**\n * M1 R2 — the analytics builder's target identity is THE shared target-scoped registry rule (lib/businessRegistry.js,\n * the rule the Core cost-history writer and the P1 supplier-credit routes apply), never a first match among records:\n *   registered       exactly one record carries the requested id → its settings (the inactive flag) are read from it\n *   not_registered   404 business_not_found (definitive, as before)\n *   ambiguous        503 business_registry_ambiguous — duplicated or colliding records: no build, no write\n *   unreadable       503 business_registry_unreadable — not the runtime `{ _v: \"<JSON array>\" }` node: no build, no write\n * A defect confined to an unrelated record never refuses the requested business.\n */\ntype TargetVerdict = { ok: true; record: Record<string, unknown> } | { ok: false; status: number; error: string };\nfunction registryTargetVerdict(rawBusiness: unknown, bizId: string): TargetVerdict {\n  const target = resolveRegistryTarget(rawBusiness, bizId);\n  if (target.state === \"registered\" && target.record) return { ok: true, record: target.record };\n  if (target.state === \"not_registered\") return { ok: false, status: 404, error: \"business_not_found\" };\n  if (target.state === \"ambiguous\") return { ok: false, status: 503, error: \"business_registry_ambiguous\" };\n  if (target.state === \"invalid_request\") return { ok: false, status: 400, error: \"invalid_tenant_or_biz_id\" };\n  return { ok: false, status: 503, error: \"business_registry_unreadable\" };\n"
+   },
+   {
+    "from": "  return typeof value === \"string\" && /^[A-Za-z0-9_-]{1,128}$/.test(value.trim());\n",
+    "to": "  return typeof value === \"string\" && /^[A-Za-z0-9_-]{1,128}$/.test(value.trim());\n}\n\n// M1 R2: a request id is EXACT. A padded id is malformed (400) — it is never trimmed into another business's id.\nfunction isExactId(value: unknown): value is string {\n  return isSafeId(value) && value === value.trim();\n"
+   },
+   {
+    "from": "import { requireCron } from \"../../lib/securityContext.js\";\n",
+    "to": "import { requireCron } from \"../../lib/securityContext.js\";\nimport { resolveRegistryTarget } from \"../../lib/businessRegistry.js\";\n"
+   }
+  ],
+  "index.html": [
+   {
+    "from": "  if(loaded && loggedInUser && !currentBizId && businesses.length > 0) {\n",
+    "to": "  if(loaded && loggedInUser && !currentBizId && selectableBizList.length > 0) {\n"
+   },
+   {
+    "from": "  if(loaded && loggedInUser && businesses.length === 0 && !currentBizId) {\n",
+    "to": "  if(loaded && loggedInUser && selectableBizList.length === 0 && !currentBizId) {\n"
+   },
+   {
+    "from": "          setMustCompleteProfile(false);\n        }}\n      />\n    );\n  }\n\n",
+    "to": "          setMustCompleteProfile(false);\n        }}\n      />\n    );\n  }\n\n  // M1 R2: the business list could not be read or interpreted — loading ends here, explicitly: no business is selected,\n  // no figure is shown, and the first-business setup (which would overwrite the stored list) is never offered.\n  if(loaded && loggedInUser && !currentBizId && bizRegistry.state === \"unavailable\") {\n    return (\n      <div data-m1=\"registry-unavailable\" style={{minHeight:\"100vh\",display:\"flex\",alignItems:\"center\",justifyContent:\"center\",padding:24,fontFamily:\"'Heebo',sans-serif\",direction:\"rtl\"}}>\n        <div style={{maxWidth:360,textAlign:\"center\",color:\"#111827\"}}>\n          <div style={{fontWeight:700,fontSize:16,marginBottom:8}}>רשימת העסקים אינה זמינה כעת</div>\n          <div style={{fontSize:13,color:\"#6B7280\",marginBottom:16}}>לא ניתן לטעון את העסק — לא מוצגים נתונים כספיים. נסה לרענן בעוד מספר רגעים.</div>\n          <button onClick={()=>{ window.location.reload(); }} style={{background:\"#111827\",color:\"#fff\",border:\"none\",borderRadius:6,padding:\"8px 16px\",cursor:\"pointer\",fontFamily:\"inherit\"}}>רענן</button>\n        </div>\n      </div>\n    );\n  }\n\n"
+   },
+   {
+    "from": "              if(rb) {\n                try {\n                  const bizList = JSON.parse(rb.value);\n                  setBusinesses(bizList);\n                  resolveAndSet(bizList);\n                } catch(_){}\n              }\n            }).catch(()=>{});\n          } else if(businesses.length === 1) {\n            setCurrentBizId(businesses[0].id);\n",
+    "to": "              const view = window.MarjinC1.businessRegistryView(rb.value);\n              if(view.state !== \"ready\") { setBizRegistry({ state: \"unavailable\", reason: view.reason }); return; }\n              setBizRegistry({ state: \"ready\" });\n              setBusinesses(view.list);\n              resolveAndSet(view.selectable);\n            }).catch((e)=>{\n              if(e && e.message === \"not found\") { setBizRegistry({ state: \"absent\" }); setBusinesses([]); }\n              else setBizRegistry({ state: \"unavailable\", reason: \"read_failed\" });\n            });\n          } else if(selectableBizList.length === 1) {\n            setCurrentBizId(selectableBizList[0].id);\n"
+   },
+   {
+    "from": "            // Force fresh load from RTDB (never use stale businesses state)\n",
+    "to": "            // Force fresh load from RTDB (never use stale businesses state). M1 R2: the same decoder as the initial load;\n            // an unreadable list or a failed read ends in the explicit unavailable state.\n"
+   },
+   {
+    "from": "              setCurrentBizId(target);\n",
+    "to": "              const target = window.MarjinC1.pickBusiness(selectable, preferred);\n              if(target) setCurrentBizId(target);\n"
+   },
+   {
+    "from": "                if(cached2 && bizList.find(b => b.id === cached2)) target = cached2;\n",
+    "to": "                if(cached2) preferred.push(cached2);\n"
+   },
+   {
+    "from": "              let target = bizList[0].id;\n",
+    "to": "              const preferred = [];\n"
+   },
+   {
+    "from": "            const resolveAndSet = (bizList) => {\n              if(!bizList || bizList.length === 0) return;\n",
+    "to": "            const resolveAndSet = (selectable) => {\n"
+   },
+   {
+    "from": "    ? businesses\n    : businesses.filter(b => (loggedInUser?.allowedBizIds || []).includes(b.id));\n",
+    "to": "    ? selectableBizList\n    : selectableBizList.filter(b => (loggedInUser?.allowedBizIds || []).includes(b.id));\n"
+   },
+   {
+    "from": "  const isMasterOwner = loggedInUser?.role === \"super_owner\";\n",
+    "to": "  const isMasterOwner = loggedInUser?.role === \"super_owner\";\n  // M1 R2: selection lists show only records with a usable id (once); the stored list stays whole for the registry rule.\n  const selectableBizList = React.useMemo(() => window.MarjinC1.selectableBusinesses(businesses), [businesses]);\n"
+   },
+   {
+    "from": "      const rb = await sg(\"app-businesses\", true);\n      if(rb) {\n        try {\n          const bizList = JSON.parse(rb.value);\n          console.log(\"[init] bizList:\", bizList.map(b=>({id:b.id,name:b.name})), \"uid:\", uid, \"cached:\", sessionStorage.getItem(\"marjin_biz_\"+uid));\n          setBusinesses(bizList);\n          if(bizList.length >= 1) {\n            // Try to restore last active biz, fallback to first in list\n            let targetBizId = bizList[0].id;\n            try {\n              const cached = sessionStorage.getItem(\"marjin_biz_\" + uid);\n              if(cached && bizList.find(b => b.id === cached)) targetBizId = cached;\n              else {\n                const activeBiz = await window._rtdbGet(`user_active_biz/${uid}`);\n                if(activeBiz && typeof activeBiz === \"string\" && bizList.find(b => b.id === activeBiz)) {\n                  targetBizId = activeBiz;\n                }\n              }\n            } catch(_){}\n            setCurrentBizId(targetBizId);\n          }\n        } catch(_){}\n",
+    "to": "      // M1 R2: ONE decoder for the business list (window.MarjinC1.businessRegistryView): an element that cannot carry an\n      // identity is never dereferenced, the valid business is selected, and a registry that cannot be read or interpreted\n      // ends loading in an explicit unavailable state — never in a stalled page or the first-business setup.\n      let rb = null, registryLoad = \"unknown\";\n      try { rb = await window.storage.get(\"app-businesses\", true); registryLoad = \"read\"; }\n      catch(e) {\n        const m = e && e.message ? String(e.message) : \"\";\n        registryLoad = m === \"not found\" ? \"absent\" : m.startsWith(\"tenant not set\") ? \"unknown\" : \"failed\";\n      }\n      if(registryLoad === \"absent\") setBizRegistry({ state: \"absent\" });\n      else if(registryLoad === \"failed\") setBizRegistry({ state: \"unavailable\", reason: \"read_failed\" });\n      else if(registryLoad === \"read\") {\n        const view = window.MarjinC1.businessRegistryView(rb.value);\n        if(view.state !== \"ready\") setBizRegistry({ state: \"unavailable\", reason: view.reason });\n        else {\n          console.log(\"[init] businesses: selectable\", view.selectable.length, \"of\", view.list.length, \"uid:\", uid);\n          setBizRegistry({ state: \"ready\" });\n          setBusinesses(view.list);\n          // Try to restore last active biz, fallback to the first selectable business\n          const preferred = [];\n          try {\n            const cached = sessionStorage.getItem(\"marjin_biz_\" + uid);\n            if(cached) preferred.push(cached);\n            if(!cached || !view.selectable.some(b => b.id === cached)) {\n              const activeBiz = await window._rtdbGet(`user_active_biz/${uid}`);\n              if(typeof activeBiz === \"string\") preferred.push(activeBiz);\n            }\n          } catch(_){}\n          const targetBizId = window.MarjinC1.pickBusiness(view.selectable, preferred);\n          if(targetBizId) setCurrentBizId(targetBizId);\n        }\n"
+   },
+   {
+    "from": "  const [businesses, setBusinesses] = useState([]);\n",
+    "to": "  const [businesses, setBusinesses] = useState([]);\n  // M1 R2: the business-list load outcome — \"unknown\" until read; \"unavailable\" ends loading with an explicit state.\n  const [bizRegistry, setBizRegistry] = useState({ state: \"unknown\" });\n"
+   },
+   {
+    "from": "      checkBundle: checkBundle, nodeState: nodeState, historyBinding: historyBinding, ledgerChunks: ledgerChunks, structuredStates: structuredStates,\n",
+    "to": "      checkBundle: checkBundle, nodeState: nodeState, historyBinding: historyBinding, ledgerChunks: ledgerChunks, structuredStates: structuredStates,\n      selectableBusinesses: selectableBusinesses, businessRegistryView: businessRegistryView, pickBusiness: pickBusiness,\n"
+   },
+   {
+    "from": "      return canonical === 1 && collisions === 0;\n",
+    "to": "      return canonical === 1 && collisions === 0;\n    }\n    /**\n     * M1 R2 — the page's business-list view of the stored registry, shared by every load / selection path. No element that\n     * cannot carry an identity is ever dereferenced (a bare null in the list used to throw on `b.id` and stall the page).\n     *   selectableBusinesses(list)  each RECORD with a non-empty string id, once, in registry order. A duplicated id stays\n     *                               selectable once: historyBinding then refuses it (ambiguous) — every financial view is\n     *                               unavailable, never a first-match figure.\n     *   businessRegistryView(value) the window.storage \"app-businesses\" value →\n     *     { state:\"ready\", list, selectable }  list = the stored array without its bare null elements — removing them is\n     *                                          identity-neutral (a bare null denotes no business for ANY id under the\n     *                                          shared rule); every other element (duplicates, colliding or malformed\n     *                                          records) is kept, so registryTargetRegistered and every write-back see\n     *                                          the registry as stored\n     *     { state:\"unreadable\", reason }       not JSON / not an array: the business list cannot be established\n     *   pickBusiness(selectable, preferred) the first preferred id that is selectable, else the first selectable, else null.\n     */\n    function selectableBusinesses(list) {\n      var out = [], seen = {};\n      if (!Array.isArray(list)) return out;\n      for (var i = 0; i < list.length; i++) {\n        var e = list[i];\n        if (e === null || typeof e !== \"object\" || Array.isArray(e) || typeof e.id !== \"string\" || !e.id) continue;\n        if (Object.prototype.hasOwnProperty.call(seen, e.id)) continue;\n        seen[e.id] = true;\n        out.push(e);\n      }\n      return out;\n    }\n    function businessRegistryView(value) {\n      var parsed;\n      try { parsed = JSON.parse(value); } catch (_) { return { state: \"unreadable\", reason: \"registry_json\" }; }\n      if (!Array.isArray(parsed)) return { state: \"unreadable\", reason: \"registry_not_array\" };\n      var list = parsed.filter(function (e) { return e !== null; });\n      return { state: \"ready\", list: list, selectable: selectableBusinesses(list) };\n    }\n    function pickBusiness(selectable, preferred) {\n      var ids = (Array.isArray(selectable) ? selectable : []).map(function (b) { return b.id; });\n      var want = Array.isArray(preferred) ? preferred : [];\n      for (var i = 0; i < want.length; i++) if (typeof want[i] === \"string\" && ids.indexOf(want[i]) >= 0) return want[i];\n      return ids.length ? ids[0] : null;\n"
+   },
+   {
+    "from": "     * collides with it (a non-string / null / missing id or a bare primitive whose String() is bizId, or a trimmed\n     * variant). A defect confined to an unrelated record never makes the requested business unavailable.\n",
+    "to": "     * collides with it (a RECORD whose non-string / null / missing id has String() === bizId, a bare string / number /\n     * boolean whose String() is bizId, or a trimmed variant). A bare null (or array) element carries no identity — it is an\n     * unrelated defect for every id, \"null\" included (M1 R2). A defect confined to an unrelated element never makes the\n     * requested business unavailable.\n"
+   }
+  ],
+  "lib/businessRegistry.js": [
+   {
+    "from": "  return { state: \"not_registered\", unrelatedDefects };\n}\n\n",
+    "to": "  return { state: \"not_registered\", unrelatedDefects };\n}\n\n/**\n * M1 R2 — the classification plus, ONLY when the requested business is registered, its one record. For any other state\n * `record` is null: a consumer that needs the business's settings (e.g. the analytics rebuild's inactive flag) never picks\n * a first match among duplicates, and never reads settings from a registry that cannot establish the identity.\n */\nexport function resolveRegistryTarget(raw, bizId) {\n  const c = classifyRegistryTarget(raw, bizId);\n  if (c.state !== \"registered\") return { ...c, record: null };\n  const records = decodeRegistryNode(raw).list.filter((e) => isRecord(e) && e.id === bizId);\n  return { ...c, record: records.length === 1 ? records[0] : null };\n}\n\n"
+   },
+   {
+    "from": "//                   record is duplicated, OR some non-canonical element collides with `bizId` — a non-string /\n//                   null / missing id or a bare primitive whose String() coercion (the coercion both previous\n//                   runtime validators applied) equals `bizId`, or a string id that equals `bizId` only after\n//                   trimming (the canonical audit model trims). Fail closed, NOT definitive.\n",
+    "to": "//                   record is duplicated, OR some non-canonical element collides with `bizId` — a RECORD whose id is\n//                   a non-string / null / missing value whose String() coercion (the coercion both previous runtime\n//                   validators applied to record ids) equals `bizId`, a bare string / number / boolean whose String()\n//                   equals `bizId`, or a string id that equals `bizId` only after trimming (the canonical audit model\n//                   trims). Fail closed, NOT definitive.\n//                   A bare `null` element (and an array element) carries NO identity: it is not a record, and no\n//                   previous validator ever read an identity from it (Core required a record; P1 refused the whole\n//                   registry). It is an unrelated defect for EVERY requested id — including the literal id \"null\":\n//                   `[{id:\"null\"}, null]` is registered, `[{id:\"null\"}, {id:null}]` is ambiguous (M1 R2, review P3).\n"
+   }
+  ],
+  "src/analytics/dailyBuilder.ts": [
+   {
+    "from": "    }\n  }\n",
+    "to": "    }\n  }\n  for (const { tenantId, bizId } of ambiguousTargets.values()) {\n    failures.push({ tenantId, bizId, error: \"business_registry_ambiguous\" });\n  }\n"
+   },
+   {
+    "from": "    Array.from(discovered.values()).filter((candidate) => {\n",
+    "to": "    Array.from(discovered.values()).filter((candidate) => {\n      if (ambiguousTargets.has(`${candidate.tenantId}|${candidate.bizId}`)) return false;\n"
+   },
+   {
+    "from": "                `[analytics/discovery] ignoring malformed app/business entry under tenant ${tenantId}`\n              );\n              continue;\n            }\n",
+    "to": "                `[analytics/discovery] ignoring malformed app/business entry under tenant ${tenantId}`\n              );\n              continue;\n            }\n            if (registryTargetOf(businesses, biz.id).state === \"ambiguous\") {\n              const key = `${tenantId.trim()}|${biz.id.trim()}`;\n              if (!ambiguousTargets.has(key)) {\n                ambiguousTargets.set(key, { tenantId: tenantId.trim(), bizId: biz.id.trim() });\n                console.warn(`[analytics/discovery] refusing ambiguous registry identity ${tenantId}:${biz.id}`);\n              }\n              continue;\n            }\n"
+   },
+   {
+    "from": "  let indexOnlySkipped = 0;\n",
+    "to": "  let indexOnlySkipped = 0;\n  // M1 R2: a business whose registry identity is AMBIGUOUS (duplicated / colliding records) is not built — no analytics or\n  // insights doc for an identity the registry cannot establish — and is reported as a failure of the run, never omitted.\n  const ambiguousTargets = new Map<string, { tenantId: string; bizId: string }>();\n"
+   },
+   {
+    "from": "    businesses.find((b) => b.id === bizId)?.name ||\n",
+    "to": "    (registered && typeof registered.name === \"string\" && registered.name) ||\n"
+   },
+   {
+    "from": "  const businesses = parseFirebaseData<Array<{ id: string; name: string }>>(\n    businessSnap.val(),\n    []\n  );\n",
+    "to": "  const businesses = parseFirebaseData<unknown>(businessSnap.val(), []);\n  const registered = Array.isArray(businesses) ? registryTargetOf(businesses, bizId).record : null;\n"
+   },
+   {
+    "from": "  return value as T;\n",
+    "to": "  return value as T;\n}\n\n// M1 R2 — the shared target-scoped registry rule (lib/businessRegistry.js: the rule of the Core cost-history writer, the\n// P1 supplier-credit routes and the analytics endpoint) applied to a parsed business list. An unrelated element (a bare\n// null, a primitive, a malformed record) is never dereferenced; duplicated or colliding records establish NO record —\n// never a first match.\nfunction registryTargetOf(list: unknown[], bizId: string) {\n  return resolveRegistryTarget({ _v: JSON.stringify(list) }, bizId);\n"
+   },
+   {
+    "from": "import { getDb } from \"../firebase/admin.js\";\n",
+    "to": "import { getDb } from \"../firebase/admin.js\";\nimport { resolveRegistryTarget } from \"../../lib/businessRegistry.js\";\n"
+   }
+  ]
+ }
+}

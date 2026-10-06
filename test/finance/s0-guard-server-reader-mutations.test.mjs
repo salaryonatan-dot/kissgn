@@ -23,9 +23,13 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
-  SERVER_READER_APPROVED_BLOBS, SERVER_READER_AUTHORIZED_FILES, SERVER_READER_BASE,
+  SERVER_READER_APPROVED_BLOBS as APPROVED_LITERAL, SERVER_READER_EFFECTIVE_BLOBS, SERVER_READER_AUTHORIZED_FILES, SERVER_READER_BASE,
   collectServerReaderScopeInputs, serverReaderScopeVerdict, blobSha, isPlainAuthorizedFile, isProtectedPath,
 } from "../support/server-reader-authorized-delta.mjs";
+import { isM1R2Tree, M1_R2_PINS } from "../support/m1-r2-remediation.mjs";
+// The pin table holding the tree under test: the approved pins — on an M1 R2 tree with the ONE R2 candidate pin of
+// src/analytics/dailyBuilder.ts overlaid (pending independent review). Every mutation class below runs against it.
+const SERVER_READER_APPROVED_BLOBS = SERVER_READER_EFFECTIVE_BLOBS;
 import { gitIn } from "../support/git-context.mjs";
 import { authorizedVersionFenceRulesDelta } from "../support/rules-authorized-delta.mjs";
 
@@ -55,6 +59,11 @@ test("I. positive control: the exact approved tree passes; six plain files (B2 a
   assert.ok(RAW.changedProtectedPaths.includes("database.rules.json"));
   assert.deepEqual(serverReaderScopeVerdict(RAW), { ok: false, reason: "unauthorized_protected_path", detail: ["database.rules.json"] }, "unprojected: Rules remain a protected path for the reader layer");
   assert.deepEqual([...SERVER_READER_AUTHORIZED_FILES].sort(), [DB, DM, "src/repositories/analytics/laborRepo.ts", "src/repositories/analytics/purchasesRepo.ts", SB, SE]);
+  if (isM1R2Tree(ROOT)) {
+    assert.equal(SERVER_READER_APPROVED_BLOBS[DB], M1_R2_PINS[DB], "R2 tree: dailyBuilder is held to its literal R2 candidate pin");
+    assert.equal(APPROVED_LITERAL[DB], "6b70d03c245d163264f1bad2cefa71c0d85ff761", "the approved B1 R1 pin itself is unchanged");
+    for (const f of SERVER_READER_AUTHORIZED_FILES) if (f !== DB) assert.equal(SERVER_READER_APPROVED_BLOBS[f], APPROVED_LITERAL[f], f + ": approved pin");
+  } else assert.equal(SERVER_READER_APPROVED_BLOBS, APPROVED_LITERAL);
   for (const f of SERVER_READER_AUTHORIZED_FILES) {
     assert.ok(isPlainAuthorizedFile(f) && isProtectedPath(f), f);
     assert.match(SERVER_READER_APPROVED_BLOBS[f], /^[0-9a-f]{40}$/, f);

@@ -9,7 +9,7 @@ import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { closureSources, generate } from "../../tools/finance-core/gen-browser.mjs";
 import {
-  SERVER_READER_APPROVED_BLOBS, SERVER_READER_AUTHORIZED_FILES, SERVER_READER_BASE, collectServerReaderScopeInputs, serverReaderScopeVerdict,
+  SERVER_READER_EFFECTIVE_BLOBS, SERVER_READER_AUTHORIZED_FILES, SERVER_READER_BASE, collectServerReaderScopeInputs, serverReaderScopeVerdict,
 } from "../support/server-reader-authorized-delta.mjs";
 import { authorizedVersionFenceRulesDelta } from "../support/rules-authorized-delta.mjs";
 import { importerVerdict, loadConsumerFiles, repoKindOf, validateConsumerFiles, importsCore, importsServerApi } from "../support/b1-fixtures.mjs";
@@ -87,6 +87,9 @@ test("GUARD-05 server-reader pins: the 4 B1 files re-pinned to their git hash-ob
   // src/snapshot/snapshotEmail.ts is pinned as the sixth exact file.
   const SNAPSHOT_FILES = ["src/snapshot/snapshotBuilder.ts", "src/snapshot/snapshotEmail.ts"];
   assert.deepEqual([...SERVER_READER_AUTHORIZED_FILES].sort(), ["src/analytics/dailyBuilder.ts", "src/repositories/analytics/dailyMetricsRepo.ts", "src/repositories/analytics/laborRepo.ts", "src/repositories/analytics/purchasesRepo.ts", ...SNAPSHOT_FILES]);
+  // M1 R2: on an R2 tree the reader table holding the tree is the approved pins with the ONE R2 candidate pin of
+  // src/analytics/dailyBuilder.ts overlaid (server-reader-authorized-delta.mjs; pending independent review)
+  const SERVER_READER_APPROVED_BLOBS = SERVER_READER_EFFECTIVE_BLOBS;
   for (const f of MIGRATED) {
     const h = gitIn(REPO, ["hash-object", f]); assert.equal(h.status, 0);
     assert.equal(SERVER_READER_APPROVED_BLOBS[f], h.stdout.trim(), f + " pin = working tree");

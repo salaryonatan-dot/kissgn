@@ -24,9 +24,11 @@
 // same reviewed change — that is the point.
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { gitIn } from "./git-context.mjs";
+import { isM1R2Tree, M1_R2_PINS } from "./m1-r2-remediation.mjs";
 
 /** The Codex-approved Storage V2 core; the reader files are authorized on top of it. */
 export const SERVER_READER_BASE = "8cac71c1248ad5cc49dfa1a727bf292398ae74e8";
@@ -95,6 +97,21 @@ export const SERVER_READER_APPROVED_BLOBS = Object.freeze({
   "src/snapshot/snapshotEmail.ts": "cae44e7911fbc5613938e5a6d12b61aa7ed29f09",
 });
 export const SERVER_READER_AUTHORIZED_FILES = Object.freeze(Object.keys(SERVER_READER_APPROVED_BLOBS));
+/**
+ * M1 integration R2 (LOCAL CANDIDATE, pending independent review): the registry-selection repair of the analytics builder
+ * changes src/analytics/dailyBuilder.ts (target identity through the shared registry rule; no financial line). On an R2 tree
+ * that ONE file is held to its literal R2 pin (test/support/m1-r2-remediation.json), which R2G-02 re-derives from the
+ * approved bytes by the recorded exact edits; every other entry stays the approved pin above, and the file set is unchanged.
+ * SERVER_READER_APPROVED_BLOBS keeps the approved values (nothing here approves the R2 candidate).
+ */
+const MODULE_REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+export function serverReaderEffectiveBlobs(root = MODULE_REPO) {
+  if (!isM1R2Tree(root)) return SERVER_READER_APPROVED_BLOBS;
+  const out = { ...SERVER_READER_APPROVED_BLOBS };
+  for (const f of Object.keys(out)) if (M1_R2_PINS[f]) out[f] = M1_R2_PINS[f];
+  return Object.freeze(out);
+}
+export const SERVER_READER_EFFECTIVE_BLOBS = serverReaderEffectiveBlobs();
 
 /**
  * Pure verdict. Inputs:
@@ -105,11 +122,11 @@ export const SERVER_READER_AUTHORIZED_FILES = Object.freeze(Object.keys(SERVER_R
  *   baseBlobs             — { [rel]: blob sha at SERVER_READER_BASE } (optional); a pin equal
  *                           to the base blob means the file is not a reviewed change and
  *                           must not be listed;
- *   authorized            — the pin table (defaults to the one above; mutation tests pass
+ *   authorized            — the pin table (defaults to the EFFECTIVE table — the approved pins, R2-overlaid on an R2 tree; mutation tests pass
  *                           altered tables to prove the checks bite).
  * Returns { ok:true } or { ok:false, reason, detail }.
  */
-export function serverReaderScopeVerdict({ changedProtectedPaths, blobs, baseBlobs, authorized = SERVER_READER_APPROVED_BLOBS }) {
+export function serverReaderScopeVerdict({ changedProtectedPaths, blobs, baseBlobs, authorized = SERVER_READER_EFFECTIVE_BLOBS }) {
   const keys = Object.keys(authorized || {});
   if (keys.length === 0) return { ok: false, reason: "empty_allowlist" };
   for (const k of keys) {

@@ -17,7 +17,10 @@ import { join, dirname, normalize } from "node:path";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { M1_PINS, M1_CORE_COMMIT, M1_P1_COMMIT } from "../support/m1-integration-pin.mjs";
-import { M1_R1_PARENT, M1_R1_PINS, M1_R1_NEW_FILES, M1_R1_EDITS, isM1R1Tree, m1EffectivePins, deriveR1, applyR1Edits, m1EffectivePageVerdict, gitBlobId } from "../support/m1-r1-remediation.mjs";
+import { M1_R1_PARENT, M1_R1_PINS, M1_R1_NEW_FILES, M1_R1_EDITS, isM1R1Tree, m1EffectivePins, m1R1Pins, deriveR1, applyR1Edits, m1EffectivePageVerdict, gitBlobId } from "../support/m1-r1-remediation.mjs";
+// The R2 layer (successor of this R1 candidate): on an R2 tree R1G-01/03 verify the R1 commit from git objects, and the HEAD /
+// index / checkout identity is held by the R2 guard (test/finance/m1-r2-guard.test.mjs R2G-01).
+import { isM1R2Tree, M1_R2_PARENT } from "../support/m1-r2-remediation.mjs";
 
 const PROTECTED = /^(src\/(finance|metrics|policy|presenters|browser|finance-server)\/|fincore\/|api\/|lib\/|database\.rules\.json$|test\/support\/rules-authorized-delta\.mjs$|index\.html$)/;
 const SKIP = !isM1R1Tree(REPO) && "not an M1 R1 tree";
@@ -29,15 +32,21 @@ const R1_MODIFIED = Object.keys(M1_R1_PINS).filter((f) => !M1_R1_NEW_FILES.inclu
 test("R1G-01 the R1 change set relative to the rejected parent is exactly the recorded set; committed / staged / checked-out bytes are the effective pins", { skip: SKIP }, () => {
   assert.equal(M1_R1_PARENT, "8511d7b2d3e4c89659b1ae006f6bdb1e9670b826", "the R1 parent is the rejected M1 candidate");
   for (const [f, pin] of Object.entries(M1_R1_PINS)) assert.match(pin, /^[0-9a-f]{40}$/, f + ": literal blob id");
-  const committed = lines(gitIn(REPO, ["diff", "--name-only", M1_R1_PARENT, "HEAD", "--"])).filter((f) => PROTECTED.test(f));
-  const staged = lines(gitIn(REPO, ["diff", "--name-only", "--cached", M1_R1_PARENT, "--"])).filter((f) => PROTECTED.test(f));
-  const working = [...lines(gitIn(REPO, ["diff", "--name-only", M1_R1_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => PROTECTED.test(f));
-  for (const [label, set] of [["committed", committed], ["staged", staged], ["working tree", working]])
+  const layered = isM1R2Tree(REPO);
+  const R1_TREE = layered ? M1_R2_PARENT : "HEAD";          // the R1 commit itself when the R2 layer is checked out
+  const committed = lines(gitIn(REPO, ["diff", "--name-only", M1_R1_PARENT, R1_TREE, "--"])).filter((f) => PROTECTED.test(f));
+  const sets = [["committed", committed]];
+  if (!layered) {
+    sets.push(["staged", lines(gitIn(REPO, ["diff", "--name-only", "--cached", M1_R1_PARENT, "--"])).filter((f) => PROTECTED.test(f))]);
+    sets.push(["working tree", [...lines(gitIn(REPO, ["diff", "--name-only", M1_R1_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => PROTECTED.test(f))]);
+  }
+  for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), Object.keys(M1_R1_PINS).sort(), label + ": protected changes vs the rejected parent = the recorded R1 set");
-  const eff = m1EffectivePins(REPO);
+  const eff = layered ? m1R1Pins() : m1EffectivePins(REPO);
   assert.deepEqual(Object.keys(eff).sort(), [...new Set([...Object.keys(M1_PINS.blobs), ...Object.keys(M1_R1_PINS)])].sort());
   for (const [f, pin] of Object.entries(eff)) {
-    assert.equal(blobId("HEAD:" + f), pin, f + " committed");
+    assert.equal(blobId(R1_TREE + ":" + f), pin, f + " committed" + (layered ? " (at the R1 commit)" : ""));
+    if (layered) continue;
     assert.equal(blobId(":" + f), pin, f + " staged");
     assert.equal(gitBlobId(readFileSync(join(REPO, f))), pin, f + " checked out");
   }
@@ -63,12 +72,13 @@ test("R1G-03 boundedness: R1 changes only the registry decision (two server cons
   for (const f of R1_MODIFIED) for (const [k, e] of M1_R1_EDITS[f].entries())
     assert.match(e.from + e.to, /[Rr]egistry/, `${f} edit #${k} is a registry edit`);
   // the page edits stay inside the C1 seam, between the READ_FAILED sentinel and the ledger chunker (the binding helpers)
-  const page = readFileSync(join(REPO, "index.html"), "utf8"), lo = page.indexOf("    var READ_FAILED = Object.freeze("), hi = page.indexOf("    function ledgerChunks(F, from, to) {");
+  // (the R1 commit's page from git objects when the R2 layer is checked out)
+  const page = isM1R2Tree(REPO) ? bytesOf(`${M1_R2_PARENT}:index.html`).toString("utf8") : readFileSync(join(REPO, "index.html"), "utf8"), lo = page.indexOf("    var READ_FAILED = Object.freeze("), hi = page.indexOf("    function ledgerChunks(F, from, to) {");
   assert.ok(lo > 0 && hi > lo);
   for (const e of M1_R1_EDITS["index.html"]) { const at = page.indexOf(e.to); assert.ok(at > lo && at + e.to.length < hi, "page edit inside the binding helpers"); }
   // the Core writer's and the P1 route's ONLY registry reads are the shared predicate
   for (const f of ["lib/finance/costHistoryWriter.js", "api/admin.js"]) {
-    const src = readFileSync(join(REPO, f), "utf8");
+    const src = readFileSync(join(REPO, f), "utf8");   // unchanged by R2 (R2G-03)
     assert.ok(src.includes("readRegistryTarget(db, tenantId, bizId)"), f + " uses the shared predicate");
   }
   assert.ok(!/app\/business`\)\.get\(\)/.test(readFileSync(join(REPO, "lib/finance/costHistoryWriter.js"), "utf8")), "no inline Core registry read");

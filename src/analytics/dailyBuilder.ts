@@ -17,6 +17,7 @@
  */
 
 import { getDb } from "../firebase/admin.js";
+import { resolveRegistryTarget } from "../../lib/businessRegistry.js";
 import { loadCanonicalInputs } from "../finance-server/canonicalInputs.js";
 import { canonicalDayRecord, toAnalyticsFinancials } from "../finance-server/canonicalMetrics.js";
 import type { AnalyticsFinBlock } from "../finance-server/canonicalMetrics.js";
@@ -175,6 +176,14 @@ function parseFirebaseData<T>(value: any, fallback: T): T {
     try { return JSON.parse(value._v); } catch { return fallback; }
   }
   return value as T;
+}
+
+// M1 R2 — the shared target-scoped registry rule (lib/businessRegistry.js: the rule of the Core cost-history writer, the
+// P1 supplier-credit routes and the analytics endpoint) applied to a parsed business list. An unrelated element (a bare
+// null, a primitive, a malformed record) is never dereferenced; duplicated or colliding records establish NO record —
+// never a first match.
+function registryTargetOf(list: unknown[], bizId: string) {
+  return resolveRegistryTarget({ _v: JSON.stringify(list) }, bizId);
 }
 
 // ── Upstream fetchers (timeouts + soft-fail) ─────────────────────────────────
@@ -397,13 +406,11 @@ export async function buildAnalyticsForBiz(
 
   // Location / region selection only (non-financial): the decoded config when readable.
   const config = (inputs.config.state === "present" ? inputs.config.value : {}) as BusinessConfig;
-  const businesses = parseFirebaseData<Array<{ id: string; name: string }>>(
-    businessSnap.val(),
-    []
-  );
+  const businesses = parseFirebaseData<unknown>(businessSnap.val(), []);
+  const registered = Array.isArray(businesses) ? registryTargetOf(businesses, bizId).record : null;
 
   const bizName =
-    businesses.find((b) => b.id === bizId)?.name ||
+    (registered && typeof registered.name === "string" && registered.name) ||
     config.businessName ||
     "Unknown";
 
@@ -685,6 +692,9 @@ export async function buildAnalyticsForAll(
   let inactiveSkipped = 0;
   let legacySelfSkipped = 0;
   let indexOnlySkipped = 0;
+  // M1 R2: a business whose registry identity is AMBIGUOUS (duplicated / colliding records) is not built — no analytics or
+  // insights doc for an identity the registry cannot establish — and is reported as a failure of the run, never omitted.
+  const ambiguousTargets = new Map<string, { tenantId: string; bizId: string }>();
 
   // Source 1: proactive_biz_index (optional — absence is not an error).
   try {
@@ -777,6 +787,14 @@ export async function buildAnalyticsForAll(
               );
               continue;
             }
+            if (registryTargetOf(businesses, biz.id).state === "ambiguous") {
+              const key = `${tenantId.trim()}|${biz.id.trim()}`;
+              if (!ambiguousTargets.has(key)) {
+                ambiguousTargets.set(key, { tenantId: tenantId.trim(), bizId: biz.id.trim() });
+                console.warn(`[analytics/discovery] refusing ambiguous registry identity ${tenantId}:${biz.id}`);
+              }
+              continue;
+            }
             if (isExplicitlyInactive(biz as Record<string, unknown>)) {
               inactiveSkipped++;
               console.log(
@@ -799,6 +817,7 @@ export async function buildAnalyticsForAll(
   const afterDedupe = discovered.size;
   const activeBusinesses: Array<{ tenantId: string; bizId: string }> =
     Array.from(discovered.values()).filter((candidate) => {
+      if (ambiguousTargets.has(`${candidate.tenantId}|${candidate.bizId}`)) return false;
       if (candidate.fromAppBusiness) return true;
       indexOnlySkipped++;
       console.warn(
@@ -824,6 +843,9 @@ export async function buildAnalyticsForAll(
       console.error(`[analytics] biz ${tenantId}:${bizId} failed:`, err);
       failures.push({ tenantId, bizId, error: String((err as Error)?.message ?? err) });
     }
+  }
+  for (const { tenantId, bizId } of ambiguousTargets.values()) {
+    failures.push({ tenantId, bizId, error: "business_registry_ambiguous" });
   }
 
   return { docs, failures };

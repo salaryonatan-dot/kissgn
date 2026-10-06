@@ -17,6 +17,22 @@
 //           serves it, the credits tab is valid and every figure equals the node core (= RM1-00) — credits included
 //   RM1-06  (M1 R1) the requested business is AMBIGUOUS in the registry (duplicated record): the cost history is not bound,
 //           the real credit list refuses (503) — no financial figure and no credit rows, together
+//   M1 R2 (review P1: a bare null BEFORE the valid business made the page's own business-list loader throw — no business was
+//   selected and the page stalled before any registry rule ran). The whole business-list load / selection path:
+//   RM2-01  [null, valid]: the valid business loads; dashboard, P&L VD-50 / net, suppliers view and the credits tab equal the
+//           node core (credits included) — as RM1-00
+//   RM2-02  null + primitives + a record without id + an unsafe / numeric id + a duplicated UNRELATED id around the valid
+//           business: identical figures
+//   RM2-03  [null, valid] with NO remembered selection (no session business, no user_active_biz): the first SELECTABLE
+//           business is chosen (never the null) and loads with the same figures
+//   RM2-04  the requested business duplicated, in both orders and behind a null: every financial view and the credit rows
+//           unavailable together (ambiguous — never a first-match figure)
+//   RM2-05  the stored list cannot be interpreted (invalid JSON / not an array): loading ENDS in the explicit
+//           registry-unavailable state — no figure, no business selected, and never the first-business setup
+//   RM2-06  the business-list read itself fails (test-only Rules copy denying that read): the same explicit state
+//   RM2-07  no business list at all (absent node): the first-business setup, as before (not an error)
+//   RM2-08  delete from the business switcher with [null, valid, other]: no page error; the stored list keeps the valid
+//           business (the bare null is not re-written — identity-neutral) and the server rule still registers it
 // Deliberately NOT named *.test.mjs (needs the emulator). Run through the emulator runner, one script at a time.
 import admin from "firebase-admin";
 import { readFileSync, mkdtempSync, writeFileSync, cpSync, mkdirSync, symlinkSync } from "node:fs";
@@ -104,14 +120,14 @@ const DEFECT_C = (() => { const n = JSON.parse(JSON.stringify(CHAIN)); delete n.
 const PENDING = FIX.creditNode([FIX.spec(1, "s1", d(5), "100", { documentNumber: "CR-100", actor: USER.uid, role: "owner", review: "pending" })], { tenantId: T, bizId: B });
 const CORRUPT_HISTORY = (() => { const n = JSON.parse(JSON.stringify(HISTORY_NODE)); n.versions["00000000-0000-4000-8000-0000000000a1"].fixedItems[0].monthlyAmount = "1"; return n; })();
 
-const fixtures = ({ history = HISTORY_NODE, credits = CHAIN, registry = [{ id: B, name: "סניף M1" }] } = {}) => ({
+const fixtures = ({ history = HISTORY_NODE, credits = CHAIN, registry = [{ id: B, name: "סניף M1" }], registryRaw, activeBiz = B } = {}) => ({
   tenants: { [T]: {
     members: { [USER.uid]: true }, roles: { [USER.uid]: "owner" }, biz_access: { [B]: { [USER.uid]: true } },
-    app: { users: env([{ id: 1, username: "owner1", name: "בעלים", email: USER.email, role: "owner", firebaseUid: USER.uid }]), business: env(registry) },
+    app: { users: env([{ id: 1, username: "owner1", name: "בעלים", email: USER.email, role: "owner", firebaseUid: USER.uid }]), ...(registryRaw === null ? {} : { business: registryRaw !== undefined ? registryRaw : env(registry) }) },
     [`biz:${B}:entries`]: env(ROWS), [`biz:${B}:config`]: env(CONFIG), [`biz:${B}:fixed`]: env(FIXED), [`biz:${B}:suppliers`]: env(SUPS),
     ...(credits ? { [`biz:${B}:supplier_credits`]: credits } : {}), ...(history ? { [`biz:${B}:cost_history`]: history } : {}),
   } },
-  user_tenants: { [USER.uid]: T }, user_active_biz: { [USER.uid]: B },
+  user_tenants: { [USER.uid]: T }, ...(activeBiz ? { user_active_biz: { [USER.uid]: activeBiz } } : {}),
   username_index: { owner1: { tenantId: T, email: USER.email } },
 });
 
@@ -150,8 +166,8 @@ const fetchImpl = async (url, opts) => {
   return resp(404, { error: "not_available_in_harness" });
 };
 const session = { ["marjin_tid_" + USER.uid]: T, ["marjin_biz_" + USER.uid]: B };
-async function boot() {
-  const page = await bootHistoricalPage({ html: HTML, fincore: "ok", loadFincore: loadFinance, adminApp: apps.owner, user: USER, session, signedIn: true, clockOffsetMs: CLOCK_OFFSET_MS, fetchImpl });
+async function boot(bootSession = session) {
+  const page = await bootHistoricalPage({ html: HTML, fincore: "ok", loadFincore: loadFinance, adminApp: apps.owner, user: USER, session: bootSession, signedIn: true, clockOffsetMs: CLOCK_OFFSET_MS, fetchImpl });
   page.window.TextEncoder = TextEncoder;
   await page.until(() => page.document.querySelector(".kpi-card-link") !== null || q(page, "fin-unavailable") !== null, 20000);
   return page;
@@ -171,11 +187,11 @@ async function expected({ history, credits }) {
   const src = { rows: ROWS, config: { state: "present", value: CONFIG }, fixed: { state: "present", value: FIXED }, asOf: AS_OF, ledger: { state: "absent", states: {}, from: "2000-01-01", to: "2100-12-31" }, rowsReady: true, credits: decodedCredits, costHistory };
   return { costHistory, src, dash: C1.dashboard(F, src, { nowMs: TARGET_MS, lastYearSales: null }), sup: C1.suppliers(F, src, MONTH, SUPS), pnl: C1.pnl(F, src, MONTH, null), tab: win.MarjinP1.monthView(F, decodedCredits, MONTH, SUPS) };
 }
-async function scenario(id, label, data, check) {
+async function scenario(id, label, data, check, bootSession = session) {
   await run(id, label, async () => {
     await apps.seed.database().ref("/").set(fixtures(data));
     const X = await expected(data);
-    const page = await boot();
+    const page = await boot(bootSession);
     try {
       await settled(page);
       const obs = { dash: { purchases: qt(page, "mtd-purchases"), pct: qt(page, "purchases-pct"), labor: qt(page, "mtd-labor"), fixed: qt(page, "mtd-fixed"), unavailable: qt(page, "fin-unavailable") } };
@@ -258,6 +274,90 @@ async function main() {
     expect(!o.tab.present || o.tab.total === "", "no credit rows / total: " + JSON.stringify(o.tab));
     expect(!/₪/.test(o.sup.total || ""), "no supplier purchase figure: " + JSON.stringify(o.sup));
     eq(o.fatal, 0, "fatal page errors");
+  });
+
+  // ── M1 R2: the page's business-list load / selection path ──
+  const SAME_AS_RM1_00 = (o, X) => {
+    expect(X.dash.status === "ready" && X.pnl.status === "ready" && X.sup.status === "ready", "node views ready");
+    eq(o.dash.purchases, X.dash.purchases.text, "dashboard MTD purchases (net of the credits)"); eq(o.dash.pct, X.dash.purchasesPct.text, "dashboard Food Cost");
+    eq(o.dash.labor, X.dash.labor.text, "dashboard labor"); eq(o.dash.fixed, X.dash.fixedRent.text, "dashboard fixed");
+    expect(/₪/.test(X.pnl.gross.text) && o.pnl.vd50.includes(X.pnl.gross.text), "P&L VD-50 gross = node core " + (o.pnl && o.pnl.vd50) + " / " + X.pnl.gross.text);
+    expect(o.pnl.net.includes(X.pnl.rows.net.text), "P&L net = node core");
+    eq(o.sup.pct, X.sup.purchasesPct.text, "suppliers Food Cost"); eq(o.sup.total, X.sup.total.text, "suppliers purchases total (net of credits)"); expect(!o.sup.incomplete, "suppliers complete (credits loaded)");
+    expect(o.tab.present && !o.tab.invalid && o.tab.total === X.tab.totalText, "credits tab valid with the node total " + JSON.stringify(o.tab) + " / " + X.tab.totalText);
+    expect(/−₪160/.test(o.sup.strip) && o.sup.strip.includes("נטו " + X.sup.total.text), "supplier-credit strip: gross, credits, net " + o.sup.strip);
+    eq(o.dash.unavailable, "", "no unavailable notice"); eq(o.fatal, 0, "fatal page errors");
+  };
+  const VALID = { id: B, name: "סניף M1" };
+  await scenario("RM2-01", "[null, valid business]: the valid business loads and every figure (credits included) = node core", { history: HISTORY_NODE, credits: CHAIN, registry: [null, VALID] }, SAME_AS_RM1_00);
+  await scenario("RM2-02", "null + primitives + a record without id + unsafe / numeric ids + a duplicated UNRELATED id around the valid business: identical figures", { history: HISTORY_NODE, credits: CHAIN, registry: [null, "bizX", 7, [B], { name: "no id" }, { id: "" }, { id: "biz:C", name: "C" }, { id: 9, name: "N" }, { id: "bizB", name: "B" }, { id: "bizB", name: "B2" }, VALID, null] }, SAME_AS_RM1_00);
+  await scenario("RM2-03", "[null, valid] with NO remembered selection: the first selectable business is chosen (never the null) and loads with the same figures", { history: HISTORY_NODE, credits: CHAIN, registry: [null, VALID], activeBiz: null }, SAME_AS_RM1_00, { ["marjin_tid_" + USER.uid]: T });
+  for (const [k, list] of [["a", [VALID, { id: B, name: "סניף M1 (dup)" }]], ["b", [{ id: B, name: "סניף M1 (dup)", active: false }, VALID]], ["c", [null, VALID, VALID]]]) {
+    await scenario("RM2-04" + k, "the requested business duplicated (" + JSON.stringify(list.map((e) => e && e.name)) + "): every financial view and the credit rows unavailable together", { history: HISTORY_NODE, credits: CHAIN, registry: list }, (o) => {
+      expect(o.dash.unavailable !== "" && o.dash.purchases === "", "dashboard financial view unavailable: " + JSON.stringify(o.dash));
+      expect(o.pnl === undefined, "no P&L figures");
+      expect(!o.tab.present || o.tab.total === "", "no credit rows / total: " + JSON.stringify(o.tab));
+      expect(!/₪/.test(o.sup.total || ""), "no supplier purchase figure: " + JSON.stringify(o.sup));
+      eq(o.fatal, 0, "fatal page errors");
+    });
+  }
+
+  // terminal page states without figures: the explicit registry-unavailable state, the first-business setup
+  const pageState = (page) => ({
+    unavailable: !!page.document.querySelector('[data-m1="registry-unavailable"]'),
+    setup: !!page.document.querySelector(".wizard-title"),
+    dashboard: !!page.document.querySelector(".kpi-card-link") || q(page, "mtd-revenue") !== null,
+    money: /₪\s?\d/.test(textOf(page.document.getElementById("root"))),     // the rendered app only (not inline script text)
+    fatal: fatalErrors(page).length,
+  });
+  async function stateScenario(id, label, data, rules, check) {
+    await run(id, label, async () => {
+      await apps.seed.database().ref("/").set(fixtures(data));
+      if (rules) await loadRules(rules);
+      try {
+        const page = await bootHistoricalPage({ html: HTML, fincore: "ok", loadFincore: loadFinance, adminApp: apps.owner, user: USER, session, signedIn: true, clockOffsetMs: CLOCK_OFFSET_MS, fetchImpl });
+        page.window.TextEncoder = TextEncoder;
+        try {
+          await page.until(() => { const st = pageState(page); return st.unavailable || st.setup || st.dashboard; }, 20000);
+          await page.sleep(500);
+          const st = pageState(page);
+          check(st);
+          return JSON.stringify(st);
+        } finally { page.detach(); }
+      } finally { if (rules) await loadRules(RULES); }
+    });
+  }
+  const explicitUnavailable = (st) => {
+    expect(st.unavailable, "the explicit registry-unavailable state is shown");
+    expect(!st.setup, "never the first-business setup (it would overwrite the stored list)");
+    expect(!st.dashboard && !st.money, "no business view and no amount: " + JSON.stringify(st));
+    eq(st.fatal, 0, "fatal page errors");
+  };
+  await stateScenario("RM2-05a", "stored business list is invalid JSON: loading ends in the explicit registry-unavailable state", { registryRaw: { _v: "[{\"id\":" } }, null, explicitUnavailable);
+  await stateScenario("RM2-05b", "stored business list is JSON but not an array: the explicit registry-unavailable state", { registryRaw: { _v: JSON.stringify({ [B]: VALID }) } }, null, explicitUnavailable);
+  const DENY_BUSINESS_READ = JSON.parse(JSON.stringify(RULES)); DENY_BUSINESS_READ.rules.tenants["$tenantId"].app.business[".read"] = false;   // test-only emulator copy
+  await stateScenario("RM2-06", "the business-list read fails (test-only Rules copy denies it): the explicit registry-unavailable state, not a 'no business' setup", {}, DENY_BUSINESS_READ, explicitUnavailable);
+  await stateScenario("RM2-07", "no business list at all (absent node): the first-business setup, as before", { registryRaw: null, activeBiz: null }, null, (st) => {
+    expect(st.setup, "first-business setup"); expect(!st.unavailable, "not the unavailable state"); eq(st.fatal, 0, "fatal page errors");
+  });
+
+  await run("RM2-08", "delete from the business switcher with [null, valid, other]: no page error; the stored list keeps the valid business and the server rule still registers it", async () => {
+    const OTHER = { id: "bizD", name: "סניף נוסף" };
+    await apps.seed.database().ref("/").set(fixtures({ registry: [null, VALID, OTHER] }));
+    const page = await boot();
+    try {
+      await settled(page);
+      const sw = page.document.querySelector("button.mhd-switch"); expect(sw, "the switcher is offered (two selectable businesses)"); click(sw); await page.sleep(300);
+      const row = Array.from(page.document.querySelectorAll("button")).find((b) => textOf(b).startsWith(OTHER.name)); expect(row, "the other business is listed");
+      const del = row.parentElement.querySelectorAll("button")[1]; expect(del, "delete control"); click(del);
+      let stored = null;
+      for (let i = 0; i < 40; i++) { stored = (await apps.seed.database().ref(`tenants/${T}/app/business`).get()).val(); if (stored && !String(stored._v).includes(OTHER.id)) break; await page.sleep(200); }
+      eq(stored._v, JSON.stringify([VALID]), "stored list after the delete");
+      const { classifyRegistryTarget } = await import("../../lib/businessRegistry.js");
+      eq(classifyRegistryTarget(stored, B).state, "registered", "the server rule still registers the valid business");
+      eq(fatalErrors(page).length, 0, "fatal page errors");
+      return stored._v;
+    } finally { page.detach(); }
   });
 
   console.log(`\n${"case".padEnd(7)} ${"status".padEnd(6)} notes`); console.log("-".repeat(120));

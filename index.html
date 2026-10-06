@@ -1443,8 +1443,10 @@
      * M1 R1 — THE shared target-scoped business-registry rule (server: lib/businessRegistry.js classifyRegistryTarget,
      * used by the Core cost-history writer and the P1 supplier-credit routes), over the parsed app-businesses list. The
      * requested business is registered iff exactly ONE record's id is the string bizId and no other element's identity
-     * collides with it (a non-string / null / missing id or a bare primitive whose String() is bizId, or a trimmed
-     * variant). A defect confined to an unrelated record never makes the requested business unavailable.
+     * collides with it (a RECORD whose non-string / null / missing id has String() === bizId, a bare string / number /
+     * boolean whose String() is bizId, or a trimmed variant). A bare null (or array) element carries no identity — it is an
+     * unrelated defect for every id, "null" included (M1 R2). A defect confined to an unrelated element never makes the
+     * requested business unavailable.
      */
     function registryTargetRegistered(list, bizId) {
       if (!Array.isArray(list) || typeof bizId !== "string" || !bizId || bizId.length > 128 || /[.#$\[\]\/:]/.test(bizId)) return false;
@@ -1456,6 +1458,46 @@
         if ((rec || id !== undefined) && String(id).trim() === bizId.trim()) collisions++;
       }
       return canonical === 1 && collisions === 0;
+    }
+    /**
+     * M1 R2 — the page's business-list view of the stored registry, shared by every load / selection path. No element that
+     * cannot carry an identity is ever dereferenced (a bare null in the list used to throw on `b.id` and stall the page).
+     *   selectableBusinesses(list)  each RECORD with a non-empty string id, once, in registry order. A duplicated id stays
+     *                               selectable once: historyBinding then refuses it (ambiguous) — every financial view is
+     *                               unavailable, never a first-match figure.
+     *   businessRegistryView(value) the window.storage "app-businesses" value →
+     *     { state:"ready", list, selectable }  list = the stored array without its bare null elements — removing them is
+     *                                          identity-neutral (a bare null denotes no business for ANY id under the
+     *                                          shared rule); every other element (duplicates, colliding or malformed
+     *                                          records) is kept, so registryTargetRegistered and every write-back see
+     *                                          the registry as stored
+     *     { state:"unreadable", reason }       not JSON / not an array: the business list cannot be established
+     *   pickBusiness(selectable, preferred) the first preferred id that is selectable, else the first selectable, else null.
+     */
+    function selectableBusinesses(list) {
+      var out = [], seen = {};
+      if (!Array.isArray(list)) return out;
+      for (var i = 0; i < list.length; i++) {
+        var e = list[i];
+        if (e === null || typeof e !== "object" || Array.isArray(e) || typeof e.id !== "string" || !e.id) continue;
+        if (Object.prototype.hasOwnProperty.call(seen, e.id)) continue;
+        seen[e.id] = true;
+        out.push(e);
+      }
+      return out;
+    }
+    function businessRegistryView(value) {
+      var parsed;
+      try { parsed = JSON.parse(value); } catch (_) { return { state: "unreadable", reason: "registry_json" }; }
+      if (!Array.isArray(parsed)) return { state: "unreadable", reason: "registry_not_array" };
+      var list = parsed.filter(function (e) { return e !== null; });
+      return { state: "ready", list: list, selectable: selectableBusinesses(list) };
+    }
+    function pickBusiness(selectable, preferred) {
+      var ids = (Array.isArray(selectable) ? selectable : []).map(function (b) { return b.id; });
+      var want = Array.isArray(preferred) ? preferred : [];
+      for (var i = 0; i < want.length; i++) if (typeof want[i] === "string" && ids.indexOf(want[i]) >= 0) return want[i];
+      return ids.length ? ids[0] : null;
     }
     /**
      * Core/F1 R4 — the ONLY way the page binds a cost-history decode. The raw node is held with the verified
@@ -2222,6 +2264,7 @@
     window.MarjinC1 = Object.freeze({
       C1_VERSION: C1_VERSION, EXPECT: EXPECT, LEDGER_CHUNK_DAYS: LEDGER_CHUNK_DAYS, LEDGER_ATTEMPT_DEADLINE_MS: LEDGER_ATTEMPT_DEADLINE_MS, TXT: TXT, READ_FAILED: READ_FAILED,
       checkBundle: checkBundle, nodeState: nodeState, historyBinding: historyBinding, ledgerChunks: ledgerChunks, structuredStates: structuredStates,
+      selectableBusinesses: selectableBusinesses, businessRegistryView: businessRegistryView, pickBusiness: pickBusiness,
       earliestRowDate: earliestRowDate, ledgerWindow: ledgerWindow, ledgerCovers: ledgerCovers, loadLedger: loadLedger,
       revisionOf: revisionOf, ledgerKey: ledgerKey, ledgerFor: ledgerFor, createLedgerSession: createLedgerSession, inputsFor: inputsFor,
       monthReport: monthReport, dashboard: dashboard, configView: configView, configuredMonthly: configuredMonthly, todayContext: todayContext, pnl: pnl, pnlGrossLineVD50: pnlGrossLineVD50,
@@ -6237,6 +6280,8 @@ function PilotDashboard() {
 
   // ── AI send — defined at component level so it's never stale ──────────────
   const [businesses, setBusinesses] = useState([]);
+  // M1 R2: the business-list load outcome — "unknown" until read; "unavailable" ends loading with an explicit state.
+  const [bizRegistry, setBizRegistry] = useState({ state: "unknown" });
   const [currentBizId, setCurrentBizId_] = useState(null);
   // ── Insight Engine v1 — Dashboard card state (Phase 3, read-only) ──────────
   const [dashboardInsights, setDashboardInsights] = useState(null);        // null = no doc found; [] = doc exists but no insights
@@ -6536,28 +6581,37 @@ function PilotDashboard() {
           }
         } catch(_){}
       }
-      const rb = await sg("app-businesses", true);
-      if(rb) {
-        try {
-          const bizList = JSON.parse(rb.value);
-          console.log("[init] bizList:", bizList.map(b=>({id:b.id,name:b.name})), "uid:", uid, "cached:", sessionStorage.getItem("marjin_biz_"+uid));
-          setBusinesses(bizList);
-          if(bizList.length >= 1) {
-            // Try to restore last active biz, fallback to first in list
-            let targetBizId = bizList[0].id;
-            try {
-              const cached = sessionStorage.getItem("marjin_biz_" + uid);
-              if(cached && bizList.find(b => b.id === cached)) targetBizId = cached;
-              else {
-                const activeBiz = await window._rtdbGet(`user_active_biz/${uid}`);
-                if(activeBiz && typeof activeBiz === "string" && bizList.find(b => b.id === activeBiz)) {
-                  targetBizId = activeBiz;
-                }
-              }
-            } catch(_){}
-            setCurrentBizId(targetBizId);
-          }
-        } catch(_){}
+      // M1 R2: ONE decoder for the business list (window.MarjinC1.businessRegistryView): an element that cannot carry an
+      // identity is never dereferenced, the valid business is selected, and a registry that cannot be read or interpreted
+      // ends loading in an explicit unavailable state — never in a stalled page or the first-business setup.
+      let rb = null, registryLoad = "unknown";
+      try { rb = await window.storage.get("app-businesses", true); registryLoad = "read"; }
+      catch(e) {
+        const m = e && e.message ? String(e.message) : "";
+        registryLoad = m === "not found" ? "absent" : m.startsWith("tenant not set") ? "unknown" : "failed";
+      }
+      if(registryLoad === "absent") setBizRegistry({ state: "absent" });
+      else if(registryLoad === "failed") setBizRegistry({ state: "unavailable", reason: "read_failed" });
+      else if(registryLoad === "read") {
+        const view = window.MarjinC1.businessRegistryView(rb.value);
+        if(view.state !== "ready") setBizRegistry({ state: "unavailable", reason: view.reason });
+        else {
+          console.log("[init] businesses: selectable", view.selectable.length, "of", view.list.length, "uid:", uid);
+          setBizRegistry({ state: "ready" });
+          setBusinesses(view.list);
+          // Try to restore last active biz, fallback to the first selectable business
+          const preferred = [];
+          try {
+            const cached = sessionStorage.getItem("marjin_biz_" + uid);
+            if(cached) preferred.push(cached);
+            if(!cached || !view.selectable.some(b => b.id === cached)) {
+              const activeBiz = await window._rtdbGet(`user_active_biz/${uid}`);
+              if(typeof activeBiz === "string") preferred.push(activeBiz);
+            }
+          } catch(_){}
+          const targetBizId = window.MarjinC1.pickBusiness(view.selectable, preferred);
+          if(targetBizId) setCurrentBizId(targetBizId);
+        }
       }
 
       setLoaded(true);
@@ -7751,9 +7805,11 @@ function PilotDashboard() {
   // Strict gate for "+ הוסף סניף חדש" — master/super_owner only. Do NOT reuse
   // isSuperOwner here (it also includes regular "owner").
   const isMasterOwner = loggedInUser?.role === "super_owner";
+  // M1 R2: selection lists show only records with a usable id (once); the stored list stays whole for the registry rule.
+  const selectableBizList = React.useMemo(() => window.MarjinC1.selectableBusinesses(businesses), [businesses]);
   const allowedBusinesses = isSuperOwner
-    ? businesses
-    : businesses.filter(b => (loggedInUser?.allowedBizIds || []).includes(b.id));
+    ? selectableBizList
+    : selectableBizList.filter(b => (loggedInUser?.allowedBizIds || []).includes(b.id));
 
   // C1: every financial figure of the dashboard / food-cost summary is a field of ONE
   // view model over the shared core (window.MarjinC1.dashboard). Not ready ⇒ no numbers.
@@ -7961,28 +8017,30 @@ function PilotDashboard() {
             // Always reload businesses from the correct tenant on manual login
             // (don't trust stale in-memory state from a previous session)
             if(window.setTenantId) window.setTenantId(user._tenantId);
-            const resolveAndSet = (bizList) => {
-              if(!bizList || bizList.length === 0) return;
+            const resolveAndSet = (selectable) => {
               const uid2 = window.storage.getUid?.();
-              let target = bizList[0].id;
+              const preferred = [];
               try {
                 const cached2 = uid2 ? sessionStorage.getItem("marjin_biz_" + uid2) : null;
-                if(cached2 && bizList.find(b => b.id === cached2)) target = cached2;
+                if(cached2) preferred.push(cached2);
               } catch(_){}
-              setCurrentBizId(target);
+              const target = window.MarjinC1.pickBusiness(selectable, preferred);
+              if(target) setCurrentBizId(target);
             };
-            // Force fresh load from RTDB (never use stale businesses state)
+            // Force fresh load from RTDB (never use stale businesses state). M1 R2: the same decoder as the initial load;
+            // an unreadable list or a failed read ends in the explicit unavailable state.
             window.storage.get("app-businesses", true).then(rb => {
-              if(rb) {
-                try {
-                  const bizList = JSON.parse(rb.value);
-                  setBusinesses(bizList);
-                  resolveAndSet(bizList);
-                } catch(_){}
-              }
-            }).catch(()=>{});
-          } else if(businesses.length === 1) {
-            setCurrentBizId(businesses[0].id);
+              const view = window.MarjinC1.businessRegistryView(rb.value);
+              if(view.state !== "ready") { setBizRegistry({ state: "unavailable", reason: view.reason }); return; }
+              setBizRegistry({ state: "ready" });
+              setBusinesses(view.list);
+              resolveAndSet(view.selectable);
+            }).catch((e)=>{
+              if(e && e.message === "not found") { setBizRegistry({ state: "absent" }); setBusinesses([]); }
+              else setBizRegistry({ state: "unavailable", reason: "read_failed" });
+            });
+          } else if(selectableBizList.length === 1) {
+            setCurrentBizId(selectableBizList[0].id);
           }
           if(user.role==="staff") setScreen("shifts");
         }}
@@ -8018,8 +8076,22 @@ function PilotDashboard() {
     );
   }
 
+  // M1 R2: the business list could not be read or interpreted — loading ends here, explicitly: no business is selected,
+  // no figure is shown, and the first-business setup (which would overwrite the stored list) is never offered.
+  if(loaded && loggedInUser && !currentBizId && bizRegistry.state === "unavailable") {
+    return (
+      <div data-m1="registry-unavailable" style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:24,fontFamily:"'Heebo',sans-serif",direction:"rtl"}}>
+        <div style={{maxWidth:360,textAlign:"center",color:"#111827"}}>
+          <div style={{fontWeight:700,fontSize:16,marginBottom:8}}>רשימת העסקים אינה זמינה כעת</div>
+          <div style={{fontSize:13,color:"#6B7280",marginBottom:16}}>לא ניתן לטעון את העסק — לא מוצגים נתונים כספיים. נסה לרענן בעוד מספר רגעים.</div>
+          <button onClick={()=>{ window.location.reload(); }} style={{background:"#111827",color:"#fff",border:"none",borderRadius:6,padding:"8px 16px",cursor:"pointer",fontFamily:"inherit"}}>רענן</button>
+        </div>
+      </div>
+    );
+  }
+
   // First time setup -- only if truly no business (not just slow load on mobile)
-  if(loaded && loggedInUser && businesses.length === 0 && !currentBizId) {
+  if(loaded && loggedInUser && selectableBizList.length === 0 && !currentBizId) {
     return (
       <SetupWizard
         initial={businessConfig} initialSuppliers={[]} initialFixed={FIXED_EXPENSES_DEFAULT}
@@ -8031,7 +8103,7 @@ function PilotDashboard() {
 
   // Business selector -- multiple businesses
   // Full-page selector only when no business selected yet
-  if(loaded && loggedInUser && !currentBizId && businesses.length > 0) {
+  if(loaded && loggedInUser && !currentBizId && selectableBizList.length > 0) {
     return (
       <BusinessSelector
         businesses={allowedBusinesses}

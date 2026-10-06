@@ -13,6 +13,7 @@ import { spawnSync } from "node:child_process";
 import { compileServer, makeDb, installDb, offlineFetch, ROOT } from "../support/server-reader-harness.mjs";
 import { T, B, asLegacy, entry, env, seedRaw, uid } from "../support/b1-fixtures.mjs";
 import { gitIn } from "../support/git-context.mjs";
+import { isM1R2Tree, M1_R2_PINS } from "../support/m1-r2-remediation.mjs";
 import { strictLegacyDailyMetric } from "../../lib/analytics/strictDailyMetrics.js";
 
 offlineFetch();
@@ -208,7 +209,10 @@ test("COMPAT-08 the API wrapper (api/analytics/daily-builder.ts — B1 leaves it
   const cronHeaders = p0In ? { authorization: "Bearer compat08-test-cron-secret" } : { "x-vercel-cron": "1" };
   const prevSecret = process.env.CRON_SECRET;
   if (p0In) {
-    assert.equal(gitIn(ROOT, ["hash-object", WRAP]).stdout.trim(), gitIn(ROOT, ["rev-parse", `${P0}:${WRAP}`]).stdout.trim(), "wrapper = approved P0 blob");
+    // M1 R2 (pending independent review) changes ONLY the wrapper's target-identity decision: on an R2 tree the wrapper is
+    // held to its literal R2 pin, which R2G-02 re-derives from the P0 bytes by recorded exact edits (auth section unchanged, R2G-03)
+    const want = isM1R2Tree(ROOT) ? M1_R2_PINS[WRAP] : gitIn(ROOT, ["rev-parse", `${P0}:${WRAP}`]).stdout.trim();
+    assert.equal(gitIn(ROOT, ["hash-object", WRAP]).stdout.trim(), want, "wrapper = approved P0 blob (or the M1 R2 pin)");
     process.env.CRON_SECRET = "compat08-test-cron-secret";
   }
   try {

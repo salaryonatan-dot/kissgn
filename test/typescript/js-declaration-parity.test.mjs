@@ -33,6 +33,7 @@ const PAIRS = [
   ["lib/proactiveCore.js", "lib/proactiveCore.d.ts"],
   ["lib/analytics/entriesReader.js", "lib/analytics/entriesReader.d.ts"],
   ["lib/storagePolicy.js", "lib/storagePolicy.d.ts"],
+  ["lib/businessRegistry.js", "lib/businessRegistry.d.ts"],
 ];
 
 for (const [jsRel, dtsRel] of PAIRS) {

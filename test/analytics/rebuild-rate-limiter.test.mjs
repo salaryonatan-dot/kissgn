@@ -28,6 +28,8 @@ mkdirSync(join(dir, "src", "analytics"), { recursive: true });
 copyFileSync(SRC, join(dir, "api", "analytics", "daily-builder.ts"));
 copyFileSync(join(REPO, "lib", "securityContext.js"), join(dir, "lib", "securityContext.js"));
 copyFileSync(join(REPO, "lib", "bizAccess.js"), join(dir, "lib", "bizAccess.js"));
+// M1 R2: the endpoint resolves its target through the REAL shared registry rule
+copyFileSync(join(REPO, "lib", "businessRegistry.js"), join(dir, "lib", "businessRegistry.js"));
 const w = (p, c) => writeFileSync(join(dir, p), c);
 w("lib/verifyToken.js", `export async function requireAuth(req){ return globalThis.__H.requireAuth(req); }`);
 w("lib/helpers.js", `export async function requireTenantAccess(u,t,r){ return globalThis.__H.requireTenantAccess(u,t,r); }
@@ -54,7 +56,7 @@ let pass=0, fail=0; const results=[];
 const ok=(n,c)=>{ if(c){pass++;results.push("PASS "+n);} else {fail++;results.push("FAIL "+n);} };
 const t=async(n,fn)=>{ try{ await fn(); }catch(e){ fail++; results.push("FAIL "+n+" :: "+(e&&e.message||e)); } };
 const mkRes=()=>{ const x={statusCode:0,body:null,headers:{}}; x.setHeader=(k,v)=>{x.headers[k]=v;}; x.status=(c)=>{x.statusCode=c;return x;}; x.json=(b)=>{x.body=b;return x;}; x.end=()=>x; return x; };
-const baseH=(o={})=>({ requireAuth:async()=>({uid:"u1"}), requireTenantAccess:async()=>"owner", isRateLimited:async()=>false, buildAnalyticsForBiz:async()=>({meta:{builtAt:1}}), calls:[], db:()=>({ ref:(p)=>({ once:async()=>({ val:()=>{ if(p.endsWith("/app/business")) return [{id:"b1",name:"Biz"}]; if(p.endsWith("/app/users")) return [{firebaseUid:"u1",role:"owner",allowedBizIds:["b1"]}]; if(p.includes("insights:daily")) return {tenantId:"t1",bizId:"b1",date:"2026-07-09",engineVersion:"insights-v1",generatedAt:Date.now(),insights:[{a:1}]}; return null; } }) }) }), ...o });
+const baseH=(o={})=>({ requireAuth:async()=>({uid:"u1"}), requireTenantAccess:async()=>"owner", isRateLimited:async()=>false, buildAnalyticsForBiz:async()=>({meta:{builtAt:1}}), calls:[], db:()=>({ ref:(p)=>({ once:async()=>({ val:()=>{ if(p.endsWith("/app/business")) return {_v:JSON.stringify([{id:"b1",name:"Biz"}])}; if(p.endsWith("/app/users")) return [{firebaseUid:"u1",role:"owner",allowedBizIds:["b1"]}]; if(p.includes("insights:daily")) return {tenantId:"t1",bizId:"b1",date:"2026-07-09",engineVersion:"insights-v1",generatedAt:Date.now(),insights:[{a:1}]}; return null; } }) }) }), ...o });
 const req=()=>({ method:"POST", headers:{}, query:{}, body:{ action:"rebuild_after_entry_save", tenantId:"t1", bizId:"b1", date:"2026-07-09" } });
 
 await t("fallback: requests 1-8 allowed, 9 rejected", async()=>{ resetRL(); const now=1e6,k="key"; for(let i=1;i<=8;i++) ok("req"+i, localRL(k,8,60000,now)===false); ok("req9 rejected", localRL(k,8,60000,now)===true); });
