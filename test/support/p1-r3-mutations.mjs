@@ -9,7 +9,8 @@ const cases=[
  ['state-ack',writer,'? "cleared" : "rejected"','? "acknowledged" : "rejected"'],
  ['decision-ack',writer,'to === "cleared" ? "accepted" : "rejected"','to === "cleared" ? "acknowledged" : "rejected"'],
  ['registry-remove','api/admin.js','  await scRequireRegisteredBusiness(db, tenantId, bizId);','  // removed registry check'],
- ['registry-stale-access','api/admin.js','if (!businesses.some(b => String(b.id) === bizId))','if (false)'],
+ // M1 R1: the P1 registry decision is the shared predicate; the stale-access mutant now lets an unregistered target through it
+ ['registry-stale-access','api/admin.js','  if (t.state === "not_registered") throw { status: 403, msg: "business_not_in_tenant" };','  if (t.state === "not_registered") return;'],
  ['case-config',core,'normalizeDocumentNumber(raw: unknown)','normalizeDocumentNumber(raw: unknown, caseSensitive = false)',null,
   [core,'const canonical = display.toLowerCase().normalize("NFKC");','const canonical = (caseSensitive ? display : display.toLowerCase()).normalize("NFKC");']],
  ['separator-delete',core,'const key = [...canonical].map((ch) => SEP_CHAR.test(ch) ? "~" + (ch.codePointAt(0) as number).toString(16) + "~" : ch).join("");','const key = fingerprint;'],

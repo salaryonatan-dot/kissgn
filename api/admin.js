@@ -29,6 +29,7 @@ import { isValidBusinessDate, isValidOperationId, isValidExpectedRevision,
   dateRangeDays, MAX_LIST_RANGE_DAYS } from "../lib/entryExceptions.js";
 import { runEntryExceptionTxn, listEntryExceptions } from "../lib/repositories/entryExceptionsRepo.js";
 import { READ_ROLES, WRITE_ROLES, isValidId as scIsValidId } from "../lib/securityContext.js";
+import { readRegistryTarget } from "../lib/businessRegistry.js";
 import {
   isValidCreditId, isValidSeq, validateCreditInput, validateVoidReason, requestHash as scRequestHash, datesOfOperation, storedIntentDigest,
   CREDIT_REVIEW_DECIDER_ROLES,
@@ -1980,18 +1981,19 @@ function scValidIds(tenantId, bizId) {
   return scIsValidId(tenantId) && scIsValidId(bizId) && !bizId.includes(":");
 }
 
-// P1-local registry boundary. Future shared extraction requires independent integration review.
+// M1 R1: the registry decision is the SHARED target-scoped predicate (lib/businessRegistry.js), the same one the
+// Core cost-history writer uses. Only the requested business's own registration decides: a defect confined to an
+// unrelated registry record is not this business's outage. Fail closed on an unavailable read (503
+// business_registry_unavailable), an uninterpretable registry (503 business_registry_unreadable) or an ambiguous
+// identity of the requested business (503 business_registry_ambiguous); an unlisted business is 403.
 async function scRequireRegisteredBusiness(db, tenantId, bizId) {
-  let raw;
-  try { raw = (await db.ref(`tenants/${tenantId}/app/business`).get()).val(); }
-  catch { throw { status: 503, msg: "business_registry_unavailable" }; }
-  let businesses;
-  try { businesses = raw && typeof raw._v === "string" ? JSON.parse(raw._v) : null; } catch {}
-  if (!Array.isArray(businesses) || businesses.some(b => !b || typeof b !== "object" ||
-      !["string", "number"].includes(typeof b.id) || !scValidIds(tenantId, String(b.id))) ||
-      new Set(businesses.map(b => String(b.id))).size !== businesses.length)
-    throw { status: 503, msg: "business_registry_unreadable" };
-  if (!businesses.some(b => String(b.id) === bizId)) throw { status: 403, msg: "business_not_in_tenant" };
+  const t = await readRegistryTarget(db, tenantId, bizId);
+  if (t.state === "registered") return;
+  if (t.state === "not_registered") throw { status: 403, msg: "business_not_in_tenant" };
+  if (t.state === "unavailable") throw { status: 503, msg: "business_registry_unavailable" };
+  if (t.state === "ambiguous") throw { status: 503, msg: "business_registry_ambiguous" };
+  if (t.state === "invalid_request") throw { status: 400, msg: "invalid_scope" };
+  throw { status: 503, msg: "business_registry_unreadable" };
 }
 
 async function scAccess(claims, tenantId, bizId, mode) {

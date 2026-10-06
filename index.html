@@ -1440,6 +1440,24 @@
     /** A failed read is never "absent": the core treats it as an unreadable input (unavailable). */
     var READ_FAILED = Object.freeze({ state: "unreadable", reason: "read_failed" });
     /**
+     * M1 R1 — THE shared target-scoped business-registry rule (server: lib/businessRegistry.js classifyRegistryTarget,
+     * used by the Core cost-history writer and the P1 supplier-credit routes), over the parsed app-businesses list. The
+     * requested business is registered iff exactly ONE record's id is the string bizId and no other element's identity
+     * collides with it (a non-string / null / missing id or a bare primitive whose String() is bizId, or a trimmed
+     * variant). A defect confined to an unrelated record never makes the requested business unavailable.
+     */
+    function registryTargetRegistered(list, bizId) {
+      if (!Array.isArray(list) || typeof bizId !== "string" || !bizId || bizId.length > 128 || /[.#$\[\]\/:]/.test(bizId)) return false;
+      var canonical = 0, collisions = 0;
+      for (var i = 0; i < list.length; i++) {
+        var e = list[i], rec = e !== null && typeof e === "object" && !Array.isArray(e);
+        var id = rec ? e.id : (typeof e === "string" || typeof e === "number" || typeof e === "boolean") ? e : undefined;
+        if (rec && typeof id === "string" && id === bizId) { canonical++; continue; }
+        if ((rec || id !== undefined) && String(id).trim() === bizId.trim()) collisions++;
+      }
+      return canonical === 1 && collisions === 0;
+    }
+    /**
      * Core/F1 R4 — the ONLY way the page binds a cost-history decode. The raw node is held with the verified
      * selection context it was subscribed for (tenant, business, generation); it may be decoded only when that
      * context is the LIVE selection and the business is registered in the tenant's business list.
@@ -1451,7 +1469,7 @@
     function historyBinding(raw, sel, currentBizId, businesses) {
       var bound = !!(sel && typeof sel.tenantId === "string" && sel.tenantId && typeof currentBizId === "string" && currentBizId && sel.bizId === currentBizId);
       if (!bound) return { ok: false, reason: "context_unbound" };
-      var registered = Array.isArray(businesses) && businesses.some(function (b) { return !!b && String(b.id) === currentBizId; });
+      var registered = registryTargetRegistered(businesses, currentBizId);
       if (!registered) return { ok: false, reason: "business_unregistered" };
       if (!raw || raw.tenantId !== sel.tenantId || raw.bizId !== currentBizId || raw.gen !== sel.gen) return { ok: false, reason: "context_switching" };
       return { ok: true, bind: { tenantId: sel.tenantId, bizId: currentBizId } };

@@ -1,0 +1,60 @@
+{
+ "parent": "8511d7b2d3e4c89659b1ae006f6bdb1e9670b826",
+ "pins": {
+  "api/admin.js": "338b9b95920a047c38e4e097939157f648735b58",
+  "index.html": "878485ccb77312f07ca71b070d46ceefeee9637e",
+  "lib/businessRegistry.js": "b0ce2ac4a62dec83145af516f27555dea5f80750",
+  "lib/finance/costHistoryWriter.js": "51ec2e77d9cc800bab12467d5a0f9f776d307b71"
+ },
+ "newFiles": [
+  "lib/businessRegistry.js"
+ ],
+ "edits": {
+  "api/admin.js": [
+   {
+    "from": "import { READ_ROLES, WRITE_ROLES, isValidId as scIsValidId } from \"../lib/securityContext.js\";\nimport {\n",
+    "to": "import { READ_ROLES, WRITE_ROLES, isValidId as scIsValidId } from \"../lib/securityContext.js\";\nimport { readRegistryTarget } from \"../lib/businessRegistry.js\";\nimport {\n"
+   },
+   {
+    "from": "// P1-local registry boundary. Future shared extraction requires independent integration review.\n",
+    "to": "// M1 R1: the registry decision is the SHARED target-scoped predicate (lib/businessRegistry.js), the same one the\n// Core cost-history writer uses. Only the requested business's own registration decides: a defect confined to an\n// unrelated registry record is not this business's outage. Fail closed on an unavailable read (503\n// business_registry_unavailable), an uninterpretable registry (503 business_registry_unreadable) or an ambiguous\n// identity of the requested business (503 business_registry_ambiguous); an unlisted business is 403.\n"
+   },
+   {
+    "from": "  let raw;\n  try { raw = (await db.ref(`tenants/${tenantId}/app/business`).get()).val(); }\n  catch { throw { status: 503, msg: \"business_registry_unavailable\" }; }\n  let businesses;\n  try { businesses = raw && typeof raw._v === \"string\" ? JSON.parse(raw._v) : null; } catch {}\n  if (!Array.isArray(businesses) || businesses.some(b => !b || typeof b !== \"object\" ||\n      ![\"string\", \"number\"].includes(typeof b.id) || !scValidIds(tenantId, String(b.id))) ||\n      new Set(businesses.map(b => String(b.id))).size !== businesses.length)\n    throw { status: 503, msg: \"business_registry_unreadable\" };\n  if (!businesses.some(b => String(b.id) === bizId)) throw { status: 403, msg: \"business_not_in_tenant\" };\n",
+    "to": "  const t = await readRegistryTarget(db, tenantId, bizId);\n  if (t.state === \"registered\") return;\n  if (t.state === \"not_registered\") throw { status: 403, msg: \"business_not_in_tenant\" };\n  if (t.state === \"unavailable\") throw { status: 503, msg: \"business_registry_unavailable\" };\n  if (t.state === \"ambiguous\") throw { status: 503, msg: \"business_registry_ambiguous\" };\n  if (t.state === \"invalid_request\") throw { status: 400, msg: \"invalid_scope\" };\n  throw { status: 503, msg: \"business_registry_unreadable\" };\n"
+   }
+  ],
+  "index.html": [
+   {
+    "from": "    /**\n     * Core/F1 R4 — the ONLY way the page binds a cost-history decode. The raw node is held with the verified\n",
+    "to": "    /**\n     * M1 R1 — THE shared target-scoped business-registry rule (server: lib/businessRegistry.js classifyRegistryTarget,\n     * used by the Core cost-history writer and the P1 supplier-credit routes), over the parsed app-businesses list. The\n     * requested business is registered iff exactly ONE record's id is the string bizId and no other element's identity\n     * collides with it (a non-string / null / missing id or a bare primitive whose String() is bizId, or a trimmed\n     * variant). A defect confined to an unrelated record never makes the requested business unavailable.\n     */\n    function registryTargetRegistered(list, bizId) {\n      if (!Array.isArray(list) || typeof bizId !== \"string\" || !bizId || bizId.length > 128 || /[.#$\\[\\]\\/:]/.test(bizId)) return false;\n      var canonical = 0, collisions = 0;\n      for (var i = 0; i < list.length; i++) {\n        var e = list[i], rec = e !== null && typeof e === \"object\" && !Array.isArray(e);\n        var id = rec ? e.id : (typeof e === \"string\" || typeof e === \"number\" || typeof e === \"boolean\") ? e : undefined;\n        if (rec && typeof id === \"string\" && id === bizId) { canonical++; continue; }\n        if ((rec || id !== undefined) && String(id).trim() === bizId.trim()) collisions++;\n      }\n      return canonical === 1 && collisions === 0;\n    }\n    /**\n     * Core/F1 R4 — the ONLY way the page binds a cost-history decode. The raw node is held with the verified\n"
+   },
+   {
+    "from": "      var registered = Array.isArray(businesses) && businesses.some(function (b) { return !!b && String(b.id) === currentBizId; });\n",
+    "to": "      var registered = registryTargetRegistered(businesses, currentBizId);\n"
+   }
+  ],
+  "lib/finance/costHistoryWriter.js": [
+   {
+    "from": "import { getAdminDb } from \"../adminSdk.js\";\n\n",
+    "to": "import { getAdminDb } from \"../adminSdk.js\";\nimport { readRegistryTarget, isRegistryBizId } from \"../businessRegistry.js\";\n\n"
+   },
+   {
+    "from": " * this tenant\". Fail closed: an unreadable or malformed registry is `authorization_unavailable` (503);\n * an unlisted business is `business_not_in_tenant` (403). Never a cross-tenant lookup.\n",
+    "to": " * this tenant\". M1 R1: the decision is the SHARED target-scoped predicate (lib/businessRegistry.js), the same one\n * the P1 supplier-credit routes use, so one business is available to both or to neither. Fail closed: an\n * unavailable read, an uninterpretable registry or an ambiguous identity of the requested business is\n * `authorization_unavailable` (503, never definitive); an unlisted business is `business_not_in_tenant` (403).\n * A defect confined to an unrelated registry record does not affect the requested business. Never a\n * cross-tenant lookup.\n"
+   },
+   {
+    "from": "  if (!isValidId(tenantId) || !isValidId(bizId)) throw { status: 400, msg: \"invalid id\" };\n  let raw;\n  try { raw = (await db.ref(`tenants/${tenantId}/app/business`).get()).val(); } catch { throw { status: 503, msg: \"authorization check unavailable\" }; }\n  let list;\n  try { list = raw && typeof raw === \"object\" && typeof raw._v === \"string\" ? JSON.parse(raw._v) : null; } catch { list = null; }\n  if (!Array.isArray(list)) throw { status: 503, msg: \"business registry unreadable\" };\n  if (!list.some((b) => b && typeof b === \"object\" && String(b.id) === bizId)) throw { status: 403, msg: \"business_not_in_tenant\" };\n  return true;\n",
+    "to": "  if (!isValidId(tenantId) || !isRegistryBizId(bizId)) throw { status: 400, msg: \"invalid id\" };\n  const t = await readRegistryTarget(db, tenantId, bizId);\n  if (t.state === \"registered\") return true;\n  if (t.state === \"not_registered\") throw { status: 403, msg: \"business_not_in_tenant\" };\n  if (t.state === \"unavailable\") throw { status: 503, msg: \"authorization check unavailable\" };\n  if (t.state === \"ambiguous\") throw { status: 503, msg: \"business registry ambiguous\" };\n  throw { status: 503, msg: \"business registry unreadable\" };\n"
+   },
+   {
+    "from": "const registryStatus = (e) => (e && e.status === 403 ? \"business_not_in_tenant\" : \"authorization_unavailable\");\n",
+    "to": "const registryStatus = (e) => (e && e.status === 403 ? \"business_not_in_tenant\" : e && e.status === 400 ? \"request_scope_invalid\" : \"authorization_unavailable\");\n"
+   },
+   {
+    "from": "    catch (e) { return { ok: false, status: registryStatus(e), definitive: !!(e && e.status === 403) }; }\n",
+    "to": "    catch (e) { return { ok: false, status: registryStatus(e), definitive: !!(e && (e.status === 403 || e.status === 400)) }; }\n"
+   }
+  ]
+ }
+}

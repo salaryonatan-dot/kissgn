@@ -10,6 +10,9 @@
 //   M1G-04  the integrated page keeps both lines' reviewed invariants (m1-index-scope.mjs).
 //   M1G-05  non-vacuity: a recorded resolution that drops either side, or a resolution applied to changed conflict sides,
 //           is refused (by the page invariants, by the derivation binding, or by the pin).
+// M1 R1 (successor of the REJECTED candidate): on an R1 tree the M1 pins are held at the rejected parent M1_R1_PARENT (git
+// objects), and the tree under test is held to the M1 pins overlaid with the recorded R1 pins
+// (test/finance/m1-r1-guard.test.mjs, R1G-01…05).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
@@ -21,6 +24,7 @@ import { generate } from "../../tools/finance-core/gen-browser.mjs";
 import { M1_CORE_COMMIT, M1_P1_COMMIT, M1_MERGE_BASE, M1_MERGED, M1_GENERATED, M1_PINS } from "../support/m1-integration-pin.mjs";
 import { deriveMerged, mergeFile, M1_RESOLUTIONS } from "../support/m1-derivation.mjs";
 import { m1PageVerdict } from "../support/m1-index-scope.mjs";
+import { M1_R1_PARENT, isM1R1Tree, m1EffectivePageVerdict } from "../support/m1-r1-remediation.mjs";
 import {
   APPROVED_FENCE_RULES_BLOB, F1_RULES_CANDIDATE_BLOB, P1_R2_RULES_BLOB, M1_INTEGRATION_RULES_BLOB,
   authorizedF1CostHistoryRulesDelta, authorizedLegacyCreditsDenialDelta, F1_COST_HISTORY_READ_PREFIX, F1_COST_HISTORY_WRITE_PREFIX,
@@ -37,16 +41,20 @@ const blobId = (spec) => { const r = gitIn(REPO, ["rev-parse", "--verify", "-q",
 const bytesOf = (spec) => { const r = gitIn(REPO, ["cat-file", "blob", spec], { encoding: "buffer" }); assert.equal(r.status, 0, spec); return r.stdout; };
 const hash = (buf) => { const r = gitIn(REPO, ["hash-object", "--stdin"], { input: buf }); assert.equal(r.status, 0); return r.stdout.trim(); };
 const pins = M1_PINS.blobs;
+// R1: the reviewed M1 tree is the rejected parent (git objects); otherwise HEAD (and its index / checkout) is the M1 tree.
+const R1 = isM1 && isM1R1Tree(REPO);
+const M1_TREE = R1 ? M1_R1_PARENT : "HEAD";
 
 test("M1G-01 the literal M1 pins cover exactly the integrated protected runtime set; committed, staged and checked-out bytes are the pins", { skip: SKIP }, () => {
   for (const [f, pin] of Object.entries(pins)) assert.match(pin, /^[0-9a-f]{40}$/, f + ": literal blob id");
-  const changed = gitIn(REPO, ["diff", "--name-only", B2_BASE, "HEAD", "--"]).stdout.trim().split("\n").filter((f) => PROTECTED.test(f));
+  const changed = gitIn(REPO, ["diff", "--name-only", B2_BASE, M1_TREE, "--"]).stdout.trim().split("\n").filter((f) => PROTECTED.test(f));
   assert.deepEqual(Object.keys(pins).sort(), changed.filter((f) => !SEPARATELY_PINNED.includes(f)).sort(), "M1 pins = the integrated protected runtime set");
   const core = gitIn(REPO, ["diff", "--name-only", B2_BASE, M1_CORE_COMMIT, "--"]).stdout.trim().split("\n").filter((f) => PROTECTED.test(f));
   const p1 = gitIn(REPO, ["diff", "--name-only", B2_BASE, M1_P1_COMMIT, "--"]).stdout.trim().split("\n").filter((f) => PROTECTED.test(f));
   assert.deepEqual([...new Set(changed)].sort(), [...new Set([...core, ...p1])].sort(), "the integrated protected set is exactly the union of both approved lines");
   for (const [f, pin] of Object.entries(pins)) {
-    assert.equal(blobId("HEAD:" + f), pin, f + " committed");
+    assert.equal(blobId(M1_TREE + ":" + f), pin, f + " committed" + (R1 ? " (at the R1 parent)" : ""));
+    if (R1) continue;                                   // the R1 tree's index / checkout are held by R1G-01 (M1 ⊕ R1 pins)
     assert.equal(blobId(":" + f), pin, f + " staged");
     assert.equal(hash(readFileSync(join(REPO, f))), pin, f + " checked out");
   }
@@ -56,7 +64,7 @@ test("M1G-02 provenance: each pin is the Core-only blob, the P1-only blob, the r
   const tmp = mkdtempSync(join(tmpdir(), "m1-fincore-"));
   const kinds = {};
   try {
-    generate({ repo: REPO, outDir: tmp });
+    generate({ repo: REPO, outDir: tmp });              // R1 changes no src/ file: the integrated sources regenerate the M1 fincore
     for (const [f, pin] of Object.entries(pins)) {
       const c = blobId(`${M1_CORE_COMMIT}:${f}`), p = blobId(`${M1_P1_COMMIT}:${f}`), b = blobId(`${M1_MERGE_BASE}:${f}`);
       if (f.startsWith("fincore/v1/")) {
@@ -115,7 +123,9 @@ test("M1G-03 combined Rules: Core Rules + the exact P1 denial == P1 Rules + the 
 });
 
 test("M1G-04 the integrated page keeps both approved lines' invariants and is exactly the recorded derivation", { skip: SKIP }, () => {
-  assert.deepEqual(m1PageVerdict(REPO, readFileSync(join(REPO, "index.html"))), { ok: true });
+  if (R1) assert.deepEqual(m1PageVerdict(REPO, bytesOf(`${M1_R1_PARENT}:index.html`)), { ok: true }, "the R1 parent page is the M1 page");
+  else assert.deepEqual(m1PageVerdict(REPO, readFileSync(join(REPO, "index.html"))), { ok: true });
+  assert.deepEqual(m1EffectivePageVerdict(REPO, readFileSync(join(REPO, "index.html"))), { ok: true }, "the page under test satisfies the effective (M1, or M1 ⊕ recorded R1 edits) contract");
   assert.equal(m1PageVerdict(REPO, bytesOf(`${M1_CORE_COMMIT}:index.html`)).reason, "not_the_recorded_derivation");
   assert.equal(m1PageVerdict(REPO, bytesOf(`${M1_P1_COMMIT}:index.html`)).reason, "not_the_recorded_derivation");
 });

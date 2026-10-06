@@ -35,6 +35,9 @@ import { P1_BASE, p1IndexVerdict } from "../support/p1-index-scope.mjs";
 import { P1_PINS } from "../support/p1-candidate-pin.mjs";
 import { M1_CORE_COMMIT, M1_P1_COMMIT, M1_MERGE_BASE, M1_PINS } from "../support/m1-integration-pin.mjs";
 import { m1PageVerdict } from "../support/m1-index-scope.mjs";
+// M1 R1 (successor of the rejected M1 candidate): on an R1 tree the M1 pins are overlaid with the recorded R1 pins and the
+// page contract is the M1 page + exactly the recorded R1 page edits (test/support/m1-r1-remediation.mjs).
+import { m1EffectivePins, m1EffectivePageVerdict, isM1R1Tree, M1_R1_NEW_FILES } from "../support/m1-r1-remediation.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -185,10 +188,12 @@ function assertB2Scope(root) {
     // 3-way derivation of the two approved pages that keeps both lines' invariants (m1-index-scope.mjs) and the M1 pin.
     const m1 = r4 && gitIn(root, ["merge-base", "--is-ancestor", M1_CORE_COMMIT, "HEAD"]).status === 0 && gitIn(root, ["merge-base", "--is-ancestor", M1_P1_COMMIT, "HEAD"]).status === 0;
     const P1_FILES = m1 ? Object.keys(P1_PINS.blobs).filter((f) => f !== "index.html") : [];
-    const M1_FILES = m1 ? Object.keys(M1_PINS.blobs).filter((f) => f !== "index.html") : [];
+    const M1_EFFECTIVE = m1 ? m1EffectivePins(root) : {};
+    const M1_FILES = m1 ? Object.keys(M1_EFFECTIVE).filter((f) => f !== "index.html") : [];
+    const M1_R1_ADDED = m1 && isM1R1Tree(root) ? M1_R1_NEW_FILES : [];
     const vd50Runtime = ["src/metrics/report.ts", "fincore/v1/metrics/report.js", "fincore/v1/MANIFEST.json"];
     const f1Runtime = ["database.rules.json", "fincore/v1/MANIFEST.json", "fincore/v1/browser/marjinFinanceGlobal.js", "fincore/v1/finance/costHistory.js", "fincore/v1/metrics/report.js", "fincore/v1/policy/productFinance.js", "lib/finance/costHistoryWriter.js", "src/browser/marjinFinanceGlobal.ts", "src/finance-server/canonicalInputs.ts", "src/finance/costHistory.ts", "src/finance/labor.ts", "src/finance/types.ts", "src/metrics/costTimeline.ts", "src/metrics/report.ts", "src/policy/productFinance.ts", "test/support/rules-authorized-delta.mjs"];
-    const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES])] : CDM2_APPROVED;
+    const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES, ...M1_R1_ADDED])] : CDM2_APPROVED;
     const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f));
     assert.deepEqual([...new Set(whole)].sort(), [...allowed].sort(), assembled
       ? "assembled tree: protected changes are exactly CD-M2 R1's approved runtime files + P0 Scheduled Auth's three API routes" + (c2 ? " + the C2-03 retirement of " + C2_RETIRED.join(", ") : "") + (m1 ? " + the pinned P1 Supplier Credits files (M1 integration)" : "")
@@ -201,7 +206,7 @@ function assertB2Scope(root) {
       }
     }
     for (const f of M1_FILES) {
-      const pin = M1_PINS.blobs[f];
+      const pin = M1_EFFECTIVE[f];
       assert.match(pin, /^[0-9a-f]{40}$/, "the M1 pin of " + f + " must be a literal blob id");
       assert.equal(gitIn(root, ["rev-parse", "HEAD:" + f]).stdout.trim(), pin, f + " (committed) is not the pinned M1 integration blob " + pin.slice(0, 8));
       assert.equal(gitIn(root, ["rev-parse", ":" + f]).stdout.trim(), pin, f + ": staged (index) blob differs from the pinned M1 integration blob");
@@ -301,10 +306,10 @@ function assertB2Scope(root) {
                         assert.equal(hashBytes(corePage), R4_INDEX_PIN.blob, "the M1 Core input page is the fixed R4 identity");
                         assert.deepEqual(p1IndexVerdict(base, p1Page), { ok: true }, "the M1 P1 input page satisfies the P1 contract");
                         assert.equal(hashBytes(p1Page), P1_PINS.blobs["index.html"], "the M1 P1 input page is the fixed P1 identity");
-                        const pin = M1_PINS.blobs["index.html"];
+                        const pin = m1EffectivePins(root)["index.html"];
                         assert.match(pin, /^[0-9a-f]{40}$/, "the M1 identity pin must be a literal blob id");
                         for (const [label, bytes] of [["committed", committed], ["staged (index)", staged], ["checked-out", checkedOut]]) {
-                          const v = m1PageVerdict(root, bytes);
+                          const v = m1EffectivePageVerdict(root, bytes);
                           assert.ok(v.ok, "index.html (" + label + ") violates the M1 integration contract: " + JSON.stringify(v));
                           assert.equal(hashBytes(bytes), pin, "index.html (" + label + ") is not the pinned M1 integration blob " + pin.slice(0, 8));
                         }
@@ -619,7 +624,7 @@ test("B2G-05-M9 C2 tree: committed changes to the call site, a second C2 block, 
 test("B2G-05-M1a M1 tree: each M1-pinned file (Core, P1, merged, generated, page) fails when edited dirty or staged; the exact commit passes", { skip: !isM1Repo && "M1 integration not present in this tree" }, () => {
   withClone(HEAD_SHA, (dir) => {
     assertB2Scope(dir);                                                 // positive control: the exact M1 commit
-    for (const f of Object.keys(M1_PINS.blobs)) {
+    for (const f of Object.keys(m1EffectivePins(dir))) {
       const before = readFileSync(join(dir, f));
       appendTo(dir, f, f.endsWith(".json") ? " " : "\n// local edit\n");
       assert.throws(() => assertB2Scope(dir), new RegExp(f.replace(/[.\/]/g, "\\$&") + ": checked-out bytes differ"), f + " unstaged edit must fail");
@@ -655,6 +660,14 @@ test("B2G-05-M1b M1 tree: committed substitutions of either input, page edits, r
     ["an unpinned protected file", (dir) => writeFileSync(join(dir, "lib", "creditsExtra.js"), "export const x = 1;\n"), /protected changes are exactly/],
     ["the P1 admin API reverted to the merge base", put("api/admin.js", M1_MERGE_BASE + ":api/admin.js"), /protected changes are exactly|api\/admin\.js \(committed\) is not the pinned M1 integration blob/],
     ["the Core trusted route removed", (dir) => rmSync(join(dir, "api", "cost-history.js")), /protected changes are exactly/],
+    // M1 R1 overlay (only on an R1 tree): the R1 files cannot fall back to the rejected parent, and the shared module cannot vanish
+    ...(isM1R1Tree(REPO) ? [
+      ["R1: the P1 admin API = the rejected parent blob (local registry validator back)", put("api/admin.js", "8511d7b2d3e4c89659b1ae006f6bdb1e9670b826:api/admin.js"), PIN("api/admin.js")],
+      ["R1: the Core writer = the rejected parent blob (coercing registry check back)", put("lib/finance/costHistoryWriter.js", "8511d7b2d3e4c89659b1ae006f6bdb1e9670b826:lib/finance/costHistoryWriter.js"), PIN("lib/finance/costHistoryWriter.js")],
+      ["R1: the page = the rejected parent page (coercing registry rule back)", put("index.html", "8511d7b2d3e4c89659b1ae006f6bdb1e9670b826:index.html"), PAGE],
+      ["R1: the shared registry module removed", (dir) => rmSync(join(dir, "lib", "businessRegistry.js")), /protected changes are exactly/],
+      ["R1: the shared registry module edited", (dir) => appendTo(dir, "lib/businessRegistry.js", "\n// edit\n"), PIN("lib/businessRegistry.js")],
+    ] : []),
   ];
   for (const [label, mut, re] of cases) {
     withWritableClone(HEAD_SHA, (dir) => {

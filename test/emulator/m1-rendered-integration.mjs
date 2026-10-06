@@ -13,6 +13,10 @@
 //   RM1-03  corrupt cost history: the financial views are unavailable (never computed without the authoritative basis);
 //           the credits tab still renders its own month
 //   RM1-04  no cost history (compat configuration basis) + credits: VD-50 and Food Cost on net purchases
+//   RM1-05  (M1 R1) the valid business beside UNRELATED malformed / duplicated / unsafe registry records: the REAL credit list
+//           serves it, the credits tab is valid and every figure equals the node core (= RM1-00) — credits included
+//   RM1-06  (M1 R1) the requested business is AMBIGUOUS in the registry (duplicated record): the cost history is not bound,
+//           the real credit list refuses (503) — no financial figure and no credit rows, together
 // Deliberately NOT named *.test.mjs (needs the emulator). Run through the emulator runner, one script at a time.
 import admin from "firebase-admin";
 import { readFileSync, mkdtempSync, writeFileSync, cpSync, mkdirSync, symlinkSync } from "node:fs";
@@ -100,10 +104,10 @@ const DEFECT_C = (() => { const n = JSON.parse(JSON.stringify(CHAIN)); delete n.
 const PENDING = FIX.creditNode([FIX.spec(1, "s1", d(5), "100", { documentNumber: "CR-100", actor: USER.uid, role: "owner", review: "pending" })], { tenantId: T, bizId: B });
 const CORRUPT_HISTORY = (() => { const n = JSON.parse(JSON.stringify(HISTORY_NODE)); n.versions["00000000-0000-4000-8000-0000000000a1"].fixedItems[0].monthlyAmount = "1"; return n; })();
 
-const fixtures = ({ history = HISTORY_NODE, credits = CHAIN } = {}) => ({
+const fixtures = ({ history = HISTORY_NODE, credits = CHAIN, registry = [{ id: B, name: "סניף M1" }] } = {}) => ({
   tenants: { [T]: {
     members: { [USER.uid]: true }, roles: { [USER.uid]: "owner" }, biz_access: { [B]: { [USER.uid]: true } },
-    app: { users: env([{ id: 1, username: "owner1", name: "בעלים", email: USER.email, role: "owner", firebaseUid: USER.uid }]), business: env([{ id: B, name: "סניף M1" }]) },
+    app: { users: env([{ id: 1, username: "owner1", name: "בעלים", email: USER.email, role: "owner", firebaseUid: USER.uid }]), business: env(registry) },
     [`biz:${B}:entries`]: env(ROWS), [`biz:${B}:config`]: env(CONFIG), [`biz:${B}:fixed`]: env(FIXED), [`biz:${B}:suppliers`]: env(SUPS),
     ...(credits ? { [`biz:${B}:supplier_credits`]: credits } : {}), ...(history ? { [`biz:${B}:cost_history`]: history } : {}),
   } },
@@ -235,6 +239,25 @@ async function main() {
     eq(o.dash.purchases, X.dash.purchases.text, "dashboard purchases"); eq(o.dash.pct, X.dash.purchasesPct.text, "dashboard Food Cost");
     expect(o.pnl && o.pnl.vd50.includes(X.pnl.gross.text), "VD-50 = node " + (o.pnl && o.pnl.vd50) + " / " + X.pnl.gross.text);
     eq(o.sup.pct, X.sup.purchasesPct.text, "suppliers Food Cost"); eq(o.fatal, 0, "fatal page errors");
+  });
+
+  // M1 R1: the registry contract on the rendered page (real list API + the page's own registry rule)
+  const SIBLING_DEFECTS = [{ id: B, name: "סניף M1" }, { name: "broken" }, { id: "bizB", name: "B" }, { id: "bizB", name: "B" }, { id: "biz:C", name: "C" }, { id: 7, name: "N" }];
+  await scenario("RM1-05", "valid business + unrelated malformed / duplicated / unsafe / numeric registry records: credits served and included; every figure = node core (as RM1-00)", { history: HISTORY_NODE, credits: CHAIN, registry: SIBLING_DEFECTS }, (o, X) => {
+    expect(X.dash.status === "ready" && X.pnl.status === "ready" && X.sup.status === "ready", "node views ready");
+    eq(o.dash.purchases, X.dash.purchases.text, "dashboard MTD purchases (net of the credits)"); eq(o.dash.pct, X.dash.purchasesPct.text, "dashboard Food Cost");
+    eq(o.dash.labor, X.dash.labor.text, "dashboard labor"); eq(o.dash.fixed, X.dash.fixedRent.text, "dashboard fixed");
+    expect(/₪/.test(X.pnl.gross.text) && o.pnl.vd50.includes(X.pnl.gross.text), "P&L VD-50 gross = node core " + o.pnl.vd50 + " / " + X.pnl.gross.text);
+    eq(o.sup.pct, X.sup.purchasesPct.text, "suppliers Food Cost"); expect(!o.sup.incomplete, "suppliers complete (credits loaded)");
+    expect(o.tab.present && !o.tab.invalid && o.tab.total === X.tab.totalText, "credits tab valid with the node total " + JSON.stringify(o.tab) + " / " + X.tab.totalText);
+    eq(o.fatal, 0, "fatal page errors");
+  });
+  await scenario("RM1-06", "the requested business is duplicated in the registry (ambiguous): no financial figures and no credit rows — every consumer unavailable together", { history: HISTORY_NODE, credits: CHAIN, registry: [{ id: B, name: "סניף M1" }, { id: B, name: "סניף M1 (dup)" }] }, (o) => {
+    expect(o.dash.unavailable !== "" && o.dash.purchases === "", "dashboard financial view unavailable: " + JSON.stringify(o.dash));
+    expect(o.pnl === undefined, "no P&L figures");
+    expect(!o.tab.present || o.tab.total === "", "no credit rows / total: " + JSON.stringify(o.tab));
+    expect(!/₪/.test(o.sup.total || ""), "no supplier purchase figure: " + JSON.stringify(o.sup));
+    eq(o.fatal, 0, "fatal page errors");
   });
 
   console.log(`\n${"case".padEnd(7)} ${"status".padEnd(6)} notes`); console.log("-".repeat(120));

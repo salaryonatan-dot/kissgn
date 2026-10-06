@@ -80,8 +80,25 @@ export function gitPrefixFor(root) {
   );
 }
 
-/** Run git against this working tree with the resolved context. */
+// M1 R1 (independent review, VAT guard finding): spawnSync buffers stdout up to `maxBuffer` (Node's default is 1 MiB).
+// Beyond it Node kills git and reports error ENOBUFS — and, depending on whether git had already exited, `status` is 0
+// (output cut at the limit) or null (SIGTERM). The S0 guard's runtime diff of the integrated tree is ~1.06 MB, so a
+// status-only check passed or failed by timing and a status-0 run could read truncated evidence; ~30 other guard calls
+// through this helper ran at 70–87 % of the default. Every call therefore gets an EXPLICIT bound (a caller may still pass
+// its own), and ANY subprocess error — ENOBUFS, a timeout, a spawn failure — THROWS: a guard can never assert on a
+// truncated or killed git result, and never turns a command failure into a pass. A non-zero git exit status is returned
+// unchanged, as before, for the caller's own assertion.
+export const GIT_OUTPUT_LIMIT = 64 * 1024 * 1024;   // ~60× today's largest guard output; exceeding it FAILS loudly
+
+/** Run git against this working tree with the resolved context; complete output or an exception. */
 export function gitIn(root, args, opts = {}) {
-  return spawnSync("git", [...gitPrefixFor(root), "--no-optional-locks", ...args],
-    { cwd: root, encoding: "utf8", ...opts });
+  const options = { cwd: root, encoding: "utf8", maxBuffer: GIT_OUTPUT_LIMIT, ...opts };
+  const r = spawnSync("git", [...gitPrefixFor(root), "--no-optional-locks", ...args], options);
+  if (r.error) {
+    const captured = r.stdout == null ? 0 : Buffer.isBuffer(r.stdout) ? r.stdout.length : Buffer.byteLength(r.stdout);
+    throw new Error(`[git-context] git ${args.join(" ")}: subprocess error ${r.error.code || r.error.message} ` +
+      `(status=${r.status}, signal=${r.signal}, captured ${captured} bytes, maxBuffer ${options.maxBuffer}). ` +
+      `A guard must never read a truncated or killed git result.`);
+  }
+  return r;
 }

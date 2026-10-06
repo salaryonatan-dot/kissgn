@@ -81,7 +81,8 @@ test("R4M-02 accepted → acknowledged: a decision audit that says `acknowledged
 });
 
 test("R4M-03 business-registry enforcement: without the registry check an unregistered (ghost) business is operated on — RL4-T02 / RL4-B01 fail on the mutant", async () => {
-  const { W } = await mutant([[WRITER, '  if (!list.some((b) => b && typeof b === "object" && String(b.id) === bizId)) throw { status: 403, msg: "business_not_in_tenant" };', '  if (false) throw { status: 403, msg: "business_not_in_tenant" };']]);
+  // M1 R1: the Core registry decision is the shared predicate (lib/businessRegistry.js); the control removes the same enforcement
+  const { W } = await mutant([[WRITER, '  if (t.state === "not_registered") throw { status: 403, msg: "business_not_in_tenant" };', '  if (t.state === "not_registered") return true;']]);
   const db = world(); db.seed(`tenants/${T}/biz_access/${GHOST}/manager`, true);
   const out = await writerOf(W, db).activateCostHistory(req, { tenantId: T, bizId: GHOST, body: body(A) });
   assert.equal(out.status, "committed_current", "the mutant activates a ghost business");
