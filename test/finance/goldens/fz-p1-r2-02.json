@@ -1,0 +1,89 @@
+{
+ "id": "FZ-P1-02",
+ "version": "FZ-P1/2",
+ "owner": "P1 Supplier Credits (P1 R2 candidate)",
+ "artifact": "C1 suppliers view: supplier and overall gross / credits / net, disclosures",
+ "note": "shapes: keys and types only (JSON projection), never values; ids: frozen contract identifiers and observed enum values; derived from the P1 R2 code by test/support/fz-p1-producers.mjs; P1 R1 goldens remain archived",
+ "scenarios": [
+  "none",
+  "present",
+  "negative_net",
+  "invalid_record",
+  "corrupt_chain",
+  "unreadable",
+  "not_loaded",
+  "pending",
+  "flagged",
+  "accepted",
+  "rejected",
+  "voided",
+  "corrected_identity"
+ ],
+ "ids": {},
+ "shapes": {
+  "rows": {
+   "amount": "string",
+   "credits": {
+    "$oneOf": [
+     "null",
+     "string"
+    ]
+   },
+   "creditsText": {
+    "$oneOf": [
+     "null",
+     "string"
+    ]
+   },
+   "gross": {
+    "$oneOf": [
+     "null",
+     "string"
+    ]
+   },
+   "grossText": "string",
+   "key": "string",
+   "name": "string",
+   "negative": "boolean",
+   "pctText": "string",
+   "text": "string"
+  },
+  "gross": {
+   "amount": "string",
+   "closedDays": [],
+   "complete": "boolean",
+   "invalidDays": [],
+   "missingDays": [],
+   "partial": "boolean",
+   "partialDays": [
+    "string"
+   ],
+   "text": "string"
+  },
+  "credits": {
+   "amount": {
+    "$oneOf": [
+     "null",
+     "string"
+    ]
+   },
+   "count": "number",
+   "state": "string",
+   "text": "string"
+  },
+  "disclosure": {
+   "incomplete": {
+    "$oneOf": [
+     "null",
+     "string"
+    ]
+   },
+   "negative": {
+    "$oneOf": [
+     "null",
+     "string"
+    ]
+   }
+  }
+ }
+}

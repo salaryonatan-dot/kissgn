@@ -19,6 +19,7 @@
     "configurationBasis": [
      "string"
     ],
+    "credits": "string",
     "dec": "string",
     "exceptionsState": "string",
     "fin": "string",
@@ -30,6 +31,7 @@
     "pb": "string",
     "pbPolicy": "string",
     "product": "string",
+    "supplierCreditsState": "string",
     "timelineSource": "string",
     "windowRule": "string"
    },

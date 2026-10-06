@@ -113,6 +113,14 @@ function makeFetch({ ledger = "ok" } = {}) {
       }
       return jsonResp(await listBody(p));
     }
+    if (u.startsWith("/api/admin?action=list-supplier-credits")) {
+      // P1: the page now reads the supplier-credit list (net purchases); the REAL server repository
+      // answers in the handler's shape. No credit node is seeded here, so it is "absent" (zero
+      // credits, complete) — the C1 expectations are unchanged.
+      const p = new URL(u, "http://x").searchParams;
+      const { readSupplierCredits } = await import("../../lib/repositories/supplierCreditsRepo.js");
+      return jsonResp({ ok: true, tenantId: p.get("tenantId"), bizId: p.get("bizId"), node: await readSupplierCredits({ tenantId: p.get("tenantId"), bizId: p.get("bizId") }) });
+    }
     return { ok: false, status: 404, json: async () => ({ error: "not_available_in_harness" }), text: async () => "" };
   };
 }

@@ -16,7 +16,7 @@ import type { FinancialReport } from "../metrics/report.js";
 import { PB_NET_POLICY_ID } from "../policy/purchaseBasis.js";
 import { productLaborSource } from "../policy/laborSource.js";
 import {
-  PRODUCT_CLOSURE_SOURCE, PRODUCT_FINANCE_VERSION, REV_FORECAST_FORMULA_ID, productDailyMetrics, productDayRecord, productDays, productMonthProjection, productMonthReport, productTimeline,
+  PRODUCT_CLOSURE_SOURCE, PRODUCT_FINANCE_VERSION, REV_FORECAST_FORMULA_ID, SUPPLIER_CREDITS_CONTRACT_VERSION, productDailyMetrics, productDayRecord, productDays, productMonthProjection, productMonthReport, productTimeline,
 } from "../policy/productFinance.js";
 import type { ProductDailyMetric, ProductProjection, ProductRange } from "../policy/productFinance.js";
 import { CANONICAL_SERVER_API_VERSION } from "./canonicalInputs.js";
@@ -45,6 +45,9 @@ export interface ServerProvenance {
    * empty "absent"); "unknown" when it was unreadable or not loaded (see `exceptionsState`).
    */
   readonly operatingCalendar: typeof PRODUCT_CLOSURE_SOURCE | "unknown";
+  /** P1: supplier-credit contract and the state of the credit node every output is net of. */
+  readonly credits: string;
+  readonly supplierCreditsState: ServerInputs["supplierCreditsState"];
 }
 
 export function provenanceOf(inputs: ServerInputs): ServerProvenance {
@@ -68,6 +71,8 @@ export function provenanceOf(inputs: ServerInputs): ServerProvenance {
     fixedState: inputs.fixedState,
     exceptionsState: inputs.exceptionsState,
     operatingCalendar: inputs.exceptionsState === "present" || inputs.exceptionsState === "absent" ? PRODUCT_CLOSURE_SOURCE : "unknown",
+    credits: SUPPLIER_CREDITS_CONTRACT_VERSION,
+    supplierCreditsState: inputs.supplierCreditsState,
   });
 }
 
@@ -150,8 +155,11 @@ export interface CanonicalPurchaseMetric {
   readonly source: "supplier" | "legacy_food_cost";
   readonly supplierId: string | null;
   readonly supplierName: string;
-  /** Aggregate of ALL contributions of this (date, source) — several per supplier per day are summed. */
+  /** NET of the supplier credits issued that date (P1): aggregate of ALL contributions of this (date, source) minus the source's credits; may be negative. */
   readonly amount: number;
+  /** P1: purchases recorded for this (date, source) before credits, and the credits issued that date */
+  readonly grossAmount: number;
+  readonly creditsAmount: number;
   readonly dayPurchases: "present" | "partial_invalid";
   readonly fin: ServerProvenance;
 }
@@ -161,6 +169,8 @@ export function canonicalPurchaseRecords(inputs: ServerInputs, range: ProductRan
   const out: CanonicalPurchaseMetric[] = [];
   for (const day of productDays(inputs, range).days) {
     if (day.presence.day !== "present") continue;
+    const grossBy = (day.purchasesGross || day.purchases).bySource;
+    const creditBy = day.supplierCredits ? day.supplierCredits.bySupplier : {};
     for (const key of Object.keys(day.purchases.bySource).sort()) {
       const supplier = key.startsWith("supplier:") ? key.slice("supplier:".length) : null;
       out.push({
@@ -169,6 +179,8 @@ export function canonicalPurchaseRecords(inputs: ServerInputs, range: ProductRan
         supplierId: supplier,
         supplierName: supplier === null ? "legacy_food_cost" : supplierNames[supplier] || `ספק ${supplier}`,
         amount: amountToNumber(day.purchases.bySource[key]) as number,
+        grossAmount: grossBy[key] === undefined ? 0 : (amountToNumber(grossBy[key]) as number),
+        creditsAmount: creditBy[key] === undefined ? 0 : (amountToNumber(creditBy[key]) as number),
         dayPurchases: day.purchases.partial ? "partial_invalid" : "present",
         fin: provenance,
       });
@@ -222,6 +234,13 @@ export interface AnalyticsFinBlock {
   readonly hourlyEmployerCost?: { state: string; value?: string };
   readonly derived?: { laborCostComplete: boolean; laborCost?: number; globalLaborCost?: number; laborPct?: number; foodCostPct?: number; conversion: string };
   readonly legacyHourlyPayroll?: { counted: false; recorded: boolean };
+  /**
+   * P1 (MARJIN_CREDITS/4): supplier credits ISSUED on this date. Omitted when none were issued and
+   * the source was complete. `purchases` above is net of them; `purchasesGross` is the recorded gross.
+   * `reason` names why the credit facts of the date are incomplete (invalid / unreadable / review).
+   */
+  readonly supplierCredits?: { state: string; value?: string; count?: number; bySupplier?: Array<{ source: string; amount: string }>; reason?: string };
+  readonly purchasesGross?: { state: string; value?: string };
   readonly timelineSource?: string;
   readonly configurationBasis?: string[];
   readonly configState?: string;
@@ -239,6 +258,19 @@ function stateOf(m: MetricValue): { state: string; value?: string } {
 
 function finHeader(p: ServerProvenance): Pick<AnalyticsFinBlock, "api" | "product" | "v" | "norm" | "dec" | "labor" | "pb" | "pbPolicy" | "laborSource" | "windowRule" | "asOfBusinessDate"> {
   return { api: p.api, product: p.product, v: p.fin, norm: p.norm, dec: p.dec, labor: p.labor, pb: p.pb, pbPolicy: p.pbPolicy, laborSource: p.laborSource, windowRule: p.windowRule, asOfBusinessDate: p.asOfBusinessDate };
+}
+
+/** P1: the credit facts of one day in the persisted fin block (RTDB-safe: omitted when no credit and the source is readable). */
+function creditFields(day: CanonicalDay): Pick<AnalyticsFinBlock, "supplierCredits" | "purchasesGross"> {
+  const c = day.supplierCredits;
+  if (!c || (c.presence === "absent" && !c.partial)) return {};
+  const state = c.presence === "present" ? (c.partial ? "partial_invalid" : "present") : c.presence;
+  const bySupplier = Object.keys(c.bySupplier).sort().map((source) => ({ source, amount: c.bySupplier[source] }));
+  const reason = c.reason ? { reason: c.reason } : {};
+  const credits: NonNullable<AnalyticsFinBlock["supplierCredits"]> = c.value === null
+    ? { state, ...reason }
+    : { state, value: serializeDec(c.value), count: c.count, ...(bySupplier.length ? { bySupplier } : {}), ...reason };
+  return { supplierCredits: credits, ...(day.purchasesGross ? { purchasesGross: stateOf(day.purchasesGross) } : {}) };
 }
 
 /** Persisted-doc encoding (RTDB-safe: no undefined/null values, no empty arrays, arrays for keyed maps, no row ids or free text). */
@@ -290,6 +322,7 @@ export function toAnalyticsFinancials(rec: CanonicalDayRecord): { revenue: Legac
     hourlyEmployerCost: stateOf(day.hourlyLabor),
     derived,
     legacyHourlyPayroll: { counted: false, recorded: day.legacyHourlyPayroll.rows.length > 0 },
+    ...creditFields(day),
     timelineSource: p.timelineSource,
     ...(p.configurationBasis.length ? { configurationBasis: [...p.configurationBasis] } : {}),
     configState: p.configState,

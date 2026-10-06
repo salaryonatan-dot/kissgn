@@ -536,4 +536,51 @@ refused by the real route with 403). Requires `bash test/historical/install-deps
 
 Expected: `{"status":"PASS","results":[…13 entries…]}`.
 
-There are now SEVENTEEN emulator scripts; all reseed the database root, so they must run one at a time.
+
+## Run the P1 Supplier Credits proofs (Marjin 1.0 pilot scope)
+
+`p1-supplier-credits-emulator.mjs` proves, on the real Rules engine and the real Admin transport,
+that the credit node `tenants/{t}/biz:{b}:supplier_credits` (and every child) is client-DENIED for
+owner, manager, viewer, a cross-tenant owner and the unauthenticated principal (no Rules change —
+the existing `biz:*` catch-all denies it), and that the ACTUAL `api/admin.js` credit actions are
+append-safe for parallel creates, single-winner for parallel void / replace of one revision and
+exactly-once for a duplicated operation. `p1-rendered-credits.mjs` boots the working-tree page in
+jsdom and drives the Supplier Credits tab (list, create, validation, void, edit = replace,
+unavailable + retry) through the real handler.
+
+P1 R1 (MARJIN_CREDITS/2, pending independent review): the rendered proof also drives the mandatory
+document number (client and server duplicate refusal), the review badges and the owner's acceptance of
+a flagged credit, the lost-response same-operation retry and the retired legacy pending-credit card
+(its stored node byte-identical). `p1-r1-review-emulator.mjs` runs TWO independent server instances (two
+copies of the actual handler, each on its own Admin app) against the real transport: lost
+acknowledgement ⇒ readback, in-window revocation ⇒ durable flagged review + audit record, unavailable
+post-check ⇒ pending ⇒ same-operation retry, reconciliation, owner-only exactly-once acceptance,
+rejection restoring the predecessor, cross-instance duplicate-identity and void / replace races, three
+weakened-Rules mutants (member write, member read, audit write) each detected by the denial probes,
+and client forge / clear / accept denial.
+
+```
+... "node test/emulator/p1-supplier-credits-emulator.mjs"
+... "node test/emulator/p1-rendered-credits.mjs"
+... "node test/emulator/p1-r1-review-emulator.mjs"
+```
+
+Expected: `total=8 passed=8 failed=0`, `total=11 passed=11 failed=0` and `total=9 passed=9 failed=0` — `ALL CASES PASSED`.
+
+M1 integration (Core/F1 R4 + P1 R7, local candidate pending independent review): there are now TWENTY-FIVE emulator
+scripts (the seventeen of the Core/F1 lineage + the seven P1 scripts + `m1-rendered-integration.mjs`); all reseed the
+database root, so they must run one at a time.
+
+`m1-rendered-integration.mjs` boots the INTEGRATED page with both lines live at once: a persisted cost history built
+offline by the REAL trusted writer (owner activation + a VD-47 attested past edit, written with the page's business
+clock) and a MARJIN_CREDITS/4 credit node; the actual `api/cost-history.js` route and `api/admin.js` handler serve the
+page. Dashboard purchases / Food Cost / labor / fixed, the P&L VD-50 gross line and net, and the suppliers view are
+compared with the node core over the merged `inputsFor` (cost history + credits); a P1 (c) chain defect and a pending
+credit review leave Food Cost "—", purchases partial and VD-50 without an amount while labor and fixed stay exact; a
+corrupt cost history makes the financial views unavailable while the credits tab still renders.
+
+```
+... "node test/emulator/m1-rendered-integration.mjs"
+```
+
+Expected: `total=5 passed=5 failed=0`.

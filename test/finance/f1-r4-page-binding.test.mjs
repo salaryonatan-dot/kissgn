@@ -20,6 +20,8 @@ import vm from "node:vm";
 import { REPO } from "../support/fincore-load.mjs";
 import { loadFinance, loadSeam } from "../support/c1-seam.mjs";
 import { reviewEntry } from "../support/f1-history-fixtures.mjs";
+import { creditNode, spec } from "../support/p1-credit-fixtures.mjs";
+import * as SC from "../../lib/supplierCredits.js";
 
 const html = readFileSync(join(REPO, "index.html"), "utf8");
 const F = await loadFinance();
@@ -41,7 +43,7 @@ function history(tenantId = T, bizId = B) {
 }
 
 /** A faithful model of the page's state + effect + memo wiring around the REAL extracted sources. */
-function pageModel() {
+function pageModel({ p1 = null } = {}) {
   const selection = createSelectionController();
   const subs = [];                                       // every subscription ever made (to replay late deliveries)
   const storage = {
@@ -51,7 +53,7 @@ function pageModel() {
   };
   let finRaw = null, cleanup = null, renders = 0;
   const setFinRaw = (v) => { finRaw = typeof v === "function" ? v(finRaw) : v; renders += 1; };
-  const sandboxBase = { window: { storage, MarjinC1: C1 }, selectionCtrlRef: { current: selection }, captureSelectionCtx: () => selection.capture(), isSelectionLive: (ctx) => selection.isLive(ctx), FIN_NODE_LOADING: Object.freeze({ kind: "loading" }), Array, Object, JSON, Promise, String, Error };
+  const sandboxBase = { window: { storage, MarjinC1: C1, ...(p1 ? { MarjinP1: p1 } : {}) }, selectionCtrlRef: { current: selection }, captureSelectionCtx: () => selection.capture(), isSelectionLive: (ctx) => selection.isLive(ctx), FIN_NODE_LOADING: Object.freeze({ kind: "loading" }), Array, Object, JSON, Promise, String, Error };
   let currentBizId = null, businesses = [{ id: B, name: "A" }, { id: B2, name: "B" }];
   const model = {
     selection, subs, storage,
@@ -65,10 +67,13 @@ function pageModel() {
       vm.runInNewContext(EFFECT_SRC, sandbox);
     },
     /** One render of finSrc with the LIVE selection (finSel), the current finRaw and the registry. */
-    finSrc(bizId = currentBizId) {
+    finSrc(bizId = currentBizId, { creditsHeld = { state: "loading", key: null }, creditsKey = null } = {}) {
       let captured = null;
-      const sandbox = { ...sandboxBase, React: { useMemo: (fn) => { captured = fn(); return captured; } }, finF: F, finAsOf: ASOF, entries: [], finRaw, finLedger: { state: "loading", key: null }, finLedgerKey: "k", finRowsReady: true,
-        currentBizId: bizId, finSel: selection.current(), businesses };
+      // M1 integration: the finSrc memo also builds the P1 credit source (creditsHeld / creditsKey, the P1 seam) and is
+      // followed by the P1 finCredits memo in the same slice. The model supplies the P1 inputs in their initial state
+      // (no P1 seam in this cost-history model ⇒ credits not_loaded) and captures the FIRST memo (finSrc) only.
+      const sandbox = { ...sandboxBase, React: { useMemo: (fn) => { const v = fn(); if (captured === null) captured = v; return v; } }, finF: F, finAsOf: ASOF, entries: [], finRaw, finLedger: { state: "loading", key: null }, finLedgerKey: "k", finRowsReady: true,
+        currentBizId: bizId, finSel: selection.current(), businesses, creditsHeld, creditsKey, supMonth: "2026-10", suppliers: [] };
       vm.runInNewContext(FINSRC_SRC, sandbox);
       return clone(captured);                            // plain-context copy (vm objects have their own prototypes)
     },
@@ -227,4 +232,36 @@ test("PB-07 page literals: the editor receives the node ONLY for the live select
   assert.ok(!/MARJIN_COSTH\/[45]"/.test(html), "no earlier capability literal"); assert.ok(!/acknowledged/.test(html), "no fifth-state literal in the page");
   assert.ok(!/decodeHistory\([^)]*\)\s*(;|,)/.test(FINSRC_SRC.replace(/histBind\.bind\)/g, "BOUND)")) || !/decodeHistory\(\{[^}]*\}\)/.test(FINSRC_SRC), "no unbound decodeHistory call in finSrc");
   assert.ok(!FINSRC_SRC.includes("_currentTenantId"), "finSrc never binds to the global tenant variable");
+});
+
+// ── M1 integration: the merged finSrc carries BOTH sources ─────────────────────────────────────────────────────
+const P1_SEAM = (() => { const i = html.indexOf("// ── P1 supplier credits browser seam"); const win = {}; vm.runInNewContext(html.slice(i, html.indexOf("</script>", i)), { window: win, Object, Promise, setTimeout, clearTimeout, AbortController }); return win.MarjinP1; })();
+test("PB-M1 the merged finSrc carries the bound cost history AND the P1 credit source of the live selection; the credits reach the figures; a stale or foreign credit source never shows as complete", () => {
+  const m = pageModel({ p1: P1_SEAM });
+  m.selection.invalidate(T, B); m.commit(B); m.liveHistorySub().onRaw(history(T, B));
+  const node = creditNode([spec(1, "s1", "2026-10-01", "40")], { tenantId: T, bizId: B }), view = SC.safeNodeView(node);
+  const held = { state: "ready", key: "k1", node: view };
+  const src = m.finSrc(B, { creditsHeld: held, creditsKey: "k1" });
+  assert.equal(src.costHistory.state, "present");
+  assert.deepEqual(src.credits, clone(F.finance.supplierCredits.decodeSupplierCredits(view, { tenantId: T, bizId: B })), "finSrc.credits = the core decode bound to the live selection");
+  assert.equal(src.credits.state, "present");
+  const ledger = { state: "absent", states: {}, from: "2000-01-01", to: "2100-12-31" };
+  const rows = [{ id: "r1", date: "2026-10-01", sales: "1000", supplier_payments: { s1: "300" }, payroll: "100" }];
+  const ready = { ...src, ledger, rows, config: { state: "present", value: {} }, fixed: { state: "absent" } };
+  const r = clone(C1.monthReport(F, ready, "2026-10"));
+  assert.equal(r.status, "ready", JSON.stringify(r).slice(0, 200));
+  assert.equal(r.report.actual.purchases.credits.value, "40", "the credit reaches the month figures"); assert.equal(r.report.actual.purchases.value, "260");
+  // a stale held result (another key) is loading, never "no credits"; a node bound to another business is unreadable ⇒ purchases partial
+  const stale = m.finSrc(B, { creditsHeld: held, creditsKey: "k2" });
+  assert.deepEqual(stale.credits, { state: "loading" });
+  assert.equal(clone(C1.inputsFor(F, { ...ready, credits: stale.credits }, { from: "2026-10-01", to: "2026-10-31" })).status, "loading");
+  const foreign = m.finSrc(B, { creditsHeld: { state: "ready", key: "k3", node: SC.safeNodeView(creditNode([spec(1, "s1", "2026-10-01", "40")], { tenantId: T, bizId: B2 })) }, creditsKey: "k3" });
+  assert.equal(foreign.credits.state, "unreadable");
+  const fr = clone(C1.monthReport(F, { ...ready, credits: foreign.credits }, "2026-10"));
+  assert.equal(fr.report.actual.purchases.complete, false); assert.equal(fr.report.actual.purchasesPct.state, "invalid_components");
+  // the selection moved to another business while the page's current business lags: the cost history is unbound ⇒ no figures at all
+  m.selection.invalidate(T, B2);
+  const moved = m.finSrc(B, { creditsHeld: held, creditsKey: "k1" });
+  assert.deepEqual(moved.costHistory, { state: "unreadable", reason: "context_unbound" });
+  assert.deepEqual(clone(C1.inputsFor(F, { ...ready, costHistory: moved.costHistory, credits: moved.credits }, { from: "2026-10-01", to: "2026-10-31" })), { status: "unavailable", reason: "cost_history_unreadable" });
 });

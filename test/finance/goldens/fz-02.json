@@ -6,8 +6,8 @@
  "note": "shapes: keys and types only (JSON projection), never values; ids: frozen contract identifiers and observed enum values",
  "ids": {
   "api": "MARJIN_FIN_SERVER/1",
-  "product": "MARJIN_PRODUCT/2",
-  "fin": "MARJIN_FIN/3",
+  "product": "MARJIN_PRODUCT/3",
+  "fin": "MARJIN_FIN/4",
   "norm": "MARJIN_NORM/3",
   "dec": "MARJIN_DEC/1",
   "labor": "MARJIN_LABOR/3",
@@ -49,6 +49,7 @@
    "configurationBasis": [
     "string"
    ],
+   "credits": "string",
    "dec": "string",
    "exceptionsState": "string",
    "fin": "string",
@@ -60,6 +61,7 @@
    "pb": "string",
    "pbPolicy": "string",
    "product": "string",
+   "supplierCreditsState": "string",
    "timelineSource": "string",
    "windowRule": "string"
   }

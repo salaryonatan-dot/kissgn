@@ -116,6 +116,22 @@ export function expectedFencedWriteRule(coreWrite) {
 // { ok, reason }. The live tree minus the two authorized additions must be deep-equal to
 // the core tree: any other change — a widened role branch, an altered validator, an
 // unexpected child, a control root that grants writes — is rejected.
+// P1 R2: one legacy client-write grant is removed. This is an exact semantic branch
+// replacement; the read branch and every other Rules node must remain byte-equivalent.
+export const LEGACY_CREDITS_BRANCH = "$dataKey.matches(/^biz:[^:]+:credits$/) ? ((root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'owner' || root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'super_owner') || (root.child('tenants').child($tenantId).child('roles').child(auth.uid).val() === 'manager' && root.child('tenants').child($tenantId).child('biz_access').child($dataKey.replace('biz:','').replace(':credits','')).child(auth.uid).val() === true))";
+export const P1_CREDITS_DENIAL_BRANCH = "$dataKey.matches(/^biz:[^:]+:credits$/) ? false";
+export function authorizedLegacyCreditsDenialDelta(before, after) {
+  let a; try { a = JSON.parse(JSON.stringify(after)); } catch { return { ok:false, reason:'unserializable' }; }
+  const b = before?.rules?.tenants?.['$tenantId']?.['$dataKey']?.['.write'];
+  const w = a?.rules?.tenants?.['$tenantId']?.['$dataKey']?.['.write'];
+  if (typeof b !== 'string' || typeof w !== 'string' || b.split(LEGACY_CREDITS_BRANCH).length !== 2)
+    return { ok:false, reason:'baseline_branch_unknown' };
+  if (w !== b.replace(LEGACY_CREDITS_BRANCH, P1_CREDITS_DENIAL_BRANCH))
+    return { ok:false, reason:'legacy_branch_not_exact_denial' };
+  a.rules.tenants['$tenantId']['$dataKey']['.write'] = b;
+  return JSON.stringify(norm(a)) === JSON.stringify(norm(before)) ? { ok:true } : { ok:false, reason:'unrelated_rules_delta' };
+}
+
 export function authorizedVersionFenceRulesDelta(core, live) {
   let a; try { a = JSON.parse(JSON.stringify(live)); } catch { return { ok: false, reason: "live_unserializable" }; }
   const cdk = core?.rules?.tenants?.["$tenantId"]?.["$dataKey"];
@@ -132,7 +148,8 @@ export function authorizedVersionFenceRulesDelta(core, live) {
   if (typeof cdk[".write"] !== "string" || typeof adk[".write"] !== "string") return { ok: false, reason: "write_rule_missing" };
   const expected = expectedFencedWriteRule(cdk[".write"]);
   if (expected === null) return { ok: false, reason: "core_write_shape_unknown" };
-  if (adk[".write"] !== expected) return { ok: false, reason: "write_rule_not_core_plus_fence_guard" };
+  const p1 = expected.includes(LEGACY_CREDITS_BRANCH) ? expected.replace(LEGACY_CREDITS_BRANCH, P1_CREDITS_DENIAL_BRANCH) : null;
+  if (adk[".write"] !== expected && adk[".write"] !== p1) return { ok: false, reason: "write_rule_not_core_plus_fence_guard" };
   adk[".write"] = cdk[".write"];
   const ctrl = a?.rules?.storage_v2_control;
   if (ctrl === undefined) return { ok: false, reason: "control_root_missing" };
@@ -165,3 +182,10 @@ export function authorizedF1CostHistoryRulesDelta(core, live) {
   }
   return authorizedVersionFenceRulesDelta(core, live);
 }
+// Candidate identity only. P1 R2 and this narrow denial require Claude's independent approval.
+export const P1_R2_RULES_BLOB = "d8650f2343d63c7b5679b3e7481345e6fe571e98";
+// M1 integration candidate (local): the Core/F1 R4 cost_history delta (scoped read + explicit write denial)
+// composed with the P1 R7 legacy `biz:{b}:credits` write denial. Both deltas were independently approved for
+// integration; their composition is checked semantically by authorizedF1CostHistoryRulesDelta +
+// authorizedLegacyCreditsDenialDelta. CANDIDATE IDENTITY ONLY — not an approved deployment / canary pin.
+export const M1_INTEGRATION_RULES_BLOB = "27887d72da5431bd0b6ee69f53e0dfd10cc44caf";

@@ -8,10 +8,12 @@
     "src/finance/canonical.ts",
     "src/finance/cells.ts",
     "src/finance/costHistory.ts",
+    "src/finance/creditEvidence.ts",
     "src/finance/decimal.ts",
     "src/finance/labor.ts",
     "src/finance/normalize.ts",
     "src/finance/purchaseBasis.ts",
+    "src/finance/supplierCredits.ts",
     "src/finance/types.ts",
     "src/forecast/revenueForecast.ts",
     "src/metrics/adapters/configCompat.ts",
@@ -30,11 +32,11 @@
     "src/presenters/money.ts",
     "src/presenters/percent.ts"
   ],
-  "sourceDigest": "6d1ea3aa694440730162464e0931889b593d02cac2ba540becfa8da1825e35cf",
+  "sourceDigest": "c8e2a918321715efe2e2e6ef0707874b1e6a7284b580fc167c64ec83cd6fb61c",
   "files": [
     {
       "path": "browser/marjinFinanceGlobal.js",
-      "sha256": "6e06a79d9cd158b71e3fc733cc0b96f18b61ed36918042929da8f92fa3f1edeb"
+      "sha256": "5fa3d36d9b21be4567f6a755f9afe83bb00a6a3fe985ac537d6df18c5efa60f9"
     },
     {
       "path": "finance/businessDate.js",
@@ -53,6 +55,10 @@
       "sha256": "ecb33bcf137f44add73737325d2858314526404c29d83e7a87f5b499d153ed72"
     },
     {
+      "path": "finance/creditEvidence.js",
+      "sha256": "24b643db791ad1714752eac6fa7e4dcd06bd58d121c513164e3907eb57510b3b"
+    },
+    {
       "path": "finance/decimal.js",
       "sha256": "3053240b5c01892bf9fdd4aa3043b55e5878c033cb849fbfe53215e52c08a4f9"
     },
@@ -67,6 +73,10 @@
     {
       "path": "finance/purchaseBasis.js",
       "sha256": "c4d00bff3a79f04ab1175855394b1c8c274273d23d0e7d9026b597896caaed84"
+    },
+    {
+      "path": "finance/supplierCredits.js",
+      "sha256": "7efb0e572d7463766609d966239e9632220bc6dafc741dca47a65ceaf5be57a8"
     },
     {
       "path": "finance/types.js",
@@ -94,7 +104,7 @@
     },
     {
       "path": "metrics/report.js",
-      "sha256": "9e872c8f2d6c39b7bc1dfd618c36339670aae27b90b8aff32991e6bdc8a59ba3"
+      "sha256": "fdbd2d7afbfb9273c0a4e8aeaaf7d816a2088fbabbefff38ac0518401d125a93"
     },
     {
       "path": "metrics/revenueForecast.js",
@@ -114,7 +124,7 @@
     },
     {
       "path": "policy/productFinance.js",
-      "sha256": "582d6162c6469442de44552bc43891000936de246fbbbd431cbf4a5c984ce269"
+      "sha256": "25de1ca3e9c6fa3b6cc164e533b4b3fdc3205534b1f0ae7731cef7c8ca67c272"
     },
     {
       "path": "policy/purchaseBasis.js",

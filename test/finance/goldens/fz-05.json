@@ -12,7 +12,7 @@
    {
     "projection": "MARJIN_PROJ/2",
     "forecast": "REV_FORECAST/v2",
-    "actualReport": "MARJIN_FIN/3"
+    "actualReport": "MARJIN_FIN/4"
    }
   ],
   "forecastStates": [
@@ -182,6 +182,7 @@
     "configurationBasis": [
      "string"
     ],
+    "credits": "string",
     "dec": "string",
     "exceptionsState": "string",
     "fin": "string",
@@ -193,6 +194,7 @@
     "pb": "string",
     "pbPolicy": "string",
     "product": "string",
+    "supplierCreditsState": "string",
     "timelineSource": "string",
     "windowRule": "string"
    }

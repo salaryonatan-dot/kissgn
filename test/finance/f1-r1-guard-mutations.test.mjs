@@ -28,6 +28,7 @@ import { R3_PARENT, R3_INDEX_PIN, R3_RUNTIME_BLOBS } from "../support/r3-candida
 import { r3IndexVerdict } from "../support/r3-index-scope.mjs";
 import { R4_PARENT, R4_INDEX_PIN, R4_RUNTIME_BLOBS } from "../support/r4-candidate-pin.mjs";
 import { r4IndexVerdict } from "../support/r4-index-scope.mjs";
+import { coreLayer } from "../support/m1-layer.mjs";
 
 const show = (spec) => gitIn(REPO, ["show", spec]).stdout;
 const hash = (s) => spawnSync("git", ["hash-object", "--stdin"], { input: s, encoding: "utf8" }).stdout.trim();
@@ -36,7 +37,9 @@ const page = show(`${R1_COMMIT}:index.html`);
 const r2Page = show(`${F2_PARENT}:index.html`);
 const f2Page = show(`${R3_PARENT}:index.html`);                 // R3: the F2 page is historical
 const r3Page = show(`${R4_PARENT}:index.html`);                 // R4: the (rejected) R3 page is historical
-const r4Page = readFileSync(join(REPO, "index.html"), "utf8");
+// M1 integration: the R4 page is the layer subject (its exact commit on the integrated tree; HEAD/working tree standalone)
+const L4 = coreLayer(REPO), S4 = L4.ref;
+const r4Page = L4.read("index.html").toString("utf8");
 
 test("R1G-01 R1 starts at the fixed F1 page; narrow page scope; literal pending identities", () => {
   assert.equal(R1_INDEX_BASE, F1_COMMIT);
@@ -53,9 +56,9 @@ test("R1G-01 R1 starts at the fixed F1 page; narrow page scope; literal pending 
   assert.equal(hash(r3Page),R3_INDEX_PIN.blob,"historical R3 page has a fixed identity");
   assert.deepEqual(r4IndexVerdict(r3Page,r4Page),{ok:true},"R4 page stays within its bounded scope");
   assert.equal(hash(r4Page),R4_INDEX_PIN.blob,"R4 checked-out page has a fixed identity");
-  assert.equal(gitIn(REPO, ["rev-parse", ":index.html"]).stdout.trim(), R4_INDEX_PIN.blob, "current R4 staged page has the same identity");
-  assert.equal(gitIn(REPO, ["rev-parse", "HEAD:index.html"]).stdout.trim(), R4_INDEX_PIN.blob, "current R4 committed page has the same identity");
-  assert.notEqual(gitIn(REPO, ["rev-parse", "HEAD:index.html"]).stdout.trim(), R3_INDEX_PIN.blob, "the rejected R3 page is not the current page");
+  if (L4.staged) assert.equal(gitIn(REPO, ["rev-parse", ":index.html"]).stdout.trim(), R4_INDEX_PIN.blob, "current R4 staged page has the same identity");
+  assert.equal(gitIn(REPO, ["rev-parse", S4 + ":index.html"]).stdout.trim(), R4_INDEX_PIN.blob, "current R4 committed page has the same identity");
+  assert.notEqual(gitIn(REPO, ["rev-parse", S4 + ":index.html"]).stdout.trim(), R3_INDEX_PIN.blob, "the rejected R3 page is not the current page");
   assert.match(R1_INDEX_PIN.status, /pending independent Codex review/);
   assert.match(R1_COMMIT, /^[0-9a-f]{40}$/);
   assert.equal(gitIn(REPO, ["merge-base", "--is-ancestor", R1_COMMIT, "HEAD"]).status, 0, "R1_COMMIT is in this lineage");
@@ -96,9 +99,9 @@ test("R1G-03 runtime pins: exactly the R1 runtime files differ from the F1 candi
     assert.equal(rev(`${F2_PARENT}:${f}`),R2_RUNTIME_BLOBS[f],f+" historical R2 identity");
     assert.equal(rev(`${R3_PARENT}:${f}`),F2_RUNTIME_BLOBS[f]||R2_RUNTIME_BLOBS[f],f+" historical F2 identity");
     assert.equal(rev(`${R4_PARENT}:${f}`),R3_RUNTIME_BLOBS[f]||F2_RUNTIME_BLOBS[f]||R2_RUNTIME_BLOBS[f],f+" historical (rejected) R3 identity");
-    assert.equal(rev("HEAD:" + f), currentPin, f + " committed R4 identity");
-    assert.equal(rev(":" + f), currentPin, f + " staged R4 identity");
-    assert.equal(hash(readFileSync(join(REPO, f), "utf8")), currentPin, f + " checked-out R4 identity");
+    assert.equal(rev(S4 + ":" + f), currentPin, f + " committed R4 identity");
+    if (L4.staged) assert.equal(rev(":" + f), currentPin, f + " staged R4 identity");
+    assert.equal(hash(L4.read(f).toString("utf8")), currentPin, f + " checked-out R4 identity");
   }
 });
 

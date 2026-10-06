@@ -12,14 +12,14 @@
 // propagates (it is never treated as "absent"). No write.
 import { readEntriesNode, requireEntriesRows } from "../../lib/analytics/entriesReader.js";
 import { israelBusinessDate } from "../finance/businessDate.js";
-import { decodeEnvelope, decodeExceptionLedger, exceptionsByDateOf } from "../policy/productFinance.js";
-import type { EnvelopeState, ExceptionLedgerState, ProductInputs } from "../policy/productFinance.js";
+import { decodeEnvelope, decodeExceptionLedger, decodeSupplierCredits, exceptionsByDateOf, REVIEW_ISSUE_CODES } from "../policy/productFinance.js";
+import type { EnvelopeState, ExceptionLedgerState, ProductInputs, SupplierCreditsState } from "../policy/productFinance.js";
 import { costHistoryCodec } from "../finance/costHistory.js";
 
 export const CANONICAL_SERVER_API_VERSION = "MARJIN_FIN_SERVER/1";
 
 export type InputState = EnvelopeState<unknown>["state"] | "not_loaded";
-export type InputIssue = "config_unreadable" | "fixed_unreadable" | "exceptions_unreadable" | "cost_history_unreadable";
+export type InputIssue = "config_unreadable" | "fixed_unreadable" | "exceptions_unreadable" | "cost_history_unreadable" | "supplier_credits_unreadable" | "supplier_credits_invalid" | "supplier_credits_review_unresolved";
 
 export interface ServerInputs extends ProductInputs {
   readonly tenantId: string;
@@ -31,6 +31,8 @@ export interface ServerInputs extends ProductInputs {
   readonly exceptionsState: ExceptionLedgerState["state"] | "not_loaded";
   readonly costHistoryState: "absent" | "present" | "unreadable" | "not_loaded";
   readonly inputIssues: readonly InputIssue[];
+  /** P1 (MARJIN_CREDITS/4): state of the supplier-credit node, ALWAYS read (purchases are net of credits). */
+  readonly supplierCreditsState: SupplierCreditsState["state"];
 }
 
 interface DbLike {
@@ -45,12 +47,15 @@ export async function loadCanonicalInputs(
 ): Promise<ServerInputs> {
   const base = `tenants/${tenantId}/biz:${bizId}`;
   const needHistory = opts.need.costHistory === undefined ? opts.need.config || opts.need.fixed : opts.need.costHistory;
-  const [entriesSnap, configSnap, fixedSnap, exceptionsSnap, costHistoryRead] = await Promise.all([
+  // P1: the supplier-credit node is read on EVERY call — every financial output is net of credits,
+  // so no caller can obtain gross purchases presented as net by forgetting to ask for credits.
+  const [entriesSnap, configSnap, fixedSnap, exceptionsSnap, costHistoryRead, creditsSnap] = await Promise.all([
     db.ref(`${base}:entries`).once("value"),
     opts.need.config ? db.ref(`${base}:config`).once("value") : Promise.resolve(null),
     opts.need.fixed ? db.ref(`${base}:fixed`).once("value") : Promise.resolve(null),
     opts.need.exceptions || opts.need.config || opts.need.fixed ? db.ref(`tenants/${tenantId}/entry_exceptions/${bizId}`).once("value") : Promise.resolve(null),
     needHistory ? db.ref(`${base}:cost_history`).once("value").then((s) => ({ snap: s })).catch((failed: unknown) => ({ failed })) : Promise.resolve(null),
+    db.ref(`${base}:supplier_credits`).once("value"),
   ]);
   const raw = entriesSnap.val();
   const rows = requireEntriesRows(raw, { tenantId, bizId, site: opts.site }) as unknown[];
@@ -66,6 +71,11 @@ export async function loadCanonicalInputs(
     ? costHistoryCodec.decodeHistory({ failed: costHistoryRead.failed }, { tenantId, bizId })
     : costHistoryCodec.decodeHistory({ exists: costHistoryRead.snap.val() !== null, value: costHistoryRead.snap.val() }, { tenantId, bizId })) : null;   // R4: always BOUND
   if (costHistory?.state === "unreadable") inputIssues.push("cost_history_unreadable");
+  // bound to the business being read: a node of another tenant / business is unreadable
+  const supplierCredits: SupplierCreditsState = decodeSupplierCredits(creditsSnap.val(), { tenantId, bizId });
+  if (supplierCredits.state === "unreadable") inputIssues.push("supplier_credits_unreadable");
+  if (supplierCredits.state === "present" && supplierCredits.issues.some((i) => !REVIEW_ISSUE_CODES.includes(i.code))) inputIssues.push("supplier_credits_invalid");
+  if (supplierCredits.state === "present" && supplierCredits.issues.some((i) => REVIEW_ISSUE_CODES.includes(i.code))) inputIssues.push("supplier_credits_review_unresolved");
   const nowMs = opts.nowMs === undefined ? Date.now() : opts.nowMs;
   return {
     tenantId,
@@ -82,6 +92,8 @@ export async function loadCanonicalInputs(
     ...(ledger && ledger.state === "present" ? { exceptionStates: ledger.value, exceptionsByDate: exceptionsByDateOf(ledger.value) } : {}),
     exceptionLedgerState: ledger ? ledger.state : "not_loaded",
     inputIssues,
+    supplierCredits,
+    supplierCreditsState: supplierCredits.state,
     asOfBusinessDate: israelBusinessDate(nowMs),
   };
 }

@@ -1,0 +1,57 @@
+{
+ "id": "FZ-P1-05",
+ "version": "FZ-P1/3",
+ "owner": "P1 Supplier Credits (P1 R2 candidate)",
+ "artifact": "server analytics fin block day credit facts (supplierCredits / purchasesGross) and loader input issues",
+ "note": "shapes: keys and types only (JSON projection), never values; ids: frozen contract identifiers and observed enum values; derived from the P1 R3 code by test/support/fz-p1-producers.mjs; P1 R1 goldens remain archived",
+ "scenarios": [
+  "none",
+  "present",
+  "negative_net",
+  "invalid_record",
+  "corrupt_chain",
+  "unreadable",
+  "not_loaded",
+  "pending",
+  "flagged",
+  "accepted",
+  "rejected",
+  "voided",
+  "corrected_identity"
+ ],
+ "ids": {
+  "dayCreditStates": [
+   "invalid",
+   "present"
+  ],
+  "dayCreditReasons": [
+   "invalid_supplier_credit",
+   "supplier_credit_review_flagged",
+   "supplier_credit_review_pending",
+   "supplier_credits_unreadable"
+  ],
+  "inputIssues": [
+   "supplier_credits_invalid",
+   "supplier_credits_review_unresolved",
+   "supplier_credits_unreadable"
+  ]
+ },
+ "shapes": {
+  "supplierCredits": {
+   "bySupplier?": [
+    {
+     "amount": "string",
+     "source": "string"
+    }
+   ],
+   "count?": "number",
+   "reason?": "string",
+   "state": "string",
+   "value?": "string"
+  },
+  "purchasesGross": {
+   "state": "string",
+   "value": "string"
+  }
+ }
+}

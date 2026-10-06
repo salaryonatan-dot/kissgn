@@ -36,10 +36,20 @@ import type { RevenueForecastV2 } from "../metrics/revenueForecast.js";
 import type { AmountString } from "../finance/decimal.js";
 import { decIsZero } from "../finance/decimal.js";
 import { productPurchaseBasis } from "./purchaseBasis.js";
+import { applySupplierCreditsToDay, creditsByDate, decodeSupplierCredits, REVIEW_ISSUE_CODES, SUPPLIER_CREDITS_CONTRACT_VERSION } from "../finance/supplierCredits.js";
+import type { SupplierCreditsState } from "../finance/supplierCredits.js";
+export { decodeSupplierCredits, REVIEW_ISSUE_CODES, SUPPLIER_CREDITS_CONTRACT_VERSION };
+export type { SupplierCreditsState };
 import { productLaborSource } from "./laborSource.js";
 import type { CostHistoryDecision } from "../finance/costHistory.js";
 
-export const PRODUCT_FINANCE_VERSION = "MARJIN_PRODUCT/2";
+/**
+ * MARJIN_PRODUCT/3 (P1 supplier credits): the composition applies the supplier credits issued on
+ * each date (MARJIN_CREDITS/4 since P1 R1, `ProductInputs.supplierCredits`) to that date's purchases, so the
+ * report, the daily metrics, the day record and the projection are all NET of credits.
+ * MARJIN_PRODUCT/2 (closed-days amendment) is otherwise unchanged.
+ */
+export const PRODUCT_FINANCE_VERSION = "MARJIN_PRODUCT/3";
 /** The one forecast formula the month projection is bound to (REV_FORECAST/v2; re-exported for the server wrappers). */
 export const REV_FORECAST_FORMULA_ID = REV_FORECAST_V2_FORMULA_ID;
 /** Source label of the product closure calendar (derived from the entry-exception domain). */
@@ -115,8 +125,15 @@ export interface ProductInputs {
    * empty ledger). Omitted ⇒ the caller's states are the complete structured ledger.
    */
   readonly exceptionLedgerState?: "present" | "absent" | "unreadable" | "not_loaded";
-  // RESERVED, not part of B1: `costVersions` (F1, F-OD-1 activation-boundary timeline);
-  // `purchaseContributions` / `supplierCredits` (P1, purchases v2 — credits by issue date).
+  /**
+   * P1 (MARJIN_CREDITS/4): the decoded supplier-credit node (decodeSupplierCredits). Every runtime
+   * caller supplies it (server loader, browser C1 inputs). "unreadable" / "not_loaded" make every
+   * date's purchases incomplete (never zero credits). Omitted ⇒ no credit source (core tests and
+   * historical callers): purchases are the recorded gross, exactly as MARJIN_PRODUCT/2.
+   */
+  readonly supplierCredits?: SupplierCreditsState;
+  // RESERVED, not part of P1: `costVersions` (F1, F-OD-1 activation-boundary timeline);
+  // `purchaseContributions` (purchase lines, P1/P2 storage design CT-9).
 }
 
 export interface ProductRange {
@@ -321,12 +338,19 @@ export function productTimeline(inputs: ProductInputs): CostTimeline {
   return { ...base, flags: [...(base.flags || []), flag] };
 }
 
+/** P1: the supplier credits issued on each day (by issue date), applied to its purchases. No credit source ⇒ unchanged days. */
+function credited(days: CanonicalDay[], inputs: ProductInputs): CanonicalDay[] {
+  if (inputs.supplierCredits === undefined || inputs.supplierCredits.state === "absent") return days;
+  const byDate = creditsByDate(inputs.supplierCredits, days.map((d) => d.date));
+  return days.map((d) => applySupplierCreditsToDay(d, byDate.get(d.date) as NonNullable<ReturnType<typeof byDate.get>>));
+}
+
 function daysOf(n: NormalizeResult, inputs: ProductInputs, range: ProductRange): ProductDays {
   requireRange(range);
   const completedThrough = addDays(inputs.asOfBusinessDate, -1);
   const to = range.to < completedThrough ? range.to : completedThrough;
   const effective = range.from <= to ? { from: range.from, to } : null;
-  const days = effective ? groupByDate(n.rows, { from: effective.from, to: effective.to, exceptionsByDate: exceptionsOf(inputs) }) : [];
+  const days = effective ? credited(groupByDate(n.rows, { from: effective.from, to: effective.to, exceptionsByDate: exceptionsOf(inputs) }), inputs) : [];
   return {
     window: { requested: { from: range.from, to: range.to }, effective, asOfBusinessDate: inputs.asOfBusinessDate, completedThrough },
     days,
@@ -389,7 +413,7 @@ export function productMonthReport(inputs: ProductInputs, sel: { readonly kind: 
   if (inputs && inputs.exceptionLedgerState === "not_loaded") throw new FinanceContractError("closure_calendar_not_loaded", "productMonthReport");
   const n = normalized(inputs);
   const { first, last } = monthBounds(sel && sel.month);
-  const days = groupByDate(n.rows, { from: first, to: last, exceptionsByDate: exceptionsOf(inputs) });
+  const days = credited(groupByDate(n.rows, { from: first, to: last, exceptionsByDate: exceptionsOf(inputs) }), inputs);
   const inMonth = new Set(n.rows.filter((r) => r.date >= first && r.date <= last).map((r) => r.id));
   const flags = n.flags.filter((f) => f.code !== "row_without_id" || (f.rowId !== undefined && inMonth.has(f.rowId)));
   const quarantine: Quarantine = n.quarantine;

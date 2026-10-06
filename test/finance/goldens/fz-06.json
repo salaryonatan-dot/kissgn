@@ -439,6 +439,7 @@
      "configurationBasis": [
       "string"
      ],
+     "credits": "string",
      "dec": "string",
      "exceptionsState": "string",
      "fin": "string",
@@ -454,6 +455,7 @@
      "product": "string",
      "proj": "string",
      "snapshot": "string",
+     "supplierCreditsState": "string",
      "timelineSource": "string",
      "windowRule": "string"
     },

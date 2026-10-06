@@ -6,7 +6,7 @@
  "note": "shapes: keys and types only (JSON projection), never values; ids: frozen contract identifiers and observed enum values",
  "ids": {
   "fin": [
-   "MARJIN_FIN/3"
+   "MARJIN_FIN/4"
   ],
   "windowStates": [
    "actual",
@@ -25,6 +25,7 @@
     "configurationBasis": [
      "string"
     ],
+    "credits": "string",
     "dec": "string",
     "exceptionsState": "string",
     "fin": "string",
@@ -36,6 +37,7 @@
     "pb": "string",
     "pbPolicy": "string",
     "product": "string",
+    "supplierCreditsState": "string",
     "timelineSource": "string",
     "windowRule": "string"
    },
@@ -124,6 +126,25 @@
      },
      "state": "string",
      "total": {
+      "$oneOf": [
+       "null",
+       "string"
+      ]
+     }
+    },
+    "grossProfitBeforeFixed": {
+     "issues": [
+      {
+       "component": "string",
+       "dates": [
+        "string"
+       ],
+       "kind": "string",
+       "reason": "string"
+      }
+     ],
+     "state": "string",
+     "value": {
       "$oneOf": [
        "null",
        "string"
@@ -266,6 +287,30 @@
       "supplier:s1?": "string"
      },
      "complete": "boolean",
+     "credits": {
+      "bySupplier": {},
+      "contract": "string",
+      "count": "number",
+      "dates": [],
+      "invalidDates": [],
+      "reviewFlaggedDates": [],
+      "reviewPendingDates": [],
+      "state": "string",
+      "value": "null"
+     },
+     "gross": {
+      "complete": "boolean",
+      "presentDays": "number",
+      "value": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      }
+     },
+     "grossBySource": {
+      "supplier:s1?": "string"
+     },
      "presentDays": "number",
      "value": {
       "$oneOf": [
@@ -283,25 +328,6 @@
     "revenue": {
      "complete": "boolean",
      "presentDays": "number",
-     "value": {
-      "$oneOf": [
-       "null",
-       "string"
-      ]
-     }
-    },
-    "grossProfitBeforeFixed": {
-     "issues": [
-      {
-       "component": "string",
-       "dates": [
-        "string"
-       ],
-       "kind": "string",
-       "reason": "string"
-      }
-     ],
-     "state": "string",
      "value": {
       "$oneOf": [
        "null",

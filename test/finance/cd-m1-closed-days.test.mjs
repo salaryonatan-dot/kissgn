@@ -371,7 +371,7 @@ test("CD-AT29 identical raw rows, ledger and clock through the server loader and
   const pr = SERVER.productMonthProjection(server, SERVER.productMonthReport(server, { kind: "open_month", month: "2026-09" }), { nowMs: now });
   assert.deepEqual([pr.forecast.engine.completedClosureDates, pr.forecast.engine.futureClosureDates], [["2026-09-08"], ["2026-09-22"]], "two eligibility views of one calendar");
   const canonical = CM.canonicalMonthProjection(server, CM.canonicalMonthReport(server, { kind: "open_month", month: "2026-09" }).report, { nowMs: now });
-  assert.equal(ser(canonical.forecast), ser(pr.forecast)); assert.equal(canonical.provenance.product, "MARJIN_PRODUCT/2"); assert.equal(canonical.provenance.fin, "MARJIN_FIN/3"); assert.equal(canonical.provenance.labor, "MARJIN_LABOR/3");
+  assert.equal(ser(canonical.forecast), ser(pr.forecast)); assert.equal(canonical.provenance.product, "MARJIN_PRODUCT/3"); assert.equal(canonical.provenance.fin, "MARJIN_FIN/4"); assert.equal(canonical.provenance.labor, "MARJIN_LABOR/3");
   assert.equal(pr.forecast.formulaId, "REV_FORECAST/v2");
 });
 

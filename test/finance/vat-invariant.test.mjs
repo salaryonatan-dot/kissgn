@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 // guard for reasons that had nothing to do with the VAT invariant. The invariant
 // assertions below are unchanged; only how git is invoked is.
 import { gitIn } from "../support/git-context.mjs";
-import { authorizedEntriesRulesDelta, authorizedF1CostHistoryRulesDelta, F1_RULES_CANDIDATE_BLOB } from "../support/rules-authorized-delta.mjs";
+import { authorizedEntriesRulesDelta, authorizedF1CostHistoryRulesDelta, M1_INTEGRATION_RULES_BLOB, LEGACY_CREDITS_BRANCH, P1_CREDITS_DENIAL_BRANCH } from "../support/rules-authorized-delta.mjs";
 import { SERVER_READER_BASE, SERVER_READER_AUTHORIZED_FILES, isProtectedPath, collectServerReaderScopeInputs, serverReaderScopeVerdict } from "../support/server-reader-authorized-delta.mjs";
 import vm from "node:vm";
 import { dailyReportMessage } from "../../lib/whatsappMessages.js";
@@ -227,7 +227,11 @@ test("S0 diff contains no historical data transform, migration, RTDB rules, or f
   assert.deepEqual(fenceDelta, { ok: true }, "database.rules.json must be the approved core plus the exact version-fence delta");
   const liveRulesBlob = gitIn(ROOT, ["hash-object", "database.rules.json"]);
   assert.equal(liveRulesBlob.status, 0, liveRulesBlob.stderr);
-  assert.equal(liveRulesBlob.stdout.trim(), F1_RULES_CANDIDATE_BLOB, "database.rules.json is the fixed F1 Rules candidate blob pending independent review");
+  assert.equal(liveRulesBlob.stdout.trim(), M1_INTEGRATION_RULES_BLOB, "database.rules.json is the fixed M1 integration Rules candidate blob (Core/F1 cost_history delta + P1 legacy credits denial; pending independent review)");
+  // M1 integration: BOTH reviewed deltas must be present — the F1 prefixes are enforced above; the P1 legacy
+  // credits branch must be the exact denial (the fence check alone would also accept the pre-P1 grant).
+  const liveWrite = liveRules.rules.tenants["$tenantId"]["$dataKey"][".write"];
+  assert.ok(liveWrite.includes(P1_CREDITS_DENIAL_BRANCH) && !liveWrite.includes(LEGACY_CREDITS_BRANCH), "P1 legacy credits client-write denial present in the integrated Rules");
   assert.equal(read("test/emulator/database.rules.json"), read("database.rules.json"), "emulator Rules mirror is byte-identical");
 
   // ── LAYER B — the approved server-reader files, core → working tree ──────────────

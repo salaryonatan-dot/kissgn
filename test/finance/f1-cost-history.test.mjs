@@ -82,7 +82,9 @@ test("F1-AT15 two effective versions reach the real B2 snapshot path", async () 
   const { report } = await coreOf(INV_NOW_MS);
   assert.deepEqual(report.costVersionsApplied, [a, b]);
   assert.equal(snap.fixedRegular, Number(report.actual.fixedAccrual.regular));
-  assert.equal(snap.financials.provenance?.versions?.fin || report.versions.fin, "MARJIN_FIN/3");
+  // M1 integration: P1 versions the financial formula MARJIN_FIN/4 (purchases net of supplier credits; without a
+  // credit source the figures are exactly MARJIN_FIN/3's). The assertion that both paths share one version is unchanged.
+  assert.equal(snap.financials.provenance?.versions?.fin || report.versions.fin, "MARJIN_FIN/4");
 });
 
 test("F1-AT14 reachable zero-eligible segment remains typed unavailable for a completed closure", async () => {

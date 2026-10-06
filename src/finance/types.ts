@@ -63,7 +63,15 @@ export type FlagCode =
   | "rent_fixed_and_rent_item_both"
   | "ratio_numerator_incomplete"
   | "legacy_hourly_payroll_not_counted"
-  | "closed_day_has_recorded_values";
+  | "closed_day_has_recorded_values"
+  // MARJIN_CREDITS/1 (P1 supplier credits)
+  | "supplier_credits_unreadable"
+  | "invalid_supplier_credit"
+  // MARJIN_CREDITS/4 (P1 R1): a credit operation whose DEC-AUTH-1 authorization review is unresolved
+  | "supplier_credit_review_pending"
+  | "supplier_credit_review_flagged"
+  | "negative_net_purchases"
+  | "negative_supplier_net";
 
 export interface Flag {
   readonly code: FlagCode;
@@ -124,4 +132,24 @@ export interface CanonicalDay {
   readonly exception: { readonly isException: boolean; readonly source: "ledger" | "rows" | "none" };
   readonly annotations: { readonly notes: ReadonlyArray<{ rowId: RowId; value: string }>; readonly securityEventRows: readonly RowId[] };
   readonly flags: readonly Flag[];
+  /**
+   * MARJIN_CREDITS/4 (P1 R1): set by the product composition (applySupplierCreditsToDay). When set,
+   * `purchases` is NET of the supplier credits issued on this date and `purchasesGross` is the
+   * purchases recorded in entries. Absent on days built without the credit source (core tests).
+   */
+  readonly purchasesGross?: MetricValue & { readonly bySource: Readonly<Record<PurchaseSourceKey, AmountString>> };
+  readonly supplierCredits?: DayCredits;
+}
+
+/** Supplier credits ISSUED on one date (EFFECTIVE credits only). value !== null ⇔ presence === "present". */
+export interface DayCredits {
+  /** absent: no credit issued that date (zero, complete) · present: credits counted · invalid: no valid credit and the source is invalid */
+  readonly presence: Presence;
+  /** present credits counted, but at least one credit fact of this date is invalid / unreadable / under an unresolved review */
+  readonly partial: boolean;
+  readonly value: Dec | null;
+  /** "supplier:<id>" → amount issued that date */
+  readonly bySupplier: Readonly<Record<PurchaseSourceKey, AmountString>>;
+  readonly count: number;
+  readonly reason: string | null;
 }
