@@ -33,6 +33,17 @@
 //   RM2-07  no business list at all (absent node): the first-business setup, as before (not an error)
 //   RM2-08  delete from the business switcher with [null, valid, other]: no page error; the stored list keeps the valid
 //           business (the bare null is not re-written — identity-neutral) and the server rule still registers it
+//   M1 R3 (review R2-01 / R2-03: an existing registry [null] / [{name}] opened the first-business setup whose completion replaced
+//   it; a raw-array registry — unreadable on the server — loaded the dashboard with amounts):
+//   RM3-01..06  [null], an id-less record, raw arrays (with and without a remembered selection), a bare JSON string and an
+//               object map: the explicit unavailable state — no setup, no dashboard, no amount
+//   RM3-07      the supported empty registry {_v:"[]"}: the first-business setup (eligible)
+//   RM3-08      first-business setup over an absent registry, driven through the rendered wizard: the registry holds exactly
+//               the new record and its config is written (legitimate initial setup preserved)
+//   RM3-09/10   the setup completion when the stored registry became [null] / another valid list before finish: REFUSED by
+//               the page's compare-and-swap — the stored node is untouched, no config is written, unavailable is shown
+//   (the add-business completion over an existing list is covered by test/finance/m1-r3-page-registry.test.mjs PR3-05 on the
+//   page's own completeSetup: in the rendered page the "+ add branch" control leads to the business selector, not the wizard)
 // Deliberately NOT named *.test.mjs (needs the emulator). Run through the emulator runner, one script at a time.
 import admin from "firebase-admin";
 import { readFileSync, mkdtempSync, writeFileSync, cpSync, mkdirSync, symlinkSync } from "node:fs";
@@ -358,6 +369,89 @@ async function main() {
       eq(fatalErrors(page).length, 0, "fatal page errors");
       return stored._v;
     } finally { page.detach(); }
+  });
+
+  // ── M1 R3: the stored registry node is judged by the server rule; first-business setup never replaces an existing one ──
+  await stateScenario("RM3-01", "existing registry [null]: the explicit unavailable state — never the first-business setup", { registry: [null], activeBiz: null }, null, explicitUnavailable);
+  await stateScenario("RM3-02", "existing registry with only an id-less record: the explicit unavailable state", { registry: [{ name: "unknown" }], activeBiz: null }, null, explicitUnavailable);
+  await stateScenario("RM3-03", "raw-array registry holding the valid business (server: unreadable): unavailable — no dashboard, no amount", { registryRaw: [VALID], activeBiz: null }, null, explicitUnavailable);
+  await stateScenario("RM3-04", "raw-array registry [null, valid] WITH a remembered selection: still unavailable — no amount", { registryRaw: [null, VALID] }, null, explicitUnavailable);
+  await stateScenario("RM3-05", "bare JSON-string registry: unavailable", { registryRaw: JSON.stringify([VALID]) }, null, explicitUnavailable);
+  await stateScenario("RM3-06", "object-map registry: unavailable", { registryRaw: { [B]: VALID } }, null, explicitUnavailable);
+  await stateScenario("RM3-07", "the supported empty registry {_v:\"[]\"}: the first-business setup (eligible)", { registry: [], activeBiz: null }, null, (st) => {
+    expect(st.setup && !st.unavailable, "empty registry permits setup"); eq(st.fatal, 0, "fatal page errors");
+  });
+
+  // the setup completion path itself, driven through the rendered wizard against the emulator (Rules loaded)
+  const setValue = (page, el, value) => {
+    const w = page.window; Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, "value").set.call(el, value);
+    el.dispatchEvent(new w.Event("input", { bubbles: true }));
+  };
+  const nextBtn = (page) => Array.from(page.document.querySelectorAll("button.btn-primary")).find((b) => textOf(b) === "המשך");
+  const storedReg = async () => (await apps.seed.database().ref(`tenants/${T}/app/business`).get()).val();
+  const newConfigs = async () => Object.keys((await apps.seed.database().ref(`tenants/${T}`).get()).val() || {}).filter((k) => /^biz:biz_\d+:config$/.test(k));
+  async function driveWizard(page, { firstSetup, beforeFinish }) {
+    const name = page.document.querySelector('input[placeholder="למשל: קפה ירושלמי"]'); expect(name, "wizard step 1"); setValue(page, name, "סניף חדש"); await page.sleep(100);
+    for (let s = 1; s <= (firstSetup ? 5 : 4); s++) { const b = nextBtn(page); expect(b, "next button at step " + s); click(b); await page.sleep(200); }
+    if (firstSetup) {
+      for (const [ph, v] of [["ישראל ישראלי", "בעלים"], ["username", "owner1"], ["your@email.com", USER.email], ["לפחות 6 תווים", "secret12"], ["הכנס שוב", "secret12"]]) {
+        const el = page.document.querySelector(`input[placeholder="${ph}"]`); expect(el, "owner field " + ph); setValue(page, el, v);
+      }
+      await page.sleep(100);
+    }
+    if (beforeFinish) await beforeFinish();
+    const fin = firstSetup ? findByText(page.document, "button", "סיום — כניסה ללוח הבקרה") : nextBtn(page);
+    expect(fin, "finish button"); click(fin);
+  }
+  async function setupRun(id, label, { data, firstSetup, beforeFinish, check }) {
+    await run(id, label, async () => {
+      await apps.seed.database().ref("/").set(fixtures(data));
+      const page = await bootHistoricalPage({ html: HTML, fincore: "ok", loadFincore: loadFinance, adminApp: apps.owner, user: USER, session, signedIn: true, clockOffsetMs: CLOCK_OFFSET_MS, fetchImpl });
+      page.window.TextEncoder = TextEncoder;
+      try {
+        await page.until(() => !!page.document.querySelector(".wizard-title"), 20000);
+        await driveWizard(page, { firstSetup, beforeFinish });
+        const out = await check(page);
+        eq(fatalErrors(page).length, 0, "fatal page errors");
+        return out;
+      } finally { page.detach(); }
+    });
+  }
+  const OTHER2 = { id: "bizD", name: "סניף נוסף" };
+  const refused = (before, label) => async (page) => {
+    // wait until the completion has ended (refused → unavailable; or, unsafely, the wizard closed after writing)
+    for (let i = 0; i < 50 && !page.document.querySelector('[data-m1="registry-unavailable"]') && page.document.querySelector(".wizard-title"); i++) await page.sleep(200);
+    await page.sleep(1500);
+    eq(JSON.stringify(await storedReg()), JSON.stringify(before), label + ": the stored registry is untouched");
+    eq((await newConfigs()).length, 0, label + ": no config of a new business is written");
+    expect(page.document.querySelector('[data-m1="registry-unavailable"]'), label + ": the explicit unavailable state after the refused completion");
+    expect(!/₪\s?\d/.test(textOf(page.document.getElementById("root"))), "no amount");
+    return JSON.stringify(await storedReg());
+  };
+  const written = (prefix) => async (page) => {
+    let reg = null;
+    for (let i = 0; i < 50; i++) { reg = await storedReg(); if (reg && JSON.parse(reg._v).length === prefix.length + 1) break; await page.sleep(200); }
+    const list = JSON.parse(reg._v);
+    eq(JSON.stringify(list.slice(0, -1)), JSON.stringify(prefix), "the existing businesses are kept");
+    expect(/^biz_\d+$/.test(list[list.length - 1].id) && list[list.length - 1].name === "סניף חדש", "the new record: " + reg._v);
+    for (let i = 0; i < 25 && (await newConfigs()).length === 0; i++) await page.sleep(200);
+    eq((await newConfigs()).length, 1, "the new business's config is written");
+    expect(!page.document.querySelector('[data-m1="registry-unavailable"]'), "no unavailable state");
+    // let the completion finish (its last writes) before the next scenario re-seeds the emulator
+    for (let i = 0; i < 50 && page.document.querySelector(".wizard-title"); i++) await page.sleep(200);
+    await page.sleep(1500);
+    return reg._v;
+  };
+  await setupRun("RM3-08", "first-business setup over an ABSENT registry completes: the registry holds exactly the new record (legitimate initial setup preserved)", { data: { registryRaw: null, activeBiz: null }, firstSetup: true, check: written([]) });
+  await setupRun("RM3-09", "UNSAFE completion: setup opened over an absent registry, another writer stores [null] before finish — refused, [null] untouched, no config", {
+    data: { registryRaw: null, activeBiz: null }, firstSetup: true,
+    beforeFinish: async () => { await apps.seed.database().ref(`tenants/${T}/app/business`).set(env([null])); },
+    check: refused(env([null]), "[null]"),
+  });
+  await setupRun("RM3-10", "UNSAFE completion: another writer stores a valid business before finish (registry changed) — refused, untouched", {
+    data: { registryRaw: null, activeBiz: null }, firstSetup: true,
+    beforeFinish: async () => { await apps.seed.database().ref(`tenants/${T}/app/business`).set(env([OTHER2])); },
+    check: refused(env([OTHER2]), "changed"),
   });
 
   console.log(`\n${"case".padEnd(7)} ${"status".padEnd(6)} notes`); console.log("-".repeat(120));

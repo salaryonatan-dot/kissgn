@@ -29,6 +29,7 @@ import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { gitIn } from "./git-context.mjs";
 import { isM1R2Tree, M1_R2_PINS } from "./m1-r2-remediation.mjs";
+import { isM1R3Tree, M1_R3_PINS } from "./m1-r3-remediation.mjs";
 
 /** The Codex-approved Storage V2 core; the reader files are authorized on top of it. */
 export const SERVER_READER_BASE = "8cac71c1248ad5cc49dfa1a727bf292398ae74e8";
@@ -109,6 +110,9 @@ export function serverReaderEffectiveBlobs(root = MODULE_REPO) {
   if (!isM1R2Tree(root)) return SERVER_READER_APPROVED_BLOBS;
   const out = { ...SERVER_READER_APPROVED_BLOBS };
   for (const f of Object.keys(out)) if (M1_R2_PINS[f]) out[f] = M1_R2_PINS[f];
+  // M1 R3 (LOCAL CANDIDATE, pending independent review): the nightly registry interpretation changes the same ONE file again;
+  // on an R3 tree it is held to its literal R3 pin (R3G-02 re-derives it from the R2 bytes). Nothing here approves R3.
+  if (isM1R3Tree(root)) for (const f of Object.keys(out)) if (M1_R3_PINS[f]) out[f] = M1_R3_PINS[f];
   return Object.freeze(out);
 }
 export const SERVER_READER_EFFECTIVE_BLOBS = serverReaderEffectiveBlobs();

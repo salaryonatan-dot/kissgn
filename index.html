@@ -781,6 +781,14 @@
       const path = fkeySharedForTenant(tenantId, key);
       return await runTransaction(ref(db, path), txnFn, { applyLocally: false });
     };
+    // M1 R3: RAW-node read. `get` above turns a raw RTDB array into JSON text, which hides the stored shape; the business
+    // registry must be judged on the node exactly as stored (the server rule). null = confirmed absent; a failed read throws.
+    window.storage.getNode = async (key) => {
+      const path = fkeyShared(key);
+      if (!path) throw new Error("tenant not set for shared key: " + key);
+      const snap = await get(ref(db, path));
+      return snap.exists() ? snap.val() : null;
+    };
 
     // R-V2: RAW-node subscribe. `subscribe` above unwraps `_v` for the legacy blob,
     // which after a V2 cutover would hand the caller the FROZEN snapshot. This one
@@ -1492,6 +1500,46 @@
       if (!Array.isArray(parsed)) return { state: "unreadable", reason: "registry_not_array" };
       var list = parsed.filter(function (e) { return e !== null; });
       return { state: "ready", list: list, selectable: selectableBusinesses(list) };
+    }
+    /**
+     * M1 R3 — the page's view of the STORED registry node, by the server rule (lib/businessRegistry.js decodeRegistryNode):
+     * only the runtime `{ _v: "<JSON array>" }` node is a business list. Never inferred from a filtered list:
+     *   { state:"absent" }                         confirmed absent node: authorized first-business setup is eligible
+     *   { state:"empty", list:[], selectable:[] }  the runtime node holding an EMPTY array: setup is eligible
+     *   { state:"ready", list, selectable }        a runtime list with at least one selectable record (businessRegistryView)
+     *   { state:"unreadable", reason }             registry_shape (a raw array, a bare string, an object map, a non-string
+     *                                              _v), registry_json, registry_not_array, or registry_no_business (a
+     *                                              NON-EMPTY list in which no element names a business: only bare nulls /
+     *                                              id-less records) — explicit unavailable; never setup, never figures
+     */
+    function businessRegistryNodeView(node) {
+      if (node === null || node === undefined) return { state: "absent", list: [], selectable: [] };
+      if (typeof node !== "object" || Array.isArray(node) || typeof node._v !== "string") return { state: "unreadable", reason: "registry_shape" };
+      var view = businessRegistryView(node._v);
+      if (view.state !== "ready") return view;
+      if (JSON.parse(node._v).length === 0) return { state: "empty", list: [], selectable: [] };
+      if (view.selectable.length === 0) return { state: "unreadable", reason: "registry_no_business" };
+      return view;
+    }
+    /** First-business setup is offered only over a confirmed absent / empty registry (or an unknown tenant: a new account). */
+    function firstSetupEligible(registryState, list) {
+      if (registryState === "unknown" || registryState === "absent" || registryState === "empty") return true;
+      return registryState === "ready" && Array.isArray(list) && list.length === 0;
+    }
+    /**
+     * M1 R3 — the setup writer's compare-and-swap over the CURRENT stored node (the pure body of the registry transaction).
+     * The new record is added only when the stored registry is still exactly what the page decided on: absent / empty when
+     * the page held no business, else the runtime list whose null-free elements equal the page's list. Any other current
+     * node — malformed, a raw array, a registry that changed since it was read — is refused and NEVER replaced.
+     *   → { ok:true, value:{ _v } } | { ok:false, reason }
+     */
+    function registrySetupWrite(current, expected, record) {
+      if (!Array.isArray(expected) || !record || typeof record.id !== "string" || !record.id) return { ok: false, reason: "setup_input" };
+      var view = businessRegistryNodeView(current);
+      if (view.state === "unreadable") return { ok: false, reason: view.reason };
+      if (JSON.stringify(view.list) !== JSON.stringify(expected)) return { ok: false, reason: "registry_changed" };
+      var next = view.list.filter(function (b) { return !(b !== null && typeof b === "object" && b.id === record.id); }).concat([record]);
+      return { ok: true, value: { _v: JSON.stringify(next) } };
     }
     function pickBusiness(selectable, preferred) {
       var ids = (Array.isArray(selectable) ? selectable : []).map(function (b) { return b.id; });
@@ -2265,6 +2313,7 @@
       C1_VERSION: C1_VERSION, EXPECT: EXPECT, LEDGER_CHUNK_DAYS: LEDGER_CHUNK_DAYS, LEDGER_ATTEMPT_DEADLINE_MS: LEDGER_ATTEMPT_DEADLINE_MS, TXT: TXT, READ_FAILED: READ_FAILED,
       checkBundle: checkBundle, nodeState: nodeState, historyBinding: historyBinding, ledgerChunks: ledgerChunks, structuredStates: structuredStates,
       selectableBusinesses: selectableBusinesses, businessRegistryView: businessRegistryView, pickBusiness: pickBusiness,
+      businessRegistryNodeView: businessRegistryNodeView, firstSetupEligible: firstSetupEligible, registrySetupWrite: registrySetupWrite,
       earliestRowDate: earliestRowDate, ledgerWindow: ledgerWindow, ledgerCovers: ledgerCovers, loadLedger: loadLedger,
       revisionOf: revisionOf, ledgerKey: ledgerKey, ledgerFor: ledgerFor, createLedgerSession: createLedgerSession, inputsFor: inputsFor,
       monthReport: monthReport, dashboard: dashboard, configView: configView, configuredMonthly: configuredMonthly, todayContext: todayContext, pnl: pnl, pnlGrossLineVD50: pnlGrossLineVD50,
@@ -6584,17 +6633,19 @@ function PilotDashboard() {
       // M1 R2: ONE decoder for the business list (window.MarjinC1.businessRegistryView): an element that cannot carry an
       // identity is never dereferenced, the valid business is selected, and a registry that cannot be read or interpreted
       // ends loading in an explicit unavailable state — never in a stalled page or the first-business setup.
-      let rb = null, registryLoad = "unknown";
-      try { rb = await window.storage.get("app-businesses", true); registryLoad = "read"; }
+      // M1 R3: the STORED node is judged (window.storage.getNode), so a raw array / non-runtime shape is unreadable exactly
+      // as on the server, and an absent or empty registry is told apart from a non-empty one with no business.
+      let node = null, registryLoad = "unknown";
+      try { node = await window.storage.getNode("app-businesses"); registryLoad = "read"; }
       catch(e) {
         const m = e && e.message ? String(e.message) : "";
-        registryLoad = m === "not found" ? "absent" : m.startsWith("tenant not set") ? "unknown" : "failed";
+        registryLoad = m.startsWith("tenant not set") ? "unknown" : "failed";
       }
-      if(registryLoad === "absent") setBizRegistry({ state: "absent" });
-      else if(registryLoad === "failed") setBizRegistry({ state: "unavailable", reason: "read_failed" });
+      if(registryLoad === "failed") setBizRegistry({ state: "unavailable", reason: "read_failed" });
       else if(registryLoad === "read") {
-        const view = window.MarjinC1.businessRegistryView(rb.value);
-        if(view.state !== "ready") setBizRegistry({ state: "unavailable", reason: view.reason });
+        const view = window.MarjinC1.businessRegistryNodeView(node);
+        if(view.state === "absent" || view.state === "empty") setBizRegistry({ state: view.state });
+        else if(view.state !== "ready") setBizRegistry({ state: "unavailable", reason: view.reason });
         else {
           console.log("[init] businesses: selectable", view.selectable.length, "of", view.list.length, "uid:", uid);
           setBizRegistry({ state: "ready" });
@@ -7383,9 +7434,30 @@ function PilotDashboard() {
 
     // ── STEP 4: Write business data (role exists now → allowed) ──────────────
     const bizName = cfg.businessName || "מסעדה חדשה";
-    const updatedBizList = [...businesses.filter(b=>b.id!==bizId), {id:bizId, name:bizName}];
+    // M1 R3: the business list is written by a compare-and-swap over the CURRENT stored node (window.MarjinC1.
+    // registrySetupWrite): the record is added only to the registry the page decided on — absent / empty, or the same
+    // list. A malformed, non-runtime or changed registry is never replaced; setup stops there (no config / supplier /
+    // fixed-cost / user write) and the explicit unavailable state is shown.
+    const expectedBizList = businesses;
+    let registryWrite = { ok: false, reason: "not_run" };
+    try {
+      // a refusal never writes: it aborts (undefined) — except over a locally-unknown (null) value, which is sent so that
+      // RTDB re-runs this check against the server's actual node
+      const res = await window.storage.mutateFor(tenantId, "app-businesses", (current) => {
+        registryWrite = window.MarjinC1.registrySetupWrite(current, expectedBizList, {id:bizId, name:bizName});
+        return registryWrite.ok ? registryWrite.value : (current === null ? null : undefined);
+      });
+      if(registryWrite.ok && (!res || res.committed !== true)) registryWrite = { ok: false, reason: "not_committed" };
+    } catch(e){ registryWrite = { ok: false, reason: registryWrite.ok ? "write_failed" : registryWrite.reason }; }
+    if(!registryWrite.ok) {
+      console.error("[setup] businesses save refused:", registryWrite.reason);
+      setBizRegistry({ state: "unavailable", reason: registryWrite.reason });
+      setShowSetup(false);
+      return;
+    }
+    const updatedBizList = JSON.parse(registryWrite.value._v);
     setBusinesses(updatedBizList);
-    try { await window.storage.set("app-businesses", JSON.stringify(updatedBizList), true); } catch(e){ console.error("[setup] businesses save failed:", e.message); }
+    setBizRegistry({ state: "ready" });
     try { await window.storage.set(`biz:${bizId}:config`, JSON.stringify(cfg), true); } catch(e){ console.error("[setup] config save failed:", e.message); }
     setBusinessConfig(cfg);
     try { await window.storage.set(`biz:${bizId}:suppliers`, JSON.stringify(sups), true); } catch(e){ console.error("[setup] suppliers save failed:", e.message); }
@@ -8029,15 +8101,15 @@ function PilotDashboard() {
             };
             // Force fresh load from RTDB (never use stale businesses state). M1 R2: the same decoder as the initial load;
             // an unreadable list or a failed read ends in the explicit unavailable state.
-            window.storage.get("app-businesses", true).then(rb => {
-              const view = window.MarjinC1.businessRegistryView(rb.value);
+            window.storage.getNode("app-businesses").then(node => {
+              const view = window.MarjinC1.businessRegistryNodeView(node);
+              if(view.state === "absent" || view.state === "empty") { setBizRegistry({ state: view.state }); setBusinesses([]); return; }
               if(view.state !== "ready") { setBizRegistry({ state: "unavailable", reason: view.reason }); return; }
               setBizRegistry({ state: "ready" });
               setBusinesses(view.list);
               resolveAndSet(view.selectable);
-            }).catch((e)=>{
-              if(e && e.message === "not found") { setBizRegistry({ state: "absent" }); setBusinesses([]); }
-              else setBizRegistry({ state: "unavailable", reason: "read_failed" });
+            }).catch(()=>{
+              setBizRegistry({ state: "unavailable", reason: "read_failed" });
             });
           } else if(selectableBizList.length === 1) {
             setCurrentBizId(selectableBizList[0].id);
@@ -8078,7 +8150,9 @@ function PilotDashboard() {
 
   // M1 R2: the business list could not be read or interpreted — loading ends here, explicitly: no business is selected,
   // no figure is shown, and the first-business setup (which would overwrite the stored list) is never offered.
-  if(loaded && loggedInUser && !currentBizId && bizRegistry.state === "unavailable") {
+  // M1 R3: a registry that is neither confirmed absent / empty nor holding a selectable business is unavailable too — the
+  // first-business setup is never inferred from a filtered list that came out empty.
+  if(loaded && loggedInUser && !currentBizId && (bizRegistry.state === "unavailable" || (selectableBizList.length === 0 && !window.MarjinC1.firstSetupEligible(bizRegistry.state, businesses)))) {
     return (
       <div data-m1="registry-unavailable" style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:24,fontFamily:"'Heebo',sans-serif",direction:"rtl"}}>
         <div style={{maxWidth:360,textAlign:"center",color:"#111827"}}>

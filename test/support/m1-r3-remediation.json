@@ -1,0 +1,130 @@
+{
+ "parent": "d848121d2139749502d06329bf6227f84f1f5f30",
+ "pins": {
+  "index.html": "602e82668044dc6b5703d4d7e0a5ada6723968d6",
+  "src/analytics/dailyBuilder.ts": "46c255e9c3d1d4f4f8d0d04c9d4c61d0c4b0df22"
+ },
+ "newFiles": [],
+ "edits": {
+  "index.html": [
+   {
+    "from": "  if(loaded && loggedInUser && !currentBizId && bizRegistry.state === \"unavailable\") {\n",
+    "to": "  // M1 R3: a registry that is neither confirmed absent / empty nor holding a selectable business is unavailable too — the\n  // first-business setup is never inferred from a filtered list that came out empty.\n  if(loaded && loggedInUser && !currentBizId && (bizRegistry.state === \"unavailable\" || (selectableBizList.length === 0 && !window.MarjinC1.firstSetupEligible(bizRegistry.state, businesses)))) {\n"
+   },
+   {
+    "from": "            }).catch((e)=>{\n              if(e && e.message === \"not found\") { setBizRegistry({ state: \"absent\" }); setBusinesses([]); }\n              else setBizRegistry({ state: \"unavailable\", reason: \"read_failed\" });\n",
+    "to": "            }).catch(()=>{\n              setBizRegistry({ state: \"unavailable\", reason: \"read_failed\" });\n"
+   },
+   {
+    "from": "            window.storage.get(\"app-businesses\", true).then(rb => {\n              const view = window.MarjinC1.businessRegistryView(rb.value);\n",
+    "to": "            window.storage.getNode(\"app-businesses\").then(node => {\n              const view = window.MarjinC1.businessRegistryNodeView(node);\n              if(view.state === \"absent\" || view.state === \"empty\") { setBizRegistry({ state: view.state }); setBusinesses([]); return; }\n"
+   },
+   {
+    "from": "    try { await window.storage.set(\"app-businesses\", JSON.stringify(updatedBizList), true); } catch(e){ console.error(\"[setup] businesses save failed:\", e.message); }\n",
+    "to": "    setBizRegistry({ state: \"ready\" });\n"
+   },
+   {
+    "from": "    const updatedBizList = [...businesses.filter(b=>b.id!==bizId), {id:bizId, name:bizName}];\n",
+    "to": "    // M1 R3: the business list is written by a compare-and-swap over the CURRENT stored node (window.MarjinC1.\n    // registrySetupWrite): the record is added only to the registry the page decided on — absent / empty, or the same\n    // list. A malformed, non-runtime or changed registry is never replaced; setup stops there (no config / supplier /\n    // fixed-cost / user write) and the explicit unavailable state is shown.\n    const expectedBizList = businesses;\n    let registryWrite = { ok: false, reason: \"not_run\" };\n    try {\n      // a refusal never writes: it aborts (undefined) — except over a locally-unknown (null) value, which is sent so that\n      // RTDB re-runs this check against the server's actual node\n      const res = await window.storage.mutateFor(tenantId, \"app-businesses\", (current) => {\n        registryWrite = window.MarjinC1.registrySetupWrite(current, expectedBizList, {id:bizId, name:bizName});\n        return registryWrite.ok ? registryWrite.value : (current === null ? null : undefined);\n      });\n      if(registryWrite.ok && (!res || res.committed !== true)) registryWrite = { ok: false, reason: \"not_committed\" };\n    } catch(e){ registryWrite = { ok: false, reason: registryWrite.ok ? \"write_failed\" : registryWrite.reason }; }\n    if(!registryWrite.ok) {\n      console.error(\"[setup] businesses save refused:\", registryWrite.reason);\n      setBizRegistry({ state: \"unavailable\", reason: registryWrite.reason });\n      setShowSetup(false);\n      return;\n    }\n    const updatedBizList = JSON.parse(registryWrite.value._v);\n"
+   },
+   {
+    "from": "        const view = window.MarjinC1.businessRegistryView(rb.value);\n        if(view.state !== \"ready\") setBizRegistry({ state: \"unavailable\", reason: view.reason });\n",
+    "to": "        const view = window.MarjinC1.businessRegistryNodeView(node);\n        if(view.state === \"absent\" || view.state === \"empty\") setBizRegistry({ state: view.state });\n        else if(view.state !== \"ready\") setBizRegistry({ state: \"unavailable\", reason: view.reason });\n"
+   },
+   {
+    "from": "      if(registryLoad === \"absent\") setBizRegistry({ state: \"absent\" });\n      else if(registryLoad === \"failed\") setBizRegistry({ state: \"unavailable\", reason: \"read_failed\" });\n",
+    "to": "      if(registryLoad === \"failed\") setBizRegistry({ state: \"unavailable\", reason: \"read_failed\" });\n"
+   },
+   {
+    "from": "        registryLoad = m === \"not found\" ? \"absent\" : m.startsWith(\"tenant not set\") ? \"unknown\" : \"failed\";\n",
+    "to": "        registryLoad = m.startsWith(\"tenant not set\") ? \"unknown\" : \"failed\";\n"
+   },
+   {
+    "from": "      let rb = null, registryLoad = \"unknown\";\n      try { rb = await window.storage.get(\"app-businesses\", true); registryLoad = \"read\"; }\n",
+    "to": "      // M1 R3: the STORED node is judged (window.storage.getNode), so a raw array / non-runtime shape is unreadable exactly\n      // as on the server, and an absent or empty registry is told apart from a non-empty one with no business.\n      let node = null, registryLoad = \"unknown\";\n      try { node = await window.storage.getNode(\"app-businesses\"); registryLoad = \"read\"; }\n"
+   },
+   {
+    "from": "      selectableBusinesses: selectableBusinesses, businessRegistryView: businessRegistryView, pickBusiness: pickBusiness,\n",
+    "to": "      selectableBusinesses: selectableBusinesses, businessRegistryView: businessRegistryView, pickBusiness: pickBusiness,\n      businessRegistryNodeView: businessRegistryNodeView, firstSetupEligible: firstSetupEligible, registrySetupWrite: registrySetupWrite,\n"
+   },
+   {
+    "from": "      return { state: \"ready\", list: list, selectable: selectableBusinesses(list) };\n",
+    "to": "      return { state: \"ready\", list: list, selectable: selectableBusinesses(list) };\n    }\n    /**\n     * M1 R3 — the page's view of the STORED registry node, by the server rule (lib/businessRegistry.js decodeRegistryNode):\n     * only the runtime `{ _v: \"<JSON array>\" }` node is a business list. Never inferred from a filtered list:\n     *   { state:\"absent\" }                         confirmed absent node: authorized first-business setup is eligible\n     *   { state:\"empty\", list:[], selectable:[] }  the runtime node holding an EMPTY array: setup is eligible\n     *   { state:\"ready\", list, selectable }        a runtime list with at least one selectable record (businessRegistryView)\n     *   { state:\"unreadable\", reason }             registry_shape (a raw array, a bare string, an object map, a non-string\n     *                                              _v), registry_json, registry_not_array, or registry_no_business (a\n     *                                              NON-EMPTY list in which no element names a business: only bare nulls /\n     *                                              id-less records) — explicit unavailable; never setup, never figures\n     */\n    function businessRegistryNodeView(node) {\n      if (node === null || node === undefined) return { state: \"absent\", list: [], selectable: [] };\n      if (typeof node !== \"object\" || Array.isArray(node) || typeof node._v !== \"string\") return { state: \"unreadable\", reason: \"registry_shape\" };\n      var view = businessRegistryView(node._v);\n      if (view.state !== \"ready\") return view;\n      if (JSON.parse(node._v).length === 0) return { state: \"empty\", list: [], selectable: [] };\n      if (view.selectable.length === 0) return { state: \"unreadable\", reason: \"registry_no_business\" };\n      return view;\n    }\n    /** First-business setup is offered only over a confirmed absent / empty registry (or an unknown tenant: a new account). */\n    function firstSetupEligible(registryState, list) {\n      if (registryState === \"unknown\" || registryState === \"absent\" || registryState === \"empty\") return true;\n      return registryState === \"ready\" && Array.isArray(list) && list.length === 0;\n    }\n    /**\n     * M1 R3 — the setup writer's compare-and-swap over the CURRENT stored node (the pure body of the registry transaction).\n     * The new record is added only when the stored registry is still exactly what the page decided on: absent / empty when\n     * the page held no business, else the runtime list whose null-free elements equal the page's list. Any other current\n     * node — malformed, a raw array, a registry that changed since it was read — is refused and NEVER replaced.\n     *   → { ok:true, value:{ _v } } | { ok:false, reason }\n     */\n    function registrySetupWrite(current, expected, record) {\n      if (!Array.isArray(expected) || !record || typeof record.id !== \"string\" || !record.id) return { ok: false, reason: \"setup_input\" };\n      var view = businessRegistryNodeView(current);\n      if (view.state === \"unreadable\") return { ok: false, reason: view.reason };\n      if (JSON.stringify(view.list) !== JSON.stringify(expected)) return { ok: false, reason: \"registry_changed\" };\n      var next = view.list.filter(function (b) { return !(b !== null && typeof b === \"object\" && b.id === record.id); }).concat([record]);\n      return { ok: true, value: { _v: JSON.stringify(next) } };\n"
+   },
+   {
+    "from": "      const path = fkeySharedForTenant(tenantId, key);\n      return await runTransaction(ref(db, path), txnFn, { applyLocally: false });\n    };\n",
+    "to": "      const path = fkeySharedForTenant(tenantId, key);\n      return await runTransaction(ref(db, path), txnFn, { applyLocally: false });\n    };\n    // M1 R3: RAW-node read. `get` above turns a raw RTDB array into JSON text, which hides the stored shape; the business\n    // registry must be judged on the node exactly as stored (the server rule). null = confirmed absent; a failed read throws.\n    window.storage.getNode = async (key) => {\n      const path = fkeyShared(key);\n      if (!path) throw new Error(\"tenant not set for shared key: \" + key);\n      const snap = await get(ref(db, path));\n      return snap.exists() ? snap.val() : null;\n    };\n"
+   }
+  ],
+  "src/analytics/dailyBuilder.ts": [
+   {
+    "from": "    failures.push({ tenantId, bizId, error: \"business_registry_ambiguous\" });\n  }\n",
+    "to": "    failures.push({ tenantId, bizId, error: \"business_registry_ambiguous\" });\n  }\n  failures.push(...registryFailures);\n"
+   },
+   {
+    "from": "      const doc = await buildAnalyticsForBiz(tenantId, bizId, date);\n",
+    "to": "      const doc = await buildAnalyticsForBiz(tenantId, bizId, date, { requireRegistered: true });\n"
+   },
+   {
+    "from": "      if (candidate.fromAppBusiness) return true;\n",
+    "to": "      if (candidate.fromAppBusiness) return true;\n      // M1 R3: an indexed business of a tenant whose registry is unreadable is a reported failure, not a silent skip\n      if (unreadableTenants.has(candidate.tenantId)) {\n        reportRegistryFailure({ tenantId: candidate.tenantId, bizId: candidate.bizId, error: \"business_registry_unreadable\" });\n        return false;\n      }\n"
+   },
+   {
+    "from": "    console.error(\"[analytics] tenant discovery failed:\", err);\n    // Proceed with index results if we have any; abort only if BOTH sources\n    // produced nothing (previous behavior for a total discovery failure).\n    if (discovered.size === 0) return { docs, failures };\n",
+    "to": "    console.error(\"[analytics] tenant discovery failed:\", (err as Error)?.message ?? \"unknown\");\n    // M1 R3: a failed tenants read is a failed discovery, never a clean empty run. Index-only businesses are never built\n    // (below), so nothing is built from this run.\n    reportRegistryFailure({ tenantId: null, bizId: null, error: \"business_discovery_failed\" });\n"
+   },
+   {
+    "from": "            if (addBiz(\"appBusiness\", tenantId, biz.id)) fromAppBusiness++;\n          }\n",
+    "to": "            if (addBiz(\"appBusiness\", tenantId, biz.id)) fromAppBusiness++;\n          }\n          if (state !== \"registered\") {\n            reportRegistryFailure({ tenantId, bizId: id, error: `business_registry_${state}` });\n            continue;\n          }\n          if (isExplicitlyInactive(biz as Record<string, unknown>)) {\n            inactiveSkipped++;\n            console.log(\n              `[analytics/discovery] skipping explicitly inactive business ${tenantId}:${id}`\n            );\n            continue;\n          }\n          if (addBiz(\"appBusiness\", tenantId, id)) fromAppBusiness++;\n        }\n        // a non-empty registry in which NO element names a business (only bare nulls / id-less records) is not\n        // \"no businesses\": it is reported, exactly as the page refuses to treat it as a first-business setup\n        if (decoded.list.length > 0 && named === 0) {\n          reportRegistryFailure({ tenantId, bizId: null, error: \"business_registry_no_valid_record\" });\n"
+   },
+   {
+    "from": "            if (registryTargetOf(businesses, biz.id).state === \"ambiguous\") {\n              const key = `${tenantId.trim()}|${biz.id.trim()}`;\n              if (!ambiguousTargets.has(key)) {\n                ambiguousTargets.set(key, { tenantId: tenantId.trim(), bizId: biz.id.trim() });\n                console.warn(`[analytics/discovery] refusing ambiguous registry identity ${tenantId}:${biz.id}`);\n              }\n              continue;\n            }\n            if (isExplicitlyInactive(biz as Record<string, unknown>)) {\n              inactiveSkipped++;\n              console.log(\n                `[analytics/discovery] skipping explicitly inactive business ${tenantId}:${biz.id}`\n              );\n              continue;\n            }\n            if (addBiz(\"appBusiness\", tenantId, biz.id)) fromAppBusiness++;\n",
+    "to": "            continue;\n"
+   },
+   {
+    "from": "        if (\n          typeof tenantData === \"object\" &&\n          tenantData !== null &&\n          (tenantData as any).app?.business\n        ) {\n          const businesses = parseFirebaseData<\n            Array<{ id: string; name: string; [k: string]: unknown }>\n          >((tenantData as any).app.business, []);\n          if (!Array.isArray(businesses)) continue;\n          for (const biz of businesses) {\n            if (!biz || typeof biz !== \"object\" || typeof biz.id !== \"string\" || !biz.id) {\n              malformedSkipped++;\n              console.warn(\n                `[analytics/discovery] ignoring malformed app/business entry under tenant ${tenantId}`\n              );\n              continue;\n",
+    "to": "        const app = typeof tenantData === \"object\" && tenantData !== null ? (tenantData as any).app : undefined;\n        const node: unknown = app && typeof app === \"object\" ? app.business : undefined;\n        if (node === undefined || node === null) continue;\n        const decoded = decodeRegistryNode(node);\n        if (!decoded.ok) {\n          unreadableTenants.add(tenantId);\n          console.warn(`[analytics/discovery] unreadable app/business registry under tenant ${tenantId} (${decoded.reason})`);\n          const ids = unreadableRegistryIds(node);\n          if (ids.length === 0) reportRegistryFailure({ tenantId, bizId: null, error: \"business_registry_unreadable\" });\n          for (const id of ids) reportRegistryFailure({ tenantId, bizId: id, error: \"business_registry_unreadable\" });\n          continue;\n        }\n        let named = 0;\n        for (const biz of decoded.list as unknown[]) {\n          if (!biz || typeof biz !== \"object\" || Array.isArray(biz) || typeof (biz as { id?: unknown }).id !== \"string\" || !(biz as { id: string }).id) {\n            malformedSkipped++;\n            console.warn(\n              `[analytics/discovery] ignoring malformed app/business entry under tenant ${tenantId}`\n            );\n            continue;\n          }\n          named++;\n          const id = (biz as { id: string }).id;\n          if (!isExactNightlyBizId(id)) {\n            reportRegistryFailure({ tenantId, bizId: id, error: \"business_id_not_exact\" });\n            continue;\n          }\n          const state = classifyRegistryTarget(node, id).state;\n          if (state === \"ambiguous\") {\n            const key = `${tenantId.trim()}|${id}`;\n            if (!ambiguousTargets.has(key)) {\n              ambiguousTargets.set(key, { tenantId: tenantId.trim(), bizId: id });\n              console.warn(`[analytics/discovery] refusing ambiguous registry identity ${tenantId}:${id}`);\n"
+   },
+   {
+    "from": "  // Source 2: ALWAYS scan tenants/*/app/business (merged, not fallback-only).\n",
+    "to": "  // Source 2: ALWAYS scan tenants/*/app/business (merged, not fallback-only).\n  // M1 R3: each tenant's STORED registry node is decoded by the shared rule. An absent node is a tenant with no registry\n  // (nothing to build, as before); any other node that is not the runtime envelope is unreadable and reported.\n"
+   },
+   {
+    "from": "  const ambiguousTargets = new Map<string, { tenantId: string; bizId: string }>();\n",
+    "to": "  const ambiguousTargets = new Map<string, { tenantId: string; bizId: string }>();\n  // M1 R3: registry failures are reported, never a clean empty run — an unreadable registry node (not the runtime\n  // `{ _v: \"<JSON array>\" }` envelope), a non-empty registry in which no element names a business, a stored id that is not\n  // exact, and a failed tenants read. None of them is built: no analytics or insights doc is persisted for them.\n  const registryFailures: AnalyticsRunFailure[] = [];\n  const unreadableTenants = new Set<string>();\n  const reportRegistryFailure = (f: AnalyticsRunFailure) => {\n    if (!registryFailures.some((x) => x.tenantId === f.tenantId && x.bizId === f.bizId)) registryFailures.push(f);\n  };\n"
+   },
+   {
+    "from": "  const failures: Array<{ tenantId: string; bizId: string; error: string }> = [];\n",
+    "to": "  const failures: AnalyticsRunFailure[] = [];\n"
+   },
+   {
+    "from": "): Promise<{ docs: AnalyticsDoc[]; failures: Array<{ tenantId: string; bizId: string; error: string }> }> {\n",
+    "to": "): Promise<{ docs: AnalyticsDoc[]; failures: AnalyticsRunFailure[] }> {\n"
+   },
+   {
+    "from": "// ── Iterate active businesses (mirrors snapshotBuilder discovery) ────────────\n\n",
+    "to": "// ── Iterate active businesses (mirrors snapshotBuilder discovery) ────────────\n\n/** One failed business (or, with `bizId: null`, a tenant registry / the discovery itself) of a nightly run. */\nexport type AnalyticsRunFailure = { tenantId: string | null; bizId: string | null; error: string };\n\n"
+   },
+   {
+    "from": "  const businesses = parseFirebaseData<unknown>(businessSnap.val(), []);\n  const registered = Array.isArray(businesses) ? registryTargetOf(businesses, bizId).record : null;\n",
+    "to": "  // M1 R3: the stored registry node itself (no lenient parse, no re-wrap). The nightly run re-checks the identity at build\n  // time (`requireRegistered`): a registry that no longer establishes the target fails this business before any write, with\n  // a code naming the build-time state (`business_registry_changed_<state>`), distinct from the discovery refusals.\n  const target = resolveRegistryTarget(businessSnap.val(), bizId);\n  if (opts?.requireRegistered && target.state !== \"registered\") throw new Error(`business_registry_changed_${target.state}`);\n  const registered = target.record;\n"
+   },
+   {
+    "from": "  opts?: { nowMs?: number }\n",
+    "to": "  opts?: { nowMs?: number; requireRegistered?: boolean }\n"
+   },
+   {
+    "from": "// M1 R2 — the shared target-scoped registry rule (lib/businessRegistry.js: the rule of the Core cost-history writer, the\n// P1 supplier-credit routes and the analytics endpoint) applied to a parsed business list. An unrelated element (a bare\n// null, a primitive, a malformed record) is never dereferenced; duplicated or colliding records establish NO record —\n// never a first match.\nfunction registryTargetOf(list: unknown[], bizId: string) {\n  return resolveRegistryTarget({ _v: JSON.stringify(list) }, bizId);\n",
+    "to": "// Report-only: the ids a NON-runtime registry node appears to name (a raw array, a bare JSON string, an object map), so a\n// rejected target stays visible in the run's failures. Never used to select, build or persist anything.\nfunction unreadableRegistryIds(node: unknown): string[] {\n  let v: unknown = node;\n  if (typeof v === \"string\") { try { v = JSON.parse(v); } catch { return []; } }\n  if (v && typeof v === \"object\" && !Array.isArray(v) && typeof (v as { _v?: unknown })._v === \"string\") {\n    try { v = JSON.parse((v as { _v: string })._v); } catch { return []; }\n  }\n  const items = Array.isArray(v) ? v : v && typeof v === \"object\" ? Object.values(v as Record<string, unknown>) : [];\n  const ids: string[] = [];\n  for (const e of items) {\n    const id = e && typeof e === \"object\" && !Array.isArray(e) ? (e as { id?: unknown }).id : undefined;\n    if (typeof id === \"string\" && id && !ids.includes(id)) ids.push(id);\n  }\n  return ids;\n"
+   },
+   {
+    "from": "function parseFirebaseData<T>(value: any, fallback: T): T {\n  if (!value) return fallback;\n  if (typeof value === \"string\") {\n    try { return JSON.parse(value); } catch { return fallback; }\n  }\n  if (value._v) {\n    try { return JSON.parse(value._v); } catch { return fallback; }\n  }\n  return value as T;\n",
+    "to": "// M1 R3 — the shared target-scoped registry rule (lib/businessRegistry.js: the rule of the Core cost-history writer, the\n// P1 supplier-credit routes and the analytics endpoint) is applied to the STORED registry node itself, never to a list\n// re-wrapped after a lenient parse: only the runtime `{ _v: \"<JSON array>\" }` node can establish a target. A raw array, a\n// bare JSON string, an object map or an invalid envelope is unreadable here exactly as in rebuild, backfill, Core and P1.\n// An unrelated element (a bare null, a primitive, a malformed record) is never dereferenced; duplicated or colliding\n// records establish NO record — never a first match.\n//\n// A nightly target id is EXACT: a string the shared rule can address, with no surrounding whitespace (the analytics\n// endpoint refuses padded ids with 400; discovery never trims a stored id into another business's id).\nfunction isExactNightlyBizId(id: unknown): id is string {\n  return typeof id === \"string\" && isRegistryBizId(id) && id === id.trim();\n"
+   },
+   {
+    "from": "import { resolveRegistryTarget } from \"../../lib/businessRegistry.js\";\n",
+    "to": "import { classifyRegistryTarget, decodeRegistryNode, isRegistryBizId, resolveRegistryTarget } from \"../../lib/businessRegistry.js\";\n"
+   }
+  ]
+ }
+}

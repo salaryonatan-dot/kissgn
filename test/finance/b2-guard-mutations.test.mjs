@@ -41,6 +41,9 @@ import { m1EffectivePins, m1EffectivePageVerdict, isM1R1Tree, M1_R1_NEW_FILES } 
 // M1 R2 (successor of the rejected R1 candidate): EXACTLY the R2 files carry R2 pins — the P0 route api/analytics/daily-builder.ts
 // is then held to its R2 pin (no longer the P0 bytes), the R2 new file joins the protected set, and the page is R1 + the R2 edits.
 import { isM1R2Tree, M1_R2_PINS, M1_R2_NEW_FILES, M1_R2_PARENT } from "../support/m1-r2-remediation.mjs";
+// M1 R3 (successor of the rejected R2 candidate): the page and the analytics builder carry R3 pins (via m1EffectivePins and the
+// effective server-reader table); neither can fall back to the rejected R2 bytes.
+import { isM1R3Tree, M1_R3_PARENT } from "../support/m1-r3-remediation.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -682,6 +685,11 @@ test("B2G-05-M1b M1 tree: committed substitutions of either input, page edits, r
       ["R2: the analytics builder = the approved B1 bytes (null-dereferencing name lookup, ambiguous discovery back)", put("src/analytics/dailyBuilder.ts", M1_R2_PARENT + ":src/analytics/dailyBuilder.ts"), PIN("src/analytics/dailyBuilder.ts")],
       ["R2: the shared registry module = the R1 bytes (resolveRegistryTarget gone)", put("lib/businessRegistry.js", M1_R2_PARENT + ":lib/businessRegistry.js"), PIN("lib/businessRegistry.js")],
       ["R2: the registry declarations removed", (dir) => rmSync(join(dir, "lib", "businessRegistry.d.ts")), /protected changes are exactly/],
+    ] : []),
+    // M1 R3 overlay (only on an R3 tree): neither repair can fall back to the rejected R2 bytes
+    ...(isM1R3Tree(REPO) ? [
+      ["R3: the page = the rejected R2 page (filtered-list setup + JSON-text registry read back)", put("index.html", M1_R3_PARENT + ":index.html"), PAGE],
+      ["R3: the analytics builder = the rejected R2 bytes (lenient raw-array nightly discovery back)", put("src/analytics/dailyBuilder.ts", M1_R3_PARENT + ":src/analytics/dailyBuilder.ts"), PIN("src/analytics/dailyBuilder.ts")],
     ] : []),
   ];
   for (const [label, mut, re] of cases) {

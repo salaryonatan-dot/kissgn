@@ -822,7 +822,18 @@ test("R1-27 create-new-business and first-business paths keep their behaviour an
   assert.equal(orig.status, 0, orig.stderr);
   const block = (html, anchor) => { const at = html.indexOf(anchor); assert.notEqual(at, -1, anchor); let d = 0, i = html.indexOf("{", at); for (; i < html.length; i++) { if (html[i] === "{") d++; else if (html[i] === "}" && --d === 0) break; } return html.slice(at, i + 1); };
   const cs = "const completeSetup = async (cfg, sups, fixed, firstOwner) => {";
-  assert.equal(block(HTML, cs), block(orig.stdout, cs), "completeSetup is byte-identical to the HF-1 candidate");
+  let want = block(orig.stdout, cs);
+  // M1 R3 (LOCAL CANDIDATE, pending independent review): the first-business setup's business-list write becomes a
+  // compare-and-swap over the stored registry (review R2-01). On an R3 tree completeSetup is the HF-1 block + EXACTLY the
+  // recorded R3 edits that touch it — the two business-list write edits — and nothing else.
+  const { isM1R3Tree, M1_R3_EDITS } = await import("../support/m1-r3-remediation.mjs");
+  if (isM1R3Tree(ROOT)) {
+    const inBlock = M1_R3_EDITS["index.html"].filter((e) => want.includes(e.from));
+    assert.equal(inBlock.length, 2, "exactly two recorded R3 edits touch completeSetup");
+    assert.ok(inBlock.every((e) => /updatedBizList/.test(e.from) && e.to.includes("registrySetupWrite") === e.from.includes("const updatedBizList = [")), "they are the business-list write (the CAS replaces the whole-node set)");
+    for (const e of inBlock) { assert.equal(want.split(e.from).length, 2, "anchor unique in the block"); want = want.replace(e.from, () => e.to); }
+  }
+  assert.equal(block(HTML, cs), want, "completeSetup is byte-identical to the HF-1 candidate (+ the recorded M1 R3 business-list write edits on an R3 tree)");
   const nb = "// Add new business -- show setup whenever showSetup=true and logged in";
   const slice = (h) => h.slice(h.indexOf(nb), h.indexOf("isFirstSetup={false}", h.indexOf(nb)));
   assert.equal(slice(HTML), slice(orig.stdout), "the new-business <SetupWizard> call site is byte-identical");

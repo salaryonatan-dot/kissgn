@@ -85,7 +85,9 @@ test("PBR2-04 pickBusiness: a remembered selectable id, else the first selectabl
 
 test("PBR2-05 the page source: one decoder for every business-list load; no element dereference of the stored list survives", () => {
   const count = (s) => HTML.split(s).length - 1;
-  assert.equal(count("window.MarjinC1.businessRegistryView(rb.value)"), 2, "the initial load and the manual-login reload both decode through the shared view");
+  // M1 R3: both load paths now read the STORED node and decode it through businessRegistryNodeView (which applies this
+  // view to the runtime envelope's list) — test/finance/m1-r3-page-registry.test.mjs PR3-06
+  assert.equal(count("window.MarjinC1.businessRegistryNodeView(node)"), 2, "the initial load and the manual-login reload both decode through the shared view");
   for (const gone of ["JSON.parse(rb.value)", "bizList[0].id", "bizList.find(", "resolveAndSet(bizList)", "bizList.map(b=>"]) assert.equal(count(gone), 0, gone + " no longer exists");
   assert.equal(count("bizList.map("), 1, "the one remaining map (the setup-edit commit) …");
   assert.equal(count("bizList.map((b) => (b && b.id === ctx.bizId"), 1, "… guards every element before reading its id");

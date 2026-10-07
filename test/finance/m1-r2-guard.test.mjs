@@ -9,13 +9,16 @@
 //           added export (the classifier itself byte-identical); no Rules, deployment config, e-mail or Core / P1 file
 //   R2G-04  non-vacuity: changed anchors, dropped or altered edits are refused; the R1 page is refused as the R2 page
 //   R2G-05  the shared rule is in the import closure of the analytics endpoint and of the analytics builder
+// On an M1 R3 tree (the successor of this rejected R2 candidate, test/support/m1-r3-remediation.mjs) R2G-01/03 verify the R2
+// commit itself from git objects (M1_R3_PARENT); the HEAD / index / checkout identity is held by the R3 guard (R3G-01).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { join, dirname, normalize } from "node:path";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
-import { m1EffectivePins, m1EffectivePageVerdict, gitBlobId } from "../support/m1-r1-remediation.mjs";
+import { m1EffectivePins, m1R2Pins, m1EffectivePageVerdict, gitBlobId } from "../support/m1-r1-remediation.mjs";
+import { isM1R3Tree, M1_R3_PARENT } from "../support/m1-r3-remediation.mjs";
 import { M1_R2_PARENT, M1_R2_PINS, M1_R2_NEW_FILES, M1_R2_EDITS, M1_R2_SCOPE, M1_R2_PROTECTED, isM1R2Tree, deriveR2 } from "../support/m1-r2-remediation.mjs";
 import { SERVER_READER_EFFECTIVE_BLOBS, SERVER_READER_APPROVED_BLOBS } from "../support/server-reader-authorized-delta.mjs";
 import { C1_WRITE_TOKENS } from "../support/c1-index-scope.mjs";
@@ -26,22 +29,30 @@ const blobId = (spec) => { const r = gitIn(REPO, ["rev-parse", "--verify", "-q",
 const bytesOf = (spec) => { const r = gitIn(REPO, ["cat-file", "blob", spec], { encoding: "buffer", maxBuffer: 1 << 28 }); assert.equal(r.status, 0, spec); return r.stdout; };
 const lines = (r) => r.stdout.split("\n").map((x) => x.trim()).filter(Boolean);
 const MODIFIED = Object.keys(M1_R2_PINS).filter((f) => !M1_R2_NEW_FILES.includes(f)).sort();
-const read = (f) => readFileSync(join(REPO, f), "utf8");
+const LAYERED = isM1R3Tree(REPO);
+const R2_TREE = LAYERED ? M1_R3_PARENT : "HEAD";          // the R2 commit itself when the R3 layer is checked out
+const read = (f) => (LAYERED ? bytesOf(`${R2_TREE}:${f}`).toString("utf8") : readFileSync(join(REPO, f), "utf8"));
 
 test("R2G-01 the R2 change set vs the rejected R1 parent is exactly the recorded set; every effective pin holds committed / staged / checked out", { skip: SKIP }, () => {
   assert.equal(M1_R2_PARENT, "45e760c893f682b71d8e8e8e962528c385206609", "R2 is built on the rejected R1 candidate");
-  assert.equal(gitIn(REPO, ["rev-parse", "HEAD^"]).stdout.trim(), M1_R2_PARENT, "the R1 candidate is the SOLE parent");
-  assert.equal(gitIn(REPO, ["rev-list", "--parents", "-n", "1", "HEAD"]).stdout.trim().split(" ").length, 2, "one parent");
+  assert.equal(gitIn(REPO, ["rev-parse", R2_TREE + "^"]).stdout.trim(), M1_R2_PARENT, "the R1 candidate is the SOLE parent");
+  assert.equal(gitIn(REPO, ["rev-list", "--parents", "-n", "1", R2_TREE]).stdout.trim().split(" ").length, 2, "one parent");
   for (const [f, pin] of Object.entries(M1_R2_PINS)) assert.match(pin, /^[0-9a-f]{40}$/, f + ": literal blob id");
-  const committed = lines(gitIn(REPO, ["diff", "--name-only", M1_R2_PARENT, "HEAD", "--"])).filter((f) => M1_R2_PROTECTED.test(f));
-  const staged = lines(gitIn(REPO, ["diff", "--name-only", "--cached", M1_R2_PARENT, "--"])).filter((f) => M1_R2_PROTECTED.test(f));
-  const working = [...lines(gitIn(REPO, ["diff", "--name-only", M1_R2_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => M1_R2_PROTECTED.test(f));
-  for (const [label, set] of [["committed", committed], ["staged", staged], ["working tree", working]])
+  const committed = lines(gitIn(REPO, ["diff", "--name-only", M1_R2_PARENT, R2_TREE, "--"])).filter((f) => M1_R2_PROTECTED.test(f));
+  const sets = [["committed", committed]];
+  if (!LAYERED) {
+    sets.push(["staged", lines(gitIn(REPO, ["diff", "--name-only", "--cached", M1_R2_PARENT, "--"])).filter((f) => M1_R2_PROTECTED.test(f))]);
+    sets.push(["working tree", [...lines(gitIn(REPO, ["diff", "--name-only", M1_R2_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => M1_R2_PROTECTED.test(f))]);
+  }
+  for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), Object.keys(M1_R2_PINS).sort(), label + ": protected changes vs the R1 parent = the recorded R2 set");
-  const eff = { ...m1EffectivePins(REPO), ...SERVER_READER_EFFECTIVE_BLOBS };
+  // the R2 commit's own pin table: on an R3 tree the M1 ⊕ R1 ⊕ R2 pins and the approved reader table with the R2 builder pin
+  const r2Reader = { ...SERVER_READER_APPROVED_BLOBS }; for (const f of Object.keys(r2Reader)) if (M1_R2_PINS[f]) r2Reader[f] = M1_R2_PINS[f];
+  const eff = LAYERED ? { ...m1R2Pins(), ...r2Reader } : { ...m1EffectivePins(REPO), ...SERVER_READER_EFFECTIVE_BLOBS };
   for (const f of Object.keys(M1_R2_PINS)) assert.equal(eff[f], M1_R2_PINS[f], f + " is held to its R2 pin by the effective tables");
   for (const [f, pin] of Object.entries(eff)) {
-    assert.equal(blobId("HEAD:" + f), pin, f + " committed");
+    assert.equal(blobId(R2_TREE + ":" + f), pin, f + " committed" + (LAYERED ? " (at the R2 commit)" : ""));
+    if (LAYERED) continue;
     assert.equal(blobId(":" + f), pin, f + " staged");
     assert.equal(gitBlobId(readFileSync(join(REPO, f))), pin, f + " checked out");
   }
@@ -62,7 +73,7 @@ test("R2G-02 provenance: each R2 pin is the R1 parent's bytes + exactly the reco
 
 test("R2G-03 scope: only the registry-selection decision changes; authorization, financial lines, page writes, Rules and e-mail are untouched", { skip: SKIP }, () => {
   assert.deepEqual(Object.keys(M1_R2_PINS).sort(), [...M1_R2_SCOPE].sort());
-  const all = lines(gitIn(REPO, ["diff", "--name-only", M1_R2_PARENT, "HEAD", "--"]));
+  const all = lines(gitIn(REPO, ["diff", "--name-only", M1_R2_PARENT, R2_TREE, "--"]));
   assert.deepEqual(all.filter((f) => /^(database\.rules\.json|vercel\.json|package(-lock)?\.json|fincore\/|src\/(finance|metrics|policy|presenters|browser|finance-server|snapshot|agent|alerts|services)\/|api\/(?!analytics\/daily-builder\.ts$)|lib\/(?!businessRegistry\.(js|d\.ts)$)|test\/emulator\/database\.rules\.json$)/.test(f)), [], "no Rules / config / Core / P1 / e-mail / other route change");
   // the page: no write line changes (the multiset of lines calling a write / lifecycle entry point is identical to R1's)
   const writes = (s) => s.split("\n").filter((l) => C1_WRITE_TOKENS.some((t) => l.includes(t))).sort();
@@ -89,7 +100,7 @@ test("R2G-03 scope: only the registry-selection decision changes; authorization,
   for (const lit of ["claims = await requireAuth(req);", 'role = await requireTenantAccess(claims.uid, safeTenantId, "shift_manager");', "hasBusinessAccess(role, claims.uid, parseAppUsers(usersRaw), safeBizId)", "resolveAnalyticsRebuildRateLimit("]) assert.ok(ep.includes(lit), "endpoint keeps " + lit);
   assert.ok(!/function findBusiness|\.find\(\(b\) => b && typeof b === "object" && \(b as AppBusiness\)\.id === bizId\)/.test(ep), "no first-match lookup remains");
   // the builder: no financial line changes
-  const removed = (f) => gitIn(REPO, ["diff", "-U0", M1_R2_PARENT, "HEAD", "--", f]).stdout.split("\n").filter((l) => l.startsWith("-") && !l.startsWith("---")).map((l) => l.slice(1));
+  const removed = (f) => gitIn(REPO, ["diff", "-U0", M1_R2_PARENT, R2_TREE, "--", f]).stdout.split("\n").filter((l) => l.startsWith("-") && !l.startsWith("---")).map((l) => l.slice(1));
   assert.deepEqual(removed("src/analytics/dailyBuilder.ts").filter((l) => /canonical|toAnalyticsFinancials|loadCanonicalInputs|fin\b|payroll|purchases|revenue|labor|vat|forecast/i.test(l)), [], "no financial line of the builder is removed or rewritten");
   for (const e of M1_R2_EDITS["src/analytics/dailyBuilder.ts"]) assert.ok(/[Rr]egistry|ambiguous|businesses|bizName|registered/.test(e.from + e.to), "builder edit is a registry-selection edit");
   // the shared module: the classifier is byte-identical to R1

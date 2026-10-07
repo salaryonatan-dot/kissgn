@@ -17,7 +17,7 @@
  */
 
 import { getDb } from "../firebase/admin.js";
-import { resolveRegistryTarget } from "../../lib/businessRegistry.js";
+import { classifyRegistryTarget, decodeRegistryNode, isRegistryBizId, resolveRegistryTarget } from "../../lib/businessRegistry.js";
 import { loadCanonicalInputs } from "../finance-server/canonicalInputs.js";
 import { canonicalDayRecord, toAnalyticsFinancials } from "../finance-server/canonicalMetrics.js";
 import type { AnalyticsFinBlock } from "../finance-server/canonicalMetrics.js";
@@ -167,23 +167,34 @@ function num(value: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function parseFirebaseData<T>(value: any, fallback: T): T {
-  if (!value) return fallback;
-  if (typeof value === "string") {
-    try { return JSON.parse(value); } catch { return fallback; }
-  }
-  if (value._v) {
-    try { return JSON.parse(value._v); } catch { return fallback; }
-  }
-  return value as T;
+// M1 R3 — the shared target-scoped registry rule (lib/businessRegistry.js: the rule of the Core cost-history writer, the
+// P1 supplier-credit routes and the analytics endpoint) is applied to the STORED registry node itself, never to a list
+// re-wrapped after a lenient parse: only the runtime `{ _v: "<JSON array>" }` node can establish a target. A raw array, a
+// bare JSON string, an object map or an invalid envelope is unreadable here exactly as in rebuild, backfill, Core and P1.
+// An unrelated element (a bare null, a primitive, a malformed record) is never dereferenced; duplicated or colliding
+// records establish NO record — never a first match.
+//
+// A nightly target id is EXACT: a string the shared rule can address, with no surrounding whitespace (the analytics
+// endpoint refuses padded ids with 400; discovery never trims a stored id into another business's id).
+function isExactNightlyBizId(id: unknown): id is string {
+  return typeof id === "string" && isRegistryBizId(id) && id === id.trim();
 }
 
-// M1 R2 — the shared target-scoped registry rule (lib/businessRegistry.js: the rule of the Core cost-history writer, the
-// P1 supplier-credit routes and the analytics endpoint) applied to a parsed business list. An unrelated element (a bare
-// null, a primitive, a malformed record) is never dereferenced; duplicated or colliding records establish NO record —
-// never a first match.
-function registryTargetOf(list: unknown[], bizId: string) {
-  return resolveRegistryTarget({ _v: JSON.stringify(list) }, bizId);
+// Report-only: the ids a NON-runtime registry node appears to name (a raw array, a bare JSON string, an object map), so a
+// rejected target stays visible in the run's failures. Never used to select, build or persist anything.
+function unreadableRegistryIds(node: unknown): string[] {
+  let v: unknown = node;
+  if (typeof v === "string") { try { v = JSON.parse(v); } catch { return []; } }
+  if (v && typeof v === "object" && !Array.isArray(v) && typeof (v as { _v?: unknown })._v === "string") {
+    try { v = JSON.parse((v as { _v: string })._v); } catch { return []; }
+  }
+  const items = Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v as Record<string, unknown>) : [];
+  const ids: string[] = [];
+  for (const e of items) {
+    const id = e && typeof e === "object" && !Array.isArray(e) ? (e as { id?: unknown }).id : undefined;
+    if (typeof id === "string" && id && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
 }
 
 // ── Upstream fetchers (timeouts + soft-fail) ─────────────────────────────────
@@ -384,7 +395,7 @@ export async function buildAnalyticsForBiz(
   tenantId: string,
   bizId: string,
   date: string,
-  opts?: { nowMs?: number }
+  opts?: { nowMs?: number; requireRegistered?: boolean }
 ): Promise<AnalyticsDoc> {
   const db = getDb();
 
@@ -406,8 +417,12 @@ export async function buildAnalyticsForBiz(
 
   // Location / region selection only (non-financial): the decoded config when readable.
   const config = (inputs.config.state === "present" ? inputs.config.value : {}) as BusinessConfig;
-  const businesses = parseFirebaseData<unknown>(businessSnap.val(), []);
-  const registered = Array.isArray(businesses) ? registryTargetOf(businesses, bizId).record : null;
+  // M1 R3: the stored registry node itself (no lenient parse, no re-wrap). The nightly run re-checks the identity at build
+  // time (`requireRegistered`): a registry that no longer establishes the target fails this business before any write, with
+  // a code naming the build-time state (`business_registry_changed_<state>`), distinct from the discovery refusals.
+  const target = resolveRegistryTarget(businessSnap.val(), bizId);
+  if (opts?.requireRegistered && target.state !== "registered") throw new Error(`business_registry_changed_${target.state}`);
+  const registered = target.record;
 
   const bizName =
     (registered && typeof registered.name === "string" && registered.name) ||
@@ -620,12 +635,15 @@ export async function buildAndSaveInsights(
 
 // ── Iterate active businesses (mirrors snapshotBuilder discovery) ────────────
 
+/** One failed business (or, with `bizId: null`, a tenant registry / the discovery itself) of a nightly run. */
+export type AnalyticsRunFailure = { tenantId: string | null; bizId: string | null; error: string };
+
 export async function buildAnalyticsForAll(
   date: string
-): Promise<{ docs: AnalyticsDoc[]; failures: Array<{ tenantId: string; bizId: string; error: string }> }> {
+): Promise<{ docs: AnalyticsDoc[]; failures: AnalyticsRunFailure[] }> {
   const db = getDb();
   const docs: AnalyticsDoc[] = [];
-  const failures: Array<{ tenantId: string; bizId: string; error: string }> = [];
+  const failures: AnalyticsRunFailure[] = [];
 
   // ── Hardened business discovery ────────────────────────────────────────────
   // Merges BOTH sources on every run — proactive_biz_index AND
@@ -695,6 +713,14 @@ export async function buildAnalyticsForAll(
   // M1 R2: a business whose registry identity is AMBIGUOUS (duplicated / colliding records) is not built — no analytics or
   // insights doc for an identity the registry cannot establish — and is reported as a failure of the run, never omitted.
   const ambiguousTargets = new Map<string, { tenantId: string; bizId: string }>();
+  // M1 R3: registry failures are reported, never a clean empty run — an unreadable registry node (not the runtime
+  // `{ _v: "<JSON array>" }` envelope), a non-empty registry in which no element names a business, a stored id that is not
+  // exact, and a failed tenants read. None of them is built: no analytics or insights doc is persisted for them.
+  const registryFailures: AnalyticsRunFailure[] = [];
+  const unreadableTenants = new Set<string>();
+  const reportRegistryFailure = (f: AnalyticsRunFailure) => {
+    if (!registryFailures.some((x) => x.tenantId === f.tenantId && x.bizId === f.bizId)) registryFailures.push(f);
+  };
 
   // Source 1: proactive_biz_index (optional — absence is not an error).
   try {
@@ -765,53 +791,74 @@ export async function buildAnalyticsForAll(
   }
 
   // Source 2: ALWAYS scan tenants/*/app/business (merged, not fallback-only).
+  // M1 R3: each tenant's STORED registry node is decoded by the shared rule. An absent node is a tenant with no registry
+  // (nothing to build, as before); any other node that is not the runtime envelope is unreadable and reported.
   try {
     const tenantsSnap = await db.ref("tenants").once("value");
     const tenantsData = tenantsSnap.val();
     if (tenantsData && typeof tenantsData === "object") {
       for (const [tenantId, tenantData] of Object.entries(tenantsData)) {
-        if (
-          typeof tenantData === "object" &&
-          tenantData !== null &&
-          (tenantData as any).app?.business
-        ) {
-          const businesses = parseFirebaseData<
-            Array<{ id: string; name: string; [k: string]: unknown }>
-          >((tenantData as any).app.business, []);
-          if (!Array.isArray(businesses)) continue;
-          for (const biz of businesses) {
-            if (!biz || typeof biz !== "object" || typeof biz.id !== "string" || !biz.id) {
-              malformedSkipped++;
-              console.warn(
-                `[analytics/discovery] ignoring malformed app/business entry under tenant ${tenantId}`
-              );
-              continue;
-            }
-            if (registryTargetOf(businesses, biz.id).state === "ambiguous") {
-              const key = `${tenantId.trim()}|${biz.id.trim()}`;
-              if (!ambiguousTargets.has(key)) {
-                ambiguousTargets.set(key, { tenantId: tenantId.trim(), bizId: biz.id.trim() });
-                console.warn(`[analytics/discovery] refusing ambiguous registry identity ${tenantId}:${biz.id}`);
-              }
-              continue;
-            }
-            if (isExplicitlyInactive(biz as Record<string, unknown>)) {
-              inactiveSkipped++;
-              console.log(
-                `[analytics/discovery] skipping explicitly inactive business ${tenantId}:${biz.id}`
-              );
-              continue;
-            }
-            if (addBiz("appBusiness", tenantId, biz.id)) fromAppBusiness++;
+        const app = typeof tenantData === "object" && tenantData !== null ? (tenantData as any).app : undefined;
+        const node: unknown = app && typeof app === "object" ? app.business : undefined;
+        if (node === undefined || node === null) continue;
+        const decoded = decodeRegistryNode(node);
+        if (!decoded.ok) {
+          unreadableTenants.add(tenantId);
+          console.warn(`[analytics/discovery] unreadable app/business registry under tenant ${tenantId} (${decoded.reason})`);
+          const ids = unreadableRegistryIds(node);
+          if (ids.length === 0) reportRegistryFailure({ tenantId, bizId: null, error: "business_registry_unreadable" });
+          for (const id of ids) reportRegistryFailure({ tenantId, bizId: id, error: "business_registry_unreadable" });
+          continue;
+        }
+        let named = 0;
+        for (const biz of decoded.list as unknown[]) {
+          if (!biz || typeof biz !== "object" || Array.isArray(biz) || typeof (biz as { id?: unknown }).id !== "string" || !(biz as { id: string }).id) {
+            malformedSkipped++;
+            console.warn(
+              `[analytics/discovery] ignoring malformed app/business entry under tenant ${tenantId}`
+            );
+            continue;
           }
+          named++;
+          const id = (biz as { id: string }).id;
+          if (!isExactNightlyBizId(id)) {
+            reportRegistryFailure({ tenantId, bizId: id, error: "business_id_not_exact" });
+            continue;
+          }
+          const state = classifyRegistryTarget(node, id).state;
+          if (state === "ambiguous") {
+            const key = `${tenantId.trim()}|${id}`;
+            if (!ambiguousTargets.has(key)) {
+              ambiguousTargets.set(key, { tenantId: tenantId.trim(), bizId: id });
+              console.warn(`[analytics/discovery] refusing ambiguous registry identity ${tenantId}:${id}`);
+            }
+            continue;
+          }
+          if (state !== "registered") {
+            reportRegistryFailure({ tenantId, bizId: id, error: `business_registry_${state}` });
+            continue;
+          }
+          if (isExplicitlyInactive(biz as Record<string, unknown>)) {
+            inactiveSkipped++;
+            console.log(
+              `[analytics/discovery] skipping explicitly inactive business ${tenantId}:${id}`
+            );
+            continue;
+          }
+          if (addBiz("appBusiness", tenantId, id)) fromAppBusiness++;
+        }
+        // a non-empty registry in which NO element names a business (only bare nulls / id-less records) is not
+        // "no businesses": it is reported, exactly as the page refuses to treat it as a first-business setup
+        if (decoded.list.length > 0 && named === 0) {
+          reportRegistryFailure({ tenantId, bizId: null, error: "business_registry_no_valid_record" });
         }
       }
     }
   } catch (err) {
-    console.error("[analytics] tenant discovery failed:", err);
-    // Proceed with index results if we have any; abort only if BOTH sources
-    // produced nothing (previous behavior for a total discovery failure).
-    if (discovered.size === 0) return { docs, failures };
+    console.error("[analytics] tenant discovery failed:", (err as Error)?.message ?? "unknown");
+    // M1 R3: a failed tenants read is a failed discovery, never a clean empty run. Index-only businesses are never built
+    // (below), so nothing is built from this run.
+    reportRegistryFailure({ tenantId: null, bizId: null, error: "business_discovery_failed" });
   }
 
   const afterDedupe = discovered.size;
@@ -819,6 +866,11 @@ export async function buildAnalyticsForAll(
     Array.from(discovered.values()).filter((candidate) => {
       if (ambiguousTargets.has(`${candidate.tenantId}|${candidate.bizId}`)) return false;
       if (candidate.fromAppBusiness) return true;
+      // M1 R3: an indexed business of a tenant whose registry is unreadable is a reported failure, not a silent skip
+      if (unreadableTenants.has(candidate.tenantId)) {
+        reportRegistryFailure({ tenantId: candidate.tenantId, bizId: candidate.bizId, error: "business_registry_unreadable" });
+        return false;
+      }
       indexOnlySkipped++;
       console.warn(
         `[analytics/discovery] skipping index-only business ${candidate.tenantId}:${candidate.bizId}`
@@ -834,7 +886,7 @@ export async function buildAnalyticsForAll(
 
   for (const { tenantId, bizId } of activeBusinesses) {
     try {
-      const doc = await buildAnalyticsForBiz(tenantId, bizId, date);
+      const doc = await buildAnalyticsForBiz(tenantId, bizId, date, { requireRegistered: true });
       await saveAnalyticsDoc(doc);
       // Insight Engine v1 — isolated, never throws (see buildAndSaveInsights).
       await buildAndSaveInsights(doc.tenantId, doc.bizId, doc.date, doc);
@@ -847,6 +899,7 @@ export async function buildAnalyticsForAll(
   for (const { tenantId, bizId } of ambiguousTargets.values()) {
     failures.push({ tenantId, bizId, error: "business_registry_ambiguous" });
   }
+  failures.push(...registryFailures);
 
   return { docs, failures };
 }
