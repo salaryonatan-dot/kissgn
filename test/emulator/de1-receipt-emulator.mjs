@@ -40,7 +40,9 @@ function fakeSend(counter, behavior) {
     counter.n++;
     await new Promise((r) => setTimeout(r, 25));
     if (behavior === "accept") { a.info = { accepted: [TO], rejected: [], messageId: a.messageId, response: "250 OK" }; return; }
-    const err = Object.assign(new Error("fake"), behavior === "transient" ? { code: "EMESSAGE", responseCode: 421, command: "DATA" } : { code: "ETIMEDOUT", command: "CONN" });
+    // R2 (review E1): the transient refusal carries the complete nodemailer negative-reply shape (reply text + code), which is
+    // now required before an error after the hand-off counts as a refusal
+    const err = Object.assign(new Error("fake"), behavior === "transient" ? { code: "EMESSAGE", response: "421 4.7.0 Try again later", responseCode: 421, command: "DATA" } : { code: "ETIMEDOUT", command: "CONN" });
     a.error = err; throw err;
   };
 }

@@ -42,6 +42,8 @@ import { m1EffectivePins, m1EffectivePageVerdict, isM1R1Tree, M1_R1_NEW_FILES } 
 // api/daily-snapshot/run.ts is then held to its DE1 pin (no longer the P0 bytes), and the DE1 lib files join the protected set.
 import { isDE1Tree, de1EffectivePins, DE1_SCOPE } from "../support/de1-daily-email.mjs";
 import { isDE1R1Tree } from "../support/de1-r1-email.mjs";
+// DE1 R2 (successor of the rejected R1): the receipt module carries R2 pins (via de1EffectivePins); it cannot fall back to R1.
+import { isDE1R2Tree, DE1R2_PARENT } from "../support/de1-r2-email.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -199,7 +201,7 @@ function assertB2Scope(root) {
     const DE1_ADDED = de1 ? DE1_SCOPE.filter((f) => !P0_APPROVED.includes(f)) : [];
     // the delivery pins: DE1's, with the DE1 R1 successor's overlaid on its tree (same file set)
     const DE1_EFF = de1 ? de1EffectivePins(root) : {};
-    const DE1_LABEL = de1 && isDE1R1Tree(root) ? "DE1 R1 successor fixed blob " : "DE1 checkpoint fixed blob ";
+    const DE1_LABEL = de1 && isDE1R2Tree(root) ? "DE1 R2 successor fixed blob " : de1 && isDE1R1Tree(root) ? "DE1 R1 successor fixed blob " : "DE1 checkpoint fixed blob ";
     const vd50Runtime = ["src/metrics/report.ts", "fincore/v1/metrics/report.js", "fincore/v1/MANIFEST.json"];
     const f1Runtime = ["database.rules.json", "fincore/v1/MANIFEST.json", "fincore/v1/browser/marjinFinanceGlobal.js", "fincore/v1/finance/costHistory.js", "fincore/v1/metrics/report.js", "fincore/v1/policy/productFinance.js", "lib/finance/costHistoryWriter.js", "src/browser/marjinFinanceGlobal.ts", "src/finance-server/canonicalInputs.ts", "src/finance/costHistory.ts", "src/finance/labor.ts", "src/finance/types.ts", "src/metrics/costTimeline.ts", "src/metrics/report.ts", "src/policy/productFinance.ts", "test/support/rules-authorized-delta.mjs"];
     const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES, ...M1_R1_ADDED, ...DE1_ADDED])] : CDM2_APPROVED;
@@ -692,6 +694,11 @@ test("B2G-05-M1b M1 tree: committed substitutions of either input, page edits, r
       ["DE1 R1: the receipt module = the rejected DE1 bytes (provider Message-ID persisted)", put("lib/emailDelivery.js", "9baf695c8f7d8c03e47dfaa4a67c3a795a4f1073:lib/emailDelivery.js"), PIN("lib/emailDelivery.js")],
       ["DE1 R1: sendEmail.js = the rejected DE1 bytes (raw provider fields logged)", put("lib/sendEmail.js", "9baf695c8f7d8c03e47dfaa4a67c3a795a4f1073:lib/sendEmail.js"), PIN("lib/sendEmail.js")],
       ["DE1 R1: the receipt declarations edited", (dir) => appendTo(dir, "lib/emailDelivery.d.ts", "\n// edit\n"), PIN("lib/emailDelivery.d.ts")],
+    ] : []),
+    // DE1 R2 overlay (only on a DE1 R2 tree): the receipt module cannot fall back to the rejected R1 bytes
+    ...(isDE1R2Tree(REPO) ? [
+      ["DE1 R2: the receipt module = the rejected R1 bytes (provider marker / text trusted as phase evidence)", put("lib/emailDelivery.js", DE1R2_PARENT + ":lib/emailDelivery.js"), PIN("lib/emailDelivery.js")],
+      ["DE1 R2: the receipt declarations = the R1 bytes", put("lib/emailDelivery.d.ts", DE1R2_PARENT + ":lib/emailDelivery.d.ts"), PIN("lib/emailDelivery.d.ts")],
     ] : []),
   ];
   for (const [label, mut, re] of cases) {

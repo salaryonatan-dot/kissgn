@@ -133,7 +133,10 @@ test("DE-07 an authentication failure is a definitive, configuration-retryable f
   for (const [t, b] of ALL) assert.deepEqual([receipt(t, b).state, receipt(t, b).retryable], ["failed", true]);
 });
 
-test("DE-08 timeouts and lost answers are UNKNOWN (never re-sent automatically); a connection that never opened is a retryable failure", async () => {
+// R2 (review E1): a refused connection / connect timeout reported by the provider no longer counts as "never sent" — the
+// provider call had already been made, and its error code or text is not trustworthy evidence of the phase. It is UNKNOWN:
+// one provider call, never retried in the run or by a later invocation (case d).
+test("DE-08 timeouts and lost answers are UNKNOWN (never re-sent automatically); so is a connection error the provider reports", async () => {
   process.env.EMAIL_SEND_DEADLINE_MS = "200";
   try {
     // (a) a stalled provider no longer stalls the run: the next business is still delivered
@@ -151,12 +154,12 @@ test("DE-08 timeouts and lost answers are UNKNOWN (never re-sent automatically);
       r = await cron(); await cron();
       assert.equal(smtp.calls.length, 1, code); assert.deepEqual([receipt(T, B).state, receipt(T, B).code], ["unknown", code]);
     }
-    // (d) refused connection / connect timeout: never sent ⇒ failed, retried within the run
-    for (const behavior of [SMTP.connectRefused(), SMTP.connectTimeout()]) {
+    // (d) refused connection / connect timeout reported by the provider: unknown, never re-sent (R2, E1)
+    for (const [behavior, code] of [[SMTP.connectRefused(), "provider_connection_lost"], [SMTP.connectTimeout(), "provider_timeout_unknown_phase"]]) {
       seedWorld({ withSecondBiz: false, withSecondTenant: false }); smtp = installSmtp([behavior, SMTP.accept()]);
-      r = await cron();
-      assert.equal(smtp.calls.length, 2); assert.deepEqual([receipt(T, B).state, receipt(T, B).attempt], ["accepted", 2]);
-      assert.equal(receipt(T, B).history[0].code, "provider_unreachable");
+      r = await cron(); assert.equal(r.statusCode, 500);
+      r = await cron(); assert.equal(r.body.results[0].code, "unknown_requires_reconciliation");
+      assert.equal(smtp.calls.length, 1, code); assert.deepEqual([receipt(T, B).state, receipt(T, B).code, receipt(T, B).attempt], ["unknown", code, 1]);
     }
   } finally { delete process.env.EMAIL_SEND_DEADLINE_MS; }
 });

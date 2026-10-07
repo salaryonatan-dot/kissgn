@@ -19,20 +19,33 @@ import * as D from "../../lib/emailDelivery.js";
 
 const err = (message, code, extra = {}) => Object.assign(new Error(message), { code }, extra);
 
+// R2 (review E1): classifyTransportError classifies an error raised AFTER sendMail was invoked. Only an SMTP negative reply in
+// the exact nodemailer shape (code + command pair, integer responseCode equal to the leading code of the reply text) is a
+// refusal; everything else — connection / DNS / timeout codes whatever their text, adapter-local errors without a server
+// reply, a configuration code, a spoofed internal marker — may follow an acceptance and is UNKNOWN. (The R1 rows that made a
+// "Connection timeout" text, a connect syscall or an EDNS code a retryable "provider_unreachable" were the unsafe retry E1.)
 test("EU-01 provider errors: a definitive refusal is failed; anything that may follow the data hand-over is unknown", () => {
   const C = D.classifyTransportError;
+  const reply = (message, code, response, command) => err(message + ": " + response, code, { response, responseCode: Number(response.slice(0, 3)), command });
   const rows = [
-    [err("Invalid login", "EAUTH", { responseCode: 535, command: "AUTH PLAIN" }), "failed", true, false, "provider_auth_failed"],
-    [err("Missing SMTP", "ECONFIG"), "failed", true, false, "provider_not_configured"],
-    [err("all recipients were rejected", "EENVELOPE", { responseCode: 550, command: "RCPT TO" }), "failed", false, false, "provider_rejected_550"],
-    [err("Message failed", "EMESSAGE", { responseCode: 552, command: "DATA" }), "failed", false, false, "provider_rejected_552"],
-    [err("Message failed", "EMESSAGE", { responseCode: 421, command: "DATA" }), "failed", true, true, "provider_deferred_421"],
-    [err("Data command failed", "EENVELOPE", { responseCode: 451, command: "DATA" }), "failed", true, true, "provider_deferred_451"],
-    [err("Invalid recipient", "EENVELOPE", { command: "API" }), "failed", false, false, "provider_refused_message"],
-    [err("Connection timeout", "ETIMEDOUT", { command: "CONN" }), "failed", true, true, "provider_unreachable"],
-    [err("Greeting never received", "ETIMEDOUT", { command: "CONN" }), "failed", true, true, "provider_unreachable"],
-    [err("connect ECONNREFUSED", "ESOCKET", { command: "CONN", syscall: "connect" }), "failed", true, true, "provider_unreachable"],
-    [err("getaddrinfo ENOTFOUND", "EDNS", { syscall: "getaddrinfo" }), "failed", true, true, "provider_unreachable"],
+    [reply("Invalid login", "EAUTH", "535-5.7.8 Username and Password not accepted.", "AUTH PLAIN"), "failed", true, false, "provider_auth_failed"],
+    [reply("Can't send mail - all recipients were rejected", "EENVELOPE", "550 5.1.1 no such user", "RCPT TO"), "failed", false, false, "provider_rejected_550"],
+    [reply("Mail command failed", "EENVELOPE", "553 5.1.8 sender rejected", "MAIL FROM"), "failed", false, false, "provider_rejected_553"],
+    [reply("Message failed", "EMESSAGE", "552 5.3.4 Message size exceeds fixed limit", "DATA"), "failed", false, false, "provider_rejected_552"],
+    [reply("Message failed", "EMESSAGE", "421 4.7.0 Try again later", "DATA"), "failed", true, true, "provider_deferred_421"],
+    [reply("Data command failed", "EENVELOPE", "451 4.3.0 Mail server temporarily rejected message", "DATA"), "failed", true, true, "provider_deferred_451"],
+    [err("Missing SMTP", "ECONFIG"), "unknown", undefined, undefined, "provider_error_unclassified"],
+    [err("Invalid recipient", "EENVELOPE", { command: "API" }), "unknown", undefined, undefined, "provider_refusal_unverifiable"],
+    [err("all recipients were rejected", "EENVELOPE", { responseCode: 550, command: "RCPT TO" }), "unknown", undefined, undefined, "provider_refusal_unverifiable"],
+    [err("Message failed", "EMESSAGE", { responseCode: 550, response: "250 OK", command: "DATA" }), "unknown", undefined, undefined, "provider_refusal_unverifiable"],
+    [err("Message failed", "EMESSAGE", { responseCode: 550, response: "550 no", command: "RCPT TO" }), "unknown", undefined, undefined, "provider_refusal_unverifiable"],
+    [err("Invalid login", "EAUTH", { responseCode: 535, response: "535 no", command: "DATA" }), "unknown", undefined, undefined, "provider_refusal_unverifiable"],
+    [err("Connection timeout", "ETIMEDOUT", { command: "CONN" }), "unknown", undefined, undefined, "provider_timeout_unknown_phase"],
+    [err("Greeting never received", "ETIMEDOUT", { command: "CONN" }), "unknown", undefined, undefined, "provider_timeout_unknown_phase"],
+    [err("connect ECONNREFUSED", "ESOCKET", { command: "CONN", syscall: "connect" }), "unknown", undefined, undefined, "provider_connection_lost"],
+    [err("getaddrinfo ENOTFOUND", "EDNS", { syscall: "getaddrinfo" }), "unknown", undefined, undefined, "provider_connection_lost"],
+    [err("may have accepted", "ETIMEDOUT", { deliveryPhase: "before_transport", deliveryCode: "claim_lost" }), "unknown", undefined, undefined, "provider_timeout_unknown_phase"],
+    [err("x", undefined, { deliveryPhase: "before_transport", deliveryCode: "not_handed_to_provider" }), "unknown", undefined, undefined, "provider_error_unclassified"],
     [err("Timeout", "ETIMEDOUT", { command: "CONN" }), "unknown", undefined, undefined, "provider_timeout_unknown_phase"],
     [err("Connection closed unexpectedly", "ECONNECTION", { command: "CONN" }), "unknown", undefined, undefined, "provider_connection_lost"],
     [err("read ECONNRESET", "ESOCKET", { command: "CONN", syscall: "read" }), "unknown", undefined, undefined, "provider_connection_lost"],
@@ -51,8 +64,11 @@ test("EU-02 a resolved provider result is accepted only for an accepted, not rej
   assert.equal(I({ accepted: ["Owner@Example.test"], rejected: [], response: "250 2.0.0 OK" }, "owner@example.test").outcome, "accepted");
   assert.equal(I({ accepted: [{ address: "owner@example.test" }], rejected: [] }, "owner@example.test").outcome, "accepted");
   assert.equal(I({ accepted: ["owner@example.test"], rejected: [], response: "250 ok" }, "owner@example.test").responseCode, 250);
-  for (const info of [{ accepted: [], rejected: ["owner@example.test"] }, { accepted: ["other@example.test"], rejected: [] }])
+  for (const info of [{ accepted: [], rejected: ["owner@example.test"] }, { accepted: [], rejected: ["owner@example.test"], response: "550 5.1.1 no" }, { accepted: ["other@example.test"], rejected: ["owner@example.test"] }])
     assert.deepEqual([I(info, "owner@example.test").outcome, I(info, "owner@example.test").code], ["failed", "provider_rejected_recipient"], JSON.stringify(info));
+  // R2 (review E2): a well-formed result that lists the recipient NOWHERE establishes neither acceptance nor refusal
+  for (const info of [{ accepted: [], rejected: [], response: "250 OK" }, { accepted: [], rejected: [] }, { accepted: ["other@example.test"], rejected: [] }, { accepted: [], rejected: ["other@example.test"], response: "250 OK" }])
+    assert.deepEqual([I(info, "owner@example.test").outcome, I(info, "owner@example.test").code], ["unknown", "provider_result_indeterminate"], JSON.stringify(info));
   // R1 (D4): a result that cannot be interpreted, or contradicts itself, does not establish a refusal — the message was handed
   // over, so it is UNKNOWN (held, never re-sent), not "failed"
   for (const [info, code] of [[{}, "provider_result_malformed"], [null, "provider_result_malformed"], [{ accepted: "owner@example.test" }, "provider_result_malformed"],

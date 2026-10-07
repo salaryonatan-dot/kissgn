@@ -37,6 +37,8 @@ export interface DeliveryAttemptContext {
   path: string;
   messageId: string;
   handedToProvider: boolean;
+  claimLost: boolean;
+  multipleHandoffs: boolean;
   info: unknown;
   error: unknown;
   beforeTransport(): Promise<void>;
@@ -51,6 +53,7 @@ export function providerCommand(err: unknown): string;
 export function providerResponseCode(x: unknown): number | null;
 export function providerIdEcho(reported: unknown, ours: string): ProviderIdEcho;
 export function boundedCode(code: unknown): string | null;
+export function smtpNegativeReply(err: unknown): { code: "EENVELOPE" | "EMESSAGE" | "EAUTH"; command: string; responseCode: number } | null;
 export function classifyTransportError(err: unknown): TransportClassification;
 export function classifyTransportInfo(info: unknown, to: string): TransportClassification;
 export function currentDeliveryAttempt(): DeliveryAttemptContext | undefined;

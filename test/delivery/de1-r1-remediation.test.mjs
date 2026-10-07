@@ -355,9 +355,10 @@ test("DR1-10 (D4) untrusted provider Message-IDs and error fields never reach lo
   const throws = [
     ["address as code", () => Object.assign(new Error("private@example.test"), { code: "private@example.test", command: "RCPT TO private@example.test", responseCode: "550 private@example.test" }), "unknown", "provider_error_unclassified"],
     ["oversized code", () => Object.assign(new Error(big), { code: big }), "unknown", "provider_error_unclassified"],
-    ["code object", () => Object.assign(new Error("m"), { code: { toString: () => "EENVELOPE" }, responseCode: 550 }), "failed", "provider_rejected_550"],
-    ["absurd responseCode", () => Object.assign(new Error("m"), { code: "EENVELOPE", responseCode: 1e12 }), "failed", "provider_refused_message"],
-    ["string responseCode", () => Object.assign(new Error("m"), { code: "EMESSAGE", responseCode: "550" }), "failed", "provider_refused_message"],
+    // R2 (review E1): a refusal needs the complete nodemailer negative-reply shape; a partial / wrongly typed one is unknown
+    ["code object", () => Object.assign(new Error("m"), { code: { toString: () => "EENVELOPE" }, responseCode: 550 }), "unknown", "provider_error_unclassified"],
+    ["absurd responseCode", () => Object.assign(new Error("m"), { code: "EENVELOPE", responseCode: 1e12 }), "unknown", "provider_refusal_unverifiable"],
+    ["string responseCode", () => Object.assign(new Error("m"), { code: "EMESSAGE", responseCode: "550" }), "unknown", "provider_refusal_unverifiable"],
     ["nested cause / errors", () => Object.assign(new AggregateError([new Error("private@example.test")], "sensitive@example.test"), { cause: { code: "private@example.test" } }), "unknown", "provider_error_unclassified"],
     ["throwing getter", throwingGetter, "unknown", "provider_error_unclassified"],
     ["a thrown string", () => "private@example.test", "unknown", "provider_error_unclassified"],
@@ -454,7 +455,7 @@ test("DR1-12 receipts hold exactly the allow-listed fields; tenant / business is
   assert.notEqual(all[T][B][DATE].messageId, all[T2][B][DATE].messageId);
 });
 
-test("DR1-C1 (combined flow) a business whose summary fails to build keeps the run from being reported clean", { todo: "pending the Daily builder's per-business outcome interface (review C1; Codex's BUILDER_DELIVERY_CONTRACT.md not delivered)" }, async () => {
+test("DR1-C1 (combined flow) a business whose summary fails to build keeps the run from being reported clean", { todo: "PENDING, not a pass: the route still uses buildSnapshotForAll() (a failed build disappears; HTTP 200). The builder contract exists (f4d00fcb, BUILDER_DELIVERY_CONTRACT.md) but that consumer/builder chain was rejected (AGENT_DAILY_BUILDER_VERDICT: CHANGES_REQUIRED); delivery adaptation G1-G9 awaits an approved builder" }, async () => {
   const db = seedWorld({ withSecondTenant: false }); installSmtp([SMTP.accept()]);
   const ref = db.ref; db.ref = (p, q) => { const x = ref(p, q); return p === `tenants/${T}/biz:${B2}:entries` ? { ...x, once: async () => { throw new Error("isolated build failure"); } } : x; };
   const r = await cron();

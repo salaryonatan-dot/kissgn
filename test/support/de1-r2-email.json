@@ -1,0 +1,82 @@
+{
+ "parent": "0576ced6b9d067cf4485ccefd2a06622a07b3137",
+ "pins": {
+  "lib/emailDelivery.d.ts": "950f463dad2a539ac3bc1439ce302c5a43949ee1",
+  "lib/emailDelivery.js": "13bc139644c52ff0e3140ee47197f03b52d1007b"
+ },
+ "newFiles": [],
+ "edits": {
+  "lib/emailDelivery.d.ts": [
+   {
+    "from": "export function boundedCode(code: unknown): string | null;\n",
+    "to": "export function boundedCode(code: unknown): string | null;\nexport function smtpNegativeReply(err: unknown): { code: \"EENVELOPE\" | \"EMESSAGE\" | \"EAUTH\"; command: string; responseCode: number } | null;\n"
+   },
+   {
+    "from": "  handedToProvider: boolean;\n",
+    "to": "  handedToProvider: boolean;\n  claimLost: boolean;\n  multipleHandoffs: boolean;\n"
+   }
+  ],
+  "lib/emailDelivery.js": [
+   {
+    "from": "  try {\n    await attemptStore.run(ctx, send);\n  } catch (err) {\n    if (!ctx.handedToProvider) return { outcome: \"failed\", code: providerCode(err) === \"ECONFIG\" ? \"provider_not_configured\" : \"failed_before_send\" };\n    const c = classifyTransportError(ctx.error || err);\n    return { outcome: c.outcome, code: c.code };\n  }\n  if (!ctx.info) return { outcome: \"unknown\", code: \"provider_result_missing\" };\n  const c = classifyTransportInfo(ctx.info, recipient);\n",
+    "to": "  let threw = false, thrown;\n  try { await attemptStore.run(ctx, send); } catch (err) { threw = true; thrown = err; }\n  const c = attemptOutcome(ctx, threw, thrown, recipient);\n"
+   },
+   {
+    "from": "    messageId: null, handedToProvider: false, info: null, error: null,\n    async beforeTransport() { ctx.handedToProvider = true; },\n",
+    "to": "    messageId: null, handedToProvider: false, claimLost: false, multipleHandoffs: false, info: null, error: null,\n    async beforeTransport() {\n      if (ctx.handedToProvider) { ctx.multipleHandoffs = true; const e = new Error(\"second provider hand-off in one delivery attempt\"); e.code = \"EMULTISEND\"; throw e; }\n      ctx.handedToProvider = true;\n    },\n"
+   },
+   {
+    "from": "    let outcome;\n    try {\n      await attemptStore.run(ctx, send);\n      outcome = ctx.info ? classifyTransportInfo(ctx.info, recipient) : { outcome: \"unknown\", code: \"provider_result_missing\" };\n    } catch (err) {\n      if (!ctx.handedToProvider) {\n        const isClaimLoss = safeRead(err, \"deliveryPhase\") === \"before_transport\";\n        outcome = isClaimLoss ? classifyTransportError(err)\n          : { outcome: \"failed\", retryable: true, inRunRetry: false, code: providerCode(err) === \"ECONFIG\" ? \"provider_not_configured\" : \"failed_before_send\" };\n      } else outcome = classifyTransportError(ctx.error || err);\n    }\n",
+    "to": "    let threw = false, thrown;\n    try { await attemptStore.run(ctx, send); } catch (err) { threw = true; thrown = err; }\n    const outcome = attemptOutcome(ctx, threw, thrown, recipient);\n"
+   },
+   {
+    "from": "        if (ctx.handedToProvider) { const e = new Error(\"second provider hand-off in one delivery attempt\"); e.code = \"EMULTISEND\"; throw e; }\n        const r = await transact(db, path, (cur) => (ownedIn(\"claimed\")(cur, claimId)\n          ? { next: { ...cur, state: \"sending\", sendingAt: clock(), messageIdHeader: ctx.messageId, updatedAt: clock() }, result: true }\n          : { next: undefined, result: false }));\n        if (!r.committed || r.result !== true) { const e = new Error(\"delivery claim lost before transport\"); e.deliveryPhase = \"before_transport\"; e.deliveryCode = \"claim_lost\"; throw e; }\n",
+    "to": "        if (ctx.handedToProvider) { ctx.multipleHandoffs = true; const e = new Error(\"second provider hand-off in one delivery attempt\"); e.code = \"EMULTISEND\"; throw e; }\n        let r;\n        try {\n          r = await transact(db, path, (cur) => (ownedIn(\"claimed\")(cur, claimId)\n            ? { next: { ...cur, state: \"sending\", sendingAt: clock(), messageIdHeader: ctx.messageId, updatedAt: clock() }, result: true }\n            : { next: undefined, result: false }));\n        } catch { r = null; }\n        if (!r || !r.committed || r.result !== true) { ctx.claimLost = true; throw new Error(\"delivery claim lost before transport\"); }\n"
+   },
+   {
+    "from": "      handedToProvider: false, info: null, error: null,\n",
+    "to": "      // trusted attempt state, written ONLY by this module and lib/sendEmail.js (never derived from a provider value):\n      //   handedToProvider  sendMail is invoked after this is set      claimLost        our claim refused the hand-off\n      //   multipleHandoffs  a second hand-off was refused               info / error     what the provider call settled with\n      handedToProvider: false, claimLost: false, multipleHandoffs: false, info: null, error: null,\n"
+   },
+   {
+    "from": "const ownedIn = (state) => (current, claimId) => current && typeof current === \"object\" && current.claimId === claimId && current.state === state;\n\n/**\n",
+    "to": "const ownedIn = (state) => (current, claimId) => current && typeof current === \"object\" && current.claimId === claimId && current.state === state;\n\n/**\n * R2 (E1 / E2): the outcome of one attempt from OUR attempt state first, the provider's answer second.\n *   not handed over  ⇒ failed, retryable (claim lost / configuration / render: the provider was never invoked)\n *   handed over      ⇒ a second hand-off: unknown; a provider error: classifyTransportError (unknown unless an SMTP negative\n *                      reply); a resolved result: classifyTransportInfo; nothing recorded: unknown\n * An error thrown by our own code AFTER the provider answered does not change the provider's answer.\n */\nfunction attemptOutcome(ctx, threw, thrown, recipient) {\n  if (!ctx.handedToProvider) {\n    if (!threw) return { outcome: \"failed\", retryable: true, inRunRetry: false, code: \"not_handed_to_provider\" };\n    if (ctx.claimLost) return { outcome: \"failed\", retryable: true, inRunRetry: false, code: \"claim_lost\" };\n    return { outcome: \"failed\", retryable: true, inRunRetry: false, code: providerCode(thrown) === \"ECONFIG\" ? \"provider_not_configured\" : \"failed_before_send\" };\n  }\n  if (ctx.multipleHandoffs) return { outcome: \"unknown\", code: \"multiple_provider_handoffs\" };\n  if (ctx.error !== null && ctx.error !== undefined) return classifyTransportError(ctx.error);\n  if (ctx.info !== null) return classifyTransportInfo(ctx.info, recipient);\n  return { outcome: \"unknown\", code: threw ? \"provider_error_unclassified\" : \"provider_result_missing\" };\n}\n\n/**\n"
+   },
+   {
+    "from": "  if (!isAccepted) return { outcome: \"failed\", retryable: false, inRunRetry: false, code: \"provider_rejected_recipient\", responseCode: rc };\n",
+    "to": "  if (isRejected) return { outcome: \"failed\", retryable: false, inRunRetry: false, code: \"provider_rejected_recipient\", responseCode: rc };\n  if (!isAccepted) return { outcome: \"unknown\", code: \"provider_result_indeterminate\", responseCode: rc };\n"
+   },
+   {
+    "from": " * refusal is established. \"failed\" requires the provider to have NOT listed the recipient as accepted in a well-formed result.\n",
+    "to": " * refusal is established. R2 (E2): \"failed\" requires the recipient to be LISTED in `rejected` (and not in `accepted`); a\n * well-formed result that lists it nowhere — e.g. { accepted: [], rejected: [], response: \"250 OK\" } — establishes neither\n * outcome and is UNKNOWN (`provider_result_indeterminate`).\n"
+   },
+   {
+    "from": "  if (code === \"ESOCKET\" || code === \"ECONNECTION\") return { outcome: \"unknown\", code: \"provider_connection_lost\" };\n",
+    "to": "  if (code === \"ESOCKET\" || code === \"ECONNECTION\" || code === \"EDNS\") return { outcome: \"unknown\", code: \"provider_connection_lost\" };\n  if (code === \"EENVELOPE\" || code === \"EMESSAGE\" || code === \"EAUTH\") return { outcome: \"unknown\", code: \"provider_refusal_unverifiable\" };\n"
+   },
+   {
+    "from": "  const rc = providerResponseCode(safeRead(err, \"responseCode\"));\n  const rawMsg = safeRead(err, \"message\");\n  const msg = typeof rawMsg === \"string\" ? rawMsg.slice(0, 40) : \"\";\n  const rawSyscall = safeRead(err, \"syscall\");\n  const syscall = typeof rawSyscall === \"string\" && SYSCALLS.has(rawSyscall) ? rawSyscall : \"\";\n  if (safeRead(err, \"deliveryPhase\") === \"before_transport\") {\n    const dc = safeRead(err, \"deliveryCode\");\n    return { outcome: \"failed\", retryable: true, inRunRetry: false, code: typeof dc === \"string\" && DELIVERY_CODES.has(dc) ? dc : \"not_handed_to_provider\" };\n  }\n  if (code === \"ECONFIG\") return { outcome: \"failed\", retryable: true, inRunRetry: false, code: \"provider_not_configured\" };\n  // an authentication refusal happens before MAIL FROM: definitively not sent; fixable only by configuration (no in-run retry)\n  if (code === \"EAUTH\") return { outcome: \"failed\", retryable: true, inRunRetry: false, code: \"provider_auth_failed\" };\n  if (rc !== null && rc >= 500) return { outcome: \"failed\", retryable: false, inRunRetry: false, code: \"provider_rejected_\" + rc };\n  if (rc !== null && rc >= 400) return { outcome: \"failed\", retryable: true, inRunRetry: true, code: \"provider_deferred_\" + rc };\n  if (code === \"EENVELOPE\" || code === \"EMESSAGE\") return { outcome: \"failed\", retryable: false, inRunRetry: false, code: \"provider_refused_message\" };\n  if (code === \"ETIMEDOUT\" && /^(Connection timeout|Greeting never received)/.test(msg)) return { outcome: \"failed\", retryable: true, inRunRetry: true, code: \"provider_unreachable\" };\n  if (code === \"EDNS\") return { outcome: \"failed\", retryable: true, inRunRetry: true, code: \"provider_unreachable\" };\n  if ((code === \"ESOCKET\" || code === \"ECONNECTION\") && syscall !== \"\") return { outcome: \"failed\", retryable: true, inRunRetry: true, code: \"provider_unreachable\" };\n  if (code === \"EMULTISEND\") return { outcome: \"unknown\", code: \"multiple_provider_handoffs\" };\n",
+    "to": ""
+   },
+   {
+    "from": "  // every field is read through safeRead and bounded: the classification depends only on allow-listed values (D4)\n",
+    "to": "  const reply = smtpNegativeReply(err);\n  if (reply) {\n    // an authentication refusal comes before MAIL FROM: not sent; fixable only by configuration (no in-run retry)\n    if (reply.code === \"EAUTH\") return { outcome: \"failed\", retryable: true, inRunRetry: false, code: \"provider_auth_failed\" };\n    if (reply.responseCode >= 500) return { outcome: \"failed\", retryable: false, inRunRetry: false, code: \"provider_rejected_\" + reply.responseCode };\n    return { outcome: \"failed\", retryable: true, inRunRetry: true, code: \"provider_deferred_\" + reply.responseCode };\n  }\n"
+   },
+   {
+    "from": " * Classify a transport error into a delivery outcome.\n *   { outcome: \"failed\", retryable, inRunRetry, code }  the provider definitively did NOT accept the message\n *   { outcome: \"unknown\", code }                         it may have accepted it (no answer after the data may have left)\n * nodemailer reports a socket inactivity timeout and a dropped connection as ETIMEDOUT / ESOCKET / ECONNECTION with command\n * \"CONN\" WHATEVER the protocol phase, so those are ambiguous unless the error proves the connection never existed.\n",
+    "to": " * The SMTP negative reply an adapter error relays, or null: an integer responseCode 400–599 that equals the leading reply code\n * of the error's `response` text, under one of the exact nodemailer (code, command) pairs. Every field is read through\n * safeRead and bounded (D4); a field that is absent, of the wrong type or inconsistent with the others yields null.\n */\nexport function smtpNegativeReply(err) {\n  const code = providerCode(err), command = providerCommand(err);\n  const shapes = NEGATIVE_REPLY_SHAPES[code];\n  if (!shapes || !shapes.has(command)) return null;\n  const rc = providerResponseCode(safeRead(err, \"responseCode\"));\n  if (rc === null || rc < 400) return null;\n  return responseTextCode(safeRead(err, \"response\")) === rc ? { code, command, responseCode: rc } : null;\n}\n/**\n * Classify a transport error raised AFTER sendMail was invoked (the caller has established that from its own attempt state;\n * an error before the hand-off is never classified here).\n *   { outcome: \"failed\", retryable, inRunRetry, code }  the server definitively did NOT accept it (an SMTP negative reply)\n *   { outcome: \"unknown\", code }                         anything else: it may have been accepted\n * R2 (E1): no provider-controlled property can turn a handed-over attempt into a \"not sent\" — no internal-looking marker, no\n * message text, no syscall, no transport error code without the server's reply.\n"
+   },
+   {
+    "from": "// ── provider outcome classification (nodemailer 6.x error shapes: lib/smtp-connection/index.js _formatError) ──────────────\n",
+    "to": "// ── provider outcome classification (nodemailer 6.x error shapes: lib/smtp-connection/index.js _formatError) ──────────────\n// The exact (code, command) pairs under which nodemailer relays an SMTP server reply (the reply text is `response`, its leading\n// integer `responseCode`). Any other shape carries no server reply and so no evidence that the message was not accepted.\nconst NEGATIVE_REPLY_SHAPES = Object.freeze({\n  EENVELOPE: new Set([\"MAIL FROM\", \"RCPT TO\", \"DATA\"]),\n  EMESSAGE: new Set([\"DATA\"]),\n  EAUTH: new Set([\"AUTH PLAIN\", \"AUTH LOGIN\", \"AUTH XOAUTH2\", \"AUTH CRAM-MD5\"]),\n});\n"
+   },
+   {
+    "from": "const SYSCALLS = new Set([\"connect\", \"getaddrinfo\"]);\nconst DELIVERY_CODES = new Set([\"claim_lost\", \"not_handed_to_provider\"]);\n",
+    "to": ""
+   },
+   {
+    "from": " *   string itself is never logged, returned or stored.\n",
+    "to": " *   string itself is never logged, returned or stored.\n *\n * PROVIDER OUTCOME EVIDENCE (R2, review findings E1 / E2) — what each delivery outcome requires\n *   Our own attempt state is the ONLY evidence of the send phase: `ctx.handedToProvider` is set by beforeTransport() right\n *   before lib/sendEmail.js invokes transporter.sendMail, `ctx.claimLost` when our claim transaction refused the hand-off.\n *   Nothing the provider returns or throws can move an attempt back to \"not handed over\" (an error property such as\n *   `deliveryPhase`, a message text such as \"Connection timeout\", a syscall or an error code is never phase evidence).\n *     failed (retryable, not handed over)  sendMail was never invoked: our render / claim / configuration step failed first\n *     failed (provider refusal)            sendMail was invoked and the adapter relayed an SMTP NEGATIVE REPLY in the exact\n *                                          nodemailer 6.x shape (lib/smtp-connection _formatError): code + command among\n *                                          EENVELOPE/{MAIL FROM, RCPT TO, DATA}, EMESSAGE/DATA, EAUTH/{AUTH …}, and an\n *                                          integer responseCode 400–599 EQUAL to the leading code of the reply text\n *                                          `response`. 5xx ⇒ final; 4xx ⇒ retryable (a deferral). An SMTP negative reply\n *                                          means the server did not take responsibility for the message (RFC 5321).\n *     failed (recipient rejected)          a resolved result lists the recipient in `rejected` and not in `accepted`\n *     accepted                             a resolved result lists the recipient in `accepted`, not in `rejected`, and its\n *                                          `response` (when present) carries a 2xx reply code\n *     unknown                              everything else once sendMail was invoked: connection loss, timeouts (whatever\n *                                          their text), DNS / socket codes, local adapter errors without a server reply,\n *                                          our deadline, a second hand-off, a reply-shaped error whose fields disagree, a\n *                                          result that lists the recipient nowhere, both ways, or cannot be read\n *   An unknown outcome is terminal for automation: it is never retried in the run, never re-claimed by a later invocation,\n *   and it keeps the run from being reported clean.\n"
+   }
+  ]
+ }
+}
