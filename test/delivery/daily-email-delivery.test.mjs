@@ -17,7 +17,7 @@
 //   DE-12  tenant / business isolation of recipients and receipts (same business id in two tenants)
 //   DE-13  business-date boundary (Asia/Jerusalem): one message per business date; the scheduled 04:05 UTC run
 //   DE-14  route authentication unchanged: no side effect without authorization
-//   DE-15  manual owner send: classified outcome, not de-duplicated against the schedule
+//   DE-15  manual owner send: classified outcome, not de-duplicated against the schedule; the response names no recipient (R1)
 //   DE-16  no address, credential or provider response text in responses, logs or receipts
 //   DE-17  partial failure: one business refused, the others delivered and recorded
 import { test } from "node:test";
@@ -47,6 +47,7 @@ test("DE-01 success: one message per business to its own tenant's owner; receipt
     assert.equal(r.recipientHash, sha(t === T ? "owner-a@example.test" : "owner-b@example.test"));
     assert.match(r.messageId, /^<daily_snapshot\.1\.[0-9a-f-]{36}@delivery\.marjin\.app>$/);
     assert.equal(r.messageId, smtp.calls.find((c) => c.messageIdHeader === r.messageId).messageIdHeader, "the receipt names the exact message handed over");
+    assert.equal(r.providerIdEcho, "match", "R1: only a bounded echo class of the provider-reported id is stored");
     assert.equal(r.leaseUntil, undefined, "a terminal receipt holds no lease");
     assert.deepEqual(r.history.map((h) => h.state), ["accepted"]);
   }
@@ -240,7 +241,10 @@ test("DE-15 the manual owner send: classified outcome, no false success, not de-
   seedWorld(); let smtp = installSmtp([SMTP.accept()]);
   await cron();
   const m1 = await at(AT, () => runManual(route)), m2 = await at(AT, () => runManual(route));
-  assert.equal(m1.statusCode, 200); assert.equal(m1.body.status, "success"); assert.equal(m1.body.emailSentTo, "owner-a@example.test");
+  assert.equal(m1.statusCode, 200); assert.equal(m1.body.status, "success");
+  // R1 (D2): the response names only the selection policy — no address, no hash
+  assert.deepEqual(m1.body.delivery, { outcome: "accepted", recipient: "owner" }); assert.equal("emailSentTo" in m1.body, false);
+  assert.ok(!/@|rcpt:|[0-9a-f]{12}/.test(JSON.stringify(m1.body.delivery)), JSON.stringify(m1.body));
   assert.equal(m2.statusCode, 200); assert.equal(smtp.calls.length, 5, "3 scheduled + 2 explicit owner requests");
   assert.match(smtp.calls[3].messageIdHeader, /^<manual\.[0-9a-f-]{36}@delivery\.marjin\.app>$/);
   assert.equal(receipt(T, B).attempt, 1, "the schedule receipt is untouched by manual sends");

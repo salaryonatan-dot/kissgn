@@ -10,7 +10,7 @@ import { compileServer, makeDb, installDb, offlineFetch } from "../support/serve
 import { seedRaw, env, entry, uid, configWithGlobal, fixedItems, T, B, nowMsFor, recordingDb, stableJson, badValues, entriesKey } from "../support/b1-fixtures.mjs";
 import { INVARIANTS, INV_NOW_MS, completeSeptember, fullDay, GLOBAL_3000, FIXED_3100, MONTH_LENGTHS, monthDates } from "../support/financial-invariants.mjs";
 import { gitIn } from "../support/git-context.mjs";
-import { isDE1Tree, DE1_PINS } from "../support/de1-daily-email.mjs";
+import { isDE1Tree, de1EffectivePins } from "../support/de1-daily-email.mjs";
 
 offlineFetch();
 const srv = compileServer();
@@ -242,7 +242,8 @@ test("B2-T14 run.ts compatibility: the endpoint file is byte-identical (pre-B2, 
     // DE1 (daily e-mail delivery reliability, pending independent review) changes ONLY the delivery orchestration of run.ts: on a
     // DE1 tree the file is held to its literal DE1 pin, which DE1G-02 re-derives from the P0 bytes by recorded exact edits and
     // DE1G-03 proves leaves the authorization section byte-identical to P0.
-    const want = isDE1Tree(REPO) ? DE1_PINS[RUN] : gitIn(REPO, ["rev-parse", `${P0}:${RUN}`]).stdout.trim();
+    // (On a DE1 R1 successor tree the R1 pin overlays the DE1 pin; DE1R1G-02 re-derives it from the DE1 bytes.)
+    const want = isDE1Tree(REPO) ? de1EffectivePins(REPO)[RUN] : gitIn(REPO, ["rev-parse", `${P0}:${RUN}`]).stdout.trim();
     assert.equal(gitIn(REPO, ["rev-parse", `HEAD:${RUN}`]).stdout.trim(), want, "committed run.ts = approved P0 blob (or the DE1 pin)");
     assert.equal(gitIn(REPO, ["hash-object", RUN]).stdout.trim(), want, "checked-out run.ts = approved P0 blob (or the DE1 pin)");
     const src = readFileSync(join(REPO, RUN), "utf8");

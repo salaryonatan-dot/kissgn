@@ -51,8 +51,13 @@ test("EU-02 a resolved provider result is accepted only for an accepted, not rej
   assert.equal(I({ accepted: ["Owner@Example.test"], rejected: [], response: "250 2.0.0 OK" }, "owner@example.test").outcome, "accepted");
   assert.equal(I({ accepted: [{ address: "owner@example.test" }], rejected: [] }, "owner@example.test").outcome, "accepted");
   assert.equal(I({ accepted: ["owner@example.test"], rejected: [], response: "250 ok" }, "owner@example.test").responseCode, 250);
-  for (const info of [{ accepted: [], rejected: ["owner@example.test"] }, { accepted: ["other@example.test"], rejected: [] }, {}, null, { accepted: ["owner@example.test"], rejected: ["owner@example.test"] }])
+  for (const info of [{ accepted: [], rejected: ["owner@example.test"] }, { accepted: ["other@example.test"], rejected: [] }])
     assert.deepEqual([I(info, "owner@example.test").outcome, I(info, "owner@example.test").code], ["failed", "provider_rejected_recipient"], JSON.stringify(info));
+  // R1 (D4): a result that cannot be interpreted, or contradicts itself, does not establish a refusal — the message was handed
+  // over, so it is UNKNOWN (held, never re-sent), not "failed"
+  for (const [info, code] of [[{}, "provider_result_malformed"], [null, "provider_result_malformed"], [{ accepted: "owner@example.test" }, "provider_result_malformed"],
+    [{ accepted: ["owner@example.test"], rejected: ["owner@example.test"] }, "provider_result_inconsistent"], [{ accepted: ["owner@example.test"], rejected: [], response: "550 no" }, "provider_result_inconsistent"]])
+    assert.deepEqual([I(info, "owner@example.test").outcome, I(info, "owner@example.test").code], ["unknown", code], JSON.stringify(info));
 });
 
 test("EU-03 receipt paths: only safely addressable identities and a YYYY-MM-DD business date", () => {

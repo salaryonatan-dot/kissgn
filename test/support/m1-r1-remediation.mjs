@@ -16,7 +16,8 @@ import { createHash } from "node:crypto";
 import { M1_PINS } from "./m1-integration-pin.mjs";
 import { m1PageVerdict } from "./m1-index-scope.mjs";
 // DE1 (daily e-mail delivery reliability, built on the R1 candidate): its pins overlay the M1 ⊕ R1 pins on a DE1 tree.
-import { isDE1Tree, DE1_PINS } from "./de1-daily-email.mjs";
+// DE1 R1 (its successor) overlays DE1 in turn: de1EffectivePins.
+import { isDE1Tree, de1EffectivePins } from "./de1-daily-email.mjs";
 
 const RECORD = JSON.parse(readFileSync(new URL("./m1-r1-remediation.json", import.meta.url), "utf8"));
 export const M1_R1_PARENT = RECORD.parent;
@@ -32,10 +33,10 @@ export function isM1R1Tree(repo) {
   return git(repo, ["rev-parse", "HEAD"]).stdout.trim() !== M1_R1_PARENT;
 }
 /** The pins that hold the tree under test: the M1 pins, with the R1 pins (and new files) overlaid on an R1 tree, and the DE1
- *  pins overlaid on a DE1 tree (a DE1 tree is always an R1 tree). */
+ *  pins overlaid on a DE1 tree (a DE1 tree is always an R1 tree; on a DE1 R1 tree the DE1 R1 pins overlay DE1's). */
 export function m1EffectivePins(repo) {
   if (!isM1R1Tree(repo)) return { ...M1_PINS.blobs };
-  return isDE1Tree(repo) ? { ...M1_PINS.blobs, ...M1_R1_PINS, ...DE1_PINS } : { ...M1_PINS.blobs, ...M1_R1_PINS };
+  return isDE1Tree(repo) ? { ...M1_PINS.blobs, ...M1_R1_PINS, ...de1EffectivePins(repo) } : { ...M1_PINS.blobs, ...M1_R1_PINS };
 }
 /** The pins of the R1 commit itself (M1 ⊕ R1), whatever later layer is checked out. */
 export function m1R1Pins() { return { ...M1_PINS.blobs, ...M1_R1_PINS }; }

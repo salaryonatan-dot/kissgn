@@ -1,6 +1,7 @@
 // Type declarations for the runtime module lib/sendEmail.js (nodemailer wrapper).
-// sendEmail resolves to the sent message id; sendAlertDigest returns null when
-// there are no alerts, otherwise the same { messageId } shape.
+// sendEmail resolves to the Message-ID it generated and set on the message (never a
+// provider-reported value); sendAlertDigest returns null when there are no alerts,
+// otherwise the same { messageId } shape.
 
 /** Minimal alert shape sendAlertDigest reads when rendering the digest. */
 export interface DigestAlertLike {

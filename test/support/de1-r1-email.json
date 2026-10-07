@@ -1,0 +1,223 @@
+{
+ "parent": "9baf695c8f7d8c03e47dfaa4a67c3a795a4f1073",
+ "pins": {
+  "api/daily-snapshot/run.ts": "fb407a049cfc8ee9cfea330d95e630313a71b587",
+  "lib/emailDelivery.d.ts": "d3b2d9f01aeffcaff7287b6cd955720009b4f590",
+  "lib/emailDelivery.js": "636381b32657eb173f736e17029ef81f3f9ee6d0",
+  "lib/sendEmail.d.ts": "a0ba311397cac28565833f4c96a3029e59afa69e",
+  "lib/sendEmail.js": "b89155ea35aa4d83aacb234cc32421c45063ec08"
+ },
+ "newFiles": [],
+ "edits": {
+  "api/daily-snapshot/run.ts": [
+   {
+    "from": "    console.error(`[daily-snapshot] run failed: ${String((error as any)?.name ?? \"Error\")}: ${String((error as any)?.message ?? \"\").slice(0, 200)}`);\n",
+    "to": "    // never the message, stack or properties of the error: they are untrusted and may carry personal data (D4)\n    console.error(`[daily-snapshot] run failed (${errorClass(error)})`);\n"
+   },
+   {
+    "from": "        emailSentTo: ownerEmail,\n",
+    "to": "        delivery: { outcome: \"accepted\", recipient: recipient.selection },\n"
+   },
+   {
+    "from": "      if (r.outcome !== \"accepted\") return res.status(504).json({ error: \"email_outcome_unknown\", code: r.code });\n\n",
+    "to": "      if (r.outcome !== \"accepted\") return res.status(504).json({ error: \"email_outcome_unknown\", code: r.code });\n\n      // R1 (review finding D2): the response never names the recipient — no address, no hash — only which policy selected it.\n"
+   },
+   {
+    "from": "      if (r.outcome === \"failed\") return res.status(502).json({ error: \"email_not_sent\", code: r.code });\n      if (r.outcome !== \"accepted\") return res.status(504).json({ error: \"email_outcome_unknown\", code: r.code });\n",
+    "to": "      if (r.outcome === \"failed\") return res.status(502).json({ error: \"email_not_sent\", code: boundedCode(r.code) });\n      if (r.outcome !== \"accepted\") return res.status(504).json({ error: \"email_outcome_unknown\", code: boundedCode(r.code) });\n"
+   },
+   {
+    "from": "        return recipient.code === \"no_recipient\"\n          ? res.status(404).json({ error: \"No owner email found for this tenant\" })\n          : res.status(503).json({ error: \"Owner email temporarily unavailable\", code: recipient.code });\n",
+    "to": "        if (recipient.code === \"no_recipient\") return res.status(404).json({ error: \"No owner email found for this tenant\" });\n        if (recipient.code === \"recipient_unavailable\") return res.status(503).json({ error: \"Owner email temporarily unavailable\", code: recipient.code });\n        return res.status(422).json({ error: \"Owner email record invalid\", code: recipient.code });\n"
+   },
+   {
+    "from": "        unknownCount,\n",
+    "to": "        unknownCount,\n        unrecordedCount,\n"
+   },
+   {
+    "from": "      // A run with any undelivered, ambiguous or unrecorded message is NOT reported as success to the scheduler.\n      return res.status(clean ? 200 : 500).json({\n        status: clean ? \"completed\" : \"completed_with_failures\",\n",
+    "to": "      // A run with any undelivered, ambiguous, unrecorded OR still-unresolved message is NOT reported as success to the\n      // scheduler: only a run whose every message is durably recorded as accepted (or a contract no-send) is \"completed\".\n      return res.status(complete ? 200 : broken ? 500 : 503).json({\n        status: complete ? \"completed\" : broken ? \"completed_with_failures\" : \"incomplete\",\n"
+   },
+   {
+    "from": "      const clean = failureCount === 0 && unknownCount === 0 && receiptWriteFailures === 0;\n",
+    "to": "      const broken = failureCount > 0 || unknownCount > 0 || unrecordedCount > 0 || receiptWriteFailures > 0;\n      const complete = !broken && inProgressCount === 0 && deliveredCount + skippedCount === results.length;\n"
+   },
+   {
+    "from": "      const inProgressCount = count((x) => x.outcome === \"skipped\" && x.code === \"in_progress\");\n      const unknownCount = count((x) => x.outcome === \"unknown\" || (x.outcome === \"skipped\" && x.code === \"unknown_requires_reconciliation\"));\n      const failureCount = count((x) => x.outcome === \"failed\" || (x.outcome === \"skipped\" && (x.code === \"failed_final\" || x.code === \"receipt_unreadable\" || x.code === \"claim_not_confirmed\")));\n      const skippedCount = count((x) => x.outcome === \"skipped\" && x.code === \"unknown_business_name\");\n",
+    "to": "      const inProgressCount = count((x) => x.settlement === \"pending\");\n      const unknownCount = count((x) => x.settlement === \"unknown\");\n      const failureCount = count((x) => x.settlement === \"failed\");\n      const unrecordedCount = count((x) => x.settlement === \"unrecorded\");\n      const skippedCount = count((x) => x.settlement === \"no_send\");\n      const deliveredCount = count((x) => x.settlement === \"delivered\");\n"
+   },
+   {
+    "from": "        results.push({ ...base, outcome: r.outcome, code: r.code, attempt: r.attempt, receipt: r.receipt });\n",
+    "to": "        results.push({ ...base, outcome: r.outcome, code, settlement, attempt: attemptNo, receipt: r.receipt,\n          ...(settlement === \"pending\" ? { phase: r.phase === \"sending\" ? \"sending\" : \"claimed\" } : {}), recipientSelection: recipient.selection });\n"
+   },
+   {
+    "from": "        if (r.outcome !== \"accepted\" && !(r.outcome === \"skipped\" && (r.code === \"already_accepted\" || r.code === \"in_progress\"))) {\n          console.error(`[daily-snapshot] delivery ${r.outcome} for ${snapshot.tenantId}:${snapshot.bizId}:${snapshot.date} code=${r.code} attempt=${r.attempt ?? \"-\"} receipt=${r.receipt}`);\n",
+    "to": "        const code = boundedCode(r.code);\n        const settlement = settle(r.outcome, code, r.receipt);\n        const attemptNo = Number.isInteger(r.attempt) ? r.attempt : undefined;\n        if (settlement === \"pending\") {\n          console.warn(`[daily-snapshot] delivery pending for ${snapshot.tenantId}:${snapshot.bizId}:${snapshot.date}: another invocation holds the claim (${r.phase === \"sending\" ? \"sending\" : \"claimed\"})`);\n        } else if (settlement !== \"delivered\") {\n          console.error(`[daily-snapshot] delivery ${settlement} for ${snapshot.tenantId}:${snapshot.bizId}:${snapshot.date} code=${code} attempt=${attemptNo ?? \"-\"} receipt=${r.receipt}`);\n"
+   },
+   {
+    "from": "          results.push({ ...base, outcome: \"failed\", code: recipient.code });\n",
+    "to": "          results.push({ ...base, outcome: \"failed\", code: recipient.code, settlement: \"failed\" });\n"
+   },
+   {
+    "from": "          results.push({ ...base, outcome: \"skipped\", code: \"unknown_business_name\" });\n",
+    "to": "          results.push({ ...base, outcome: \"skipped\", code: \"unknown_business_name\", settlement: settle(\"skipped\", \"unknown_business_name\") });\n"
+   },
+   {
+    "from": "      type Row = { tenantId: string; bizId: string; businessDate: string | null; outcome: string; code: string | null; attempt?: number; receipt?: string };\n",
+    "to": "      type Row = { tenantId: string; bizId: string; businessDate: string | null; outcome: string; code: string | null; settlement: Settlement;\n        attempt?: number; receipt?: string; phase?: string; recipientSelection?: RecipientSelection };\n"
+   },
+   {
+    "from": "  return { ok: false, code: \"no_recipient\" };\n",
+    "to": "  return { ok: false, code: \"no_recipient\" };\n}\n\n// Run outcome (R1, review finding D1). Every row settles into exactly one class:\n//   delivered   provider acceptance is DURABLY RECORDED: accepted with the receipt recorded, or already_accepted\n//   no_send     a no-send condition of the contract (unknown business name)\n//   pending     an unresolved active claim held by another invocation (in_progress): not delivered, not failed — yet\n//   unknown     the provider may have accepted it (unknown / unknown_requires_reconciliation): never re-sent automatically\n//   unrecorded  the provider accepted it but the receipt could not be finalized\n//   failed      confirmed not delivered, an unreadable / unconfirmed receipt, or ANY outcome not listed above (fail closed)\n// The run is \"completed\" (HTTP 200) ONLY when every row is delivered or no_send. Any failed / unknown / unrecorded row (or a\n// receipt write problem) ⇒ \"completed_with_failures\" (500); otherwise any pending row ⇒ \"incomplete\" (503). An unresolved\n// claim is never re-claimed early and never re-sent: a later invocation observes its outcome (accepted ⇒ already_accepted;\n// an invocation that died while sending ⇒ unknown after the lease).\ntype Settlement = \"delivered\" | \"no_send\" | \"pending\" | \"unknown\" | \"unrecorded\" | \"failed\";\nfunction settle(outcome: string, code: string | null, receipt?: string): Settlement {\n  if (outcome === \"accepted\") return receipt === \"recorded\" ? \"delivered\" : \"unrecorded\";\n  if (outcome === \"skipped\" && code === \"already_accepted\") return \"delivered\";\n  if (outcome === \"skipped\" && code === \"unknown_business_name\") return \"no_send\";\n  if (outcome === \"skipped\" && code === \"in_progress\") return \"pending\";\n  if (outcome === \"unknown\" || (outcome === \"skipped\" && code === \"unknown_requires_reconciliation\")) return \"unknown\";\n  return \"failed\";\n}\nconst SAFE_ERROR_NAMES = new Set([\"Error\", \"TypeError\", \"RangeError\", \"ReferenceError\", \"SyntaxError\", \"URIError\", \"EvalError\", \"AggregateError\"]);\n/** The class of an unexpected error for the log: a built-in error name, else \"OTHER\" — never its message (D4). */\nfunction errorClass(error: unknown): string {\n  let name: unknown;\n  try { name = (error as { name?: unknown } | null)?.name; } catch { name = undefined; }\n  return typeof name === \"string\" && SAFE_ERROR_NAMES.has(name) ? name : \"OTHER\";\n"
+   },
+   {
+    "from": "  const firstWithEmail = users.find((u) => u && u.email && !u.email.endsWith(\"@temp.marjin.app\"));\n  if (firstWithEmail) {\n    return { ok: true, email: firstWithEmail.email };\n",
+    "to": "  const firstWithEmail = users.find((u) => u && u.email && !u.email.endsWith(TEMP_ADDRESS_SUFFIX));\n  if (firstWithEmail && firstWithEmail.email) {\n    return pick(firstWithEmail.email, \"first_user_with_email\");\n"
+   },
+   {
+    "from": "  if (owner && owner.email && !owner.email.endsWith(\"@temp.marjin.app\")) {\n    return { ok: true, email: owner.email };\n",
+    "to": "  if (owner && owner.email && !owner.email.endsWith(TEMP_ADDRESS_SUFFIX)) {\n    return pick(owner.email, \"owner\");\n"
+   },
+   {
+    "from": "  if (!Array.isArray(users)) return { ok: false, code: \"recipient_unavailable\" };\n",
+    "to": "  const pick = (email: string, selection: RecipientSelection): RecipientResult =>\n    isSingleMailbox(email) ? { ok: true, email, selection } : { ok: false, code: \"recipient_invalid\" };\n"
+   },
+   {
+    "from": "  if (!usersData) return { ok: false, code: \"no_recipient\" };\n\n  let users: Array<{ name: string; email: string; role: string }> = [];\n\n  if (typeof usersData === \"string\") {\n    try {\n      users = JSON.parse(usersData);\n    } catch {\n      return { ok: false, code: \"recipient_unavailable\" };\n    }\n  } else if ((usersData as any)._v && typeof (usersData as any)._v === \"string\") {\n    try {\n      users = JSON.parse((usersData as any)._v);\n    } catch {\n      return { ok: false, code: \"recipient_unavailable\" };\n    }\n  } else if (Array.isArray(usersData)) {\n    users = usersData;\n",
+    "to": "  const list = decodeUserList(usersData);\n  if (list === null) return { ok: false, code: \"recipient_data_invalid\" };\n  const users: Array<UserRecord | null> = [];\n  for (const element of list) {\n    const u = readUser(element);\n    if (u === undefined) return { ok: false, code: \"recipient_data_invalid\" };\n    users.push(u);\n"
+   },
+   {
+    "from": "  } catch (error) {\n    console.error(`[daily-snapshot] recipient read failed for tenant ${tenantId}: ${(error as any)?.code ?? \"read_error\"}`);\n",
+    "to": "  } catch {\n    // the error object is untrusted (its code / message may carry anything): a fixed code only (D4)\n    console.error(`[daily-snapshot] recipient read failed for tenant ${tenantId} (recipient_unavailable)`);\n"
+   },
+   {
+    "from": "type RecipientResult = { ok: true; email: string } | { ok: false; code: \"no_recipient\" | \"recipient_unavailable\" };\n",
+    "to": "//\n// R1 (review finding D3): ABSENCE is distinguished from DAMAGE.\n//   no_recipient            the list is absent or holds no user with a usable address (the legitimate empty cases)\n//   recipient_unavailable   the list could not be read (transient)\n//   recipient_data_invalid  the list is present but not a supported representation, or one of its users is malformed\n//                           (a non-object element, or a role / email of the wrong type) — never treated as \"empty\"\n//   recipient_invalid       the user the policy SELECTS has an address that is not a single well-formed mailbox; the run\n//                           never moves on to another user (that would widen the fallback)\n// Supported representations are those of the canonical server parser (lib/bizAccess.js parseAppUsers): an array, a JSON\n// array string, or the runtime envelope {_v: \"<JSON array>\"}; a bare null element (an RTDB hole) carries no user. The\n// selection predicates themselves are unchanged; validation only turns a would-be send into a visible failure. Whether a\n// non-owner may receive the report at all is an owner decision (review C3), not changed here.\ntype RecipientCode = \"no_recipient\" | \"recipient_unavailable\" | \"recipient_data_invalid\" | \"recipient_invalid\";\ntype RecipientSelection = \"owner\" | \"first_user_with_email\";\ntype RecipientResult = { ok: true; email: string; selection: RecipientSelection } | { ok: false; code: RecipientCode };\ntype UserRecord = { role?: string; email?: string };\nconst TEMP_ADDRESS_SUFFIX = \"@temp.marjin.app\";\nconst MAILBOX = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;\n/** One plain mailbox (no display name, list, comment, whitespace or control character), at most 254 characters. */\nfunction isSingleMailbox(x: string): boolean { return x.length <= 254 && MAILBOX.test(x); }\n/** The stored list with the canonical server semantics: absent ⇒ empty; anything unsupported ⇒ malformed (never empty). */\nfunction decodeUserList(raw: unknown): unknown[] | null {\n  if (raw === null || raw === undefined) return [];\n  if (Array.isArray(raw)) return raw;\n  let json: string;\n  if (typeof raw === \"object\" && typeof (raw as { _v?: unknown })._v === \"string\") json = (raw as { _v: string })._v;\n  else if (typeof raw === \"string\") json = raw;\n  else return null;\n  let parsed: unknown;\n  try { parsed = JSON.parse(json); } catch { return null; }\n  return Array.isArray(parsed) ? parsed : null;\n}\n/** One stored user: null for a hole, undefined when malformed. */\nfunction readUser(u: unknown): UserRecord | null | undefined {\n  if (u === null || u === undefined) return null;\n  if (typeof u !== \"object\" || Array.isArray(u)) return undefined;\n  const role = (u as { role?: unknown }).role, email = (u as { email?: unknown }).email;\n  if (role !== undefined && role !== null && typeof role !== \"string\") return undefined;\n  if (email !== undefined && email !== null && typeof email !== \"string\") return undefined;\n  return { role: typeof role === \"string\" ? role : undefined, email: typeof email === \"string\" ? email : undefined };\n}\n"
+   },
+   {
+    "from": "import { deliverWithReceipt, deliverWithoutReceipt, DAILY_SNAPSHOT_KIND } from \"../../lib/emailDelivery.js\";\n",
+    "to": "import { deliverWithReceipt, deliverWithoutReceipt, boundedCode, DAILY_SNAPSHOT_KIND } from \"../../lib/emailDelivery.js\";\n"
+   }
+  ],
+  "lib/emailDelivery.d.ts": [
+   {
+    "from": "export const recipientRef: (email: string) => string;\n",
+    "to": "export const recipientRef: (email: string) => string;\nexport function safeRead(obj: unknown, key: string): unknown;\nexport function providerCode(err: unknown): string;\nexport function providerCommand(err: unknown): string;\nexport function providerResponseCode(x: unknown): number | null;\nexport function providerIdEcho(reported: unknown, ours: string): ProviderIdEcho;\nexport function boundedCode(code: unknown): string | null;\n"
+   },
+   {
+    "from": "  messageId?: string;\n  retryable?: boolean;\n",
+    "to": "  messageId?: string;\n  retryable?: boolean;\n  phase?: \"claimed\" | \"sending\";\n"
+   },
+   {
+    "from": "export type ReceiptWrite = \"recorded\" | \"write_failed\" | \"unavailable\" | \"not_written\";\n",
+    "to": "export type ReceiptWrite = \"recorded\" | \"write_failed\" | \"unavailable\" | \"not_written\";\nexport type ProviderIdEcho = \"match\" | \"different\" | \"absent\" | \"invalid\";\n"
+   }
+  ],
+  "lib/emailDelivery.js": [
+   {
+    "from": "  return c.outcome === \"accepted\" ? { outcome: \"accepted\", code: null, messageId: ctx.info.messageId || ctx.messageId } : { outcome: c.outcome, code: c.code };\n",
+    "to": "  return c.outcome === \"accepted\" ? { outcome: \"accepted\", code: null, messageId: ctx.messageId } : { outcome: c.outcome, code: c.code };\n"
+   },
+   {
+    "from": "    if (!ctx.handedToProvider) return { outcome: \"failed\", code: err && err.code === \"ECONFIG\" ? \"provider_not_configured\" : \"failed_before_send\" };\n",
+    "to": "    if (!ctx.handedToProvider) return { outcome: \"failed\", code: providerCode(err) === \"ECONFIG\" ? \"provider_not_configured\" : \"failed_before_send\" };\n"
+   },
+   {
+    "from": " * Returns { outcome: \"accepted\" | \"failed\" | \"unknown\", code, messageId? }; never throws for delivery problems.\n",
+    "to": " * Returns { outcome: \"accepted\" | \"failed\" | \"unknown\", code, messageId? } (messageId: our generated id); never throws for\n * delivery problems.\n"
+   },
+   {
+    "from": "      ? { state: \"accepted\", messageId: (ctx.info && ctx.info.messageId) || ctx.messageId, responseCode: outcome.responseCode ?? null }\n",
+    "to": "      ? { state: \"accepted\", messageId: ctx.messageId, providerIdEcho: providerIdEcho(safeRead(ctx.info, \"messageId\"), ctx.messageId), responseCode: providerResponseCode(outcome.responseCode) }\n"
+   },
+   {
+    "from": "    const now = clock();\n",
+    "to": "    const now = clock();\n    // the receipt names OUR Message-ID (the header we set on the message) and only a bounded echo classification of the\n    // provider's reported id — never the provider's string (D4)\n"
+   },
+   {
+    "from": "        const isClaimLoss = err && err.deliveryPhase === \"before_transport\";\n        outcome = { outcome: \"failed\", retryable: true, inRunRetry: false, code: isClaimLoss ? err.deliveryCode || \"not_handed_to_provider\" : (err && err.code === \"ECONFIG\" ? \"provider_not_configured\" : \"failed_before_send\") };\n",
+    "to": "        const isClaimLoss = safeRead(err, \"deliveryPhase\") === \"before_transport\";\n        outcome = isClaimLoss ? classifyTransportError(err)\n          : { outcome: \"failed\", retryable: true, inRunRetry: false, code: providerCode(err) === \"ECONFIG\" ? \"provider_not_configured\" : \"failed_before_send\" };\n"
+   },
+   {
+    "from": "      return { outcome: \"skipped\", code, receipt: claim.result && claim.result.converted ? \"recorded\" : \"not_written\" };\n",
+    "to": "      return { outcome: \"skipped\", code, receipt: claim.result && claim.result.converted ? \"recorded\" : \"not_written\",\n        // an unresolved active claim held by another invocation: \"claimed\" (not yet handed over) or \"sending\" (may be with the provider)\n        ...(code === \"in_progress\" && (claim.result.phase === \"claimed\" || claim.result.phase === \"sending\") ? { phase: claim.result.phase } : {}) };\n"
+   },
+   {
+    "from": " *   accepted | failed | unknown | skipped   and receipt is \"recorded\" | \"write_failed\" | \"unavailable\" | \"not_written\".\n",
+    "to": " *   accepted | failed | unknown | skipped   and receipt is \"recorded\" | \"write_failed\" | \"unavailable\" | \"not_written\".\n * messageId is the Message-ID this module generated for the attempt (never a provider-reported string). `phase` accompanies a\n * skipped `in_progress`: the state of the other invocation's unresolved claim (\"claimed\" | \"sending\").\n"
+   },
+   {
+    "from": " * Never throws for delivery problems: returns { outcome, code, attempt, messageId?, receipt } where outcome is\n",
+    "to": " * Never throws for delivery problems: returns { outcome, code, attempt, messageId?, receipt, phase? } where outcome is\n"
+   },
+   {
+    "from": "  if ((s === \"claimed\" || s === \"sending\") && Number(current.leaseUntil) > nowMs) return { next: undefined, result: { action: \"skip\", code: \"in_progress\" } };\n",
+    "to": "  if ((s === \"claimed\" || s === \"sending\") && Number(current.leaseUntil) > nowMs) return { next: undefined, result: { action: \"skip\", code: \"in_progress\", phase: s } };\n"
+   },
+   {
+    "from": "  const accepted = Array.isArray(info && info.accepted) ? info.accepted.map(norm) : [];\n  const rejected = Array.isArray(info && info.rejected) ? info.rejected.map(norm) : [];\n  const rc = typeof (info && info.response) === \"string\" ? Number((info.response.match(/^\\d+/) || [])[0]) || null : null;\n  if (rejected.includes(want) || !accepted.includes(want)) return { outcome: \"failed\", retryable: false, inRunRetry: false, code: \"provider_rejected_recipient\", responseCode: rc };\n",
+    "to": "  const accepted = listOf(\"accepted\", true), rejected = listOf(\"rejected\", false);\n  if (info === null || typeof info !== \"object\" || accepted === null || rejected === null || want === null)\n    return { outcome: \"unknown\", code: \"provider_result_malformed\", responseCode: rc };\n  const isAccepted = accepted.includes(want), isRejected = rejected.includes(want);\n  // contradictory answers (listed both ways, or \"accepted\" with a non-2xx reply code) do not establish either outcome\n  if ((isAccepted && isRejected) || (isAccepted && rc !== null && rc >= 300)) return { outcome: \"unknown\", code: \"provider_result_inconsistent\", responseCode: rc };\n  if (!isAccepted) return { outcome: \"failed\", retryable: false, inRunRetry: false, code: \"provider_rejected_recipient\", responseCode: rc };\n"
+   },
+   {
+    "from": "  const norm = (x) => String(x && typeof x === \"object\" && \"address\" in x ? x.address : x).trim().toLowerCase();\n",
+    "to": "  const norm = (x) => {\n    const v = x !== null && typeof x === \"object\" ? safeRead(x, \"address\") : x;\n    return typeof v === \"string\" && v.length <= MAX_ADDRESS ? v.trim().toLowerCase() : null;\n  };\n  const listOf = (k, required) => {\n    const v = safeRead(info, k);\n    if (v === undefined) return required ? null : [];\n    try {                            // a hostile list (revoked Proxy, throwing length / index getters) proves nothing\n      if (!Array.isArray(v) || v.length > MAX_LISTED) return null;\n      const out = [];\n      for (let i = 0; i < v.length; i++) {\n        const n = norm(v[i]);\n        if (n === null) return null; // an entry that cannot be read might have been this recipient: the list proves nothing\n        out.push(n);\n      }\n      return out;\n    } catch { return null; }\n  };\n  const rc = responseTextCode(safeRead(info, \"response\"));\n"
+   },
+   {
+    "from": "/** Classify a resolved sendMail result for one recipient. */\n",
+    "to": "const MAX_LISTED = 50;          // a single-recipient send lists one address; a longer list is not a well-formed result\nconst MAX_ADDRESS = 320;\n/**\n * Classify a resolved sendMail result for one recipient. The result is untrusted (D4): it is read through safeRead, its lists\n * are bounded, and a result that cannot be interpreted is UNKNOWN — the message was handed over, so neither acceptance nor\n * refusal is established. \"failed\" requires the provider to have NOT listed the recipient as accepted in a well-formed result.\n */\n"
+   },
+   {
+    "from": "  if ((code === \"ESOCKET\" || code === \"ECONNECTION\") && err && (err.syscall === \"connect\" || err.syscall === \"getaddrinfo\")) return { outcome: \"failed\", retryable: true, inRunRetry: true, code: \"provider_unreachable\" };\n",
+    "to": "  if ((code === \"ESOCKET\" || code === \"ECONNECTION\") && syscall !== \"\") return { outcome: \"failed\", retryable: true, inRunRetry: true, code: \"provider_unreachable\" };\n"
+   },
+   {
+    "from": "  const code = err && typeof err.code === \"string\" ? err.code : \"\";\n  const rc = err && Number.isInteger(err.responseCode) ? err.responseCode : null;\n  const msg = err && typeof err.message === \"string\" ? err.message : \"\";\n  if (err && err.deliveryPhase === \"before_transport\") return { outcome: \"failed\", retryable: true, inRunRetry: false, code: err.deliveryCode || \"not_handed_to_provider\" };\n",
+    "to": "  // every field is read through safeRead and bounded: the classification depends only on allow-listed values (D4)\n  const code = providerCode(err);\n  const rc = providerResponseCode(safeRead(err, \"responseCode\"));\n  const rawMsg = safeRead(err, \"message\");\n  const msg = typeof rawMsg === \"string\" ? rawMsg.slice(0, 40) : \"\";\n  const rawSyscall = safeRead(err, \"syscall\");\n  const syscall = typeof rawSyscall === \"string\" && SYSCALLS.has(rawSyscall) ? rawSyscall : \"\";\n  if (safeRead(err, \"deliveryPhase\") === \"before_transport\") {\n    const dc = safeRead(err, \"deliveryCode\");\n    return { outcome: \"failed\", retryable: true, inRunRetry: false, code: typeof dc === \"string\" && DELIVERY_CODES.has(dc) ? dc : \"not_handed_to_provider\" };\n  }\n"
+   },
+   {
+    "from": "export const recipientRef = (email) => \"rcpt:\" + recipientHash(email).slice(0, 12);\n",
+    "to": "export const recipientRef = (email) => \"rcpt:\" + recipientHash(email).slice(0, 12);\n\n// ── bounded views of untrusted provider data (R1 / D4) ───────────────────────────────────────────────────────────────────\n/** Read obj[key] without trusting obj: a non-object, a throwing getter or a Proxy trap yields undefined. */\nexport function safeRead(obj, key) {\n  if (obj === null || (typeof obj !== \"object\" && typeof obj !== \"function\")) return undefined;\n  try { return obj[key]; } catch { return undefined; }\n}\nconst PROVIDER_CODES = new Set([\"ECONFIG\", \"EAUTH\", \"ENOAUTH\", \"EOAUTH2\", \"EENVELOPE\", \"EMESSAGE\", \"ETIMEDOUT\", \"EDNS\", \"ESOCKET\",\n  \"ECONNECTION\", \"ETLS\", \"EPROTOCOL\", \"ESTREAM\", \"EMULTISEND\", \"EDEADLINE\"]);\nconst PROVIDER_COMMANDS = new Set([\"CONN\", \"API\", \"EHLO\", \"HELO\", \"LHLO\", \"STARTTLS\", \"AUTH PLAIN\", \"AUTH LOGIN\", \"AUTH XOAUTH2\",\n  \"AUTH CRAM-MD5\", \"MAIL FROM\", \"RCPT TO\", \"DATA\", \"RSET\"]);\nconst SYSCALLS = new Set([\"connect\", \"getaddrinfo\"]);\nconst DELIVERY_CODES = new Set([\"claim_lost\", \"not_handed_to_provider\"]);\n/** The error code as one of the known transport codes, \"none\" when absent, else \"OTHER\" (never the raw value). */\nexport function providerCode(err) {\n  const c = safeRead(err, \"code\");\n  if (c === undefined || c === null || c === \"\") return \"none\";\n  return typeof c === \"string\" && PROVIDER_CODES.has(c) ? c : \"OTHER\";\n}\n/** The SMTP command as one of the known commands, \"none\" when absent, else \"OTHER\". */\nexport function providerCommand(err) {\n  const c = safeRead(err, \"command\");\n  if (c === undefined || c === null || c === \"\") return \"none\";\n  return typeof c === \"string\" && PROVIDER_COMMANDS.has(c) ? c : \"OTHER\";\n}\n/** An SMTP reply code: an integer 200–599, else null (strings, floats, out-of-range and huge values are discarded). */\nexport function providerResponseCode(x) { return Number.isInteger(x) && x >= 200 && x <= 599 ? x : null; }\n/** The leading SMTP reply code of a provider response text (only its first 4 characters are examined), else null. */\nfunction responseTextCode(x) {\n  if (typeof x !== \"string\") return null;\n  const m = /^([2-5]\\d\\d)(?:[ \\-]|$)/.exec(x.slice(0, 4));\n  return m ? Number(m[1]) : null;\n}\n/** What the provider reported as the Message-ID, compared with the one WE set — never the reported string itself. */\nexport function providerIdEcho(reported, ours) {\n  if (reported === undefined || reported === null || reported === \"\") return \"absent\";\n  if (typeof reported !== \"string\" || reported.length > 998) return \"invalid\";\n  return reported === ours ? \"match\" : \"different\";\n}\nconst OUR_CODE = /^[a-z][a-z0-9_]{0,63}$/;\n/** A delivery outcome code safe for logs / responses: our own token shape, else \"invalid_code\". */\nexport function boundedCode(code) {\n  if (code === null || code === undefined) return null;\n  return typeof code === \"string\" && OUR_CODE.test(code) ? code : \"invalid_code\";\n}\n"
+   },
+   {
+    "from": "/** Short log-safe reference of a recipient. */\n",
+    "to": "/** Short reference of a recipient. Pseudonymous (dictionary-matchable), so R1 no longer writes it to logs; kept for callers. */\n"
+   },
+   {
+    "from": " *   stored — only a SHA-256 of the normalized recipient, the provider message id and SMTP status codes.\n",
+    "to": " *   stored — only a SHA-256 of the normalized recipient (pseudonymous, not anonymous), the Message-ID WE generated for the\n *   attempt, a bounded classification of what the provider echoed back, and a bounded SMTP status code.\n *\n * UNTRUSTED PROVIDER DATA (R1, review finding D4)\n *   Everything a transport returns or throws — error codes, commands, response codes, accepted / rejected lists, the\n *   Message-ID it reports — is untrusted input: it may be of any type, any size, carry personal data, or throw from a getter.\n *   It is read only through safeRead() and reduced to BOUNDED values before it reaches a decision, a log, a response or a\n *   receipt: providerCode() / providerCommand() map to fixed allow-lists (anything else is \"OTHER\"), providerResponseCode()\n *   to an integer 200–599 (else null), providerIdEcho() to match | different | absent | invalid. The provider's Message-ID\n *   string itself is never logged, returned or stored.\n"
+   }
+  ],
+  "lib/sendEmail.d.ts": [
+   {
+    "from": "// sendEmail resolves to the sent message id; sendAlertDigest returns null when\n// there are no alerts, otherwise the same { messageId } shape.\n",
+    "to": "// sendEmail resolves to the Message-ID it generated and set on the message (never a\n// provider-reported value); sendAlertDigest returns null when there are no alerts,\n// otherwise the same { messageId } shape.\n"
+   }
+  ],
+  "lib/sendEmail.js": [
+   {
+    "from": "  console.log(`[sendEmail] provider answered for ${recipientRef(to)}, id: ${info.messageId}`);\n  return { messageId: info.messageId };\n",
+    "to": "  console.log(`[sendEmail] provider answered id=${messageId} echo=${providerIdEcho(safeRead(info, \"messageId\"), messageId)}`);\n  return { messageId };\n"
+   },
+   {
+    "from": "    console.error(`[sendEmail] provider error code=${(err && err.code) || \"none\"} smtp=${(err && err.responseCode) || \"none\"} command=${(err && err.command) || \"none\"} ${recipientRef(to)}`);\n",
+    "to": "    console.error(`[sendEmail] provider error code=${providerCode(err)} smtp=${providerResponseCode(safeRead(err, \"responseCode\")) ?? \"none\"} command=${providerCommand(err)} id=${messageId}`);\n"
+   },
+   {
+    "from": "      ...(attempt ? { messageId: attempt.messageId } : {}),\n",
+    "to": "      messageId,\n"
+   },
+   {
+    "from": "  if (attempt) await attempt.beforeTransport();\n",
+    "to": "  if (attempt) await attempt.beforeTransport();\n  const messageId = attempt ? attempt.messageId : `<mail.${randomUUID()}@delivery.marjin.app>`;\n"
+   },
+   {
+    "from": " * on the attempt. Logs never contain the recipient address or provider response text.\n",
+    "to": " * on the attempt. Every message carries a Message-ID WE generate (outside an attempt: <mail.{uuid}@delivery.marjin.app>);\n * that id is what is logged and returned. The provider's own result and errors are untrusted (R1, D4): logs carry only\n * bounded, allow-listed values (code, SMTP reply code, command, id-echo class) — never the recipient (not even a hash),\n * the provider's Message-ID string, response text or error message.\n"
+   },
+   {
+    "from": "import { currentDeliveryAttempt, recipientRef } from \"./emailDelivery.js\";\n",
+    "to": "import { randomUUID } from \"node:crypto\";\nimport { currentDeliveryAttempt, providerCode, providerCommand, providerResponseCode, providerIdEcho, safeRead } from \"./emailDelivery.js\";\n"
+   }
+  ]
+ }
+}

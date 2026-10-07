@@ -10,6 +10,7 @@ export const HISTORY_KEEP: number;
 
 export type DeliveryOutcome = "accepted" | "failed" | "unknown" | "skipped";
 export type ReceiptWrite = "recorded" | "write_failed" | "unavailable" | "not_written";
+export type ProviderIdEcho = "match" | "different" | "absent" | "invalid";
 
 export interface DeliveryResult {
   outcome: DeliveryOutcome;
@@ -18,6 +19,7 @@ export interface DeliveryResult {
   receipt: ReceiptWrite;
   messageId?: string;
   retryable?: boolean;
+  phase?: "claimed" | "sending";
 }
 
 export interface TransportClassification {
@@ -43,6 +45,12 @@ export interface DeliveryAttemptContext {
 export function receiptPath(kind: string, tenantId: string, bizId: string, businessDate: string): string | null;
 export function recipientHash(email: string): string;
 export const recipientRef: (email: string) => string;
+export function safeRead(obj: unknown, key: string): unknown;
+export function providerCode(err: unknown): string;
+export function providerCommand(err: unknown): string;
+export function providerResponseCode(x: unknown): number | null;
+export function providerIdEcho(reported: unknown, ours: string): ProviderIdEcho;
+export function boundedCode(code: unknown): string | null;
 export function classifyTransportError(err: unknown): TransportClassification;
 export function classifyTransportInfo(info: unknown, to: string): TransportClassification;
 export function currentDeliveryAttempt(): DeliveryAttemptContext | undefined;
