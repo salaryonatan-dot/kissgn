@@ -93,15 +93,16 @@ test("DR2-03 (E1) the server took the message, then the connection was lost: unk
 });
 
 test("DR2-04 (E2) an indeterminate resolved result is unknown — never a definite refusal and never re-sent", async () => {
-  for (const [label, answer] of [
+  for (const [label, answer, code] of [
     ["empty lists with 250 (review shape)", (mail) => ({ messageId: mail.messageId, accepted: [], rejected: [], response: "250 OK" })],
     ["empty lists, no response", (mail) => ({ messageId: mail.messageId, accepted: [], rejected: [] })],
-    ["another address accepted", (mail) => ({ messageId: mail.messageId, accepted: ["someone-else@example.test"], rejected: [], response: "250 OK" })],
+    // R3: another ACCEPTED address contradicts the single-recipient envelope — unknown and held as before, now coded inconsistent
+    ["another address accepted", (mail) => ({ messageId: mail.messageId, accepted: ["someone-else@example.test"], rejected: [], response: "250 OK" }), "provider_result_inconsistent"],
     ["another address rejected", (mail) => ({ messageId: mail.messageId, accepted: [], rejected: ["someone-else@example.test"], response: "250 OK" })],
   ]) {
     one(); const smtp = installSmtp([async (mail) => answer(mail), async (mail) => accepted(mail)]);
     const rs = await runs(3);
-    assertUnknownHeld(rs, smtp, "provider_result_indeterminate", label);
+    assertUnknownHeld(rs, smtp, code ?? "provider_result_indeterminate", label);
     assert.ok(rs.every((r) => row(r).code !== "failed_final" && row(r).settlement !== "failed"), label + ": never a definite failure");
   }
 });
@@ -132,8 +133,9 @@ test("DR2-06 controls: acceptance, definite refusals, a 4xx deferral and an auth
   rs = await runs(3);
   assert.deepEqual(rs.map((r) => [r.statusCode, row(r).code]), [[500, "provider_rejected_550"], [500, "failed_final"], [500, "failed_final"]]);
   assert.equal(smtp.calls.length, 1); assert.deepEqual(view(receipt()), { state: "failed", code: "provider_rejected_550", attempt: 1, retryable: false });
-  // a resolved result that lists the recipient as rejected: failed, final
-  one(); smtp = installSmtp([SMTP.acceptedNone(), SMTP.accept()]);
+  // a resolved result that lists the recipient as rejected WITH a consistent 5xx reply: failed, final
+  // (R3: SMTP.acceptedNone() pairs the rejection with a 250 end-of-DATA reply — contradictory, unknown: de1-r3-remediation DR3-01)
+  one(); smtp = installSmtp([async (mail) => ({ messageId: mail.messageId, accepted: [], rejected: [mail.to], response: "550 5.1.1 no" }), SMTP.accept()]);
   rs = await runs(2);
   assert.deepEqual(rs.map((r) => [r.statusCode, row(r).code]), [[500, "provider_rejected_recipient"], [500, "failed_final"]]);
   assert.equal(smtp.calls.length, 1);

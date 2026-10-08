@@ -15,6 +15,8 @@ import { readFileSync } from "node:fs";
 import { isDE1R1Tree, DE1R1_PINS } from "./de1-r1-email.mjs";
 // DE1 R2 (the successor answering the R1 review, built on the R1 commit): its pins overlay the R1 pins on an R2 tree.
 import { isDE1R2Tree, DE1R2_PINS } from "./de1-r2-email.mjs";
+// DE1 R3 (the successor answering the R2 review, built on the R2 commit): its pin overlays the R2 pins on an R3 tree.
+import { isDE1R3Tree, DE1R3_PINS } from "./de1-r3-email.mjs";
 
 const RECORD = JSON.parse(readFileSync(new URL("./de1-daily-email.json", import.meta.url), "utf8"));
 export const DE1_PARENT = RECORD.parent;
@@ -49,7 +51,10 @@ export function deriveDE1(repo, file, edits = DE1_EDITS) { return applyDE1Edits(
  *  successor's overlaid on an R2 tree (an R2 tree is always an R1 tree). */
 export function de1EffectivePins(repo) {
   if (!isDE1R1Tree(repo)) return { ...DE1_PINS };
+  if (isDE1R3Tree(repo)) return { ...DE1_PINS, ...DE1R1_PINS, ...DE1R2_PINS, ...DE1R3_PINS };
   return isDE1R2Tree(repo) ? { ...DE1_PINS, ...DE1R1_PINS, ...DE1R2_PINS } : { ...DE1_PINS, ...DE1R1_PINS };
 }
+/** The pins of the R2 commit itself (DE1 ⊕ R1 ⊕ R2), whatever later layer is checked out. */
+export function de1R2Pins() { return { ...DE1_PINS, ...DE1R1_PINS, ...DE1R2_PINS }; }
 /** The pins of the R1 commit itself (DE1 ⊕ R1), whatever later layer is checked out. */
 export function de1R1Pins() { return { ...DE1_PINS, ...DE1R1_PINS }; }

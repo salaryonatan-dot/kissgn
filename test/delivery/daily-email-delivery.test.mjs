@@ -190,12 +190,15 @@ test("DE-10 an invocation that died after claiming but before the provider: the 
   assert.equal(receipt(T, B).history[0].state, "abandoned_before_send");
 });
 
-test("DE-11 the provider answered without accepting the recipient: failed, never counted as success", async () => {
+// R3 (independent R2 review, E2 continuation): SMTP.acceptedNone() lists the recipient as rejected beside the 250 end-of-DATA
+// reply — a combination the single-recipient SMTP adapter cannot produce (test/delivery/de1-r3-provider-contract.test.mjs).
+// It establishes no refusal: unknown, held, never counted as success (was: failed / provider_rejected_recipient).
+test("DE-11 the provider answered without accepting the recipient: never counted as success; a contradictory answer is unknown", async () => {
   seedWorld({ withSecondBiz: false, withSecondTenant: false }); installSmtp([SMTP.acceptedNone()]);
   const r = await cron();
   assert.equal(r.statusCode, 500); assert.equal(r.body.successCount, 0);
-  assert.deepEqual([r.body.results[0].outcome, r.body.results[0].code], ["failed", "provider_rejected_recipient"]);
-  assert.equal(receipt(T, B).state, "failed");
+  assert.deepEqual([r.body.results[0].outcome, r.body.results[0].code], ["unknown", "provider_result_inconsistent"]);
+  assert.equal(receipt(T, B).state, "unknown");
 });
 
 test("DE-12 tenant / business isolation: the same business id in two tenants has two receipts and two recipients", async () => {

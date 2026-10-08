@@ -64,11 +64,16 @@ test("EU-02 a resolved provider result is accepted only for an accepted, not rej
   assert.equal(I({ accepted: ["Owner@Example.test"], rejected: [], response: "250 2.0.0 OK" }, "owner@example.test").outcome, "accepted");
   assert.equal(I({ accepted: [{ address: "owner@example.test" }], rejected: [] }, "owner@example.test").outcome, "accepted");
   assert.equal(I({ accepted: ["owner@example.test"], rejected: [], response: "250 ok" }, "owner@example.test").responseCode, 250);
-  for (const info of [{ accepted: [], rejected: ["owner@example.test"] }, { accepted: [], rejected: ["owner@example.test"], response: "550 5.1.1 no" }, { accepted: ["other@example.test"], rejected: ["owner@example.test"] }])
-    assert.deepEqual([I(info, "owner@example.test").outcome, I(info, "owner@example.test").code], ["failed", "provider_rejected_recipient"], JSON.stringify(info));
+  // R3 (review E2 continuation): a refusal needs every field to agree — the recipient alone in `rejected`, nothing accepted, a
+  // present 4xx/5xx reply code. A listed rejection without a code is incomplete; beside another accepted address, inconsistent.
+  assert.deepEqual([I({ accepted: [], rejected: ["owner@example.test"], response: "550 5.1.1 no" }, "owner@example.test").outcome, I({ accepted: [], rejected: ["owner@example.test"], response: "550 5.1.1 no" }, "owner@example.test").code], ["failed", "provider_rejected_recipient"]);
+  for (const [info, code] of [[{ accepted: [], rejected: ["owner@example.test"] }, "provider_result_incomplete"], [{ accepted: ["other@example.test"], rejected: ["owner@example.test"] }, "provider_result_inconsistent"]])
+    assert.deepEqual([I(info, "owner@example.test").outcome, I(info, "owner@example.test").code], ["unknown", code], JSON.stringify(info));
   // R2 (review E2): a well-formed result that lists the recipient NOWHERE establishes neither acceptance nor refusal
-  for (const info of [{ accepted: [], rejected: [], response: "250 OK" }, { accepted: [], rejected: [] }, { accepted: ["other@example.test"], rejected: [] }, { accepted: [], rejected: ["other@example.test"], response: "250 OK" }])
+  for (const info of [{ accepted: [], rejected: [], response: "250 OK" }, { accepted: [], rejected: [] }, { accepted: [], rejected: ["other@example.test"], response: "250 OK" }])
     assert.deepEqual([I(info, "owner@example.test").outcome, I(info, "owner@example.test").code], ["unknown", "provider_result_indeterminate"], JSON.stringify(info));
+  // R3: another ACCEPTED address contradicts the single-recipient envelope (was: indeterminate) — still unknown, never accepted
+  assert.deepEqual([I({ accepted: ["other@example.test"], rejected: [] }, "owner@example.test").outcome, I({ accepted: ["other@example.test"], rejected: [] }, "owner@example.test").code], ["unknown", "provider_result_inconsistent"]);
   // R1 (D4): a result that cannot be interpreted, or contradicts itself, does not establish a refusal — the message was handed
   // over, so it is UNKNOWN (held, never re-sent), not "failed"
   for (const [info, code] of [[{}, "provider_result_malformed"], [null, "provider_result_malformed"], [{ accepted: "owner@example.test" }, "provider_result_malformed"],
