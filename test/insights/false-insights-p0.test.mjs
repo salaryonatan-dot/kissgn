@@ -28,6 +28,8 @@ for (const f of ["entriesReader.js", "entriesReader.d.ts"])
   copyFileSync(join(REPO, "lib", "analytics", f), join(dir, "lib", "analytics", f));
 // M1 R2: dailyBuilder resolves the business's registered record through the shared registry rule (pure ESM + .d.ts)
 for (const f of ["businessRegistry.js", "businessRegistry.d.ts"]) copyFileSync(join(REPO, "lib", f), join(dir, "lib", f));
+// M1 R4: the nightly discovery applies the shared tenant identity (lib/securityContext.js isValidId, which imports bizAccess.js)
+for (const f of ["securityContext.js", "securityContext.d.ts", "bizAccess.js"]) copyFileSync(join(REPO, "lib", f), join(dir, "lib", f));
 // Financial Core B1: dailyBuilder reads through the canonical server API (src/finance-server),
 // which composes the pure core (finance/metrics/policy) and the revenue forecast.
 for (const d of ["finance", "metrics", "policy", "forecast", "finance-server"])

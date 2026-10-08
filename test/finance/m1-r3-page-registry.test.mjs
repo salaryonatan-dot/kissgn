@@ -110,7 +110,8 @@ test("PR3-04 registrySetupWrite: the record is added only over the registry the 
     [env([]), [], ok([N])],
     [env([A]), [A], ok([A, N])],
     [env([null, A]), [A], ok([A, N])],
-    [env([A, { ...N, name: "old" }]), [A, { ...N, name: "old" }], ok([A, N])],
+    // M1 R4 (review S1): creation is ADD-ONLY — an id already stored is refused, never replaced (R3 expected the replacement)
+    [env([A, { ...N, name: "old" }]), [A, { ...N, name: "old" }], { ok: false, reason: "registry_id_collision" }],
     [env([null]), [], { ok: false, reason: "registry_no_business" }],
     [env([{ name: "unknown" }]), [], { ok: false, reason: "registry_no_business" }],
     [[A], [A], { ok: false, reason: "registry_shape" }],
@@ -155,12 +156,15 @@ function completeSetupOf(html, { stored, businesses }) {
     setFor: async (tenantId, key, value) => { writes.push({ op: "setFor", key, value }); },
     getUid: () => "u1",
   };
-  const window = { storage, MarjinC1: seam, setTenantId: () => {}, _currentTenantId: "tenantA", _rtdbSet: async (p) => { writes.push({ op: "rtdbSet", key: p }); }, _auth: null };
+  // M1 R4 (review S2): setup goes on only after the bootstrap answer allows it; this existing tenant ("tenantA", with roles)
+  // answers 409 tenant_already_initialized exactly as api/admin.js does, and its Rules then decide the write.
+  storage.getNode = async (key) => { writes.push({ op: "getNode", key }); return clone(node); };
+  const window = { storage, MarjinC1: seam, setTenantId: () => {}, _currentTenantId: "tenantA", _rtdbSet: async (p) => { writes.push({ op: "rtdbSet", key: p }); }, _auth: { currentUser: { uid: "u1", getIdToken: async () => "t" } } };
   const set = (k) => (v) => { state[k] = typeof v === "function" ? v(state[k]) : v; };
   const ctx = {
     window, loggedInUser: { _tenantId: "tenantA", role: "super_owner" }, businesses,
     invalidateSelection: () => {}, sessionStorage: { setItem: () => {}, getItem: () => null },
-    fetch: async () => ({ ok: false, json: async () => ({}) }), setTimeout: (f) => f(), console: { log() {}, error() {}, warn() {} },
+    fetch: async () => ({ ok: false, status: 409, json: async () => ({ error: "tenant_already_initialized" }) }), setTimeout: (f) => f(), console: { log() {}, error() {}, warn() {} },
     setBusinesses: set("businesses"), setBizRegistry: set("bizRegistry"), setShowSetup: set("showSetup"), setBusinessConfig: set("config"),
     setSuppliers: set("suppliers"), setFixedList: set("fixed"), setAppUsers: set("users"), setLoggedInUser: set("loggedInUser"),
     setCurrentBizId: set("currentBizId"), setSetupDone: set("setupDone"), setShowBizSelect: set("showBizSelect"),
@@ -169,7 +173,7 @@ function completeSetupOf(html, { stored, businesses }) {
   const fn = new Function("ctx", "with (ctx) { " + html.slice(i, j) + "\n return completeSetup; }")(ctx);
   return { run: () => fn({ businessName: "New" }, [{ id: "s", name: "S" }], [{ id: "f", amount: 1 }], null), writes, state, node: () => node };
 }
-const nonRegistryWrites = (w) => w.filter((x) => x.key !== "app-businesses" && x.op !== "rtdbSet");
+const nonRegistryWrites = (w) => w.filter((x) => x.key !== "app-businesses" && x.op !== "rtdbSet" && x.op !== "getNode");
 
 test("PR3-05 the page's completeSetup never replaces a malformed, raw or changed registry; legitimate setup still writes", async () => {
   for (const [label, stored, businesses, reason] of [
@@ -207,13 +211,14 @@ test("PR3-05 the page's completeSetup never replaces a malformed, raw or changed
 
 test("PR3-06 the page source: raw-node loads, node-view decoding, the eligibility gate and the CAS setup write", () => {
   const count = (s) => HTML.split(s).length - 1;
-  assert.equal(count('window.storage.getNode("app-businesses")'), 2, "both load paths read the stored node");
+  // M1 R4: + the re-read that decides an UNKNOWN setup write outcome (registrySetupReread)
+  assert.equal(count('window.storage.getNode("app-businesses")'), 3, "both load paths and the setup's unknown-outcome re-read read the stored node");
   assert.equal(count("window.MarjinC1.businessRegistryNodeView(node)"), 2, "… and decode it through the node view");
   assert.equal(count('window.storage.get("app-businesses"'), 0, "the JSON-text read (which hid a raw array) is gone");
   assert.equal(count("window.MarjinC1.businessRegistryView(rb.value)"), 0);
   const cs = HTML.slice(HTML.indexOf(CS_START), HTML.indexOf(CS_END));
   assert.ok(!/storage\.set\("app-businesses"/.test(cs), "completeSetup has no whole-node business-list write");
-  assert.equal((cs.match(/"app-businesses"/g) || []).length, 1, "completeSetup touches the business list once …");
+  assert.equal((cs.match(/"app-businesses"/g) || []).length, 2, "completeSetup touches the business list once (+ the M1 R4 re-read of an unknown outcome) …");
   assert.ok(cs.includes('window.storage.mutateFor(tenantId, "app-businesses", (current) => {') && cs.includes("window.MarjinC1.registrySetupWrite(current, expectedBizList,"), "… through the CAS");
   assert.ok(cs.indexOf("if(!registryWrite.ok) {") < cs.indexOf("biz:${bizId}:config"), "a refusal returns before the config write");
   const unavailableGate = HTML.indexOf('(bizRegistry.state === "unavailable" || (selectableBizList.length === 0 && !window.MarjinC1.firstSetupEligible(bizRegistry.state, businesses)))');

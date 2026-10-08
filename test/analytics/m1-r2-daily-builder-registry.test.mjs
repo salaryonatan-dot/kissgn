@@ -16,7 +16,9 @@
 //   DBR2-05  not registered → 404; uniquely registered but explicitly inactive → 404 (unchanged); no write
 //   DBR2-06  registry shapes: absent node, invalid JSON, non-array JSON, a raw (non-envelope) array, an object map —
 //            503 business_registry_unreadable, no write; the runtime `{_v:"<JSON array>"}` node is the supported shape
-//   DBR2-07  malformed request ids (padded, ":"-bearing, non-string, tenant = business) → 400 before any read or write
+//   DBR2-07  malformed request ids (":"-bearing, "/"-bearing, non-string, tenant = business) → 400 before any read or write;
+//            M1 R4 (review A1): a PADDED id is no longer a malformed request (the shared Core / P1 rule admits it exactly) —
+//            it is refused by the registry (a trim collision: 503 ambiguous / unreadable) with no write
 //   DBR2-08  the registry read fails → 503 authorization_unavailable (never a definitive 404), no write
 //   DBR2-09  the operator backfill (cron-authorized POST) follows the same identity rule: ambiguous in both orders →
 //            503 and no write; registered → 200 and the doc is written; an explicitly inactive unique business stays
@@ -166,12 +168,19 @@ test("DBR2-06 registry shapes: only the runtime {_v:'<JSON array>'} node establi
 });
 
 test("DBR2-07 malformed request ids are refused (400) before any registry read or write", async () => {
-  for (const body of [{ bizId: " " + B }, { bizId: B + " " }, { tenantId: " " + T }, { bizId: "a:b" }, { bizId: "a/b" }, { bizId: 5 }, { bizId: null }, { bizId: T }]) {
+  for (const body of [{ bizId: "a:b" }, { bizId: "a/b" }, { bizId: 5 }, { bizId: null }, { bizId: T }]) {
     const db = world(env([rec()]));
     const reads = []; const ref = db.ref; db.ref = (p, q) => { reads.push(p); return ref(p, q); };
     const res = await rebuild(body);
     assert.equal(res.statusCode, 400, JSON.stringify(body) + " → " + JSON.stringify(res.body));
     assert.deepEqual([reads, db.writes], [[], []], "no read, no write");
+  }
+  // M1 R4 (review A1): padded spellings are exact requests; the registry refuses them (never trimmed into bizA / tenantA)
+  for (const [body, error] of [[{ bizId: " " + B }, "business_registry_ambiguous"], [{ bizId: B + " " }, "business_registry_ambiguous"], [{ tenantId: " " + T }, "business_registry_unreadable"]]) {
+    const db = world(env([rec()]));
+    const res = await rebuild(body);
+    assert.deepEqual([res.statusCode, res.body && res.body.error], [503, error], JSON.stringify(body) + " → " + JSON.stringify(res.body));
+    assert.deepEqual(db.writes, [], "no write");
   }
 });
 
@@ -204,10 +213,11 @@ test("DBR2-09 the operator backfill follows the same identity rule: ambiguous (b
     assert.equal(res.statusCode, 200, JSON.stringify(list) + " → " + JSON.stringify(res.body));
     assert.equal(db.read(analyticsPath(YESTERDAY)).revenue.total, 500, "the backfilled doc is written");
   }
-  for (const body of [{ bizId: " " + B }, { bizId: "a:b" }]) {
+  // M1 R4 (review A1): a ":"-bearing id is malformed (400); a padded id is an exact request the registry refuses (503 ambiguous)
+  for (const [body, status] of [[{ bizId: "a:b" }, 400], [{ bizId: " " + B }, 503]]) {
     const db = world(env([rec()]));
     const res = await backfill(body);
-    assert.equal(res.statusCode, 400, JSON.stringify(body)); assert.deepEqual(db.writes, []);
+    assert.equal(res.statusCode, status, JSON.stringify(body)); assert.deepEqual(db.writes, []);
   }
 });
 
@@ -220,7 +230,8 @@ test("DBR2-10 the scheduled run (cron GET): an AMBIGUOUS business is not built a
       db.seed(`tenants/${T}/app/business`, env(list));            // the stored list, as given (seedRaw re-seeded it)
       const res = mkRes();
       await API.default({ method: "GET", headers: { authorization: "Bearer " + SECRET }, query: {}, body: {} }, res);
-      assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+      // M1 R4 (review A2): a run with a reported failure is HTTP 500 `partial`, never 200
+      assert.deepEqual([res.statusCode, res.body.status], [500, "partial"], JSON.stringify(res.body));
       assert.deepEqual(res.body.summary.map((d) => d.bizId), ["bizC"], "only the uniquely registered business is built: " + JSON.stringify(list));
       assert.deepEqual(res.body.failures, [{ tenantId: T, bizId: B, error: "business_registry_ambiguous" }], "the ambiguous business is reported, never silently omitted");
       assert.equal(db.read(analyticsPath(YESTERDAY)), null, "no analytics doc for the ambiguous identity");

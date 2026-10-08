@@ -17,8 +17,9 @@
 //           coercion-only ids): no write; reported `business_registry_no_valid_record` — never a clean empty run
 //   NR3-04  a valid target beside unrelated nulls / malformed records: built, analytics + insights written, no failure
 //   NR3-05  the requested id duplicated, both orders: `business_registry_ambiguous`, no write (preserved from R2)
-//   NR3-06  padded / coercion-only identifiers: a padded stored id is never trimmed into another business's id — reported
-//           `business_id_not_exact`, nothing written under either spelling; a padded twin makes the exact id ambiguous
+//   NR3-06  padded / coercion-only identifiers: a padded stored id is never trimmed into another business's id — M1 R4 (review
+//           A1): it is built under ITS OWN exact id, as page / Core / P1 serve it, never under the trimmed id; a padded twin
+//           makes both spellings ambiguous (nothing written for either)
 //   NR3-07  genuine absence (no node) and the supported empty registry (`{_v:"[]"}`): no failure, no write (unchanged)
 //   NR3-08  the tenants read fails: `business_discovery_failed`, nothing built — never a clean empty run
 //   NR3-09  an indexed business of a tenant whose registry is unreadable is a reported failure, never a silent skip
@@ -72,8 +73,10 @@ async function nightly(db) {
   finally { if (prev === undefined) delete process.env.CRON_SECRET; else process.env.CRON_SECRET = prev; }
 }
 /** The run outcome for tenant T: nothing persisted under it; the control tenant built (analytics AND insights). */
+// M1 R4 (review A2): a run with any failure is HTTP 500 and `partial` (the control tenant is built) — never 200 `completed`.
 function assertRefusedTenant(db, res, failures, label) {
-  assert.equal(res.statusCode, 200, label + ": " + JSON.stringify(res.body));
+  assert.equal(res.statusCode, failures.length ? 500 : 200, label + ": " + JSON.stringify(res.body));
+  assert.equal(res.body.status, failures.length ? "partial" : "completed", label + ": run status");
   assert.deepEqual(res.body.failures ?? [], failures, label + ": failures");
   assert.equal(res.body.failureCount, failures.length, label + ": failureCount");
   assert.deepEqual(res.body.summary.map((d) => [d.tenantId, d.bizId]), [[K, BK]], label + ": only the control business is built");
@@ -132,15 +135,21 @@ test("NR3-05 the requested id duplicated (both orders): ambiguous, nothing writt
 });
 
 test("NR3-06 padded / coercion-only identifiers: never trimmed or coerced into a business id", async () => {
+  // M1 R4 (review A1): the R3 expectation (a padded stored id refused as `business_id_not_exact`) disagreed with page / Core /
+  // P1, which serve the EXACT registered id " bizA". Under the one shared contract the padded id is built under ITSELF — never
+  // trimmed into "bizA" (no doc under "bizA") — and a padded twin makes both spellings ambiguous.
   {
-    const db = world(env([{ id: " " + B, name: "padded" }]), { bizIds: [B] });
+    const db = world(env([{ id: " " + B, name: "padded" }]), { bizIds: [" " + B, B] });
     const res = await nightly(db);
-    assertRefusedTenant(db, res, [{ tenantId: T, bizId: " " + B, error: "business_id_not_exact" }], "padded only");
+    assert.equal(res.statusCode, 200, JSON.stringify(res.body));
+    assert.deepEqual(res.body.summary.map((d) => [d.tenantId, d.bizId]).sort(), [[T, " " + B], [K, BK]], "padded only: built under its exact id");
+    for (const p of docPaths(T, " " + B)) assert.ok(db.read(p), "padded only: written " + p);
+    for (const p of docPaths(T, B)) assert.equal(db.read(p), null, "padded only: never trimmed into " + p);
   }
   {
-    const db = world(env([rec(), { id: B + " ", name: "padded twin" }]));
+    const db = world(env([rec(), { id: B + " ", name: "padded twin" }]), { bizIds: [B, B + " "] });
     const res = await nightly(db);
-    assertRefusedTenant(db, res, [{ tenantId: T, bizId: B, error: "business_registry_ambiguous" }, { tenantId: T, bizId: B + " ", error: "business_id_not_exact" }], "exact + padded twin");
+    assertRefusedTenant(db, res, [{ tenantId: T, bizId: B, error: "business_registry_ambiguous" }, { tenantId: T, bizId: B + " ", error: "business_registry_ambiguous" }], "exact + padded twin");
   }
   {
     const db = world(env([{ id: 5, name: "n" }, { id: "5", name: "s" }]), { bizIds: ["5"] });
@@ -162,10 +171,11 @@ test("NR3-08 the tenants read fails: a reported discovery failure, nothing built
   const db = world(env([rec()]), { index: { [`${T}:${B}`]: true } });
   const failing = { ...db, ref: (p) => (p === "tenants" ? { once: async () => { throw new Error("PERMISSION_DENIED private@example.test"); } } : db.ref(p)) };
   const res = await nightly(failing);
-  assert.equal(res.statusCode, 200);
+  assert.equal(res.statusCode, 500, "M1 R4 (review A2): a failed discovery is HTTP 500");
+  assert.equal(res.body.status, "failed", "nothing built and a failure: `failed`, never `completed`");
   assert.deepEqual(res.body.failures, [{ tenantId: null, bizId: null, error: "business_discovery_failed" }]);
   assert.equal(res.body.successCount, 0);
-  assert.deepEqual(db.writes, [], "nothing is written");
+  assert.deepEqual(db.writes.filter((w) => !w.path.startsWith("analytics_runs/")), [], "nothing but the run record is written");
 });
 
 test("NR3-09 an indexed business of an unreadable-registry tenant is reported, never silently skipped", async () => {

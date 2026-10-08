@@ -44,6 +44,9 @@ import { isM1R2Tree, M1_R2_PINS, M1_R2_NEW_FILES, M1_R2_PARENT } from "../suppor
 // M1 R3 (successor of the rejected R2 candidate): the page and the analytics builder carry R3 pins (via m1EffectivePins and the
 // effective server-reader table); neither can fall back to the rejected R2 bytes.
 import { isM1R3Tree, M1_R3_PARENT } from "../support/m1-r3-remediation.mjs";
+// M1 R4 (successor of the rejected R3 candidate): the page, the analytics endpoint and builder, and the admin API carry R4 pins;
+// none can fall back to the rejected R3 bytes.
+import { isM1R4Tree, M1_R4_PARENT, M1_R4_PINS } from "../support/m1-r4-remediation.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -198,6 +201,8 @@ function assertB2Scope(root) {
     const M1_FILES = m1 ? Object.keys(M1_EFFECTIVE).filter((f) => f !== "index.html") : [];
     const M1_R1_ADDED = m1 && isM1R1Tree(root) ? M1_R1_NEW_FILES : [];
     const r2m = m1 && isM1R2Tree(root);
+    // M1 R4: the P0 route api/analytics/daily-builder.ts changes again (review A1 / A2) and is held to its literal R4 pin
+    const r4m = m1 && isM1R4Tree(root);
     const M1_R2_ADDED = r2m ? M1_R2_NEW_FILES.filter((f) => PROTECTED.test(f)) : [];
     const vd50Runtime = ["src/metrics/report.ts", "fincore/v1/metrics/report.js", "fincore/v1/MANIFEST.json"];
     const f1Runtime = ["database.rules.json", "fincore/v1/MANIFEST.json", "fincore/v1/browser/marjinFinanceGlobal.js", "fincore/v1/finance/costHistory.js", "fincore/v1/metrics/report.js", "fincore/v1/policy/productFinance.js", "lib/finance/costHistoryWriter.js", "src/browser/marjinFinanceGlobal.ts", "src/finance-server/canonicalInputs.ts", "src/finance/costHistory.ts", "src/finance/labor.ts", "src/finance/types.ts", "src/metrics/costTimeline.ts", "src/metrics/report.ts", "src/policy/productFinance.ts", "test/support/rules-authorized-delta.mjs"];
@@ -244,7 +249,9 @@ function assertB2Scope(root) {
       ...(r4 && !m1 ? R4_NEW_FILES.map((f) => [f, blobBytes(root, R4_RUNTIME_BLOBS[f]), "R4 candidate fixed blob " + R4_RUNTIME_BLOBS[f]]) : []),
       ...(assembled ? [
         ...(c1 ? [] : [["index.html", approvedIndexMerge(root), "merge(" + CDM2R1.slice(0, 8) + ", " + HF1R1.slice(0, 8) + ")"]]),
-        ...P0_APPROVED.map((f) => (r2m && M1_R2_PINS[f]
+        ...P0_APPROVED.map((f) => (r4m && M1_R4_PINS[f]
+          ? [f, blobBytes(root, M1_R4_PINS[f]), "M1 R4 candidate fixed blob " + M1_R4_PINS[f].slice(0, 8)]
+          : r2m && M1_R2_PINS[f]
           ? [f, blobBytes(root, M1_R2_PINS[f]), "M1 R2 candidate fixed blob " + M1_R2_PINS[f].slice(0, 8)]
           : [f, blobBytes(root, P0 + ":" + f), P0.slice(0, 8) + ":" + f])),
       ] : []),
@@ -690,6 +697,13 @@ test("B2G-05-M1b M1 tree: committed substitutions of either input, page edits, r
     ...(isM1R3Tree(REPO) ? [
       ["R3: the page = the rejected R2 page (filtered-list setup + JSON-text registry read back)", put("index.html", M1_R3_PARENT + ":index.html"), PAGE],
       ["R3: the analytics builder = the rejected R2 bytes (lenient raw-array nightly discovery back)", put("src/analytics/dailyBuilder.ts", M1_R3_PARENT + ":src/analytics/dailyBuilder.ts"), PIN("src/analytics/dailyBuilder.ts")],
+    ] : []),
+    // M1 R4 overlay (only on an R4 tree): none of the four repairs can fall back to the rejected R3 bytes
+    ...(isM1R4Tree(REPO) ? [
+      ["R4: the page = the rejected R3 page (replacing setup write, ungated bootstrap)", put("index.html", M1_R4_PARENT + ":index.html"), PAGE],
+      ["R4: the analytics builder = the rejected R3 bytes (padded-id refusal, trimmed keys, unreported insights failure)", put("src/analytics/dailyBuilder.ts", M1_R4_PARENT + ":src/analytics/dailyBuilder.ts"), PIN("src/analytics/dailyBuilder.ts")],
+      ["R4: the analytics endpoint = the rejected R3 bytes (HTTP 200 completed for a failed run)", put("api/analytics/daily-builder.ts", M1_R4_PARENT + ":api/analytics/daily-builder.ts"), /api\/analytics\/daily-builder\.ts \(committed\) is not the pinned M1 integration blob|api\/analytics\/daily-builder\.ts is byte-identical to the approved/],
+      ["R4: the admin API = the rejected R3 bytes (role-only bootstrap check)", put("api/admin.js", M1_R4_PARENT + ":api/admin.js"), PIN("api/admin.js")],
     ] : []),
   ];
   for (const [label, mut, re] of cases) {

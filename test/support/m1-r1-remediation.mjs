@@ -21,6 +21,9 @@ import { isM1R2Tree, M1_R2_PINS, applyR2Edits } from "./m1-r2-remediation.mjs";
 // M1 R3 (successor of the rejected R2 candidate): its pins overlay the M1 ⊕ R1 ⊕ R2 pins on an R3 tree, and its page is the R2
 // page + exactly the recorded R3 page edits (test/support/m1-r3-remediation.mjs).
 import { isM1R3Tree, M1_R3_PINS, applyR3Edits } from "./m1-r3-remediation.mjs";
+// M1 R4 (successor of the rejected R3 candidate): its pins overlay the M1 ⊕ R1 ⊕ R2 ⊕ R3 pins on an R4 tree, and its page is
+// the R3 page + exactly the recorded R4 page edits (test/support/m1-r4-remediation.mjs).
+import { isM1R4Tree, M1_R4_PINS, applyR4Edits } from "./m1-r4-remediation.mjs";
 
 const RECORD = JSON.parse(readFileSync(new URL("./m1-r1-remediation.json", import.meta.url), "utf8"));
 export const M1_R1_PARENT = RECORD.parent;
@@ -40,8 +43,11 @@ export function isM1R1Tree(repo) {
 export function m1EffectivePins(repo) {
   if (!isM1R1Tree(repo)) return { ...M1_PINS.blobs };
   if (!isM1R2Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS };
-  return isM1R3Tree(repo) ? { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS } : { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS };
+  if (!isM1R3Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS };
+  return isM1R4Tree(repo) ? { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS } : { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS };
 }
+/** The pins of the R3 commit itself (M1 ⊕ R1 ⊕ R2 ⊕ R3), whatever later layer is checked out. */
+export function m1R3Pins() { return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS }; }
 /** The pins of the R2 commit itself (M1 ⊕ R1 ⊕ R2), whatever later layer is checked out. */
 export function m1R2Pins() { return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS }; }
 /** The pins of the R1 commit itself (M1 ⊕ R1), whatever later layer is checked out. */
@@ -86,6 +92,8 @@ export function m1EffectivePageVerdict(repo, candidateBytes, edits = M1_R1_EDITS
   if (isM1R2Tree(repo)) { const d2 = applyR2Edits("index.html", d.bytes); if (!d2.ok) return d2; want = d2.bytes; }
   // R3 tree: … + exactly the recorded R3 page edits on top of the R2 page
   if (isM1R3Tree(repo)) { const d3 = applyR3Edits("index.html", want); if (!d3.ok) return d3; want = d3.bytes; }
+  // R4 tree: … + exactly the recorded R4 page edits on top of the R3 page
+  if (isM1R4Tree(repo)) { const d4 = applyR4Edits("index.html", want); if (!d4.ok) return d4; want = d4.bytes; }
   const B = Buffer.isBuffer(candidateBytes) ? candidateBytes : Buffer.from(String(candidateBytes), "utf8");
   if (!want.equals(B)) return { ok: false, reason: "not_the_recorded_derivation" };
   return { ok: true };

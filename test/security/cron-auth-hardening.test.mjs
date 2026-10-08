@@ -112,10 +112,14 @@ function setSecret(v) {
 
 // ── compile the three routes once ───────────────────────────────────────────
 const DB_STUBS = {
+// M1 R4: the stub also exports the run-outcome / run-record helpers the endpoint now imports (always "recorded")
   "src/analytics/dailyBuilder.js": `export async function buildAnalyticsForBiz(t,b,d){ globalThis.__H.calls.push("buildAnalyticsForBiz"); return {meta:{builtAt:1}}; }
 export async function buildAnalyticsForAll(d){ globalThis.__H.calls.push("buildAnalyticsForAll"); return {docs:[],failures:[]}; }
 export async function saveAnalyticsDoc(x){ globalThis.__H.calls.push("saveAnalyticsDoc"); }
 export async function buildAndSaveInsights(t,b,d,x){ globalThis.__H.calls.push("buildAndSaveInsights"); }
+export async function recordAnalyticsRunStart(){ return { ok: true, invocation: 1 }; }
+export async function recordAnalyticsRunEnd(){ return true; }
+export function analyticsRunOutcome(s,f){ return f === 0 ? "completed" : s > 0 ? "partial" : "failed"; }
 export function yesterdayInIsrael(){ return "2026-07-18"; }`,
   "lib/analytics/sources.js": `export async function fetchBeecommDaily(d){ globalThis.__H.calls.push("fetchBeecommDaily"); return { revenue_total:1, tickets:1, revenue_dine_in:0, revenue_delivery:0, revenue_takeaway:0, hourly:{} }; }`,
 };

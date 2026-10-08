@@ -1,0 +1,236 @@
+{
+ "parent": "acf6880cb4654bee53a5ec0e4b284b14221afc72",
+ "pins": {
+  "api/admin.js": "350fd50f59cd26e0ca2857e161e88b1b883a8fe8",
+  "api/analytics/daily-builder.ts": "44a80cd79a3d9aa1f963339952e78afbc33313e3",
+  "index.html": "a5b7c4dba5e87584a3c61659042711d24c9beea5",
+  "src/analytics/dailyBuilder.ts": "4d6f46c987315b58a78d6a5244ffae37bf7a5b5f"
+ },
+ "newFiles": [],
+ "edits": {
+  "api/admin.js": [
+   {
+    "from": "  try { await db.ref().update(updates); }\n  catch (e) { console.error(\"[bootstrap-self] write failed:\", e?.message); res.status(500).json({ error: \"bootstrap failed\" }); return; }\n",
+    "to": "  let claimed;\n  try {\n    const r = await db.ref(`tenants/${tenantId}`).transaction((cur) => (cur === null || cur === undefined ? claim : undefined));\n    claimed = !!r && r.committed === true;\n  } catch (e) {\n    // unknown outcome: nothing is assumed; a retry by the same user resumes its own claim (above) or claims the absent tenant\n    console.error(\"[bootstrap-self] claim failed:\", e?.message); res.status(500).json({ error: \"bootstrap failed\" }); return;\n  }\n  if (!claimed) { res.status(409).json({ error: \"tenant_has_data\" }); return; }\n  try { await db.ref().update({ [`user_tenants/${uid}`]: tenantId }); }\n  catch (e) { console.error(\"[bootstrap-self] mapping write failed:\", e?.message); res.status(500).json({ error: \"bootstrap failed\" }); return; }\n"
+   },
+   {
+    "from": "  const uid = claims.uid;\n  const updates = {};\n  updates[`tenants/${tenantId}/roles/${uid}`]   = \"super_owner\";\n  updates[`tenants/${tenantId}/members/${uid}`] = true;\n  updates[`user_tenants/${uid}`] = tenantId;\n  // Seed the owner guard: the bootstrapping super_owner is an owner-level principal.\n  updates[`tenants/${tenantId}/access_meta/owner_guard`] = {\n    version: 1, ownerUids: { [uid]: true }, updatedAt: now, lastOpId: null, ops: {}, pending: null,\n",
+    "to": "  const claim = {\n    roles: { [uid]: \"super_owner\" },\n    members: { [uid]: true },\n    // Seed the owner guard: the bootstrapping super_owner is an owner-level principal.\n    access_meta: { owner_guard: { version: 1, ownerUids: { [uid]: true }, updatedAt: now, lastOpId: null, ops: {}, pending: null } },\n"
+   },
+   {
+    "from": "    res.status(503).json({ error: \"bootstrap check failed\" }); return;\n  }\n\n",
+    "to": "    res.status(503).json({ error: \"bootstrap check failed\" }); return;\n  }\n\n  if (roles) {\n    // M1 R4: the caller's OWN interrupted claim is resumed — it is the tenant's ONLY role holder, as super_owner, and has no\n    // user mapping yet (the claim committed but its acknowledgement or the mapping write was lost). Only the caller's own\n    // mapping / membership is written; it grants nothing the caller does not already hold. Anything else — another role\n    // holder, or an established owner who already has a mapping — is an initialized tenant (409, unchanged).\n    const keys = roles && typeof roles === \"object\" ? Object.keys(roles) : [];\n    let unmapped = false;\n    if (keys.length === 1 && keys[0] === uid && roles[uid] === \"super_owner\") {\n      try { unmapped = !(await db.ref(`user_tenants/${uid}`).once(\"value\")).exists(); }\n      catch (e) { console.error(\"[bootstrap-self] mapping check failed:\", e?.message); res.status(503).json({ error: \"bootstrap check failed\" }); return; }\n    }\n    if (unmapped) {\n      try { await db.ref().update({ [`tenants/${tenantId}/members/${uid}`]: true, [`user_tenants/${uid}`]: tenantId }); }\n      catch (e) { console.error(\"[bootstrap-self] resume write failed:\", e?.message); res.status(500).json({ error: \"bootstrap failed\" }); return; }\n      res.status(200).json({ ok: true, tenantId, role: \"super_owner\", resumed: true }); return;\n    }\n    res.status(409).json({ error: \"tenant_already_initialized\" }); return; // cannot claim an initialized tenant\n  }\n\n  // M1 R4 (review S2): \"uninitialized\" means the tenant holds NOTHING — not merely \"no roles\". A tenant with a business\n  // registry (valid or not), entries, users or any other data but no roles is never claimable by an arbitrary authenticated\n  // user. The claim is ONE transaction over the whole tenant node that commits only while the node is absent, so it is\n  // also atomic against a concurrent claim / creation (two callers: exactly one wins, the other gets 409, no mixed roles).\n"
+   },
+   {
+    "from": "    if (rolesSnap.exists() && rolesSnap.hasChildren()) {\n      res.status(409).json({ error: \"tenant_already_initialized\" }); return; // cannot claim an initialized tenant\n    }\n",
+    "to": "    roles = rolesSnap.exists() && rolesSnap.hasChildren() ? rolesSnap.val() : null;\n"
+   },
+   {
+    "from": "  }\n  const db = getAdminDb();\n",
+    "to": "  }\n  const db = getAdminDb();\n  const uid = claims.uid;\n  let roles;\n"
+   },
+   {
+    "from": "//   Only permitted on an UNINITIALIZED tenant (no existing roles) — equivalent to\n//   the old `!data.exists()` bootstrap rule, but enforced server-side and no\n//   weaker. Also seeds the owner guard so the first principal is authoritative.\n",
+    "to": "//   Only permitted on an UNINITIALIZED tenant — M1 R4: an ABSENT tenant node (no\n//   roles AND no data), claimed atomically; equivalent to the old `!data.exists()`\n//   bootstrap rule, enforced server-side and no weaker. Also seeds the owner guard\n//   so the first principal is authoritative. The caller's own earlier claim resumes.\n"
+   },
+   {
+    "from": "      inviteLink, emailSent\n    });\n\n  } catch(e) {\n",
+    "to": "      inviteLink, emailSent\n    });\n\n  } catch(e) {\n    await releaseReservation();   // M1 R4: a no-op unless the node is still exactly this request's reservation\n"
+   },
+   {
+    "from": "    updates[`tenants/${tenantId}/meta/createdAt`]  = now;\n",
+    "to": "    updates[`tenants/${tenantId}/meta/createdAt`]  = now;\n    updates[`tenants/${tenantId}/meta/provisioning`] = null;\n"
+   },
+   {
+    "from": "      firebaseUid = userRecord.uid;\n    } catch(e) {\n",
+    "to": "      firebaseUid = userRecord.uid;\n    } catch(e) {\n      await releaseReservation();\n"
+   },
+   {
+    "from": "      res.status(409).json({ error: \"שם המשתמש כבר תפוס — יש לבחור שם משתמש אחר\" });\n",
+    "to": "      res.status(409).json({ error: \"שם המשתמש כבר תפוס — יש לבחור שם משתמש אחר\" });\n      return;\n    }\n\n    for (let attempt = 0; attempt < 5 && !tenantId; attempt++) {\n      const candidate = \"biz_\" + Date.now() + (attempt ? \"_\" + attempt : \"\");\n      const r = await db.ref(`tenants/${candidate}`).transaction((cur) => (cur === null || cur === undefined ? reservation : undefined));\n      if (r && r.committed === true) tenantId = candidate;\n    }\n    if (!tenantId) {\n      res.status(409).json({ error: \"tenant_id_unavailable\" });\n"
+   },
+   {
+    "from": "  const now      = Date.now();\n",
+    "to": "  const now      = Date.now();\n  // M1 R4 (adjacent to review S1): creating a client never writes over an EXISTING tenant. The generated id is reserved by\n  // ONE transaction that commits only while the tenant node is absent (a colliding id — e.g. another tenant created in the\n  // same millisecond, or a self-onboarded `biz_<ms>` tenant — is skipped, never replaced). The reservation holds only\n  // meta.provisioning; it is released if the client cannot be created, and cleared by the final atomic write.\n  const reservation = { meta: { createdAt: now, createdBy: claims.uid, provisioning: true } };\n  const isOurReservation = (cur) => !!cur && typeof cur === \"object\" && Object.keys(cur).length === 1 && cur.meta\n    && Object.keys(cur.meta).length === 3 && cur.meta.provisioning === true && cur.meta.createdBy === claims.uid && cur.meta.createdAt === now;\n  const releaseReservation = async () => {\n    if (!tenantId) return;\n    try { await db.ref(`tenants/${tenantId}`).transaction((cur) => (isOurReservation(cur) ? null : undefined)); }\n    catch (e) { console.error(\"[create-client] reservation release failed:\", e?.message); }\n  };\n"
+   },
+   {
+    "from": "  const tenantId = \"biz_\" + Date.now();\n",
+    "to": "  let tenantId = null;\n"
+   }
+  ],
+  "api/analytics/daily-builder.ts": [
+   {
+    "from": "      await buildAndSaveInsights(tenantId, bizId, targetDate, doc);\n",
+    "to": "      // M1 R4: its result is reported — a failed insights persistence is never a backfill \"success\" (the analytics doc stays).\n      const insightsSaved = await buildAndSaveInsights(tenantId, bizId, targetDate, doc);\n      if (insightsSaved === false) {\n        return res.status(502).json({\n          status: \"partial\",\n          error: \"insights_persist_failed\",\n          path: `tenants/${tenantId}/biz:${bizId}:analytics:daily:${targetDate}`,\n          analyticsSaved: true,\n        });\n      }\n"
+   },
+   {
+    "from": "      // M1 R2: exact ids only (never trimmed or coerced into another business's id)\n      if (!isExactId(tenantId) || !isExactId(bizId)) {\n",
+    "to": "      // M1 R2 / R4: exact ids by the shared contract (never trimmed or coerced into another business's id)\n      if (!isRequestTenantId(tenantId) || !isRequestBizId(bizId)) {\n"
+   },
+   {
+    "from": "        failures: failures.length > 0 ? failures : undefined,\n",
+    "to": "        failures: failures.length > 0 ? failures : undefined,\n        skipped,\n"
+   },
+   {
+    "from": "      return res.status(200).json({\n        status: \"completed\",\n",
+    "to": "      return res.status(outcome === \"completed\" && recorded ? 200 : 500).json({\n        status: outcome,\n        runRecord,\n        invocation: run.ok ? run.invocation : null,\n"
+   },
+   {
+    "from": "      const { docs, failures } = await buildAnalyticsForAll(date);\n",
+    "to": "      const run = await recordAnalyticsRunStart(date, Date.now());\n      const { docs, failures, skipped } = await buildAnalyticsForAll(date);\n      const outcome = analyticsRunOutcome(docs.length, failures.length);\n      const recorded = run.ok\n        ? await recordAnalyticsRunEnd(date, run.invocation, { outcome, finishedAt: Date.now(), successCount: docs.length, failures, skipped })\n        : false;\n      const runRecord = recorded ? \"recorded\" : \"write_failed\";\n      if (!recorded) console.error(`[analytics] run record for ${date} could not be written (outcome ${outcome})`);\n      if (outcome !== \"completed\") console.error(`[analytics] run ${date} ${outcome}: ${failures.length} failure(s), ${docs.length} built`);\n"
+   },
+   {
+    "from": "    // GET = cron trigger: yesterday's data for every active biz.\n",
+    "to": "    // GET = cron trigger: yesterday's data for every active biz.\n    // M1 R4 (review A2): the response states the run's ACTUAL outcome — `completed` only when discovery, every build and\n    // every analytics / insights persistence succeeded; `partial` when some business was built and something failed;\n    // `failed` when nothing was built and something failed — and it is HTTP 200 ONLY for a completed run whose durable run\n    // record (analytics_runs/daily/{date}, Admin-only) was written. Any failure, or an unrecorded run, is HTTP 500, so the\n    // scheduled invocation itself is visibly failed (Vercel cron logs the status; it does not retry — no retry policy is\n    // introduced here). Successful businesses keep their docs and stay listed in `summary`; nothing is rolled back. A\n    // repeated invocation for the same date rebuilds the same per-day docs (idempotent `set`s) and appends one bounded\n    // history entry to the same run record.\n"
+   },
+   {
+    "from": "      if (!isExactId(tenantId) || !isExactId(bizId)) {\n",
+    "to": "      if (!isRequestTenantId(tenantId) || !isRequestBizId(bizId)) {\n"
+   },
+   {
+    "from": "\n// M1 R2: a request id is EXACT. A padded id is malformed (400) — it is never trimmed into another business's id.\nfunction isExactId(value: unknown): value is string {\n  return isSafeId(value) && value === value.trim();\n",
+    "to": "function isRequestBizId(value: unknown): value is string {\n  return isRegistryBizId(value);\n"
+   },
+   {
+    "from": "function isSafeId(value: unknown): value is string {\n  return typeof value === \"string\" && /^[A-Za-z0-9_-]{1,128}$/.test(value.trim());\n",
+    "to": "// M1 R4 (review A1) — ONE request-identity contract for every analytics entrypoint (manual rebuild, operator backfill and\n// the nightly run, src/analytics/dailyBuilder.ts), the contract Core (lib/finance/costHistoryWriter.js) and P1 (api/admin.js)\n// already apply: the tenant id is the shared securityContext.isValidId, the business id is the shared\n// lib/businessRegistry.js isRegistryBizId, and both are compared EXACTLY — never trimmed, coerced or aliased. Whether the\n// business is a target is then decided by the registry (registryTargetVerdict below): a stored id that differs from the\n// request only by padding / coercion is a collision (ambiguous, 503), never the requested business. The R2 / R3 rule\n// (`[A-Za-z0-9_-]` and \"no surrounding whitespace\") refused registered businesses that page, Core, P1 and the nightly run\n// serve (\" bizA\", \"biz A\", \"biz@A\"), so it is gone.\nfunction isRequestTenantId(value: unknown): value is string {\n  return isValidId(value);\n"
+   },
+   {
+    "from": "import { requireCron } from \"../../lib/securityContext.js\";\nimport { resolveRegistryTarget } from \"../../lib/businessRegistry.js\";\n",
+    "to": "import { requireCron, isValidId } from \"../../lib/securityContext.js\";\nimport { resolveRegistryTarget, isRegistryBizId } from \"../../lib/businessRegistry.js\";\n"
+   },
+   {
+    "from": "  yesterdayInIsrael,\n",
+    "to": "  yesterdayInIsrael,\n  recordAnalyticsRunStart,\n  recordAnalyticsRunEnd,\n  analyticsRunOutcome,\n"
+   }
+  ],
+  "index.html": [
+   {
+    "from": "    } catch(e){ registryWrite = { ok: false, reason: registryWrite.ok ? \"write_failed\" : registryWrite.reason }; }\n",
+    "to": "    } catch(e){\n      if(registryWrite.ok) {\n        // M1 R4: the transaction's outcome is UNKNOWN (e.g. a lost acknowledgement after the server committed). The stored\n        // node is re-read and decides (window.MarjinC1.registrySetupReread): exactly the expected list + this record ⇒ our\n        // commit, setup continues; still exactly the expected list ⇒ not written; anything else / a failed re-read ⇒ stop.\n        const pending = registryWrite;\n        let verdict = \"unknown\";\n        try { verdict = window.MarjinC1.registrySetupReread(await window.storage.getNode(\"app-businesses\"), expectedBizList, {id:bizId, name:bizName}); }\n        catch(_) { verdict = \"unknown\"; }\n        registryWrite = verdict === \"committed\" ? pending : { ok: false, reason: verdict === \"not_committed\" ? \"not_committed\" : \"write_unknown\" };\n      } else registryWrite = { ok: false, reason: registryWrite.reason };\n    }\n"
+   },
+   {
+    "from": "        console.error(\"[setup] CRITICAL: could not bootstrap tenant \" + tenantId + \" for uid \" + firebaseUid);\n      }\n    }\n",
+    "to": "        console.error(\"[setup] CRITICAL: could not bootstrap tenant \" + tenantId + \" for uid \" + firebaseUid);\n      }\n    }\n    if(!bootstrapDecision.proceed) {\n      // nothing is written: no registry, config, supplier, fixed-cost or user record; the setup can be retried\n      console.error(\"[setup] stopped before any business write:\", bootstrapDecision.reason);\n      setBizRegistry({ state: \"unavailable\", reason: bootstrapDecision.reason });\n      setShowSetup(false);\n      return;\n    }\n"
+   },
+   {
+    "from": "        const result = await resp.json().catch(() => ({}));\n",
+    "to": "        const result = await resp.json().catch(() => ({}));\n        bootstrapDecision = window.MarjinC1.setupBootstrapProceed(resp.status, result);\n"
+   },
+   {
+    "from": "      let bootstrapOk = false;\n",
+    "to": "      let bootstrapOk = false;\n      bootstrapDecision = { proceed: false, reason: \"setup_bootstrap_failed\" };\n"
+   },
+   {
+    "from": "    // fall back to server-side /api/create-tenant which uses Admin SDK.\n",
+    "to": "    // fall back to server-side /api/create-tenant which uses Admin SDK.\n    // M1 R4 (review S2): the bootstrap answer decides whether setup may continue (window.MarjinC1.setupBootstrapProceed).\n    let bootstrapDecision = { proceed: true, owner: false };\n"
+   },
+   {
+    "from": "    const bizId    = `biz_${Date.now()}`;\n",
+    "to": "    // M1 R4 (review S1): the generated id is one no current element denotes (biz_<ms>, else biz_<ms>_<n>); the registry\n    // transaction below still refuses any collision against the server's node (add-only).\n    const bizId    = window.MarjinC1.freshBusinessId(businesses, Date.now());\n    if(!bizId) {\n      console.error(\"[setup] no free business id\");\n      setBizRegistry({ state: \"unavailable\", reason: \"registry_id_collision\" });\n      setShowSetup(false);\n      return;\n    }\n"
+   },
+   {
+    "from": "      businessRegistryNodeView: businessRegistryNodeView, firstSetupEligible: firstSetupEligible, registrySetupWrite: registrySetupWrite,\n",
+    "to": "      businessRegistryNodeView: businessRegistryNodeView, firstSetupEligible: firstSetupEligible, registrySetupWrite: registrySetupWrite,\n      registryIdTaken: registryIdTaken, freshBusinessId: freshBusinessId, registrySetupReread: registrySetupReread, setupBootstrapProceed: setupBootstrapProceed,\n"
+   },
+   {
+    "from": "      var next = view.list.filter(function (b) { return !(b !== null && typeof b === \"object\" && b.id === record.id); }).concat([record]);\n      return { ok: true, value: { _v: JSON.stringify(next) } };\n",
+    "to": "      // M1 R4 (review S1): ADD-ONLY. Creating a business never replaces or removes a stored element: an id that any stored\n      // element already denotes — exactly, or after the trim / String() coercion the server rule treats as a collision\n      // (lib/businessRegistry.js classifyRegistryTarget) — is refused. Editing an existing business is a different operation.\n      if (registryIdTaken(view.list, record.id)) return { ok: false, reason: \"registry_id_collision\" };\n      return { ok: true, value: { _v: JSON.stringify(view.list.concat([record])) } };\n    }\n    /** M1 R4 — does any stored element denote `id` (exact, or colliding after trim / String() coercion, as the server rule)? */\n    function registryIdTaken(list, id) {\n      var want = String(id).trim();\n      for (var i = 0; i < (Array.isArray(list) ? list.length : 0); i++) {\n        var e = list[i], rec = e !== null && typeof e === \"object\" && !Array.isArray(e);\n        var eid = rec ? e.id : (typeof e === \"string\" || typeof e === \"number\" || typeof e === \"boolean\") ? e : undefined;\n        if ((rec || eid !== undefined) && String(eid).trim() === want) return true;\n      }\n      return false;\n    }\n    /** M1 R4 — a generated business id that no element of `list` denotes: biz_<ms>, else biz_<ms>_<n>. null if none found. */\n    function freshBusinessId(list, nowMs) {\n      var base = \"biz_\" + String(Math.floor(Number(nowMs) || 0));\n      if (!registryIdTaken(list, base)) return base;\n      for (var n = 1; n <= 1000; n++) if (!registryIdTaken(list, base + \"_\" + n)) return base + \"_\" + n;\n      return null;\n    }\n    /**\n     * M1 R4 — after an UNKNOWN registry write outcome (the transaction threw, e.g. a lost acknowledgement), the stored node\n     * re-read from the server decides: \"committed\" only when it is exactly the expected list plus this ONE new record;\n     * \"not_committed\" when the stored node is still exactly the expected registry (nothing written); anything else is\n     * \"changed\" — never treated as our commit, never overwritten.\n     */\n    function registrySetupReread(node, expected, record) {\n      var view = businessRegistryNodeView(node);\n      if (view.state === \"unreadable\") return \"changed\";\n      if (JSON.stringify(view.list) === JSON.stringify((Array.isArray(expected) ? expected : []).concat([record]))) return \"committed\";\n      if (JSON.stringify(view.list) === JSON.stringify(Array.isArray(expected) ? expected : [])) return \"not_committed\";\n      return \"changed\";\n    }\n    /**\n     * M1 R4 (review S2) — may first-business setup go on to the registry write after the bootstrap-self answer? Only when the\n     * server made this user the tenant's owner (2xx ok — a NEW, empty tenant, or this user's own earlier claim resumed), or\n     * answered that the tenant already has roles (409 tenant_already_initialized: an existing tenant, whose Rules then decide\n     * the write). Any other answer — a tenant holding data with no roles (tenant_has_data), a failed / unknown bootstrap —\n     * stops setup BEFORE any registry / config / user write, so a refused or failed setup never leaves an owner-less tenant\n     * behind and never claims anything; the setup can simply be retried (the server resumes this user's own claim).\n     */\n    function setupBootstrapProceed(status, body) {\n      var ok = typeof status === \"number\" && status >= 200 && status < 300 && !!body && body.ok === true;\n      if (ok) return { proceed: true, owner: true };\n      if (status === 409 && body && body.error === \"tenant_already_initialized\") return { proceed: true, owner: false };\n      if (status === 409 && body && body.error === \"tenant_has_data\") return { proceed: false, reason: \"setup_tenant_has_data\" };\n      return { proceed: false, reason: \"setup_bootstrap_failed\" };\n"
+   }
+  ],
+  "src/analytics/dailyBuilder.ts": [
+   {
+    "from": "  return { docs, failures };\n",
+    "to": "  const skipped: AnalyticsRunSkipped = { inactive: inactiveSkipped, indexOnly: indexOnlySkipped, malformedEntries: malformedSkipped, legacySelf, legacySelfCount: legacySelfSkipped };\n  return { docs, failures, skipped };\n"
+   },
+   {
+    "from": "      console.error(`[analytics] biz ${tenantId}:${bizId} failed:`, err);\n",
+    "to": "      console.error(`[analytics] biz ${tenantId}:${bizId} failed:`, (err as Error)?.message ?? \"unknown\");\n"
+   },
+   {
+    "from": "      // Insight Engine v1 — isolated, never throws (see buildAndSaveInsights).\n      await buildAndSaveInsights(doc.tenantId, doc.bizId, doc.date, doc);\n      docs.push(doc);\n",
+    "to": "      // Insight Engine v1 — isolated, never throws (see buildAndSaveInsights). M1 R4: a failed insights persistence is a\n      // failure of this business (its analytics doc stays saved), never a counted success.\n      const insightsSaved = await buildAndSaveInsights(doc.tenantId, doc.bizId, doc.date, doc);\n      if (insightsSaved !== false) docs.push(doc);\n      else failures.push({ tenantId, bizId, error: \"insights_persist_failed\" });\n"
+   },
+   {
+    "from": "              ambiguousTargets.set(key, { tenantId: tenantId.trim(), bizId: id });\n",
+    "to": "              ambiguousTargets.set(key, { tenantId, bizId: id });\n"
+   },
+   {
+    "from": "            const key = `${tenantId.trim()}|${id}`;\n",
+    "to": "            const key = `${tenantId}|${id}`;\n"
+   },
+   {
+    "from": "          if (!isExactNightlyBizId(id)) {\n            reportRegistryFailure({ tenantId, bizId: id, error: \"business_id_not_exact\" });\n",
+    "to": "          if (!isNightlyBizId(id)) {\n            // not addressable by the shared rule (e.g. contains \":\" / an RTDB-forbidden character / too long): no endpoint,\n            // Core or P1 can serve it either; reported, never built\n            reportRegistryFailure({ tenantId, bizId: id, error: \"business_id_invalid\" });\n"
+   },
+   {
+    "from": "        if (node === undefined || node === null) continue;\n",
+    "to": "        if (node === undefined || node === null) continue;\n        // M1 R4: a tenant key outside the shared tenant identity is reported, never built (and never trimmed into another key)\n        if (!isNightlyTenantId(tenantId)) {\n          reportRegistryFailure({ tenantId, bizId: null, error: \"tenant_id_invalid\" });\n          continue;\n        }\n"
+   },
+   {
+    "from": "    console.error(\"[analytics] proactive_biz_index read failed:\", err);\n",
+    "to": "    console.error(\"[analytics] proactive_biz_index read failed:\", (err as Error)?.message ?? \"unknown\");\n    // M1 R4: a failed index read is an incomplete discovery (an indexed business of an unreadable tenant can no longer be\n    // reported), never a clean run. The registry scan below still decides what is built.\n    reportRegistryFailure({ tenantId: null, bizId: null, error: \"business_index_read_failed\" });\n"
+   },
+   {
+    "from": "    if (!registryFailures.some((x) => x.tenantId === f.tenantId && x.bizId === f.bizId)) registryFailures.push(f);\n",
+    "to": "    if (!registryFailures.some((x) => x.tenantId === f.tenantId && x.bizId === f.bizId && (f.tenantId !== null || x.error === f.error))) registryFailures.push(f);\n"
+   },
+   {
+    "from": "  const unreadableTenants = new Set<string>();\n",
+    "to": "  const unreadableTenants = new Set<string>();\n  // M1 R4: run-level failures (no tenant) are distinct by their code — a failed index read never hides a failed tenants read\n"
+   },
+   {
+    "from": "  let indexOnlySkipped = 0;\n",
+    "to": "  let indexOnlySkipped = 0;\n  const legacySelf: Array<{ tenantId: string; bizId: string }> = [];\n"
+   },
+   {
+    "from": "      legacySelfSkipped++;\n",
+    "to": "      legacySelfSkipped++;\n      if (legacySelf.length < ANALYTICS_RUN_FAILURES_KEEP && !legacySelf.some((x) => x.tenantId === t && x.bizId === b)) legacySelf.push({ tenantId: t, bizId: b });\n"
+   },
+   {
+    "from": "    const t = tenantId.trim();\n    const b = bizId.trim();\n",
+    "to": "    const t = tenantId;\n    const b = bizId;\n"
+   },
+   {
+    "from": "  const discovered = new Map<string, DiscoveredBusiness>();\n",
+    "to": "  const discovered = new Map<string, DiscoveredBusiness>();\n  // M1 R4: identities are EXACT — never trimmed (a trimmed tenant key would address another tenant, a trimmed business id\n  // another business). Index entries are matched to registry businesses by the exact pair only.\n"
+   },
+   {
+    "from": "): Promise<{ docs: AnalyticsDoc[]; failures: AnalyticsRunFailure[] }> {\n",
+    "to": "): Promise<{ docs: AnalyticsDoc[]; failures: AnalyticsRunFailure[]; skipped: AnalyticsRunSkipped }> {\n"
+   },
+   {
+    "from": "export type AnalyticsRunFailure = { tenantId: string | null; bizId: string | null; error: string };\n\n",
+    "to": "export type AnalyticsRunFailure = { tenantId: string | null; bizId: string | null; error: string };\n\n/**\n * M1 R4 — businesses discovered but deliberately NOT built, by an existing rule (never a failure, never silent): an explicit\n * inactive flag, an index-only entry, and the documented \"legacy self\" rule (tenantId === bizId) that this discovery and\n * the snapshot discovery apply. Counts, plus the legacy-self identities (bounded) so they stay auditable.\n */\nexport type AnalyticsRunSkipped = {\n  inactive: number;\n  indexOnly: number;\n  malformedEntries: number;\n  legacySelf: Array<{ tenantId: string; bizId: string }>;\n  legacySelfCount: number;\n};\n\n// ── M1 R4 (review A2): the run outcome and its durable, auditable record ─────────────────────────────────────────────\nexport type AnalyticsRunOutcome = \"completed\" | \"partial\" | \"failed\";\n\n/** `completed` only with no failure at all; otherwise `partial` (something built) or `failed` (nothing built). */\nexport function analyticsRunOutcome(successCount: number, failureCount: number): AnalyticsRunOutcome {\n  if (failureCount === 0) return \"completed\";\n  return successCount > 0 ? \"partial\" : \"failed\";\n}\n\nexport const ANALYTICS_RUN_HISTORY_KEEP = 10;\nexport const ANALYTICS_RUN_FAILURES_KEEP = 50;\n/** Admin-only path (database.rules.json `$other`: no client read or write). One record per business date. */\nexport const analyticsRunPath = (date: string): string => `analytics_runs/daily/${date}`;\n\n/**\n * Mark an invocation for `date` as RUNNING before anything is built (a run that dies mid-way stays visibly `running`,\n * never `completed`). Increments the date's invocation counter in one transaction. Never throws.\n */\nexport async function recordAnalyticsRunStart(\n  date: string,\n  nowMs: number\n): Promise<{ ok: true; invocation: number } | { ok: false }> {\n  try {\n    let invocation = 0;\n    const r = await getDb().ref(analyticsRunPath(date)).transaction((cur: unknown) => {\n      const prev = cur && typeof cur === \"object\" && !Array.isArray(cur) ? (cur as Record<string, unknown>) : {};\n      invocation = (Number(prev.invocations) || 0) + 1;\n      return { ...prev, date, invocations: invocation, current: { invocation, state: \"running\", startedAt: nowMs } };\n    });\n    if (!r || r.committed !== true || invocation < 1) return { ok: false };\n    return { ok: true, invocation };\n  } catch (err) {\n    console.error(\"[analytics] run record start failed:\", (err as Error)?.message ?? \"unknown\");\n    return { ok: false };\n  }\n}\n\n/**\n * Finalize invocation `invocation`: its outcome, counts and the (bounded, code-only) failure list are appended to the\n * date's bounded history, and become `current` unless a LATER invocation has started meanwhile (a concurrent run's state is\n * never overwritten). Resolves `true` only when committed. Never throws.\n */\nexport async function recordAnalyticsRunEnd(\n  date: string,\n  invocation: number,\n  r: { outcome: AnalyticsRunOutcome; finishedAt: number; successCount: number; failures: AnalyticsRunFailure[]; skipped: AnalyticsRunSkipped }\n): Promise<boolean> {\n  const entry = {\n    invocation,\n    state: r.outcome,\n    finishedAt: r.finishedAt,\n    successCount: r.successCount,\n    failureCount: r.failures.length,\n    failures: r.failures.slice(0, ANALYTICS_RUN_FAILURES_KEEP).map((f) => ({ tenantId: f.tenantId, bizId: f.bizId, error: String(f.error).slice(0, 200) })),\n    skipped: { inactive: r.skipped.inactive, indexOnly: r.skipped.indexOnly, malformedEntries: r.skipped.malformedEntries, legacySelfCount: r.skipped.legacySelfCount },\n  };\n  try {\n    const res = await getDb().ref(analyticsRunPath(date)).transaction((cur: unknown) => {\n      const prev = cur && typeof cur === \"object\" && !Array.isArray(cur) ? (cur as Record<string, any>) : { date, invocations: invocation };\n      const history = Array.isArray(prev.history) ? prev.history : prev.history && typeof prev.history === \"object\" ? Object.values(prev.history) : [];\n      const next: Record<string, unknown> = { ...prev, history: [...history, entry].slice(-ANALYTICS_RUN_HISTORY_KEEP) };\n      const current = prev.current && typeof prev.current === \"object\" ? prev.current : null;\n      if (!current || Number(current.invocation) === invocation) next.current = { ...entry, startedAt: current ? current.startedAt ?? null : null };\n      return next;\n    });\n    return !!res && res.committed === true;\n  } catch (err) {\n    console.error(\"[analytics] run record end failed:\", (err as Error)?.message ?? \"unknown\");\n    return false;\n  }\n}\n\n"
+   },
+   {
+    "from": "      (err as Error)?.message ?? \"unknown\"\n    );\n",
+    "to": "      (err as Error)?.message ?? \"unknown\"\n    );\n    return false;\n"
+   },
+   {
+    "from": "    await saveInsightsDoc(tenantId, bizId, insightsDoc);\n",
+    "to": "    await saveInsightsDoc(tenantId, bizId, insightsDoc);\n    return true;\n"
+   },
+   {
+    "from": "      return;\n",
+    "to": "      return true;\n"
+   },
+   {
+    "from": "  todayDoc: AnalyticsDoc\n): Promise<void> {\n",
+    "to": "  todayDoc: AnalyticsDoc\n): Promise<boolean> {\n"
+   },
+   {
+    "from": " * the analytics flow is never affected.\n",
+    "to": " * the analytics flow is never affected.\n * M1 R4: resolves `true` when the insights doc was persisted, `false` when building or persisting it failed — so a caller\n * can REPORT the failed persistence (the nightly run and the operator backfill) instead of stating success. Still never throws.\n"
+   },
+   {
+    "from": "// A nightly target id is EXACT: a string the shared rule can address, with no surrounding whitespace (the analytics\n// endpoint refuses padded ids with 400; discovery never trims a stored id into another business's id).\nfunction isExactNightlyBizId(id: unknown): id is string {\n  return typeof id === \"string\" && isRegistryBizId(id) && id === id.trim();\n",
+    "to": "// M1 R4 (review A1): a nightly target id is the SHARED request identity of every analytics entrypoint (manual rebuild,\n// operator backfill: api/analytics/daily-builder.ts) and of Core / P1 / the page — a string the shared rule can address\n// (lib/businessRegistry.js isRegistryBizId), compared EXACTLY. Nothing is trimmed: a stored \" bizA\" is the business\n// \" bizA\" (served exactly as Core / P1 / the page serve it), never \"bizA\"; a stored id that collides with another\n// record's id only after trimming / coercion makes BOTH ambiguous (classifyRegistryTarget), never a merged business. The\n// R3 rule (a padded stored id refused as `business_id_not_exact`) disagreed with every other consumer and is gone.\nfunction isNightlyBizId(id: unknown): id is string {\n  return isRegistryBizId(id);\n}\n// The tenant key is used exactly as stored (never trimmed: a trimmed key would read ANOTHER tenant's data); it must be the\n// shared tenant identity (lib/securityContext.js isValidId) the endpoints, Core and P1 require.\nfunction isNightlyTenantId(id: unknown): id is string {\n  return isValidId(id);\n"
+   },
+   {
+    "from": "import { classifyRegistryTarget, decodeRegistryNode, isRegistryBizId, resolveRegistryTarget } from \"../../lib/businessRegistry.js\";\n",
+    "to": "import { classifyRegistryTarget, decodeRegistryNode, isRegistryBizId, resolveRegistryTarget } from \"../../lib/businessRegistry.js\";\nimport { isValidId } from \"../../lib/securityContext.js\";\n"
+   }
+  ]
+ }
+}

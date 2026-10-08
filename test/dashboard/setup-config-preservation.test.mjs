@@ -435,7 +435,8 @@ test("10 a repeated identical edit is idempotent (byte-identical stored config)"
 test("11 create-new-business path is unchanged: completeSetup writes the wizard cfg for a fresh business id", () => {
   const at = unique("const completeSetup = async (cfg, sups, fixed, firstOwner) => {", "completeSetup");
   const body = HTML.slice(at, braceFrom(at, "completeSetup"));
-  assert.match(body, /const bizId\s+= `biz_\$\{Date\.now\(\)\}`;/, "a new business always gets a new id (nothing stored to preserve)");
+  // M1 R4 (review S1): the new id is still a fresh biz_<ms> — generated so that no stored element already denotes it
+  assert.match(body, /const bizId\s+= (`biz_\$\{Date\.now\(\)\}`|window\.MarjinC1\.freshBusinessId\(businesses, Date\.now\(\)\));/, "a new business always gets a new id (nothing stored to preserve)");
   assert.match(body, /window\.storage\.set\(`biz:\$\{bizId\}:config`, JSON\.stringify\(cfg\), true\)/);
   assert.doesNotMatch(body, /MarjinConfigMerge/, "create path does not merge (no existing config for a fresh id)");
   // and the new-business <SetupWizard> still routes to completeSetup
@@ -833,7 +834,17 @@ test("R1-27 create-new-business and first-business paths keep their behaviour an
     assert.ok(inBlock.every((e) => /updatedBizList/.test(e.from) && e.to.includes("registrySetupWrite") === e.from.includes("const updatedBizList = [")), "they are the business-list write (the CAS replaces the whole-node set)");
     for (const e of inBlock) { assert.equal(want.split(e.from).length, 2, "anchor unique in the block"); want = want.replace(e.from, () => e.to); }
   }
-  assert.equal(block(HTML, cs), want, "completeSetup is byte-identical to the HF-1 candidate (+ the recorded M1 R3 business-list write edits on an R3 tree)");
+  // M1 R4 (LOCAL CANDIDATE, pending independent review): review S1 / S2 — the generated id is a fresh one (add-only), setup
+  // stops when the bootstrap answer does not allow it, and an unknown registry-write outcome is decided by a re-read. On an R4
+  // tree completeSetup is the R3 block + EXACTLY the recorded R4 edits that touch it, each one of those three corrections.
+  const { isM1R4Tree, M1_R4_EDITS } = await import("../support/m1-r4-remediation.mjs");
+  if (isM1R4Tree(ROOT)) {
+    const inBlock = M1_R4_EDITS["index.html"].filter((e) => want.includes(e.from));
+    assert.ok(inBlock.length >= 1, "recorded R4 edits touch completeSetup");
+    assert.ok(inBlock.every((e) => /freshBusinessId|bootstrapDecision|setupBootstrapProceed|registrySetupReread/.test(e.to)), "they are the S1 / S2 corrections only");
+    for (const e of inBlock) { assert.equal(want.split(e.from).length, 2, "anchor unique in the block"); want = want.replace(e.from, () => e.to); }
+  }
+  assert.equal(block(HTML, cs), want, "completeSetup is byte-identical to the HF-1 candidate (+ the recorded M1 R3 / R4 edits on an R3 / R4 tree)");
   const nb = "// Add new business -- show setup whenever showSetup=true and logged in";
   const slice = (h) => h.slice(h.indexOf(nb), h.indexOf("isFirstSetup={false}", h.indexOf(nb)));
   assert.equal(slice(HTML), slice(orig.stdout), "the new-business <SetupWizard> call site is byte-identical");

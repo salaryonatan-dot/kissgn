@@ -18,6 +18,7 @@
 
 import { getDb } from "../firebase/admin.js";
 import { classifyRegistryTarget, decodeRegistryNode, isRegistryBizId, resolveRegistryTarget } from "../../lib/businessRegistry.js";
+import { isValidId } from "../../lib/securityContext.js";
 import { loadCanonicalInputs } from "../finance-server/canonicalInputs.js";
 import { canonicalDayRecord, toAnalyticsFinancials } from "../finance-server/canonicalMetrics.js";
 import type { AnalyticsFinBlock } from "../finance-server/canonicalMetrics.js";
@@ -174,10 +175,19 @@ function num(value: any): number {
 // An unrelated element (a bare null, a primitive, a malformed record) is never dereferenced; duplicated or colliding
 // records establish NO record — never a first match.
 //
-// A nightly target id is EXACT: a string the shared rule can address, with no surrounding whitespace (the analytics
-// endpoint refuses padded ids with 400; discovery never trims a stored id into another business's id).
-function isExactNightlyBizId(id: unknown): id is string {
-  return typeof id === "string" && isRegistryBizId(id) && id === id.trim();
+// M1 R4 (review A1): a nightly target id is the SHARED request identity of every analytics entrypoint (manual rebuild,
+// operator backfill: api/analytics/daily-builder.ts) and of Core / P1 / the page — a string the shared rule can address
+// (lib/businessRegistry.js isRegistryBizId), compared EXACTLY. Nothing is trimmed: a stored " bizA" is the business
+// " bizA" (served exactly as Core / P1 / the page serve it), never "bizA"; a stored id that collides with another
+// record's id only after trimming / coercion makes BOTH ambiguous (classifyRegistryTarget), never a merged business. The
+// R3 rule (a padded stored id refused as `business_id_not_exact`) disagreed with every other consumer and is gone.
+function isNightlyBizId(id: unknown): id is string {
+  return isRegistryBizId(id);
+}
+// The tenant key is used exactly as stored (never trimmed: a trimmed key would read ANOTHER tenant's data); it must be the
+// shared tenant identity (lib/securityContext.js isValidId) the endpoints, Core and P1 require.
+function isNightlyTenantId(id: unknown): id is string {
+  return isValidId(id);
 }
 
 // Report-only: the ids a NON-runtime registry node appears to name (a raw array, a bare JSON string, an object map), so a
@@ -607,29 +617,33 @@ export async function saveInsightsDoc(
  * Build + persist insights for one biz/date. Isolated & non-throwing: any error
  * is swallowed with a SANITIZED log (no payload, no revenue figures, no PII) so
  * the analytics flow is never affected.
+ * M1 R4: resolves `true` when the insights doc was persisted, `false` when building or persisting it failed — so a caller
+ * can REPORT the failed persistence (the nightly run and the operator backfill) instead of stating success. Still never throws.
  */
 export async function buildAndSaveInsights(
   tenantId: string,
   bizId: string,
   date: string,
   todayDoc: AnalyticsDoc
-): Promise<void> {
+): Promise<boolean> {
   try {
     // A current-day / future-date doc is a non-Actual context doc (D-1, VD-30): the empty
     // insights path, saved under the date so the browser readback contract holds.
     if (todayDoc.fin && todayDoc.fin.inActual === false) {
       const emptyDoc = buildInsights({ ...(todayDoc as unknown as AnalyticsDailyInput), revenue: { ...(todayDoc.revenue as unknown as AnalyticsDailyInput["revenue"]), had_entry: false } }, []);
       await saveInsightsDoc(tenantId, bizId, emptyDoc);
-      return;
+      return true;
     }
     const history = await loadAnalyticsHistory(tenantId, bizId, date, 45);
     const insightsDoc = buildInsights(todayDoc as unknown as AnalyticsDailyInput, history as unknown as AnalyticsDailyInput[]);
     await saveInsightsDoc(tenantId, bizId, insightsDoc);
+    return true;
   } catch (err) {
     console.error(
       `[insights] ${tenantId}:${bizId} ${date} failed:`,
       (err as Error)?.message ?? "unknown"
     );
+    return false;
   }
 }
 
@@ -638,9 +652,94 @@ export async function buildAndSaveInsights(
 /** One failed business (or, with `bizId: null`, a tenant registry / the discovery itself) of a nightly run. */
 export type AnalyticsRunFailure = { tenantId: string | null; bizId: string | null; error: string };
 
+/**
+ * M1 R4 — businesses discovered but deliberately NOT built, by an existing rule (never a failure, never silent): an explicit
+ * inactive flag, an index-only entry, and the documented "legacy self" rule (tenantId === bizId) that this discovery and
+ * the snapshot discovery apply. Counts, plus the legacy-self identities (bounded) so they stay auditable.
+ */
+export type AnalyticsRunSkipped = {
+  inactive: number;
+  indexOnly: number;
+  malformedEntries: number;
+  legacySelf: Array<{ tenantId: string; bizId: string }>;
+  legacySelfCount: number;
+};
+
+// ── M1 R4 (review A2): the run outcome and its durable, auditable record ─────────────────────────────────────────────
+export type AnalyticsRunOutcome = "completed" | "partial" | "failed";
+
+/** `completed` only with no failure at all; otherwise `partial` (something built) or `failed` (nothing built). */
+export function analyticsRunOutcome(successCount: number, failureCount: number): AnalyticsRunOutcome {
+  if (failureCount === 0) return "completed";
+  return successCount > 0 ? "partial" : "failed";
+}
+
+export const ANALYTICS_RUN_HISTORY_KEEP = 10;
+export const ANALYTICS_RUN_FAILURES_KEEP = 50;
+/** Admin-only path (database.rules.json `$other`: no client read or write). One record per business date. */
+export const analyticsRunPath = (date: string): string => `analytics_runs/daily/${date}`;
+
+/**
+ * Mark an invocation for `date` as RUNNING before anything is built (a run that dies mid-way stays visibly `running`,
+ * never `completed`). Increments the date's invocation counter in one transaction. Never throws.
+ */
+export async function recordAnalyticsRunStart(
+  date: string,
+  nowMs: number
+): Promise<{ ok: true; invocation: number } | { ok: false }> {
+  try {
+    let invocation = 0;
+    const r = await getDb().ref(analyticsRunPath(date)).transaction((cur: unknown) => {
+      const prev = cur && typeof cur === "object" && !Array.isArray(cur) ? (cur as Record<string, unknown>) : {};
+      invocation = (Number(prev.invocations) || 0) + 1;
+      return { ...prev, date, invocations: invocation, current: { invocation, state: "running", startedAt: nowMs } };
+    });
+    if (!r || r.committed !== true || invocation < 1) return { ok: false };
+    return { ok: true, invocation };
+  } catch (err) {
+    console.error("[analytics] run record start failed:", (err as Error)?.message ?? "unknown");
+    return { ok: false };
+  }
+}
+
+/**
+ * Finalize invocation `invocation`: its outcome, counts and the (bounded, code-only) failure list are appended to the
+ * date's bounded history, and become `current` unless a LATER invocation has started meanwhile (a concurrent run's state is
+ * never overwritten). Resolves `true` only when committed. Never throws.
+ */
+export async function recordAnalyticsRunEnd(
+  date: string,
+  invocation: number,
+  r: { outcome: AnalyticsRunOutcome; finishedAt: number; successCount: number; failures: AnalyticsRunFailure[]; skipped: AnalyticsRunSkipped }
+): Promise<boolean> {
+  const entry = {
+    invocation,
+    state: r.outcome,
+    finishedAt: r.finishedAt,
+    successCount: r.successCount,
+    failureCount: r.failures.length,
+    failures: r.failures.slice(0, ANALYTICS_RUN_FAILURES_KEEP).map((f) => ({ tenantId: f.tenantId, bizId: f.bizId, error: String(f.error).slice(0, 200) })),
+    skipped: { inactive: r.skipped.inactive, indexOnly: r.skipped.indexOnly, malformedEntries: r.skipped.malformedEntries, legacySelfCount: r.skipped.legacySelfCount },
+  };
+  try {
+    const res = await getDb().ref(analyticsRunPath(date)).transaction((cur: unknown) => {
+      const prev = cur && typeof cur === "object" && !Array.isArray(cur) ? (cur as Record<string, any>) : { date, invocations: invocation };
+      const history = Array.isArray(prev.history) ? prev.history : prev.history && typeof prev.history === "object" ? Object.values(prev.history) : [];
+      const next: Record<string, unknown> = { ...prev, history: [...history, entry].slice(-ANALYTICS_RUN_HISTORY_KEEP) };
+      const current = prev.current && typeof prev.current === "object" ? prev.current : null;
+      if (!current || Number(current.invocation) === invocation) next.current = { ...entry, startedAt: current ? current.startedAt ?? null : null };
+      return next;
+    });
+    return !!res && res.committed === true;
+  } catch (err) {
+    console.error("[analytics] run record end failed:", (err as Error)?.message ?? "unknown");
+    return false;
+  }
+}
+
 export async function buildAnalyticsForAll(
   date: string
-): Promise<{ docs: AnalyticsDoc[]; failures: AnalyticsRunFailure[] }> {
+): Promise<{ docs: AnalyticsDoc[]; failures: AnalyticsRunFailure[]; skipped: AnalyticsRunSkipped }> {
   const db = getDb();
   const docs: AnalyticsDoc[] = [];
   const failures: AnalyticsRunFailure[] = [];
@@ -662,13 +761,16 @@ export async function buildAnalyticsForAll(
   };
 
   const discovered = new Map<string, DiscoveredBusiness>();
+  // M1 R4: identities are EXACT — never trimmed (a trimmed tenant key would address another tenant, a trimmed business id
+  // another business). Index entries are matched to registry businesses by the exact pair only.
   const addBiz = (source: "index" | "appBusiness", tenantId: unknown, bizId: unknown): boolean => {
     if (typeof tenantId !== "string" || typeof bizId !== "string") return false;
-    const t = tenantId.trim();
-    const b = bizId.trim();
+    const t = tenantId;
+    const b = bizId;
     if (!t || !b) return false;
     if (t === b) {
       legacySelfSkipped++;
+      if (legacySelf.length < ANALYTICS_RUN_FAILURES_KEEP && !legacySelf.some((x) => x.tenantId === t && x.bizId === b)) legacySelf.push({ tenantId: t, bizId: b });
       console.warn(`[analytics/discovery] skipping legacy self business ${t}:${b}`);
       return false;
     }
@@ -710,6 +812,7 @@ export async function buildAnalyticsForAll(
   let inactiveSkipped = 0;
   let legacySelfSkipped = 0;
   let indexOnlySkipped = 0;
+  const legacySelf: Array<{ tenantId: string; bizId: string }> = [];
   // M1 R2: a business whose registry identity is AMBIGUOUS (duplicated / colliding records) is not built — no analytics or
   // insights doc for an identity the registry cannot establish — and is reported as a failure of the run, never omitted.
   const ambiguousTargets = new Map<string, { tenantId: string; bizId: string }>();
@@ -718,8 +821,9 @@ export async function buildAnalyticsForAll(
   // exact, and a failed tenants read. None of them is built: no analytics or insights doc is persisted for them.
   const registryFailures: AnalyticsRunFailure[] = [];
   const unreadableTenants = new Set<string>();
+  // M1 R4: run-level failures (no tenant) are distinct by their code — a failed index read never hides a failed tenants read
   const reportRegistryFailure = (f: AnalyticsRunFailure) => {
-    if (!registryFailures.some((x) => x.tenantId === f.tenantId && x.bizId === f.bizId)) registryFailures.push(f);
+    if (!registryFailures.some((x) => x.tenantId === f.tenantId && x.bizId === f.bizId && (f.tenantId !== null || x.error === f.error))) registryFailures.push(f);
   };
 
   // Source 1: proactive_biz_index (optional — absence is not an error).
@@ -787,7 +891,10 @@ export async function buildAnalyticsForAll(
       }
     }
   } catch (err) {
-    console.error("[analytics] proactive_biz_index read failed:", err);
+    console.error("[analytics] proactive_biz_index read failed:", (err as Error)?.message ?? "unknown");
+    // M1 R4: a failed index read is an incomplete discovery (an indexed business of an unreadable tenant can no longer be
+    // reported), never a clean run. The registry scan below still decides what is built.
+    reportRegistryFailure({ tenantId: null, bizId: null, error: "business_index_read_failed" });
   }
 
   // Source 2: ALWAYS scan tenants/*/app/business (merged, not fallback-only).
@@ -801,6 +908,11 @@ export async function buildAnalyticsForAll(
         const app = typeof tenantData === "object" && tenantData !== null ? (tenantData as any).app : undefined;
         const node: unknown = app && typeof app === "object" ? app.business : undefined;
         if (node === undefined || node === null) continue;
+        // M1 R4: a tenant key outside the shared tenant identity is reported, never built (and never trimmed into another key)
+        if (!isNightlyTenantId(tenantId)) {
+          reportRegistryFailure({ tenantId, bizId: null, error: "tenant_id_invalid" });
+          continue;
+        }
         const decoded = decodeRegistryNode(node);
         if (!decoded.ok) {
           unreadableTenants.add(tenantId);
@@ -821,15 +933,17 @@ export async function buildAnalyticsForAll(
           }
           named++;
           const id = (biz as { id: string }).id;
-          if (!isExactNightlyBizId(id)) {
-            reportRegistryFailure({ tenantId, bizId: id, error: "business_id_not_exact" });
+          if (!isNightlyBizId(id)) {
+            // not addressable by the shared rule (e.g. contains ":" / an RTDB-forbidden character / too long): no endpoint,
+            // Core or P1 can serve it either; reported, never built
+            reportRegistryFailure({ tenantId, bizId: id, error: "business_id_invalid" });
             continue;
           }
           const state = classifyRegistryTarget(node, id).state;
           if (state === "ambiguous") {
-            const key = `${tenantId.trim()}|${id}`;
+            const key = `${tenantId}|${id}`;
             if (!ambiguousTargets.has(key)) {
-              ambiguousTargets.set(key, { tenantId: tenantId.trim(), bizId: id });
+              ambiguousTargets.set(key, { tenantId, bizId: id });
               console.warn(`[analytics/discovery] refusing ambiguous registry identity ${tenantId}:${id}`);
             }
             continue;
@@ -888,11 +1002,13 @@ export async function buildAnalyticsForAll(
     try {
       const doc = await buildAnalyticsForBiz(tenantId, bizId, date, { requireRegistered: true });
       await saveAnalyticsDoc(doc);
-      // Insight Engine v1 — isolated, never throws (see buildAndSaveInsights).
-      await buildAndSaveInsights(doc.tenantId, doc.bizId, doc.date, doc);
-      docs.push(doc);
+      // Insight Engine v1 — isolated, never throws (see buildAndSaveInsights). M1 R4: a failed insights persistence is a
+      // failure of this business (its analytics doc stays saved), never a counted success.
+      const insightsSaved = await buildAndSaveInsights(doc.tenantId, doc.bizId, doc.date, doc);
+      if (insightsSaved !== false) docs.push(doc);
+      else failures.push({ tenantId, bizId, error: "insights_persist_failed" });
     } catch (err) {
-      console.error(`[analytics] biz ${tenantId}:${bizId} failed:`, err);
+      console.error(`[analytics] biz ${tenantId}:${bizId} failed:`, (err as Error)?.message ?? "unknown");
       failures.push({ tenantId, bizId, error: String((err as Error)?.message ?? err) });
     }
   }
@@ -901,7 +1017,8 @@ export async function buildAnalyticsForAll(
   }
   failures.push(...registryFailures);
 
-  return { docs, failures };
+  const skipped: AnalyticsRunSkipped = { inactive: inactiveSkipped, indexOnly: indexOnlySkipped, malformedEntries: malformedSkipped, legacySelf, legacySelfCount: legacySelfSkipped };
+  return { docs, failures, skipped };
 }
 
 // ── Date helpers ──────────────────────────────────────────────────────────────

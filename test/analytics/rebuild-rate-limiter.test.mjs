@@ -36,10 +36,14 @@ w("lib/helpers.js", `export async function requireTenantAccess(u,t,r){ return gl
 export async function isRateLimited(k,l,w){ return globalThis.__H.isRateLimited(k,l,w); }`);
 w("lib/adminSdk.js", `export function getAdminDb(){ globalThis.__H.calls.push("getAdminDb"); return globalThis.__H.db(); }`);
 w("lib/analytics/sources.js", `export async function fetchBeecommDaily(){ globalThis.__H.calls.push("fetchBeecommDaily"); return {}; }`);
+// M1 R4: the stub also exports the run-outcome / run-record helpers the endpoint now imports (always "recorded")
 w("src/analytics/dailyBuilder.js", `export async function buildAnalyticsForBiz(t,b,d){ globalThis.__H.calls.push("buildAnalyticsForBiz"); return globalThis.__H.buildAnalyticsForBiz(t,b,d); }
 export async function buildAnalyticsForAll(d){ globalThis.__H.calls.push("buildAnalyticsForAll"); return { docs:[], failures:[] }; }
 export async function saveAnalyticsDoc(x){ globalThis.__H.calls.push("saveAnalyticsDoc"); }
 export async function buildAndSaveInsights(t,b,d,x){ globalThis.__H.calls.push("buildAndSaveInsights"); }
+export async function recordAnalyticsRunStart(){ return { ok: true, invocation: 1 }; }
+export async function recordAnalyticsRunEnd(){ return true; }
+export function analyticsRunOutcome(s,f){ return f === 0 ? "completed" : s > 0 ? "partial" : "failed"; }
 export function yesterdayInIsrael(){ return "2026-07-09"; }`);
 
 const r = spawnSync("node", [TSC, "--module","esnext","--target","es2020","--moduleResolution","bundler","--skipLibCheck","--noEmitOnError","false", join(dir,"api","analytics","daily-builder.ts")], { encoding:"utf8" });
@@ -69,7 +73,9 @@ await t("resolve: remote throws -> fallback allow", async()=>{ resetRL(); ok("",
 await t("resolve: fallback still limits at 9", async()=>{ resetRL(); let last; for(let i=1;i<=9;i++) last=await resolveRL(()=>null,"k9",8,60000,7); ok("", last==="limited"); });
 await t("handler: auth failure -> 401 before limiter", async()=>{ globalThis.__H=baseH({requireAuth:async()=>{throw new Error("x")}, isRateLimited:async()=>{globalThis.__H.calls.push("isRateLimited");return false;}}); const res=mkRes(); await handler(req(),res); ok("401",res.statusCode===401); ok("limiter skipped",!globalThis.__H.calls.includes("isRateLimited")); });
 await t("handler: RBAC failure -> 403 before limiter", async()=>{ globalThis.__H=baseH({requireTenantAccess:async()=>{throw {status:403,msg:"role"}}, isRateLimited:async()=>{globalThis.__H.calls.push("isRateLimited");return false;}}); const res=mkRes(); await handler(req(),res); ok("403",res.statusCode===403); ok("limiter skipped",!globalThis.__H.calls.includes("isRateLimited")); });
-await t("handler: invalid input -> 400", async()=>{ globalThis.__H=baseH(); const q=req(); q.body.tenantId="bad!!"; const res=mkRes(); await handler(q,res); ok("400",res.statusCode===400); });
+// M1 R4 (review A1): request ids follow the shared Core / P1 identity (securityContext.isValidId / isRegistryBizId);
+// "bad!!" is now a valid exact tenant id there, so the invalid input is an RTDB-forbidden "/" instead
+await t("handler: invalid input -> 400", async()=>{ globalThis.__H=baseH(); const q=req(); q.body.tenantId="bad/!!"; const res=mkRes(); await handler(q,res); ok("400",res.statusCode===400); });
 await t("handler: remote false -> 200 builder ran", async()=>{ globalThis.__H=baseH({isRateLimited:async()=>false}); const res=mkRes(); await handler(req(),res); ok("200",res.statusCode===200); ok("built",globalThis.__H.calls.includes("buildAnalyticsForBiz")); });
 await t("handler: remote true -> 429 builder not run", async()=>{ globalThis.__H=baseH({isRateLimited:async()=>true}); const res=mkRes(); await handler(req(),res); ok("429",res.statusCode===429); ok("no build",!globalThis.__H.calls.includes("buildAnalyticsForBiz")); });
 await t("handler: limiter throws -> fallback -> 200 (no 503)", async()=>{ resetRL(); globalThis.__H=baseH({isRateLimited:async()=>{throw new Error("rate limiter unavailable")}}); const res=mkRes(); await handler(req(),res); ok("200 not 503",res.statusCode===200); ok("built via fallback",globalThis.__H.calls.includes("buildAnalyticsForBiz")); });

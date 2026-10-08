@@ -1538,8 +1538,56 @@
       var view = businessRegistryNodeView(current);
       if (view.state === "unreadable") return { ok: false, reason: view.reason };
       if (JSON.stringify(view.list) !== JSON.stringify(expected)) return { ok: false, reason: "registry_changed" };
-      var next = view.list.filter(function (b) { return !(b !== null && typeof b === "object" && b.id === record.id); }).concat([record]);
-      return { ok: true, value: { _v: JSON.stringify(next) } };
+      // M1 R4 (review S1): ADD-ONLY. Creating a business never replaces or removes a stored element: an id that any stored
+      // element already denotes — exactly, or after the trim / String() coercion the server rule treats as a collision
+      // (lib/businessRegistry.js classifyRegistryTarget) — is refused. Editing an existing business is a different operation.
+      if (registryIdTaken(view.list, record.id)) return { ok: false, reason: "registry_id_collision" };
+      return { ok: true, value: { _v: JSON.stringify(view.list.concat([record])) } };
+    }
+    /** M1 R4 — does any stored element denote `id` (exact, or colliding after trim / String() coercion, as the server rule)? */
+    function registryIdTaken(list, id) {
+      var want = String(id).trim();
+      for (var i = 0; i < (Array.isArray(list) ? list.length : 0); i++) {
+        var e = list[i], rec = e !== null && typeof e === "object" && !Array.isArray(e);
+        var eid = rec ? e.id : (typeof e === "string" || typeof e === "number" || typeof e === "boolean") ? e : undefined;
+        if ((rec || eid !== undefined) && String(eid).trim() === want) return true;
+      }
+      return false;
+    }
+    /** M1 R4 — a generated business id that no element of `list` denotes: biz_<ms>, else biz_<ms>_<n>. null if none found. */
+    function freshBusinessId(list, nowMs) {
+      var base = "biz_" + String(Math.floor(Number(nowMs) || 0));
+      if (!registryIdTaken(list, base)) return base;
+      for (var n = 1; n <= 1000; n++) if (!registryIdTaken(list, base + "_" + n)) return base + "_" + n;
+      return null;
+    }
+    /**
+     * M1 R4 — after an UNKNOWN registry write outcome (the transaction threw, e.g. a lost acknowledgement), the stored node
+     * re-read from the server decides: "committed" only when it is exactly the expected list plus this ONE new record;
+     * "not_committed" when the stored node is still exactly the expected registry (nothing written); anything else is
+     * "changed" — never treated as our commit, never overwritten.
+     */
+    function registrySetupReread(node, expected, record) {
+      var view = businessRegistryNodeView(node);
+      if (view.state === "unreadable") return "changed";
+      if (JSON.stringify(view.list) === JSON.stringify((Array.isArray(expected) ? expected : []).concat([record]))) return "committed";
+      if (JSON.stringify(view.list) === JSON.stringify(Array.isArray(expected) ? expected : [])) return "not_committed";
+      return "changed";
+    }
+    /**
+     * M1 R4 (review S2) — may first-business setup go on to the registry write after the bootstrap-self answer? Only when the
+     * server made this user the tenant's owner (2xx ok — a NEW, empty tenant, or this user's own earlier claim resumed), or
+     * answered that the tenant already has roles (409 tenant_already_initialized: an existing tenant, whose Rules then decide
+     * the write). Any other answer — a tenant holding data with no roles (tenant_has_data), a failed / unknown bootstrap —
+     * stops setup BEFORE any registry / config / user write, so a refused or failed setup never leaves an owner-less tenant
+     * behind and never claims anything; the setup can simply be retried (the server resumes this user's own claim).
+     */
+    function setupBootstrapProceed(status, body) {
+      var ok = typeof status === "number" && status >= 200 && status < 300 && !!body && body.ok === true;
+      if (ok) return { proceed: true, owner: true };
+      if (status === 409 && body && body.error === "tenant_already_initialized") return { proceed: true, owner: false };
+      if (status === 409 && body && body.error === "tenant_has_data") return { proceed: false, reason: "setup_tenant_has_data" };
+      return { proceed: false, reason: "setup_bootstrap_failed" };
     }
     function pickBusiness(selectable, preferred) {
       var ids = (Array.isArray(selectable) ? selectable : []).map(function (b) { return b.id; });
@@ -2314,6 +2362,7 @@
       checkBundle: checkBundle, nodeState: nodeState, historyBinding: historyBinding, ledgerChunks: ledgerChunks, structuredStates: structuredStates,
       selectableBusinesses: selectableBusinesses, businessRegistryView: businessRegistryView, pickBusiness: pickBusiness,
       businessRegistryNodeView: businessRegistryNodeView, firstSetupEligible: firstSetupEligible, registrySetupWrite: registrySetupWrite,
+      registryIdTaken: registryIdTaken, freshBusinessId: freshBusinessId, registrySetupReread: registrySetupReread, setupBootstrapProceed: setupBootstrapProceed,
       earliestRowDate: earliestRowDate, ledgerWindow: ledgerWindow, ledgerCovers: ledgerCovers, loadLedger: loadLedger,
       revisionOf: revisionOf, ledgerKey: ledgerKey, ledgerFor: ledgerFor, createLedgerSession: createLedgerSession, inputsFor: inputsFor,
       monthReport: monthReport, dashboard: dashboard, configView: configView, configuredMonthly: configuredMonthly, todayContext: todayContext, pnl: pnl, pnlGrossLineVD50: pnlGrossLineVD50,
@@ -7352,7 +7401,15 @@ function PilotDashboard() {
     // bizId    = unique id for this specific business (sub-namespace within tenant)
     // Priority: loggedInUser._tenantId > window._currentTenantId > new bizId (first setup only)
     const existingTenantId = loggedInUser?._tenantId || window._currentTenantId || null;
-    const bizId    = `biz_${Date.now()}`;
+    // M1 R4 (review S1): the generated id is one no current element denotes (biz_<ms>, else biz_<ms>_<n>); the registry
+    // transaction below still refuses any collision against the server's node (add-only).
+    const bizId    = window.MarjinC1.freshBusinessId(businesses, Date.now());
+    if(!bizId) {
+      console.error("[setup] no free business id");
+      setBizRegistry({ state: "unavailable", reason: "registry_id_collision" });
+      setShowSetup(false);
+      return;
+    }
     const tenantId = existingTenantId || bizId;
     // Always sync _currentTenantId immediately
     if(window.setTenantId) window.setTenantId(tenantId);
@@ -7393,8 +7450,11 @@ function PilotDashboard() {
     // Strategy: try direct RTDB write first (works with updated Rules that allow
     // bootstrap when no members exist). If that fails (PERMISSION_DENIED),
     // fall back to server-side /api/create-tenant which uses Admin SDK.
+    // M1 R4 (review S2): the bootstrap answer decides whether setup may continue (window.MarjinC1.setupBootstrapProceed).
+    let bootstrapDecision = { proceed: true, owner: false };
     if(firebaseUid) {
       let bootstrapOk = false;
+      bootstrapDecision = { proceed: false, reason: "setup_bootstrap_failed" };
       // roles/members are SERVER-MANAGED (database.rules.json denies direct client
       //   role writes). Bootstrap the first owner via the authenticated Admin-SDK
       //   endpoint, which writes canonical roles/members and seeds the owner guard.
@@ -7406,6 +7466,7 @@ function PilotDashboard() {
           body: JSON.stringify({ tenantId })
         });
         const result = await resp.json().catch(() => ({}));
+        bootstrapDecision = window.MarjinC1.setupBootstrapProceed(resp.status, result);
         if(resp.ok && result.ok) {
           // Non-role paths the client is still allowed to write.
           try { await window._rtdbSet(`user_tenants/${firebaseUid}`, tenantId); } catch(_){}
@@ -7428,6 +7489,13 @@ function PilotDashboard() {
         console.error("[setup] CRITICAL: could not bootstrap tenant " + tenantId + " for uid " + firebaseUid);
       }
     }
+    if(!bootstrapDecision.proceed) {
+      // nothing is written: no registry, config, supplier, fixed-cost or user record; the setup can be retried
+      console.error("[setup] stopped before any business write:", bootstrapDecision.reason);
+      setBizRegistry({ state: "unavailable", reason: bootstrapDecision.reason });
+      setShowSetup(false);
+      return;
+    }
 
     // Small delay so Firebase propagates the role write before data writes
     await new Promise(r => setTimeout(r, 800));
@@ -7448,7 +7516,18 @@ function PilotDashboard() {
         return registryWrite.ok ? registryWrite.value : (current === null ? null : undefined);
       });
       if(registryWrite.ok && (!res || res.committed !== true)) registryWrite = { ok: false, reason: "not_committed" };
-    } catch(e){ registryWrite = { ok: false, reason: registryWrite.ok ? "write_failed" : registryWrite.reason }; }
+    } catch(e){
+      if(registryWrite.ok) {
+        // M1 R4: the transaction's outcome is UNKNOWN (e.g. a lost acknowledgement after the server committed). The stored
+        // node is re-read and decides (window.MarjinC1.registrySetupReread): exactly the expected list + this record ⇒ our
+        // commit, setup continues; still exactly the expected list ⇒ not written; anything else / a failed re-read ⇒ stop.
+        const pending = registryWrite;
+        let verdict = "unknown";
+        try { verdict = window.MarjinC1.registrySetupReread(await window.storage.getNode("app-businesses"), expectedBizList, {id:bizId, name:bizName}); }
+        catch(_) { verdict = "unknown"; }
+        registryWrite = verdict === "committed" ? pending : { ok: false, reason: verdict === "not_committed" ? "not_committed" : "write_unknown" };
+      } else registryWrite = { ok: false, reason: registryWrite.reason };
+    }
     if(!registryWrite.ok) {
       console.error("[setup] businesses save refused:", registryWrite.reason);
       setBizRegistry({ state: "unavailable", reason: registryWrite.reason });

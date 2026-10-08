@@ -33,13 +33,16 @@ import {
   saveAnalyticsDoc,
   buildAndSaveInsights,
   yesterdayInIsrael,
+  recordAnalyticsRunStart,
+  recordAnalyticsRunEnd,
+  analyticsRunOutcome,
 } from "../../src/analytics/dailyBuilder.js";
 import { fetchBeecommDaily } from "../../lib/analytics/sources.js";
 import { getAdminDb } from "../../lib/adminSdk.js";
 import { requireAuth } from "../../lib/verifyToken.js";
 import { requireTenantAccess, isRateLimited } from "../../lib/helpers.js";
-import { requireCron } from "../../lib/securityContext.js";
-import { resolveRegistryTarget } from "../../lib/businessRegistry.js";
+import { requireCron, isValidId } from "../../lib/securityContext.js";
+import { resolveRegistryTarget, isRegistryBizId } from "../../lib/businessRegistry.js";
 
 function setCorsHeaders(req: VercelRequest, res: VercelResponse): void {
   const origin = (req.headers.origin as string) || "";
@@ -69,13 +72,19 @@ type AppUser = {
   allowedBizIds?: unknown;
 };
 
-function isSafeId(value: unknown): value is string {
-  return typeof value === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(value.trim());
+// M1 R4 (review A1) — ONE request-identity contract for every analytics entrypoint (manual rebuild, operator backfill and
+// the nightly run, src/analytics/dailyBuilder.ts), the contract Core (lib/finance/costHistoryWriter.js) and P1 (api/admin.js)
+// already apply: the tenant id is the shared securityContext.isValidId, the business id is the shared
+// lib/businessRegistry.js isRegistryBizId, and both are compared EXACTLY — never trimmed, coerced or aliased. Whether the
+// business is a target is then decided by the registry (registryTargetVerdict below): a stored id that differs from the
+// request only by padding / coercion is a collision (ambiguous, 503), never the requested business. The R2 / R3 rule
+// (`[A-Za-z0-9_-]` and "no surrounding whitespace") refused registered businesses that page, Core, P1 and the nightly run
+// serve (" bizA", "biz A", "biz@A"), so it is gone.
+function isRequestTenantId(value: unknown): value is string {
+  return isValidId(value);
 }
-
-// M1 R2: a request id is EXACT. A padded id is malformed (400) — it is never trimmed into another business's id.
-function isExactId(value: unknown): value is string {
-  return isSafeId(value) && value === value.trim();
+function isRequestBizId(value: unknown): value is string {
+  return isRegistryBizId(value);
 }
 
 function isRealBusinessDate(value: unknown): value is string {
@@ -366,7 +375,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         date?: unknown;
       };
 
-      if (!isExactId(tenantId) || !isExactId(bizId)) {
+      if (!isRequestTenantId(tenantId) || !isRequestBizId(bizId)) {
         return res.status(400).json({ ok: false, error: "invalid_tenant_or_biz_id" });
       }
 
@@ -468,17 +477,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     // GET = cron trigger: yesterday's data for every active biz.
+    // M1 R4 (review A2): the response states the run's ACTUAL outcome — `completed` only when discovery, every build and
+    // every analytics / insights persistence succeeded; `partial` when some business was built and something failed;
+    // `failed` when nothing was built and something failed — and it is HTTP 200 ONLY for a completed run whose durable run
+    // record (analytics_runs/daily/{date}, Admin-only) was written. Any failure, or an unrecorded run, is HTTP 500, so the
+    // scheduled invocation itself is visibly failed (Vercel cron logs the status; it does not retry — no retry policy is
+    // introduced here). Successful businesses keep their docs and stay listed in `summary`; nothing is rolled back. A
+    // repeated invocation for the same date rebuilds the same per-day docs (idempotent `set`s) and appends one bounded
+    // history entry to the same run record.
     if (req.method === "GET") {
       const date = yesterdayInIsrael();
-      const { docs, failures } = await buildAnalyticsForAll(date);
+      const run = await recordAnalyticsRunStart(date, Date.now());
+      const { docs, failures, skipped } = await buildAnalyticsForAll(date);
+      const outcome = analyticsRunOutcome(docs.length, failures.length);
+      const recorded = run.ok
+        ? await recordAnalyticsRunEnd(date, run.invocation, { outcome, finishedAt: Date.now(), successCount: docs.length, failures, skipped })
+        : false;
+      const runRecord = recorded ? "recorded" : "write_failed";
+      if (!recorded) console.error(`[analytics] run record for ${date} could not be written (outcome ${outcome})`);
+      if (outcome !== "completed") console.error(`[analytics] run ${date} ${outcome}: ${failures.length} failure(s), ${docs.length} built`);
 
-      return res.status(200).json({
-        status: "completed",
+      return res.status(outcome === "completed" && recorded ? 200 : 500).json({
+        status: outcome,
+        runRecord,
+        invocation: run.ok ? run.invocation : null,
         date,
         totalBusinesses: docs.length + failures.length,
         successCount: docs.length,
         failureCount: failures.length,
         failures: failures.length > 0 ? failures : undefined,
+        skipped,
         // Light summary so the cron run is auditable from logs without
         // dumping the full feature doc.
         summary: docs.map((d) => ({
@@ -505,8 +533,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!tenantId || !bizId) {
         return res.status(400).json({ error: "Missing tenantId or bizId" });
       }
-      // M1 R2: exact ids only (never trimmed or coerced into another business's id)
-      if (!isExactId(tenantId) || !isExactId(bizId)) {
+      // M1 R2 / R4: exact ids by the shared contract (never trimmed or coerced into another business's id)
+      if (!isRequestTenantId(tenantId) || !isRequestBizId(bizId)) {
         return res.status(400).json({ error: "invalid tenantId or bizId" });
       }
       const targetDate = date || yesterdayInIsrael();
@@ -530,7 +558,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const doc = await buildAnalyticsForBiz(tenantId, bizId, targetDate);
       await saveAnalyticsDoc(doc);
       // Insight Engine v1 — rebuild insights for this date too (isolated; never throws).
-      await buildAndSaveInsights(tenantId, bizId, targetDate, doc);
+      // M1 R4: its result is reported — a failed insights persistence is never a backfill "success" (the analytics doc stays).
+      const insightsSaved = await buildAndSaveInsights(tenantId, bizId, targetDate, doc);
+      if (insightsSaved === false) {
+        return res.status(502).json({
+          status: "partial",
+          error: "insights_persist_failed",
+          path: `tenants/${tenantId}/biz:${bizId}:analytics:daily:${targetDate}`,
+          analyticsSaved: true,
+        });
+      }
 
       return res.status(200).json({
         status: "success",

@@ -44,10 +44,14 @@ const ROUTES = {
   "daily-builder": {
     src: "api/analytics/daily-builder.ts", out: "api/analytics/daily-builder.js", job: "buildAnalyticsForAll", realLib: ["businessRegistry.js"],
     stubs: {
+// M1 R4: the stub also exports the run-outcome / run-record helpers the endpoint now imports (always "recorded")
       "src/analytics/dailyBuilder.js": `export async function buildAnalyticsForBiz(t,b,d){ ${rec("buildAnalyticsForBiz", "{meta:{builtAt:1}}")} }
 export async function buildAnalyticsForAll(d){ ${rec("buildAnalyticsForAll", "{docs:[],failures:[]}")} }
 export async function saveAnalyticsDoc(x){ ${rec("saveAnalyticsDoc", "undefined")} }
 export async function buildAndSaveInsights(){ ${rec("buildAndSaveInsights", "undefined")} }
+export async function recordAnalyticsRunStart(){ return { ok: true, invocation: 1 }; }
+export async function recordAnalyticsRunEnd(){ return true; }
+export function analyticsRunOutcome(s,f){ return f === 0 ? "completed" : s > 0 ? "partial" : "failed"; }
 export function yesterdayInIsrael(){ return "2026-09-28"; }`,
       "lib/analytics/sources.js": `export async function fetchBeecommDaily(d){ ${rec("fetchBeecommDaily", "{revenue_total:1,tickets:1,revenue_dine_in:0,revenue_delivery:0,revenue_takeaway:0,hourly:{}}")} }`,
     },

@@ -255,15 +255,37 @@ async function handleCreateClient(req, res) {
 
   const safeEmail = ownerEmail.trim();
   const safeUsername = ownerUsername.trim().toLowerCase();
-  const tenantId = "biz_" + Date.now();
+  let tenantId = null;
   const tempPass = "Marjin_" + Math.random().toString(36).slice(2, 10);
   const now      = Date.now();
+  // M1 R4 (adjacent to review S1): creating a client never writes over an EXISTING tenant. The generated id is reserved by
+  // ONE transaction that commits only while the tenant node is absent (a colliding id — e.g. another tenant created in the
+  // same millisecond, or a self-onboarded `biz_<ms>` tenant — is skipped, never replaced). The reservation holds only
+  // meta.provisioning; it is released if the client cannot be created, and cleared by the final atomic write.
+  const reservation = { meta: { createdAt: now, createdBy: claims.uid, provisioning: true } };
+  const isOurReservation = (cur) => !!cur && typeof cur === "object" && Object.keys(cur).length === 1 && cur.meta
+    && Object.keys(cur.meta).length === 3 && cur.meta.provisioning === true && cur.meta.createdBy === claims.uid && cur.meta.createdAt === now;
+  const releaseReservation = async () => {
+    if (!tenantId) return;
+    try { await db.ref(`tenants/${tenantId}`).transaction((cur) => (isOurReservation(cur) ? null : undefined)); }
+    catch (e) { console.error("[create-client] reservation release failed:", e?.message); }
+  };
 
   try {
     // Check if username already taken (tenant isolation)
     const existingUn = await db.ref(`username_index/${safeUsername}`).once("value");
     if (existingUn.exists()) {
       res.status(409).json({ error: "שם המשתמש כבר תפוס — יש לבחור שם משתמש אחר" });
+      return;
+    }
+
+    for (let attempt = 0; attempt < 5 && !tenantId; attempt++) {
+      const candidate = "biz_" + Date.now() + (attempt ? "_" + attempt : "");
+      const r = await db.ref(`tenants/${candidate}`).transaction((cur) => (cur === null || cur === undefined ? reservation : undefined));
+      if (r && r.committed === true) tenantId = candidate;
+    }
+    if (!tenantId) {
+      res.status(409).json({ error: "tenant_id_unavailable" });
       return;
     }
 
@@ -277,6 +299,7 @@ async function handleCreateClient(req, res) {
       });
       firebaseUid = userRecord.uid;
     } catch(e) {
+      await releaseReservation();
       if (e.code === "auth/email-already-exists") {
         res.status(409).json({ error: "כתובת האימייל כבר קיימת במערכת — יש להשתמש באימייל אחר" });
         return;
@@ -305,6 +328,7 @@ async function handleCreateClient(req, res) {
     updates[`tenants/${tenantId}/roles/${firebaseUid}`]   = "owner";
     updates[`tenants/${tenantId}/members/${firebaseUid}`] = true;
     updates[`tenants/${tenantId}/meta/createdAt`]  = now;
+    updates[`tenants/${tenantId}/meta/provisioning`] = null;
     updates[`tenants/${tenantId}/meta/createdBy`]  = claims.uid;
     updates[`tenants/${tenantId}/meta/inviteLink`] = inviteLink;
     updates[`tenants/${tenantId}/lookup/${ownerUsername.trim().toLowerCase()}`] = { email: safeEmail, firebaseUid };
@@ -331,6 +355,7 @@ async function handleCreateClient(req, res) {
     });
 
   } catch(e) {
+    await releaseReservation();   // M1 R4: a no-op unless the node is still exactly this request's reservation
     console.error("[create-client] error:", e.message, e.code);
     res.status(500).json({ error: e.message || "שגיאה ביצירת לקוח" });
   }
@@ -1590,9 +1615,10 @@ async function handleUpdateUser(req, res) {
 // POST ?action=bootstrap-self — self-service first-owner bootstrap (Admin SDK).
 //   Writes the canonical roles/{uid}=super_owner + members/{uid}=true so that
 //   `roles` can be fully server-managed (clients no longer write roles directly).
-//   Only permitted on an UNINITIALIZED tenant (no existing roles) — equivalent to
-//   the old `!data.exists()` bootstrap rule, but enforced server-side and no
-//   weaker. Also seeds the owner guard so the first principal is authoritative.
+//   Only permitted on an UNINITIALIZED tenant — M1 R4: an ABSENT tenant node (no
+//   roles AND no data), claimed atomically; equivalent to the old `!data.exists()`
+//   bootstrap rule, enforced server-side and no weaker. Also seeds the owner guard
+//   so the first principal is authoritative. The caller's own earlier claim resumes.
 // ─────────────────────────────────────────────────────────────────────────────
 async function handleBootstrapSelf(req, res) {
   if (req.method !== "POST") { res.status(405).json({ error: "Method not allowed" }); return; }
@@ -1605,28 +1631,57 @@ async function handleBootstrapSelf(req, res) {
     res.status(400).json({ error: "invalid tenantId" }); return;
   }
   const db = getAdminDb();
+  const uid = claims.uid;
+  let roles;
   try {
     const rolesSnap = await db.ref(`tenants/${tenantId}/roles`).once("value");
-    if (rolesSnap.exists() && rolesSnap.hasChildren()) {
-      res.status(409).json({ error: "tenant_already_initialized" }); return; // cannot claim an initialized tenant
-    }
+    roles = rolesSnap.exists() && rolesSnap.hasChildren() ? rolesSnap.val() : null;
   } catch (e) {
     console.error("[bootstrap-self] roles check failed:", e?.message);
     res.status(503).json({ error: "bootstrap check failed" }); return;
   }
 
+  if (roles) {
+    // M1 R4: the caller's OWN interrupted claim is resumed — it is the tenant's ONLY role holder, as super_owner, and has no
+    // user mapping yet (the claim committed but its acknowledgement or the mapping write was lost). Only the caller's own
+    // mapping / membership is written; it grants nothing the caller does not already hold. Anything else — another role
+    // holder, or an established owner who already has a mapping — is an initialized tenant (409, unchanged).
+    const keys = roles && typeof roles === "object" ? Object.keys(roles) : [];
+    let unmapped = false;
+    if (keys.length === 1 && keys[0] === uid && roles[uid] === "super_owner") {
+      try { unmapped = !(await db.ref(`user_tenants/${uid}`).once("value")).exists(); }
+      catch (e) { console.error("[bootstrap-self] mapping check failed:", e?.message); res.status(503).json({ error: "bootstrap check failed" }); return; }
+    }
+    if (unmapped) {
+      try { await db.ref().update({ [`tenants/${tenantId}/members/${uid}`]: true, [`user_tenants/${uid}`]: tenantId }); }
+      catch (e) { console.error("[bootstrap-self] resume write failed:", e?.message); res.status(500).json({ error: "bootstrap failed" }); return; }
+      res.status(200).json({ ok: true, tenantId, role: "super_owner", resumed: true }); return;
+    }
+    res.status(409).json({ error: "tenant_already_initialized" }); return; // cannot claim an initialized tenant
+  }
+
+  // M1 R4 (review S2): "uninitialized" means the tenant holds NOTHING — not merely "no roles". A tenant with a business
+  // registry (valid or not), entries, users or any other data but no roles is never claimable by an arbitrary authenticated
+  // user. The claim is ONE transaction over the whole tenant node that commits only while the node is absent, so it is
+  // also atomic against a concurrent claim / creation (two callers: exactly one wins, the other gets 409, no mixed roles).
   const now = Date.now();
-  const uid = claims.uid;
-  const updates = {};
-  updates[`tenants/${tenantId}/roles/${uid}`]   = "super_owner";
-  updates[`tenants/${tenantId}/members/${uid}`] = true;
-  updates[`user_tenants/${uid}`] = tenantId;
-  // Seed the owner guard: the bootstrapping super_owner is an owner-level principal.
-  updates[`tenants/${tenantId}/access_meta/owner_guard`] = {
-    version: 1, ownerUids: { [uid]: true }, updatedAt: now, lastOpId: null, ops: {}, pending: null,
+  const claim = {
+    roles: { [uid]: "super_owner" },
+    members: { [uid]: true },
+    // Seed the owner guard: the bootstrapping super_owner is an owner-level principal.
+    access_meta: { owner_guard: { version: 1, ownerUids: { [uid]: true }, updatedAt: now, lastOpId: null, ops: {}, pending: null } },
   };
-  try { await db.ref().update(updates); }
-  catch (e) { console.error("[bootstrap-self] write failed:", e?.message); res.status(500).json({ error: "bootstrap failed" }); return; }
+  let claimed;
+  try {
+    const r = await db.ref(`tenants/${tenantId}`).transaction((cur) => (cur === null || cur === undefined ? claim : undefined));
+    claimed = !!r && r.committed === true;
+  } catch (e) {
+    // unknown outcome: nothing is assumed; a retry by the same user resumes its own claim (above) or claims the absent tenant
+    console.error("[bootstrap-self] claim failed:", e?.message); res.status(500).json({ error: "bootstrap failed" }); return;
+  }
+  if (!claimed) { res.status(409).json({ error: "tenant_has_data" }); return; }
+  try { await db.ref().update({ [`user_tenants/${uid}`]: tenantId }); }
+  catch (e) { console.error("[bootstrap-self] mapping write failed:", e?.message); res.status(500).json({ error: "bootstrap failed" }); return; }
 
   res.status(200).json({ ok: true, tenantId, role: "super_owner" });
 }

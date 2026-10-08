@@ -10,8 +10,8 @@
 //             insights persistence
 // For every row the outcome of each consumer is computed, written (M1_R3_MATRIX_OUT, when set) and checked against ONE rule:
 //   * a target the shared rule classifies "registered" is served by every consumer (bound / 200 / built: analytics AND
-//     insights written) — except the documented analytics exact-id rule for a PADDED stored id (rebuild / backfill 400,
-//     nightly `business_id_not_exact`), which serves no other business either;
+//     insights written) — M1 R4 (review A1): with NO exception; the R3 padded-id exception is removed, and the review's
+//     exact registered ids " bizA", "bizA ", "biz A" and "biz@A" are rows of this one rule;
 //   * any other target is refused by every consumer — no binding, no 2xx, no analytics or insights write — and the nightly
 //     run reports it (never a clean empty run), except genuine absence and the supported empty registry (nothing to build,
 //     first-business setup eligible on the page).
@@ -105,7 +105,14 @@ async function outcomes(node, id) {
     const mine = (res.body.failures || []).filter((f) => f.tenantId === T || f.tenantId === null);
     const analytics = !!db.read(`tenants/${T}/biz:${id}:analytics:daily:${DAY}`), insights = !!db.read(`tenants/${T}/biz:${id}:insights:daily:${DAY}`);
     o.nightly = built ? "serve" : mine.length ? "refuse " + mine.map((f) => `${f.bizId === null ? "(tenant)" : f.bizId}:${f.error}`).join(", ") : "none";
-    o.nightlyWrites = { analytics, insights, underTenant: tWrites(db).length, controlBuilt: (res.body.summary || []).some((d) => d.tenantId === K) || node === READ_FAILS };
+    // M1 R4 (review A2): the run's HTTP status / outcome follow its failures — 200 `completed` only without any failure
+    o.nightlyRun = `${res.statusCode} ${res.body.status}`; o.nightlyFailures = (res.body.failures || []).length;
+    // M1 R4: writes under the tenant that are NOT another registered business's docs (a stored id that merely collides
+    // with the request — e.g. " bizA" when "bizA" is requested — is its own registered business and is built as such)
+    const others = (res.body.summary || []).filter((d) => d.tenantId === T && d.bizId !== id).map((d) => d.bizId);
+    o.nightlyOtherBuilt = others;
+    const foreign = tWrites(db).filter((w) => !others.some((b) => w.path === `tenants/${T}/biz:${b}:analytics:daily:${DAY}` || w.path === `tenants/${T}/biz:${b}:insights:daily:${DAY}`));
+    o.nightlyWrites = { analytics, insights, underTenant: foreign.length, controlBuilt: (res.body.summary || []).some((d) => d.tenantId === K) || node === READ_FAILS };
   }
   o.shared = node === READ_FAILS ? "unavailable" : classifyRegistryTarget(node, id).state;
   return o;
@@ -136,7 +143,14 @@ const ROWS = [
   ["padded stored id, exact id requested", env([{ id: " " + B, name: "padded" }]), B],
   ["coercion-only numeric id", env([{ id: 5, name: "n" }]), "5"],
   ["numeric id beside its string spelling", env([{ id: 5 }, { id: "5", name: "s" }]), "5"],
-  ["padded stored id, padded id requested (documented analytics exact-id rule)", env([{ id: " " + B, name: "padded" }]), " " + B],
+  // M1 R4 (review A1): the review's exact registered ids — one rule, no exception
+  ["padded stored id, the exact padded id requested", env([{ id: " " + B, name: "padded" }]), " " + B],
+  ["trailing-space stored id, the exact id requested", env([{ id: B + " ", name: "trailing" }]), B + " "],
+  ["internal space (review: \"biz A\")", env([{ id: "biz A", name: "space" }]), "biz A"],
+  ["punctuation (review: \"biz@A\")", env([{ id: "biz@A", name: "at" }]), "biz@A"],
+  ["padded twin, the padded spelling requested", env([A, { id: B + " ", name: "twin" }]), B + " "],
+  ["internal space beside its trimmed-equal twin", env([{ id: "biz A" }, { id: " biz A " }]), "biz A"],
+  ["not addressable by the shared rule (\":\")", env([{ id: "biz:A", name: "colon" }]), "biz:A"],
 ];
 
 test("RMX-01 the registry shape × target identity matrix: one rule across page, Core, P1, rebuild, backfill and nightly", async () => {
@@ -145,26 +159,24 @@ test("RMX-01 the registry shape × target identity matrix: one rule across page,
     const o = await outcomes(node, id);
     matrix.push({ case: label, node: node === READ_FAILS ? "<read fails>" : node === undefined ? "<absent>" : node, requested: id, ...o });
     const at = label + " → " + JSON.stringify(o);
-    const padded = id !== id.trim();
     if (o.shared === "registered") {
-      for (const c of ["page", "core", "p1"]) assert.equal(o[c], "serve", c + " serves the registered target: " + at);
-      if (padded) {
-        assert.equal(o.rebuild, "refuse 400 invalid_tenant_or_biz_id", at); assert.match(o.backfill, /^refuse 400 /, at);
-        assert.match(o.nightly, /business_id_not_exact/, at);
-      } else {
-        for (const c of ["rebuild", "backfill", "nightly"]) assert.equal(o[c], "serve", c + " serves the registered target: " + at);
-        assert.ok(o.nightlyWrites.analytics && o.nightlyWrites.insights, "nightly writes analytics AND insights: " + at);
-      }
+      for (const c of ["page", "core", "p1", "rebuild", "backfill", "nightly"]) assert.equal(o[c], "serve", c + " serves the registered target: " + at);
+      assert.ok(o.nightlyWrites.analytics && o.nightlyWrites.insights, "nightly writes analytics AND insights: " + at);
     } else {
       for (const c of ["core", "p1", "rebuild", "backfill"]) assert.match(o[c], /^refuse /, c + " refuses: " + at);
       assert.notEqual(o.page, "serve", "the page binds no figure: " + at);
       assert.equal(o.rebuildWrites + o.backfillWrites, 0, "no rebuild / backfill write: " + at);
       assert.ok(!o.nightlyWrites.analytics && !o.nightlyWrites.insights && o.nightlyWrites.underTenant === 0, "no nightly analytics / insights write: " + at);
       const genuinelyEmpty = node === undefined || JSON.stringify(node) === JSON.stringify(env([]));
+      for (const b of o.nightlyOtherBuilt) assert.equal(classifyRegistryTarget(node, b).state, "registered", "only another REGISTERED business is built: " + b + " " + at);
+      const namesRequest = node !== READ_FAILS && node !== undefined && node !== null && typeof node === "object" && typeof node._v === "string" &&
+        (() => { try { const l = JSON.parse(node._v); return Array.isArray(l) && l.some((e) => e && typeof e === "object" && e.id === id); } catch { return true; } })();
       if (genuinelyEmpty) { assert.equal(o.nightly, "none", at); assert.equal(o.page, "first-business setup", at); }
+      else if (o.nightly === "none") assert.ok(!namesRequest && o.nightlyOtherBuilt.length > 0, "nothing to report only when no element names the request and the registry establishes other businesses: " + at);
       else { assert.match(o.nightly, /^refuse /, "the nightly run reports it: " + at); assert.notEqual(o.page, "first-business setup", "never the first-business setup over an existing registry: " + at); }
     }
     assert.ok(o.nightlyWrites.controlBuilt, "the control tenant is built in the same run: " + at);
+    assert.equal(o.nightlyRun, o.nightlyFailures === 0 ? "200 completed" : node === READ_FAILS ? "500 failed" : "500 partial", "M1 R4: the run outcome follows its failures: " + at);
   }
   if (process.env.M1_R3_MATRIX_OUT) writeFileSync(process.env.M1_R3_MATRIX_OUT, JSON.stringify(matrix, null, 1) + "\n");
 });

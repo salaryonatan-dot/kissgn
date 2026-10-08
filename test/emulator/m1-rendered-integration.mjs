@@ -173,6 +173,9 @@ const fetchImpl = async (url, opts) => {
     return resp(200, { ok: true, tenantId: p.get("tenantId"), bizId: p.get("bizId"), fromDate: p.get("fromDate"), toDate: p.get("toDate"), exceptions });
   }
   if (/^\/api\/admin\?action=[a-z-]*supplier-credit/.test(u)) return callReal(adminHandler, u, opts);
+  // M1 R4 (review S2): the setup's bootstrap goes to the REAL handler (over the emulator): this tenant has roles, so it
+  // answers 409 tenant_already_initialized and the page's setup proceeds under the Rules (never a stubbed "not available")
+  if (u.startsWith("/api/admin?action=bootstrap-self")) return callReal(adminHandler, u, opts);
   if (u.startsWith("/api/cost-history")) return callReal(costRoute, u, opts);
   return resp(404, { error: "not_available_in_harness" });
 };
