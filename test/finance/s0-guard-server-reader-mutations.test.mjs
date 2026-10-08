@@ -29,6 +29,7 @@ import {
 import { isM1R2Tree, M1_R2_PINS } from "../support/m1-r2-remediation.mjs";
 import { isM1R3Tree, M1_R3_PINS } from "../support/m1-r3-remediation.mjs";
 import { isM1R4Tree, M1_R4_PINS } from "../support/m1-r4-remediation.mjs";
+import { isM1R5Tree, M1_R5_PINS } from "../support/m1-r5-remediation.mjs";
 // The pin table holding the tree under test: the approved pins — on an M1 R2 tree with the ONE R2 candidate pin of
 // src/analytics/dailyBuilder.ts overlaid (pending independent review). Every mutation class below runs against it.
 const SERVER_READER_APPROVED_BLOBS = SERVER_READER_EFFECTIVE_BLOBS;
@@ -62,7 +63,8 @@ test("I. positive control: the exact approved tree passes; six plain files (B2 a
   assert.deepEqual(serverReaderScopeVerdict(RAW), { ok: false, reason: "unauthorized_protected_path", detail: ["database.rules.json"] }, "unprojected: Rules remain a protected path for the reader layer");
   assert.deepEqual([...SERVER_READER_AUTHORIZED_FILES].sort(), [DB, DM, "src/repositories/analytics/laborRepo.ts", "src/repositories/analytics/purchasesRepo.ts", SB, SE]);
   if (isM1R2Tree(ROOT)) {
-    if (isM1R4Tree(ROOT)) assert.equal(SERVER_READER_APPROVED_BLOBS[DB], M1_R4_PINS[DB], "R4 tree: dailyBuilder is held to its literal R4 candidate pin");
+    if (isM1R5Tree(ROOT)) assert.equal(SERVER_READER_APPROVED_BLOBS[DB], M1_R5_PINS[DB], "R5 tree: dailyBuilder is held to its literal R5 candidate pin");
+    else if (isM1R4Tree(ROOT)) assert.equal(SERVER_READER_APPROVED_BLOBS[DB], M1_R4_PINS[DB], "R4 tree: dailyBuilder is held to its literal R4 candidate pin");
     else if (isM1R3Tree(ROOT)) assert.equal(SERVER_READER_APPROVED_BLOBS[DB], M1_R3_PINS[DB], "R3 tree: dailyBuilder is held to its literal R3 candidate pin");
     else assert.equal(SERVER_READER_APPROVED_BLOBS[DB], M1_R2_PINS[DB], "R2 tree: dailyBuilder is held to its literal R2 candidate pin");
     assert.equal(APPROVED_LITERAL[DB], "6b70d03c245d163264f1bad2cefa71c0d85ff761", "the approved B1 R1 pin itself is unchanged");

@@ -47,6 +47,7 @@ import { isM1R3Tree, M1_R3_PARENT } from "../support/m1-r3-remediation.mjs";
 // M1 R4 (successor of the rejected R3 candidate): the page, the analytics endpoint and builder, and the admin API carry R4 pins;
 // none can fall back to the rejected R3 bytes.
 import { isM1R4Tree, M1_R4_PARENT, M1_R4_PINS } from "../support/m1-r4-remediation.mjs";
+import { isM1R5Tree, M1_R5_PARENT } from "../support/m1-r5-remediation.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -704,6 +705,10 @@ test("B2G-05-M1b M1 tree: committed substitutions of either input, page edits, r
       ["R4: the analytics builder = the rejected R3 bytes (padded-id refusal, trimmed keys, unreported insights failure)", put("src/analytics/dailyBuilder.ts", M1_R4_PARENT + ":src/analytics/dailyBuilder.ts"), PIN("src/analytics/dailyBuilder.ts")],
       ["R4: the analytics endpoint = the rejected R3 bytes (HTTP 200 completed for a failed run)", put("api/analytics/daily-builder.ts", M1_R4_PARENT + ":api/analytics/daily-builder.ts"), /api\/analytics\/daily-builder\.ts \(committed\) is not the pinned M1 integration blob|api\/analytics\/daily-builder\.ts is byte-identical to the approved/],
       ["R4: the admin API = the rejected R3 bytes (role-only bootstrap check)", put("api/admin.js", M1_R4_PARENT + ":api/admin.js"), PIN("api/admin.js")],
+    ] : []),
+    // M1 R5 overlay (only on an R5 tree): the nightly builder cannot fall back to the rejected R4 bytes (colliding pair key)
+    ...(isM1R5Tree(REPO) ? [
+      ["R5: the analytics builder = the rejected R4 bytes (`${tenantId}|${bizId}` discovery key)", put("src/analytics/dailyBuilder.ts", M1_R5_PARENT + ":src/analytics/dailyBuilder.ts"), PIN("src/analytics/dailyBuilder.ts")],
     ] : []),
   ];
   for (const [label, mut, re] of cases) {

@@ -1,0 +1,27 @@
+{
+ "parent": "6d4600275bb8a80dc147880c5776cacfd4c0090c",
+ "pins": {
+  "src/analytics/dailyBuilder.ts": "857f66128a4edbf863e8c439f6b2af304d100e7a"
+ },
+ "newFiles": [],
+ "edits": {
+  "src/analytics/dailyBuilder.ts": [
+   {
+    "from": "export async function buildAnalyticsForAll(\n",
+    "to": "/**\n * M1 R5: the ONE in-memory key for a (tenantId, bizId) pair in nightly discovery, de-duplication and ambiguity accounting.\n * The shared identity rules admit \"|\" (and \":\") in both ids, so a delimiter concatenation is not injective:\n * (\"t|x\", \"y\") and (\"t\", \"x|y\") both read \"t|x|y\". The JSON encoding of the two-element string array is injective for every\n * pair of strings (each element is quoted and escaped), so distinct registered pairs never merge. The ids themselves are\n * carried unchanged next to the key; the key is never parsed back, persisted or used as a storage path.\n */\nexport function analyticsPairKey(tenantId: string, bizId: string): string {\n  return JSON.stringify([tenantId, bizId]);\n}\n\nexport async function buildAnalyticsForAll(\n"
+   },
+   {
+    "from": "    const key = `${t}|${b}`;\n",
+    "to": "    const key = analyticsPairKey(t, b);\n"
+   },
+   {
+    "from": "            const key = `${tenantId}|${id}`;\n",
+    "to": "            const key = analyticsPairKey(tenantId, id);\n"
+   },
+   {
+    "from": "      if (ambiguousTargets.has(`${candidate.tenantId}|${candidate.bizId}`)) return false;\n",
+    "to": "      if (ambiguousTargets.has(analyticsPairKey(candidate.tenantId, candidate.bizId))) return false;\n"
+   }
+  ]
+ }
+}

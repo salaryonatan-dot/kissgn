@@ -31,6 +31,7 @@ import { gitIn } from "./git-context.mjs";
 import { isM1R2Tree, M1_R2_PINS } from "./m1-r2-remediation.mjs";
 import { isM1R3Tree, M1_R3_PINS } from "./m1-r3-remediation.mjs";
 import { isM1R4Tree, M1_R4_PINS } from "./m1-r4-remediation.mjs";
+import { isM1R5Tree, M1_R5_PINS } from "./m1-r5-remediation.mjs";
 
 /** The Codex-approved Storage V2 core; the reader files are authorized on top of it. */
 export const SERVER_READER_BASE = "8cac71c1248ad5cc49dfa1a727bf292398ae74e8";
@@ -117,6 +118,9 @@ export function serverReaderEffectiveBlobs(root = MODULE_REPO) {
   // M1 R4 (LOCAL CANDIDATE, pending independent review): the analytics identity / run-outcome corrections change it once more;
   // on an R4 tree it is held to its literal R4 pin (R4G-02 re-derives it from the R3 bytes). Nothing here approves R4.
   if (isM1R4Tree(root)) for (const f of Object.keys(out)) if (M1_R4_PINS[f]) out[f] = M1_R4_PINS[f];
+  // M1 R5 (LOCAL CANDIDATE, pending independent review): the collision-free nightly pair key changes it once more; on an R5
+  // tree it is held to its literal R5 pin (R5G-02 re-derives it from the R4 bytes). Nothing here approves R5.
+  if (isM1R5Tree(root)) for (const f of Object.keys(out)) if (M1_R5_PINS[f]) out[f] = M1_R5_PINS[f];
   return Object.freeze(out);
 }
 export const SERVER_READER_EFFECTIVE_BLOBS = serverReaderEffectiveBlobs();

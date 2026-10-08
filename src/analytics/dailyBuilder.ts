@@ -737,6 +737,17 @@ export async function recordAnalyticsRunEnd(
   }
 }
 
+/**
+ * M1 R5: the ONE in-memory key for a (tenantId, bizId) pair in nightly discovery, de-duplication and ambiguity accounting.
+ * The shared identity rules admit "|" (and ":") in both ids, so a delimiter concatenation is not injective:
+ * ("t|x", "y") and ("t", "x|y") both read "t|x|y". The JSON encoding of the two-element string array is injective for every
+ * pair of strings (each element is quoted and escaped), so distinct registered pairs never merge. The ids themselves are
+ * carried unchanged next to the key; the key is never parsed back, persisted or used as a storage path.
+ */
+export function analyticsPairKey(tenantId: string, bizId: string): string {
+  return JSON.stringify([tenantId, bizId]);
+}
+
 export async function buildAnalyticsForAll(
   date: string
 ): Promise<{ docs: AnalyticsDoc[]; failures: AnalyticsRunFailure[]; skipped: AnalyticsRunSkipped }> {
@@ -775,7 +786,7 @@ export async function buildAnalyticsForAll(
       return false;
     }
 
-    const key = `${t}|${b}`;
+    const key = analyticsPairKey(t, b);
     const existing = discovered.get(key);
     if (existing) {
       if (source === "index") existing.fromIndex = true;
@@ -941,7 +952,7 @@ export async function buildAnalyticsForAll(
           }
           const state = classifyRegistryTarget(node, id).state;
           if (state === "ambiguous") {
-            const key = `${tenantId}|${id}`;
+            const key = analyticsPairKey(tenantId, id);
             if (!ambiguousTargets.has(key)) {
               ambiguousTargets.set(key, { tenantId, bizId: id });
               console.warn(`[analytics/discovery] refusing ambiguous registry identity ${tenantId}:${id}`);
@@ -978,7 +989,7 @@ export async function buildAnalyticsForAll(
   const afterDedupe = discovered.size;
   const activeBusinesses: Array<{ tenantId: string; bizId: string }> =
     Array.from(discovered.values()).filter((candidate) => {
-      if (ambiguousTargets.has(`${candidate.tenantId}|${candidate.bizId}`)) return false;
+      if (ambiguousTargets.has(analyticsPairKey(candidate.tenantId, candidate.bizId))) return false;
       if (candidate.fromAppBusiness) return true;
       // M1 R3: an indexed business of a tenant whose registry is unreadable is a reported failure, not a silent skip
       if (unreadableTenants.has(candidate.tenantId)) {

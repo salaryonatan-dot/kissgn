@@ -10,13 +10,16 @@
 //   R4G-04  non-vacuity: changed anchors, dropped or altered edits are refused; the R3 page is refused as the R4 page
 //   R4G-05  the corrected rules in the source: no analytics-only identity regex / trimming; the run status follows its
 //           failures; the bootstrap claim is ONE transaction over the tenant node; the setup write never replaces a record
+// On an M1 R5 tree (the successor of this rejected R4 candidate, test/support/m1-r5-remediation.mjs) R4G-01..05 verify the R4
+// commit itself from git objects (M1_R5_PARENT); the HEAD / index / checkout identity is held by the R5 guard (R5G-01).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
-import { m1EffectivePins, m1EffectivePageVerdict, m1R3Pins, gitBlobId } from "../support/m1-r1-remediation.mjs";
+import { m1EffectivePins, m1EffectivePageVerdict, m1R3Pins, m1R4Pins, gitBlobId } from "../support/m1-r1-remediation.mjs";
+import { isM1R5Tree, M1_R5_PARENT } from "../support/m1-r5-remediation.mjs";
 import { M1_R2_PROTECTED } from "../support/m1-r2-remediation.mjs";
 import { M1_R3_PINS } from "../support/m1-r3-remediation.mjs";
 import { M1_R4_PARENT, M1_R4_PINS, M1_R4_NEW_FILES, M1_R4_EDITS, M1_R4_SCOPE, isM1R4Tree, deriveR4, applyR4Edits } from "../support/m1-r4-remediation.mjs";
@@ -28,22 +31,31 @@ const blobId = (spec) => { const r = gitIn(REPO, ["rev-parse", "--verify", "-q",
 const bytesOf = (spec) => { const r = gitIn(REPO, ["cat-file", "blob", spec], { encoding: "buffer", maxBuffer: 1 << 28 }); assert.equal(r.status, 0, spec); return r.stdout; };
 const lines = (r) => r.stdout.split("\n").map((x) => x.trim()).filter(Boolean);
 const MODIFIED = Object.keys(M1_R4_PINS).filter((f) => !M1_R4_NEW_FILES.includes(f)).sort();
-const read = (f) => readFileSync(join(REPO, f), "utf8");
+const LAYERED = isM1R5Tree(REPO);
+const R4_TREE = LAYERED ? M1_R5_PARENT : "HEAD";          // the R4 commit itself when the R5 layer is checked out
+const read = (f) => (LAYERED ? bytesOf(`${R4_TREE}:${f}`).toString("utf8") : readFileSync(join(REPO, f), "utf8"));
 
 test("R4G-01 the R4 change set vs the rejected R3 parent is exactly the recorded set; every effective pin holds committed / staged / checked out", { skip: SKIP }, () => {
   assert.equal(M1_R4_PARENT, "acf6880cb4654bee53a5ec0e4b284b14221afc72", "R4 is built on the rejected R3 candidate");
-  assert.equal(gitIn(REPO, ["rev-parse", "HEAD^"]).stdout.trim(), M1_R4_PARENT, "the R3 candidate is the SOLE parent");
-  assert.equal(gitIn(REPO, ["rev-list", "--parents", "-n", "1", "HEAD"]).stdout.trim().split(" ").length, 2, "one parent");
+  assert.equal(gitIn(REPO, ["rev-parse", R4_TREE + "^"]).stdout.trim(), M1_R4_PARENT, "the R3 candidate is the SOLE parent");
+  assert.equal(gitIn(REPO, ["rev-list", "--parents", "-n", "1", R4_TREE]).stdout.trim().split(" ").length, 2, "one parent");
   for (const [f, pin] of Object.entries(M1_R4_PINS)) assert.match(pin, /^[0-9a-f]{40}$/, f + ": literal blob id");
-  const committed = lines(gitIn(REPO, ["diff", "--name-only", M1_R4_PARENT, "HEAD", "--"])).filter((f) => M1_R2_PROTECTED.test(f));
-  const staged = lines(gitIn(REPO, ["diff", "--name-only", "--cached", M1_R4_PARENT, "--"])).filter((f) => M1_R2_PROTECTED.test(f));
-  const working = [...lines(gitIn(REPO, ["diff", "--name-only", M1_R4_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => M1_R2_PROTECTED.test(f));
-  for (const [label, set] of [["committed", committed], ["staged", staged], ["working tree", working]])
+  const committed = lines(gitIn(REPO, ["diff", "--name-only", M1_R4_PARENT, R4_TREE, "--"])).filter((f) => M1_R2_PROTECTED.test(f));
+  const sets = [["committed", committed]];
+  if (!LAYERED) {
+    sets.push(["staged", lines(gitIn(REPO, ["diff", "--name-only", "--cached", M1_R4_PARENT, "--"])).filter((f) => M1_R2_PROTECTED.test(f))]);
+    sets.push(["working tree", [...lines(gitIn(REPO, ["diff", "--name-only", M1_R4_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => M1_R2_PROTECTED.test(f))]);
+  }
+  for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), Object.keys(M1_R4_PINS).sort(), label + ": protected changes vs the R3 parent = the recorded R4 set");
-  const eff = { ...m1EffectivePins(REPO), ...SERVER_READER_EFFECTIVE_BLOBS };
+  // the R4 commit's own pin table: on an R5 tree the M1 ⊕ R1 ⊕ R2 ⊕ R3 ⊕ R4 pins and the approved reader table with the R4 builder pin
+  const r4Reader = { ...SERVER_READER_APPROVED_BLOBS };
+  for (const f of Object.keys(r4Reader)) if (M1_R4_PINS[f]) r4Reader[f] = M1_R4_PINS[f];
+  const eff = LAYERED ? { ...m1R4Pins(), ...r4Reader } : { ...m1EffectivePins(REPO), ...SERVER_READER_EFFECTIVE_BLOBS };
   for (const f of Object.keys(M1_R4_PINS)) assert.equal(eff[f], M1_R4_PINS[f], f + " is held to its R4 pin by the effective tables");
   for (const [f, pin] of Object.entries(eff)) {
-    assert.equal(blobId("HEAD:" + f), pin, f + " committed");
+    assert.equal(blobId(R4_TREE + ":" + f), pin, f + " committed" + (LAYERED ? " (at the R4 commit)" : ""));
+    if (LAYERED) continue;
     assert.equal(blobId(":" + f), pin, f + " staged");
     assert.equal(gitBlobId(readFileSync(join(REPO, f))), pin, f + " checked out");
   }
@@ -64,11 +76,11 @@ test("R4G-02 provenance: each R4 pin is the R3 parent's bytes + exactly the reco
 });
 
 test("R4G-03 scope: analytics identity / run outcome, the page's setup corrections and the two admin handlers only", { skip: SKIP }, () => {
-  const all = lines(gitIn(REPO, ["diff", "--name-only", M1_R4_PARENT, "HEAD", "--"]));
+  const all = lines(gitIn(REPO, ["diff", "--name-only", M1_R4_PARENT, R4_TREE, "--"]));
   assert.deepEqual(all.filter((f) => M1_R2_PROTECTED.test(f) && !M1_R4_SCOPE.includes(f)), [], "no other protected file");
   assert.deepEqual(all.filter((f) => /^(database\.rules\.json|vercel\.json|package(-lock)?\.json|fincore\/|lib\/|tools\/|test\/emulator\/database\.rules\.json$)/.test(f)), [], "no Rules / config / shared module / Core / e-mail / tool change");
   for (const f of ["lib/businessRegistry.js", "lib/securityContext.js", "lib/emailDelivery.js", "lib/sendEmail.js", "api/daily-snapshot/run.ts", "api/cost-history.js", "vercel.json", "database.rules.json", "src/snapshot/snapshotBuilder.ts", "src/alerts/runner.ts"])
-    assert.equal(blobId("HEAD:" + f), blobId(`${M1_R4_PARENT}:${f}`), f + " is the R3 bytes");
+    assert.equal(blobId(R4_TREE + ":" + f), blobId(`${M1_R4_PARENT}:${f}`), f + " is the R3 bytes");
   // the page: no write line is added or removed (the corrections are decisions around the existing CAS)
   const writes = (s) => s.split("\n").filter((l) => C1_WRITE_TOKENS.some((t) => l.includes(t)));
   const before = writes(bytesOf(`${M1_R4_PARENT}:index.html`).toString("utf8")), after = writes(read("index.html"));
@@ -95,7 +107,7 @@ test("R4G-03 scope: analytics identity / run outcome, the page's setup correctio
     assert.ok(at > 0 && (AREG.some(([i, j]) => at >= i && at + e.to.length <= j) || (at >= comment && at < AREG[1][0])), "admin edit inside bootstrap-self / create-client: " + e.to.slice(0, 80));
   }
   // the builder: no financial line changes
-  const removed = (f) => gitIn(REPO, ["diff", "-U0", M1_R4_PARENT, "HEAD", "--", f]).stdout.split("\n").filter((l) => l.startsWith("-") && !l.startsWith("---")).map((l) => l.slice(1));
+  const removed = (f) => gitIn(REPO, ["diff", "-U0", M1_R4_PARENT, R4_TREE, "--", f]).stdout.split("\n").filter((l) => l.startsWith("-") && !l.startsWith("---")).map((l) => l.slice(1));
   assert.deepEqual(removed("src/analytics/dailyBuilder.ts").filter((l) => /canonical|toAnalyticsFinancials|loadCanonicalInputs|fin\b|payroll|purchases|revenue|labor|vat|forecast/i.test(l)), [], "no financial line of the builder is removed or rewritten");
   assert.deepEqual(removed("api/analytics/daily-builder.ts").filter((l) => !l.startsWith("import ") && /requireCron|requireAuth|requireTenantAccess|hasBusinessAccess|isRateLimited|validInsightsReadback|normalizedPreview/.test(l)), [], "no authorization / rate-limit / diagnostic line of the endpoint is removed");
 });
@@ -112,7 +124,7 @@ test("R4G-04 non-vacuity: changed anchors, dropped or altered edits are refused;
   }
   assert.equal(applyR4Edits("index.html", "no anchors here").reason, "edit_anchor_not_unique");
   assert.equal(m1EffectivePageVerdict(REPO, bytesOf(`${M1_R4_PARENT}:index.html`)).reason, "not_the_recorded_derivation", "the rejected R3 page is refused on the R4 tree");
-  assert.deepEqual(m1EffectivePageVerdict(REPO, readFileSync(join(REPO, "index.html"))), { ok: true }, "positive control");
+  assert.deepEqual(m1EffectivePageVerdict(REPO, LAYERED ? bytesOf(`${R4_TREE}:index.html`) : readFileSync(join(REPO, "index.html"))), { ok: true }, "positive control");
   assert.equal(M1_R3_PINS["index.html"], blobId(`${M1_R4_PARENT}:index.html`), "the parent page is the R3 pin");
 });
 

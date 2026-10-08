@@ -24,6 +24,9 @@ import { isM1R3Tree, M1_R3_PINS, applyR3Edits } from "./m1-r3-remediation.mjs";
 // M1 R4 (successor of the rejected R3 candidate): its pins overlay the M1 ⊕ R1 ⊕ R2 ⊕ R3 pins on an R4 tree, and its page is
 // the R3 page + exactly the recorded R4 page edits (test/support/m1-r4-remediation.mjs).
 import { isM1R4Tree, M1_R4_PINS, applyR4Edits } from "./m1-r4-remediation.mjs";
+// M1 R5 (successor of the rejected R4 candidate): its ONE pin (the nightly builder) overlays the M1 ⊕ R1 ⊕ R2 ⊕ R3 ⊕ R4 pins on
+// an R5 tree (test/support/m1-r5-remediation.mjs). R5 changes no page byte.
+import { isM1R5Tree, M1_R5_PINS } from "./m1-r5-remediation.mjs";
 
 const RECORD = JSON.parse(readFileSync(new URL("./m1-r1-remediation.json", import.meta.url), "utf8"));
 export const M1_R1_PARENT = RECORD.parent;
@@ -44,8 +47,11 @@ export function m1EffectivePins(repo) {
   if (!isM1R1Tree(repo)) return { ...M1_PINS.blobs };
   if (!isM1R2Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS };
   if (!isM1R3Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS };
+  if (isM1R5Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS, ...M1_R5_PINS };
   return isM1R4Tree(repo) ? { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS } : { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS };
 }
+/** The pins of the R4 commit itself (M1 ⊕ R1 ⊕ R2 ⊕ R3 ⊕ R4), whatever later layer is checked out. */
+export function m1R4Pins() { return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS }; }
 /** The pins of the R3 commit itself (M1 ⊕ R1 ⊕ R2 ⊕ R3), whatever later layer is checked out. */
 export function m1R3Pins() { return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS }; }
 /** The pins of the R2 commit itself (M1 ⊕ R1 ⊕ R2), whatever later layer is checked out. */
