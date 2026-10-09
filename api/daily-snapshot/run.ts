@@ -4,8 +4,8 @@ import { buildSnapshotForBiz, buildSnapshotForAll } from "../../src/snapshot/sna
 import { sendSnapshotEmail } from "../../src/snapshot/snapshotEmail.js";
 import { requireCron, requireBizContext } from "../../lib/securityContext.js";
 import { deliverWithReceipt, deliverWithoutReceipt, boundedCode, DAILY_SNAPSHOT_KIND,
-  readDeliveryTarget, recordMissingNameNotice, clearDeliveryNotice, readDeliveryNotice, MISSING_NAME_NOTICE_HE } from "../../lib/emailDelivery.js";
-import type { DeliveryTarget, DeliveryTargetCode } from "../../lib/emailDelivery.js";
+  readDeliveryTarget, recordMissingNameNotice, clearDeliveryNotice, readDeliveryNoticeState } from "../../lib/emailDelivery.js";
+import type { DeliveryTarget, DeliveryTargetCode, DeliveryNotice, DeliveryNoticeState } from "../../lib/emailDelivery.js";
 
 function setCorsHeaders(req: VercelRequest, res: VercelResponse): void {
   const origin = (req.headers.origin as string) || "";
@@ -142,8 +142,10 @@ function errorClass(error: unknown): string {
 //   422  registry_unreadable         the registry node exists but is malformed (shape / JSON / not an array)
 //   422  business_name_unavailable   the registered record has no usable name (owner decision G4): preserved, not e-mailed
 //   503  registry_unavailable        the registry could not be read (transport)
-//   503  snapshot_build_failed       the snapshot could not be built (any builder failure); a SyntaxError from an undecodable
-//                                    registry envelope inside the builder is 422 registry_unreadable
+//   503  snapshot_build_failed       the snapshot could not be built: ANY builder throw that the builder itself did not
+//                                    attribute to the registry (R7, review finding OD-01 — a failure is classified by the
+//                                    operation that failed, never by the exception class: a SyntaxError raised while the
+//                                    snapshot data is read is a build failure, not a malformed registry)
 // Bodies are a fixed sentence plus the bounded code (and the caller-supplied, already authorized ids); never raw error
 // text, never registry bytes (a Node SyntaxError message embeds the input), never an address or a financial figure.
 const MANUAL_REFUSALS: Record<DeliveryTargetCode | "snapshot_build_failed", { status: number; error: string }> = {
@@ -155,10 +157,41 @@ const MANUAL_REFUSALS: Record<DeliveryTargetCode | "snapshot_build_failed", { st
   registry_unavailable:        { status: 503, error: "Business registry temporarily unavailable; email not sent" },
   snapshot_build_failed:       { status: 503, error: "Snapshot could not be built; email not sent" },
 };
-/** The bounded manual refusal for a builder throw: a registry SyntaxError is a malformed registry, anything else a build failure. */
+// The bounded codes a builder may attribute itself (delivery coordination contract §3: `throw new Error(<code>)`, the message
+// EQUAL to the code). Only the builder knows which of its operations failed; the route never infers the source from the
+// exception class or from any other property of the thrown value.
+const BUILDER_ATTRIBUTED_CODES: ReadonlySet<string> = new Set<DeliveryTargetCode>(["invalid_business_identity", "business_not_registered",
+  "ambiguous_business_identity", "registry_unreadable", "business_name_unavailable", "registry_unavailable"]);
+/**
+ * The bounded manual refusal for a builder throw (R7): the code the builder attributed (its message, compared for exact
+ * equality against the bounded set — never logged, never echoed), else snapshot_build_failed. The registry itself was
+ * already read and found deliverable by the route's own gate before the builder ran, so an unattributed throw — of any
+ * class, a SyntaxError included — is a failure of the build, not of the registry.
+ */
 function builderRefusal(error: unknown): keyof typeof MANUAL_REFUSALS {
-  return errorClass(error) === "SyntaxError" ? "registry_unreadable" : "snapshot_build_failed";
+  let message: unknown;
+  try { message = (error as { message?: unknown } | null)?.message; } catch { message = undefined; }
+  return typeof message === "string" && BUILDER_ATTRIBUTED_CODES.has(message) ? (message as DeliveryTargetCode) : "snapshot_build_failed";
 }
+
+// ── the owner notice read (action: "notice"; R7, review finding OD-02) ─────────────────────────────────────────────────
+// Three states are reported DISTINCTLY and never collapsed into one another:
+//   deliverable / code   the business / name state from the registry read (the route's own gate; null when the registry
+//                        could not be read)
+//   noticeState          the notice STORE state: "active" (stored, and the cause persists), "stale" (stored, but the
+//                        business is no longer in the missing-name state), "none" (read, nothing stored — confirmed),
+//                        "unavailable" (the store could not be read — nothing is known, nothing is manufactured)
+//   clearState           what happened to a stored notice whose cause is gone: "cleared" (the removal was acknowledged),
+//                        "failed" (the removal failed — the notice is STILL stored), "not_needed" (nothing was stored),
+//                        "not_attempted" (an earlier step failed), "not_applicable" (the cause persists)
+// HTTP 200 only when every step succeeded; a store that cannot be read or cleared is 503 with `status: "unavailable"`, the
+// same bounded shape as the pre-send infrastructure refusals (no raw error text; the stored record, when returned, carries
+// no financial figure, no address and no name). A notice is NEVER synthesized: when nothing is stored, `notice` is null
+// and `noticeState` says so; the business state alone says whether the Daily is blocked.
+type NoticeState = "active" | "stale" | "none" | "unavailable";
+type ClearState = "cleared" | "failed" | "not_needed" | "not_attempted" | "not_applicable";
+const NOTICE_UNAVAILABLE = { registry: "Business registry temporarily unavailable; notice state unknown",
+  read: "Daily notice store temporarily unavailable; notice state unknown", clear: "Daily notice could not be cleared; notice still stored" };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   setCorsHeaders(req, res);
@@ -312,18 +345,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // send: owner / super_owner of the tenant, through requireBizContext). Nothing is sent. A notice whose cause is gone
       // (the name is present again) is removed on read; a target that is not deliverable for another reason is reported as such.
       if (action === "notice") {
-        if (target.state === "unavailable") return refuse("registry_unavailable");
-        if (target.state === "deliverable") {
-          await clearDeliveryNotice(db, tenantId, bizId);
-          return res.status(200).json({ status: "ok", tenantId, bizId, deliverable: true, code: null, notice: null });
-        }
-        let notice: Awaited<ReturnType<typeof readDeliveryNotice>> | null = null;
-        if (target.state === "name_unavailable") {
-          try { notice = await readDeliveryNotice(db, tenantId, bizId); } catch { notice = null; }
-          // no scheduled run has recorded it yet (or the read failed): the same notice, not yet counted
-          if (notice === null) notice = { code: "business_name_unavailable", message: MISSING_NAME_NOTICE_HE, tenantId, bizId, businessDate: null, firstSeenAt: 0, lastSeenAt: 0, runs: 0 };
-        }
-        return res.status(200).json({ status: "ok", tenantId, bizId, deliverable: false, code: target.code, notice });
+        const reply = (ok: boolean, error: string | null, noticeState: NoticeState, clearState: ClearState, notice: DeliveryNotice | null) => {
+          if (!ok) console.warn("[daily-snapshot] notice state unavailable", { tenantId, bizId, noticeState, clearState });
+          const deliverable = target.state === "unavailable" ? null : target.state === "deliverable";
+          return res.status(ok ? 200 : 503).json({ status: ok ? "ok" : "unavailable", ...(error === null ? {} : { error }),
+            tenantId, bizId, deliverable, code: target.code, notice, noticeState, clearState });
+        };
+        // 1. the business / name state: unknown when the registry could not be read — the store is not consulted
+        if (target.state === "unavailable") return reply(false, NOTICE_UNAVAILABLE.registry, "unavailable", "not_attempted", null);
+        // 2. the notice store state: read, never manufactured
+        const stored: DeliveryNoticeState = await readDeliveryNoticeState(db, tenantId, bizId);
+        if (stored.state === "unavailable") return reply(false, NOTICE_UNAVAILABLE.read, "unavailable", "not_attempted", null);
+        const record = stored.state === "present" ? stored.record : null;
+        // 3. the cause persists: the stored notice (if any) is active; the business state alone blocks the Daily
+        if (target.state === "name_unavailable") return reply(true, null, stored.state === "present" ? "active" : "none", "not_applicable", record);
+        // 4. the business is not deliverable for another reason: a stored notice is stale but is not touched (no healthy state was confirmed)
+        if (target.state !== "deliverable") return reply(true, null, stored.state === "present" ? "stale" : "none", "not_applicable", record);
+        // 5. the name is present again: a stored notice is removed; "cleared" is claimed only once the removal is acknowledged
+        if (stored.state === "absent") return reply(true, null, "none", "not_needed", null);
+        const cleared = await clearDeliveryNotice(db, tenantId, bizId);
+        return cleared ? reply(true, null, "none", "cleared", null) : reply(false, NOTICE_UNAVAILABLE.clear, "stale", "failed", record);
       }
 
       if (target.state !== "deliverable") return refuse(target.code);
@@ -331,7 +372,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       let snapshot: Awaited<ReturnType<typeof buildSnapshotForBiz>>;
       try { snapshot = await buildSnapshotForBiz(tenantId, bizId); }
       catch (error) {
-        // the error is untrusted (D4): only its class is read; a registry SyntaxError is a malformed registry, the rest a build failure
+        // the error is untrusted (D4): only its class is logged; the refusal is the code the builder attributed, else a build failure
         console.error(`[daily-snapshot] manual build failed (${errorClass(error)})`);
         return refuse(builderRefusal(error));
       }

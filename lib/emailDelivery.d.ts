@@ -67,6 +67,9 @@ export function deliveryNoticePath(tenantId: string, bizId: string): string | nu
 export function recordMissingNameNotice(db: unknown, args: { tenantId: string; bizId: string; businessDate: string | null; nowMs?: number }): Promise<"recorded" | "not_recorded">;
 export function clearDeliveryNotice(db: unknown, tenantId: string, bizId: string): Promise<boolean>;
 export function readDeliveryNotice(db: unknown, tenantId: string, bizId: string): Promise<DeliveryNotice | null>;
+/** R7: the notice store state, never a manufactured notice; never throws. */
+export type DeliveryNoticeState = { state: "present"; record: DeliveryNotice | null } | { state: "absent" } | { state: "unavailable" };
+export function readDeliveryNoticeState(db: unknown, tenantId: string, bizId: string): Promise<DeliveryNoticeState>;
 export function recipientHash(email: string): string;
 export const recipientRef: (email: string) => string;
 export function safeRead(obj: unknown, key: string): unknown;

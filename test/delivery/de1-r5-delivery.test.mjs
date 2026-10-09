@@ -190,12 +190,14 @@ test("DR5-05 manual POST refusals before any provider hand-off (G10); the provid
     assert.deepEqual([r.statusCode, r.body.code, smtp.calls.length], [status, code, 0], label);
     assert.deepEqual(lines.filter(leaks), [], label); assert.ok(lines.some((l) => logRe.test(l)), label + "\n" + lines.join("\n"));
   }
-  // a builder SyntaxError is a malformed registry (422), never a build failure and never its message
+  // R7 (test-contract transition, review finding OD-01): a SyntaxError raised while the snapshot DATA is read, with a valid
+  // registry, is a build failure (503 snapshot_build_failed) — the source of a failure is the operation that failed, never the
+  // exception class; and never its message (the R5 assertion expected 422 registry_unreadable here: DR7-01 covers attribution)
   {
     const db = seedWorld({ withSecondBiz: false, withSecondTenant: false }); const smtp = installSmtp([SMTP.accept()]);
     const ref = db.ref; db.ref = (p, q) => { const x = ref(p, q); return p === `tenants/${T}/biz:${B}:entries` ? { ...x, once: async () => { JSON.parse(SECRET_NAME); } } : x; };
     const { value: r, lines } = await captureConsole(() => at(AT, () => post(route, { tenantId: T, bizId: B })));
-    assert.deepEqual([r.statusCode, r.body.code, smtp.calls.length], [422, "registry_unreadable", 0]);
+    assert.deepEqual([r.statusCode, r.body.code, smtp.calls.length], [503, "snapshot_build_failed", 0]);
     assert.deepEqual(lines.filter(leaks), []); assert.ok(!JSON.stringify(r.body).includes(SECRET_NAME));
   }
   // the provider classes, reached only after the gate: 502 refused (one hand-off), 504 unknown (one hand-off)
@@ -288,11 +290,12 @@ test("DR5-07 G4 scheduled (route gate, stubbed builder output): failed row, no s
   globalThis.__STUB_EXTRA = [[T, B, "Unknown"]];                                                   // the pin drops it; the gate sees a named business
   const r4 = await cron(stub);
   assert.deepEqual([r4.statusCode, rowOf(r4, T, B).settlement, smtp2.calls.length, db2.read(NOTICES)], [200, "delivered", 1, null]);
-  // a notice read before any scheduled run: the same notice, not yet counted
+  // a notice read before any scheduled run (R7 test-contract transition, review finding OD-02): the business state says the
+  // Daily is blocked; nothing is stored and NOTHING is manufactured — the R5 assertion expected a synthesized runs: 0 notice
   const db3 = seedWorld({ withSecondBiz: false, withSecondTenant: false }); installSmtp([SMTP.accept()]);
   db3.seed(`tenants/${T}/app/business`, env([{ id: B, name: "" }]));
   const read3 = await at(AT, () => post(route, { tenantId: T, bizId: B, action: "notice" }));
-  assert.deepEqual([read3.statusCode, read3.body.deliverable, read3.body.notice.message, read3.body.notice.runs], [200, false, HE, 0]);
+  assert.deepEqual([read3.statusCode, read3.body.deliverable, read3.body.code, read3.body.notice, read3.body.noticeState, read3.body.clearState], [200, false, "business_name_unavailable", null, "none", "not_applicable"]);
 });
 
 test("DR5-08 the notice is owner-only and tenant-isolated: viewer, manager and another tenant's owner are refused by the unchanged authorization", async () => {
@@ -300,8 +303,10 @@ test("DR5-08 the notice is owner-only and tenant-isolated: viewer, manager and a
   db.seed(`tenants/${T}/app/business`, env([{ id: B, name: "" }, { id: B2, name: "מסעדה ב" }]));
   db.seed(`tenants/${T}/members/u_manager_a`, true); db.seed(`tenants/${T}/roles/u_manager_a`, "manager");
   db.seed(`tenants/${T}/biz_access/${B}/u_viewer_a`, true); db.seed(`tenants/${T}/biz_access/${B}/u_manager_a`, true);
+  // R7: the notice the owner reads is the STORED one (recorded by a scheduled run), never a synthesized record
+  assert.equal(await D.recordMissingNameNotice(db, { tenantId: T, bizId: B, businessDate: DATE, nowMs: AT }), "recorded");
   const owner = await at(AT, () => post(route, { tenantId: T, bizId: B, action: "notice" }));
-  assert.deepEqual([owner.statusCode, owner.body.notice.message], [200, HE]);
+  assert.deepEqual([owner.statusCode, owner.body.notice.message, owner.body.noticeState], [200, HE, "active"]);
   for (const [uid, email, error] of [["u_viewer_a", "viewer-a@example.test", "insufficient role"], ["u_manager_a", "manager-a@example.test", "owner_role_required"]]) {
     const r = await at(AT, () => post(route, { tenantId: T, bizId: B, action: "notice" }, { uid, email }));
     assert.deepEqual([r.statusCode, r.body], [403, { error }], uid + " (the unchanged write-mode floor, then the route's owner gate)");
