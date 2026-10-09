@@ -75,7 +75,13 @@ export interface SnapshotBusinessIdentity {
 }
 
 export interface SnapshotBuildFailure extends SnapshotBusinessIdentity {
-  readonly code: "snapshot_build_failed" | "business_name_unavailable" | "ambiguous_business_identity";
+  readonly code: "snapshot_build_failed" | "business_name_unavailable" | "ambiguous_business_identity" |
+    "invalid_business_identity" | "business_not_registered" | "registry_unreadable" | "registry_unavailable";
+}
+
+type SnapshotRefusalCode = Exclude<SnapshotBuildFailure["code"], "snapshot_build_failed">;
+class SnapshotIdentityRefusal extends Error {
+  constructor(readonly code: SnapshotRefusalCode) { super(code); }
 }
 
 export interface SnapshotExclusion extends SnapshotBusinessIdentity {
@@ -106,17 +112,19 @@ function registryRows(value: unknown): readonly unknown[] | null {
   return decoded.list;
 }
 
-function isUnknownBusinessName(value?: string | null): boolean {
-  const name = value?.trim();
-  return !name || name === "Unknown";
-}
+// Compose the approved M1 R5 identity predicates with the RTDB key restriction in
+// D-CTRL. This only rules out control characters; it does not trim or reinterpret ids.
+const RTDB_CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+const isAddressableTenant = (id: unknown): id is string => typeof id === "string" && isValidId(id) && !RTDB_CONTROL_CHARS.test(id);
+const isAddressableBusiness = (id: unknown): id is string => typeof id === "string" && isRegistryBizId(id) && !RTDB_CONTROL_CHARS.test(id);
+const usableName = (name: unknown): name is string => typeof name === "string" && name.trim() !== "";
 
 export async function buildSnapshotForBiz(
   tenantId: string,
   bizId: string,
   opts?: { readonly nowMs?: number }
 ): Promise<SnapshotData> {
-  if (!isValidId(tenantId) || !isRegistryBizId(bizId)) throw new Error("invalid_business_identity");
+  if (!isAddressableTenant(tenantId) || !isAddressableBusiness(bizId)) throw new SnapshotIdentityRefusal("invalid_business_identity");
   const db = getDb();
   // ONE clock read for the whole snapshot: the same instant fixes the business date of the
   // loader (Actual = D-1) and the projection's engine run.
@@ -124,12 +132,17 @@ export async function buildSnapshotForBiz(
 
   // Resolve the exact registered identity before constructing a business-scoped
   // financial path. A malformed twin is a refusal, never a name or authority.
-  const businessSnap = await db.ref(`tenants/${tenantId}/app/business`).once("value");
+  let businessSnap;
+  try { businessSnap = await db.ref(`tenants/${tenantId}/app/business`).once("value"); }
+  catch { throw new SnapshotIdentityRefusal("registry_unavailable"); }
   const selected = resolveRegistryTarget(businessSnap.val(), bizId);
-  if (selected.state === "ambiguous") throw new Error("ambiguous_business_identity");
-  if (selected.state !== "registered" || !selected.record) throw new Error("business_registry_unavailable");
+  if (selected.state === "ambiguous") throw new SnapshotIdentityRefusal("ambiguous_business_identity");
+  if (selected.state === "not_registered") throw new SnapshotIdentityRefusal("business_not_registered");
+  if (selected.state === "unreadable") throw new SnapshotIdentityRefusal("registry_unreadable");
+  if (selected.state !== "registered" || !selected.record) throw new SnapshotIdentityRefusal("ambiguous_business_identity");
   const business = selected.record;
-  const bizName = typeof business?.name === "string" ? business.name : "Unknown";
+  if (!usableName(business.name)) throw new SnapshotIdentityRefusal("business_name_unavailable");
+  const bizName = business.name;
   const inputs = await loadCanonicalInputs(db, tenantId, bizId, {
     site: "snapshotBuilder", nowMs, need: { config: true, fixed: true, exceptions: true },
   });
@@ -233,7 +246,7 @@ export async function buildSnapshotRun(opts?: { readonly nowMs?: number }): Prom
     if (typeof tenantId !== "string" || typeof bizId !== "string") return false;
     const t = tenantId;
     const b = bizId;
-    if (!isValidId(t) || !isRegistryBizId(b)) return false;
+    if (!isAddressableTenant(t) || !isAddressableBusiness(b)) return false;
     if (t === b) {
       legacySelfSkipped++;
       exclusions.push({ ...identity(t, b), reason: "legacy_self" });
@@ -293,7 +306,7 @@ export async function buildSnapshotRun(opts?: { readonly nowMs?: number }): Prom
         // any other primitive is malformed.
         if (rawValue === false) {
           const parts = key.split(":");
-          if (parts.length === 2 && isValidId(parts[0]) && isRegistryBizId(parts[1])) {
+          if (parts.length === 2 && isAddressableTenant(parts[0]) && isAddressableBusiness(parts[1])) {
             inactiveSkipped++;
             exclusions.push({ ...identity(parts[0], parts[1]), reason: "explicit_inactive" });
           } else {
@@ -327,7 +340,7 @@ export async function buildSnapshotRun(opts?: { readonly nowMs?: number }): Prom
           }
         }
 
-        if (!isValidId(tenantId) || !isRegistryBizId(bizId)) {
+        if (!isAddressableTenant(tenantId) || !isAddressableBusiness(bizId)) {
           malformedSkipped++;
           discoveryFailed("proactive_biz_index", "malformed_entry");
           continue;
@@ -356,7 +369,7 @@ export async function buildSnapshotRun(opts?: { readonly nowMs?: number }): Prom
       discoveryFailed("app_business", "malformed_source");
     } else if (tenantsData && typeof tenantsData === "object") {
       for (const [tenantId, tenantData] of Object.entries(tenantsData)) {
-        if (!isValidId(tenantId)) {
+        if (!isAddressableTenant(tenantId)) {
           discoveryFailed("app_business", "malformed_entry");
           continue;
         }
@@ -384,7 +397,7 @@ export async function buildSnapshotRun(opts?: { readonly nowMs?: number }): Prom
           for (const biz of businesses) {
             if (biz === null) continue;
             nonNull++;
-            if (!biz || typeof biz !== "object" || Array.isArray(biz) || !isRegistryBizId((biz as Business).id)) {
+            if (!biz || typeof biz !== "object" || Array.isArray(biz) || !isAddressableBusiness((biz as Business).id)) {
               malformedSkipped++;
               discoveryFailed("app_business", "malformed_entry");
               continue;
@@ -432,14 +445,10 @@ export async function buildSnapshotRun(opts?: { readonly nowMs?: number }): Prom
   for (const { tenantId, bizId } of activeBusinesses) {
     try {
       const snapshot = await buildSnapshotForBiz(tenantId, bizId, { nowMs });
-      if (isUnknownBusinessName(snapshot.bizName)) {
-        failedBuilds.push({ ...identity(tenantId, bizId), code: "business_name_unavailable" });
-        continue;
-      }
       snapshots.push(snapshot);
     } catch (error) {
-      failedBuilds.push({ ...identity(tenantId, bizId), code: error instanceof Error && error.message === "ambiguous_business_identity"
-        ? "ambiguous_business_identity" : "snapshot_build_failed" });
+      const code = error instanceof SnapshotIdentityRefusal ? error.code : "snapshot_build_failed";
+      failedBuilds.push({ ...identity(tenantId, bizId), code });
     }
   }
 

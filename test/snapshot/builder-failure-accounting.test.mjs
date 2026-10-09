@@ -121,6 +121,91 @@ test('business without authoritative name is a failed expected build', async () 
   assert.equal(result.status, 'incomplete');
 });
 
+test('a literal Unknown is a real name; missing names fail before any financial read', async () => {
+  const db = installDb(makeDb());
+  seedBusiness(db, { tenant: 'tenantA', biz: 'named', entries: null, businesses: [
+    { id: 'named', name: 'Unknown' }, { id: 'unnamed', name: '   ' },
+  ] });
+  const paths = [];
+  const prior = db.ref;
+  db.ref = (path, query) => { paths.push(path); return prior(path, query); };
+  const run = await buildSnapshotRun({ nowMs: NOW });
+  assert.deepEqual(run.expectedBusinesses, [identity('tenantA', 'named'), identity('tenantA', 'unnamed')]);
+  assert.deepEqual(run.snapshots.map(({ bizId, bizName }) => [bizId, bizName]), [['named', 'Unknown']]);
+  assert.deepEqual(run.failedBuilds, [{ ...identity('tenantA', 'unnamed'), code: 'business_name_unavailable' }]);
+  assert.equal(paths.some((path) => path.includes('biz:unnamed:')), false);
+  await assert.rejects(buildSnapshotForBiz('tenantA', 'unnamed', { nowMs: NOW }), { message: 'business_name_unavailable' });
+});
+
+test('manual registry outcomes have the coordination-contract codes', async () => {
+  const db = installDb(makeDb());
+  seed(db, 'tenantA', ['a']);
+  const registry = 'tenants/tenantA/app/business';
+  db.seed(registry, { _v: '[]' });
+  await assert.rejects(buildSnapshotForBiz('tenantA', 'a', { nowMs: NOW }), { message: 'business_not_registered' });
+  db.seed(registry, { _v: '[' });
+  await assert.rejects(buildSnapshotForBiz('tenantA', 'a', { nowMs: NOW }), { message: 'registry_unreadable' });
+  db.seed(registry, { _v: JSON.stringify([{ id: 'a', name: 'A' }]) });
+  const prior = db.ref;
+  db.ref = (path, query) => path === registry
+    ? { ...prior(path, query), once: async () => { throw Error('private transport failure'); } }
+    : prior(path, query);
+  await assert.rejects(buildSnapshotForBiz('tenantA', 'a', { nowMs: NOW }), { message: 'registry_unavailable' });
+});
+
+test('a registry change after discovery keeps its precise scheduled failure code', async () => {
+  for (const [afterDiscovery, code] of [
+    [{ _v: '[]' }, 'business_not_registered'],
+    [{ _v: '[' }, 'registry_unreadable'],
+  ]) {
+    const db = installDb(makeDb());
+    seed(db, 'tenantA', ['a']);
+    const path = 'tenants/tenantA/app/business';
+    const prior = db.ref;
+    db.ref = (p, query) => p === path
+      ? { ...prior(p, query), once: async () => ({ val: () => afterDiscovery }) }
+      : prior(p, query);
+    const run = await buildSnapshotRun({ nowMs: NOW });
+    assert.deepEqual(run.expectedBusinesses, [identity('tenantA', 'a')]);
+    assert.deepEqual(run.failedBuilds, [{ ...identity('tenantA', 'a'), code }]);
+    assert.deepEqual(run.snapshots, []);
+    assert.equal(run.status, 'incomplete');
+  }
+});
+
+test('an unrelated financial read error cannot spoof a registry refusal code', async () => {
+  const db = installDb(makeDb());
+  seed(db, 'tenantA', ['a']);
+  failReads(db, [['tenantA', 'a']], 'registry_unreadable');
+  const run = await buildSnapshotRun({ nowMs: NOW });
+  assert.deepEqual(run.failedBuilds, [{ ...identity('tenantA', 'a'), code: 'snapshot_build_failed' }]);
+});
+
+test('control characters are discovery failures; valid tenant colon remains exact', async () => {
+  const db = installDb(makeDb());
+  seedBusiness(db, { tenant: 't:1', biz: ' b', entries: null, businesses: [{ id: ' b', name: 'Good' }] });
+  db.seed('tenants/tenantA/app/business', { _v: JSON.stringify([{ id: 'bad\u0001id', name: 'Bad' }, { id: 'bad\u007fid', name: 'Bad' }]) });
+  db.seed('proactive_biz_index', {
+    badBusiness: { tenantId: 't:1', bizId: 'bad\u0002id' },
+    badTenant: { tenantId: 't\u0001', bizId: 'safe' },
+  });
+  const paths = [];
+  const prior = db.ref;
+  db.ref = (path, query) => { paths.push(path); return prior(path, query); };
+  const run = await buildSnapshotRun({ nowMs: NOW });
+  assert.deepEqual(run.expectedBusinesses, [identity('t:1', ' b')]);
+  assert.deepEqual(run.snapshots.map(({ tenantId, bizId }) => [tenantId, bizId]), [['t:1', ' b']]);
+  assert.deepEqual(run.discovery.failures, [
+    { source: 'proactive_biz_index', code: 'malformed_entry' },
+    { source: 'proactive_biz_index', code: 'malformed_entry' },
+    { source: 'app_business', code: 'malformed_entry' },
+    { source: 'app_business', code: 'malformed_entry' },
+  ]);
+  assert.equal(paths.some((path) => path.includes('bad\u0001id') || path.includes('bad\u007fid')), false);
+  await assert.rejects(buildSnapshotForBiz('t:1', 'bad\u0001id', { nowMs: NOW }), { message: 'invalid_business_identity' });
+  await assert.rejects(buildSnapshotForBiz('t\u0001', 'safe', { nowMs: NOW }), { message: 'invalid_business_identity' });
+});
+
 test('discovery read failure is incomplete even without expected identities', async () => {
   const db = installDb(makeDb());
   const prior = db.ref;

@@ -29,7 +29,7 @@ async function catchMutation(label, needle, replacement) {
   console.log(`CAUGHT ${label}: accounting invariant rejects mutated real entrypoint`);
 }
 await catchMutation('swallow-failed-build',
-  'failedBuilds.push({ ...identity(tenantId, bizId), code: error instanceof Error && error.message === "ambiguous_business_identity"\n                    ? "ambiguous_business_identity" : "snapshot_build_failed" });',
+  'failedBuilds.push({ ...identity(tenantId, bizId), code });',
   'void identity(tenantId, bizId);');
 await catchMutation('omit-expected-businesses',
   'const expectedBusinesses = activeBusinesses.map(({ tenantId, bizId }) => identity(tenantId, bizId));',
