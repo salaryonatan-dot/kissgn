@@ -317,15 +317,24 @@ test("DR1-09 (D4) untrusted error data on the recipient read and in the route's 
   let c = await captureConsole(() => cron());
   assert.deepEqual([c.value.statusCode, c.value.body.results[0].code], [500, "recipient_unavailable"]);
   assert.deepEqual(c.lines.filter(leaks), []); assert.ok(c.lines.some((l) => l.includes("recipient read failed") && l.includes("(recipient_unavailable)")));
-  // the route's outer catch (POST: the business list read throws inside the builder)
+  // DE1 R5 (owner decision G10): a registry read that throws is the bounded 503 `registry_unavailable` of the pre-send gate
+  // (it was the route's generic 500); a builder failure after the gate is the bounded 503 `snapshot_build_failed`. In both,
+  // nothing of the thrown value reaches the log or the body.
   for (const thrown of [hostile(), "private@example.test", { name: { toString: () => "private@example.test" }, message: "sensitive@example.test" },
     new Proxy({}, { get() { throw new Error("private@example.test"); } })]) {
     db = seedWorld(); installSmtp([SMTP.accept()]);
     ref = db.ref; db.ref = (p, q) => { const x = ref(p, q); return p === `tenants/${T}/app/business` ? { ...x, once: async () => { throw thrown; } } : x; };
     c = await captureConsole(() => at(AT, () => runManual(route)));
-    assert.deepEqual([c.value.statusCode, c.value.body], [500, { error: "Internal server error" }]);
+    assert.deepEqual([c.value.statusCode, c.value.body], [503, { error: "Business registry temporarily unavailable; email not sent", code: "registry_unavailable", tenantId: T, bizId: B }]);
     assert.deepEqual(c.lines.filter(leaks), [], c.lines.join("\n"));
-    assert.ok(c.lines.some((l) => /\[daily-snapshot\] run failed \((Error|OTHER)\)$/.test(l)), c.lines.join("\n"));
+    assert.ok(c.lines.some((l) => l.includes("manual send refused") && l.includes('"code":"registry_unavailable"')), c.lines.join("\n"));
+    // the gate passes (registry readable); the builder's own read throws the same hostile values
+    db = seedWorld(); installSmtp([SMTP.accept()]);
+    ref = db.ref; db.ref = (p, q) => { const x = ref(p, q); return p === `tenants/${T}/biz:${B}:entries` ? { ...x, once: async () => { throw thrown; } } : x; };
+    c = await captureConsole(() => at(AT, () => runManual(route)));
+    assert.deepEqual([c.value.statusCode, c.value.body], [503, { error: "Snapshot could not be built; email not sent", code: "snapshot_build_failed", tenantId: T, bizId: B }]);
+    assert.deepEqual(c.lines.filter(leaks), [], c.lines.join("\n"));
+    assert.ok(c.lines.some((l) => /\[daily-snapshot\] manual build failed \((Error|OTHER)\)$/.test(l)), c.lines.join("\n"));
   }
 });
 

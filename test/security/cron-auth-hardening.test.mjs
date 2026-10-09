@@ -45,6 +45,8 @@ function build(routeRel, outRel, extraStubs) {
   copyFileSync(join(REPO, "lib", "bizAccess.js"), join(dir, "lib", "bizAccess.js"));
   // daily e-mail reliability: the snapshot route's delivery receipts / outcome classification (real, dependency-free)
   if (existsSync(join(REPO, "lib", "emailDelivery.js"))) copyFileSync(join(REPO, "lib", "emailDelivery.js"), join(dir, "lib", "emailDelivery.js"));
+  // DE1 R5 (delivery owner decisions): the receipt module composes the REAL shared registry predicate (dependency-free)
+  if (existsSync(join(REPO, "lib", "businessRegistry.js"))) copyFileSync(join(REPO, "lib", "businessRegistry.js"), join(dir, "lib", "businessRegistry.js"));
   // lazy deps of requireBizContext
   mk("lib/verifyToken.js", STUB_VERIFYTOKEN);
   mk("lib/helpers.js", STUB_HELPERS);
@@ -91,7 +93,9 @@ function setH(o = {}) {
   const calls = [];
   const state = {
     bizAccessVal: o.bizAccessVal !== undefined ? o.bizAccessVal : true,
-    business: o.business || [{ id: "b1", name: "Biz" }],
+    // the runtime registry representation ({ _v: "<JSON array>" }, lib/businessRegistry.js): the delivery route resolves the
+    // target against it with the approved predicate before a manual send (DE1 R5)
+    business: o.business || { _v: JSON.stringify([{ id: "b1", name: "Biz" }]) },
     users: o.users || [{ firebaseUid: "u1", role: "owner", email: "owner@x.com", allowedBizIds: ["b1"] }],
     insights: o.insights !== undefined ? o.insights : null,
   };

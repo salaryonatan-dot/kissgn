@@ -3,7 +3,9 @@ import { getDb } from "../../src/firebase/admin.js";
 import { buildSnapshotForBiz, buildSnapshotForAll } from "../../src/snapshot/snapshotBuilder.js";
 import { sendSnapshotEmail } from "../../src/snapshot/snapshotEmail.js";
 import { requireCron, requireBizContext } from "../../lib/securityContext.js";
-import { deliverWithReceipt, deliverWithoutReceipt, boundedCode, DAILY_SNAPSHOT_KIND } from "../../lib/emailDelivery.js";
+import { deliverWithReceipt, deliverWithoutReceipt, boundedCode, DAILY_SNAPSHOT_KIND,
+  readDeliveryTarget, recordMissingNameNotice, clearDeliveryNotice, readDeliveryNotice, MISSING_NAME_NOTICE_HE } from "../../lib/emailDelivery.js";
+import type { DeliveryTarget, DeliveryTargetCode } from "../../lib/emailDelivery.js";
 
 function setCorsHeaders(req: VercelRequest, res: VercelResponse): void {
   const origin = (req.headers.origin as string) || "";
@@ -100,7 +102,8 @@ async function resolveOwnerRecipient(tenantId: string): Promise<RecipientResult>
 
 // Run outcome (R1, review finding D1). Every row settles into exactly one class:
 //   delivered   provider acceptance is DURABLY RECORDED: accepted with the receipt recorded, or already_accepted
-//   no_send     a no-send condition of the contract (unknown business name)
+//   no_send     reserved: no contract no-send condition remains (owner decision G4, 2026-10-09: a business without a name is a
+//               FAILED row `business_name_unavailable`, never a silent no-send); the class is kept for the response shape
 //   pending     an unresolved active claim held by another invocation (in_progress): not delivered, not failed — yet
 //   unknown     the provider may have accepted it (unknown / unknown_requires_reconciliation): never re-sent automatically
 //   unrecorded  the provider accepted it but the receipt could not be finalized
@@ -113,7 +116,6 @@ type Settlement = "delivered" | "no_send" | "pending" | "unknown" | "unrecorded"
 function settle(outcome: string, code: string | null, receipt?: string): Settlement {
   if (outcome === "accepted") return receipt === "recorded" ? "delivered" : "unrecorded";
   if (outcome === "skipped" && code === "already_accepted") return "delivered";
-  if (outcome === "skipped" && code === "unknown_business_name") return "no_send";
   if (outcome === "skipped" && code === "in_progress") return "pending";
   if (outcome === "unknown" || (outcome === "skipped" && code === "unknown_requires_reconciliation")) return "unknown";
   return "failed";
@@ -126,9 +128,36 @@ function errorClass(error: unknown): string {
   return typeof name === "string" && SAFE_ERROR_NAMES.has(name) ? name : "OTHER";
 }
 
-function isUnknownBusinessName(value?: string | null): boolean {
-  const name = value?.trim();
-  return !name || name === "Unknown";
+// ── the pre-send identity gate (owner decisions G4 / G10 / control characters, 2026-10-09) ─────────────────────────────
+// Before a business-scoped path is built or a message is addressed, (tenantId, bizId) is resolved against the tenant's
+// registry with the approved shared predicates (lib/emailDelivery.js readDeliveryTarget → lib/businessRegistry.js). Every
+// refusal happens BEFORE the recipient is resolved and BEFORE any provider hand-off, so "nothing was sent" is certain, and
+// the refusal is disjoint — by status and by code — from a provider refusal (502 email_not_sent) and from an unknown
+// acceptance (504 email_outcome_unknown). Nothing is sent, no receipt is written and no claim is touched for a refused row.
+//
+// Manual POST mapping (owner decision G10):
+//   400  invalid_business_identity   the request names nothing addressable (control character, `:` in a business id, …)
+//   404  business_not_registered     the registry is readable and denotes no such business (definitive)
+//   422  ambiguous_business_identity the registry cannot establish the identity uniquely (duplicate / non-canonical twin)
+//   422  registry_unreadable         the registry node exists but is malformed (shape / JSON / not an array)
+//   422  business_name_unavailable   the registered record has no usable name (owner decision G4): preserved, not e-mailed
+//   503  registry_unavailable        the registry could not be read (transport)
+//   503  snapshot_build_failed       the snapshot could not be built (any builder failure); a SyntaxError from an undecodable
+//                                    registry envelope inside the builder is 422 registry_unreadable
+// Bodies are a fixed sentence plus the bounded code (and the caller-supplied, already authorized ids); never raw error
+// text, never registry bytes (a Node SyntaxError message embeds the input), never an address or a financial figure.
+const MANUAL_REFUSALS: Record<DeliveryTargetCode | "snapshot_build_failed", { status: number; error: string }> = {
+  invalid_business_identity:   { status: 400, error: "Business identity is not addressable; email not sent" },
+  business_not_registered:     { status: 404, error: "Business is not registered in this tenant; email not sent" },
+  ambiguous_business_identity: { status: 422, error: "Business identity is ambiguous in the registry; email not sent" },
+  registry_unreadable:         { status: 422, error: "Business registry is unreadable; email not sent" },
+  business_name_unavailable:   { status: 422, error: "Unknown business snapshot; email not sent" },
+  registry_unavailable:        { status: 503, error: "Business registry temporarily unavailable; email not sent" },
+  snapshot_build_failed:       { status: 503, error: "Snapshot could not be built; email not sent" },
+};
+/** The bounded manual refusal for a builder throw: a registry SyntaxError is a malformed registry, anything else a build failure. */
+function builderRefusal(error: unknown): keyof typeof MANUAL_REFUSALS {
+  return errorClass(error) === "SyntaxError" ? "registry_unreadable" : "snapshot_build_failed";
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -188,18 +217,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // (business, business date) by automation: a receipt (lib/emailDelivery.js) is claimed before the provider is
       // called, so a duplicate, concurrent or re-run invocation never re-sends an accepted or possibly-accepted message.
       type Row = { tenantId: string; bizId: string; businessDate: string | null; outcome: string; code: string | null; settlement: Settlement;
-        attempt?: number; receipt?: string; phase?: string; recipientSelection?: RecipientSelection };
+        attempt?: number; receipt?: string; phase?: string; recipientSelection?: RecipientSelection; notice?: "recorded" | "not_recorded" };
       const results: Row[] = [];
+      const registryCache = new Map<string, unknown>();   // one registry read per tenant per run
 
       for (const snapshot of snapshots) {
         const base = { tenantId: snapshot.tenantId, bizId: snapshot.bizId, businessDate: snapshot.date ?? null };
-        if (isUnknownBusinessName(snapshot.bizName)) {
-          console.warn("[daily-snapshot] skipping snapshot email for unknown business", {
-            tenantId: snapshot.tenantId,
-            bizId: snapshot.bizId,
-            reason: "unknown_business_name",
-          });
-          results.push({ ...base, outcome: "skipped", code: "unknown_business_name", settlement: settle("skipped", "unknown_business_name") });
+        // the pre-send identity gate: only the ONE registered business with a usable name is addressed (G4 / G10 / control
+        // characters). A refused business is a FAILED row with its bounded code — no send, no receipt, no claim — and a
+        // missing name additionally records the owner notice (never a placeholder name, never the e-mail as the notice).
+        const target: DeliveryTarget = await readDeliveryTarget(db, snapshot.tenantId, snapshot.bizId, { cache: registryCache });
+        if (target.state !== "deliverable") {
+          console.warn("[daily-snapshot] business not deliverable", { tenantId: snapshot.tenantId, bizId: snapshot.bizId, code: target.code });
+          const row: Row = { ...base, outcome: "failed", code: target.code, settlement: "failed", receipt: "not_written" };
+          if (target.state === "name_unavailable") row.notice = await recordMissingNameNotice(db, { tenantId: snapshot.tenantId, bizId: snapshot.bizId, businessDate: base.businessDate });
+          results.push(row);
           continue;
         }
 
@@ -265,20 +297,46 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // de-duplicated against the scheduled receipt, but its provider outcome is classified (never a false success).
     if (req.method === "POST" && snapshotCtx) {
       const { tenantId, bizId } = snapshotCtx;
+      const db = getDb();
+      const refuse = (code: keyof typeof MANUAL_REFUSALS) => {
+        console.warn("[daily-snapshot] manual send refused", { tenantId, bizId, code });
+        return res.status(MANUAL_REFUSALS[code].status).json({ error: MANUAL_REFUSALS[code].error, code, tenantId, bizId });
+      };
+      const action = (req.body as { action?: unknown } | undefined)?.action;
+      if (action !== undefined && action !== "notice") return res.status(400).json({ error: "invalid_action" });
 
-      const snapshot = await buildSnapshotForBiz(tenantId, bizId);
-      if (isUnknownBusinessName(snapshot.bizName)) {
-        console.warn("[daily-snapshot] refusing to email snapshot for unknown business", {
-          tenantId,
-          bizId,
-          reason: "unknown_business_name",
-        });
-        return res.status(422).json({
-          error: "Unknown business snapshot; email not sent",
-          tenantId,
-          bizId,
-        });
+      // the pre-send identity gate (G4 / G10 / control characters): resolved before any business-scoped path is built
+      const target = await readDeliveryTarget(db, tenantId, bizId);
+
+      // action: "notice" — the owner-authorized read of the in-app notice for this business (same authorization as a manual
+      // send: owner / super_owner of the tenant, through requireBizContext). Nothing is sent. A notice whose cause is gone
+      // (the name is present again) is removed on read; a target that is not deliverable for another reason is reported as such.
+      if (action === "notice") {
+        if (target.state === "unavailable") return refuse("registry_unavailable");
+        if (target.state === "deliverable") {
+          await clearDeliveryNotice(db, tenantId, bizId);
+          return res.status(200).json({ status: "ok", tenantId, bizId, deliverable: true, code: null, notice: null });
+        }
+        let notice: Awaited<ReturnType<typeof readDeliveryNotice>> | null = null;
+        if (target.state === "name_unavailable") {
+          try { notice = await readDeliveryNotice(db, tenantId, bizId); } catch { notice = null; }
+          // no scheduled run has recorded it yet (or the read failed): the same notice, not yet counted
+          if (notice === null) notice = { code: "business_name_unavailable", message: MISSING_NAME_NOTICE_HE, tenantId, bizId, businessDate: null, firstSeenAt: 0, lastSeenAt: 0, runs: 0 };
+        }
+        return res.status(200).json({ status: "ok", tenantId, bizId, deliverable: false, code: target.code, notice });
       }
+
+      if (target.state !== "deliverable") return refuse(target.code);
+
+      let snapshot: Awaited<ReturnType<typeof buildSnapshotForBiz>>;
+      try { snapshot = await buildSnapshotForBiz(tenantId, bizId); }
+      catch (error) {
+        // the error is untrusted (D4): only its class is read; a registry SyntaxError is a malformed registry, the rest a build failure
+        console.error(`[daily-snapshot] manual build failed (${errorClass(error)})`);
+        return refuse(builderRefusal(error));
+      }
+      // the registry's own name is the one the owner sees in the message — never the builder's placeholder
+      snapshot = { ...snapshot, bizName: target.name };
 
       const recipient = await resolveOwnerRecipient(tenantId);
 

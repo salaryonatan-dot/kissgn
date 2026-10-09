@@ -92,6 +92,8 @@ function build(route) {
   for (const f of ["securityContext.js", "bizAccess.js", ...(route.realLib || [])]) copyFileSync(join(REPO, "lib", f), join(dir, "lib", f));
   // daily e-mail reliability: the snapshot route's delivery receipts / outcome classification (real, dependency-free)
   if (existsSync(join(REPO, "lib", "emailDelivery.js"))) copyFileSync(join(REPO, "lib", "emailDelivery.js"), join(dir, "lib", "emailDelivery.js"));
+  // DE1 R5 (delivery owner decisions): the receipt module composes the REAL shared registry predicate (dependency-free)
+  if (existsSync(join(REPO, "lib", "businessRegistry.js"))) copyFileSync(join(REPO, "lib", "businessRegistry.js"), join(dir, "lib", "businessRegistry.js"));
   for (const [rel, c] of Object.entries({ ...COMMON, ...route.stubs })) put(rel, c);
   const routeAbs = join(dir, route.src);
   mkdirSync(dirname(routeAbs), { recursive: true });
