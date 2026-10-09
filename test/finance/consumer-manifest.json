@@ -521,6 +521,46 @@
    "purchaseBasisImpact": false
   },
   {
+   "id": "S19a",
+   "file": "src/agent/validation/validateData.ts",
+   "sites": "financial availability and data quality validation",
+   "slice": "D",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true,
+   "note": "Inventory only; independent consumer ownership approval remains pending"
+  },
+  {
+   "id": "S19b",
+   "file": "src/agent/financialMonth.ts",
+   "sites": "canonical month report adapter and exact completed revenue coverage",
+   "slice": "D",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true,
+   "note": "Pure Core month assembly and date coverage; independent consumer ownership approval remains pending"
+  },
+  {
+   "id": "S19c",
+   "file": "src/agent/financialMonthSource.ts",
+   "sites": "canonical month and closure source loading",
+   "slice": "D",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true,
+   "note": "Server API source split; independent consumer ownership approval remains pending"
+  },
+  {
+   "id": "S19d",
+   "file": "src/alerts/alertMonthReport.ts",
+   "sites": "canonical alert month source loading",
+   "slice": "D",
+   "disposition": "MIGRATE",
+   "presenceImpact": true,
+   "purchaseBasisImpact": true,
+   "note": "Server API source split; independent consumer ownership approval remains pending"
+  },
+  {
    "id": "S20",
    "file": "src/agent/baseline/selectBaseline.ts",
    "sites": "baselines",

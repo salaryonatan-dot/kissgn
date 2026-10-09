@@ -27,9 +27,12 @@ import { saveProactiveInsight, getRecentInsights } from "../../repositories/proa
 // Phase 2: memory + digest + prioritization
 import { trackInsightOccurrence, isInCooldown, setCooldown } from "./memoryManager.js";
 import { buildDailyDigest } from "./digestBuilder.js";
+import type { AgentFinancialMonth } from "../financialMonth.js";
+import { revenueClosedDates, trustedCompletedRevenueDays } from "../financialMonth.js";
+import { isDeepStrictEqual } from "node:util";
 
 // Utilities
-import { daysAgoIso, todayIso } from "../../utils/dates.js";
+import { addDays, israelBusinessDate } from "../../finance/businessDate.js";
 import { logger } from "../../utils/logging.js";
 import { proactiveBizIndexRef } from "../../firebase/refs.js";
 
@@ -101,14 +104,24 @@ export async function runForBiz(
   const validation = validateData({ fetched, plan, context });
   if (!validation.ok) {
     logger.info(`[Proactive] ${tenantId}/${bizId}: validation failed — skipping`);
-    return { tenantId, bizId, insightsGenerated: 0, insightsSuppressed: 0, insightsUpdated: 0, errors: ["validation_failed"] };
+    const errors = ["validation_failed"];
+    try {
+      await saveDailyDigest(tenantId, bizId, buildDailyDigest(tenantId, bizId, [], 0,
+        ["validation_failed", "purchase_trend_exact_window_source_unavailable", ...validation.issues.map((issue) => issue.code)]));
+    } catch { logger.error("[Proactive] Unavailable digest persistence failed"); errors.push("digest_persistence_failed"); }
+    return { tenantId, bizId, insightsGenerated: 0, insightsSuppressed: 0, insightsUpdated: 0, errors };
   }
 
   // Step 4: Build baseline (reuse existing selectBaseline)
   const baseline = selectBaseline(plan, fetched, context);
   if (!baseline.valid) {
     logger.info(`[Proactive] ${tenantId}/${bizId}: baseline invalid — skipping`);
-    return { tenantId, bizId, insightsGenerated: 0, insightsSuppressed: 0, insightsUpdated: 0, errors: ["baseline_invalid"] };
+    const errors = ["baseline_invalid"];
+    try {
+      await saveDailyDigest(tenantId, bizId, buildDailyDigest(tenantId, bizId, [], 0,
+        ["baseline_invalid", "purchase_trend_exact_window_source_unavailable"]));
+    } catch { logger.error("[Proactive] Unavailable digest persistence failed"); errors.push("digest_persistence_failed"); }
+    return { tenantId, bizId, insightsGenerated: 0, insightsSuppressed: 0, insightsUpdated: 0, errors };
   }
 
   // Step 5: Load recent insights for dedup + suppression
@@ -140,8 +153,17 @@ export async function runForBiz(
     }
   }
 
+  // Forecast risk currently uses the same Actual MTD ratio as the dedicated
+  // labor detector. A second alert for the same measured fact would occupy a
+  // second ranked slot without independent evidence.
+  const uniqueDetectorResults = detectorResults.filter((result) =>
+    result.type !== "forecast_risk" || !detectorResults.some((other) =>
+      other.type === "labor_inefficiency" && other.metric === result.metric &&
+      other.periodStart === result.periodStart && other.periodEnd === result.periodEnd &&
+      other.currentValue === result.currentValue));
+
   // Step 7: Process each detector result through pipeline
-  for (const result of detectorResults) {
+  for (const result of uniqueDetectorResults) {
     try {
       const processed = await processDetectorResult(
         result, tenantId, bizId, branchId, validation, baseline, fetched, recentInsights
@@ -156,15 +178,30 @@ export async function runForBiz(
     }
   }
 
-  // Step 8 (Phase 2): Build daily digest — best-effort, never fails the job
+  // Step 8: persist the ranked top-three with source limitations. A missing
+  // financial finding is not evidence that the business met its targets.
   try {
     const todaysInsights = await getRecentInsights(tenantId, bizId, 1);
-    const digest = buildDailyDigest(tenantId, bizId, todaysInsights, insightsSuppressed);
+    const month = fetched.metrics["financialMonth"] as AgentFinancialMonth | undefined;
+    const limitations = ["purchase_trend_exact_window_source_unavailable"];
+    const closed = revenueClosedDates(fetched.metrics);
+    if (closed === null || !trustedCompletedRevenueDays(fetched.metrics["daily"], plan.timeRange,
+      israelBusinessDate(Date.parse(context.nowIso)), closed)) {
+      limitations.push("revenue_exact_window_unavailable");
+    }
+    if (!month) limitations.push("financial_month_unavailable");
+    else {
+      if (month.report.actual.purchasesPct.state !== "value") limitations.push(`food_cost_${month.report.actual.purchasesPct.state}`);
+      if (month.report.actual.labor.employerCostPct.state !== "value") limitations.push(`labor_${month.report.actual.labor.employerCostPct.state}`);
+      if (!month.report.actual.revenue.complete || month.report.coverage.revenue.presentDays < 28) limitations.push("weak_day_insufficient_revenue_coverage");
+      if (month.projection?.forecast.state !== "complete") limitations.push(`forecast_${month.projection?.forecast.state ?? "unavailable"}`);
+    }
+    const digest = buildDailyDigest(tenantId, bizId, todaysInsights, insightsSuppressed, limitations);
     // Store digest for dashboard/WhatsApp retrieval
     await saveDailyDigest(tenantId, bizId, digest);
-  } catch (err) {
-    logger.error(`[Proactive] Digest build failed for ${tenantId}/${bizId}:`, err);
-    // Best-effort — don't add to errors, don't fail the job
+  } catch {
+    logger.error("[Proactive] Digest build or persistence failed");
+    errors.push("digest_persistence_failed");
   }
 
   return { tenantId, bizId, insightsGenerated, insightsSuppressed, insightsUpdated, errors };
@@ -230,7 +267,7 @@ async function processDetectorResult(
   // Step D: Build the insight object
   const now = new Date().toISOString();
   // fingerprint already computed in Step A.5
-  const dateKey = todayIso();
+  const dateKey = israelBusinessDate(Date.now());
 
   const insight: ProactiveInsight = {
     id: buildSafeInsightId(tenantId, bizId, result.type, dateKey),
@@ -325,14 +362,13 @@ async function writeToAgentMemory(insight: ProactiveInsight): Promise<void> {
  * Path: tenants/{tenantId}/proactive_digests/{bizId}/daily/{date}
  */
 async function saveDailyDigest(tenantId: string, bizId: string, digest: DailyDigest): Promise<void> {
-  try {
-    const { getDb } = await import("../../firebase/admin.js");
-    await getDb()
-      .ref(`tenants/${tenantId}/proactive_digests/${bizId}/daily/${digest.date}`)
-      .set(digest);
-  } catch (err) {
-    logger.error("[Proactive] Failed to save daily digest:", err);
-  }
+  const { getDb } = await import("../../firebase/admin.js");
+  const ref = getDb().ref(`tenants/${tenantId}/proactive_digests/${bizId}/daily/${digest.date}`);
+  await ref.set(digest);
+  const saved = (await ref.once("value")).val();
+  // RTDB omits an empty array; that representation still means zero ranked insights.
+  const readback = saved && typeof saved === "object" ? { ...saved, topInsights: Array.isArray(saved.topInsights) ? saved.topInsights : [] } : null;
+  if (!isDeepStrictEqual(readback, digest)) throw new Error("daily_digest_readback_mismatch");
 }
 
 // --- Synthetic context/plan builders ---
@@ -356,8 +392,8 @@ function buildProactivePlan(context: AgentContext): MetricsPlan {
     dimensions: ["date", "day_of_week"],
     filters: {},
     timeRange: {
-      start: daysAgoIso(28),
-      end: todayIso(),
+      start: addDays(israelBusinessDate(Date.parse(context.nowIso)), -28),
+      end: addDays(israelBusinessDate(Date.parse(context.nowIso)), -1),
     },
     requiresBaseline: true,
     requiresComparison: false,

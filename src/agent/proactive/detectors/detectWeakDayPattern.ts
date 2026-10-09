@@ -5,6 +5,11 @@ import type { FetchedData, BaselineResult } from "../../types/agent.js";
 import type { DetectorResult } from "../types.js";
 import { avg, round2 } from "../../../utils/math.js";
 import { dowToHebDay } from "../../../utils/dates.js";
+import { dowOf } from "../../../finance/businessDate.js";
+import { formatShekel } from "../../../presenters/money.js";
+import { formatPercent } from "../../../presenters/percent.js";
+import type { AgentFinancialMonth } from "../../financialMonth.js";
+import { revenueClosedDates, trustedCompletedRevenueDays } from "../../financialMonth.js";
 
 // --- Thresholds ---
 const MIN_WEEKS = 4;                  // need 4+ full weeks
@@ -15,6 +20,8 @@ const UNIFORMITY_RATIO = 0.80;        // if all days within 80% of each other, s
 interface DailyRecord {
   date: string;
   revenue: number;
+  presence?: { revenue?: string };
+  partial?: { revenue?: boolean };
 }
 
 interface DowStats {
@@ -46,19 +53,26 @@ export function detectWeakDayPattern(
   _baseline: BaselineResult
 ): DetectorResult | null {
   const daily = (fetched.metrics["daily"] as DailyRecord[] | undefined) ?? [];
+  const month = fetched.metrics["financialMonth"] as AgentFinancialMonth | undefined;
+  if (!month || !month.report.actual.revenue.complete || fetched.fetchStatus?.daily !== "ok" || !month.report.window.completedThrough) return null;
+  const monthDays = daily.filter((d) => d.date.startsWith(month.month));
+  const closed = revenueClosedDates(fetched.metrics);
+  if (closed === null) return null;
+  const trusted = trustedCompletedRevenueDays(monthDays,
+    { start: `${month.month}-01`, end: month.report.window.completedThrough }, month.asOfBusinessDate, closed);
+  if (!trusted) return null;
+  const sorted = trusted.days;
+  if (sorted.length < MIN_WEEKS * 7) return null;
 
-  if (daily.length < MIN_WEEKS * 7) return null;
-
-  const sorted = [...daily].sort((a, b) => a.date.localeCompare(b.date));
-
-  // Filter out closed days (revenue = 0) — don't penalize closed days
-  const openDays = sorted.filter((d) => d.revenue > 0);
+  // Explicit zero on an operating day participates; only a declared closure
+  // is excluded. Missing/invalid revenue makes the month report incomplete.
+  const openDays = sorted;
   if (openDays.length < MIN_WEEKS * 5) return null; // need enough open days
 
   // Group by dow
   const byDow: Record<number, number[]> = {};
   for (const d of openDays) {
-    const dow = new Date(d.date + "T12:00:00").getDay();
+    const dow = dowOf(d.date);
     if (!byDow[dow]) byDow[dow] = [];
     byDow[dow].push(d.revenue);
   }
@@ -103,11 +117,11 @@ export function detectWeakDayPattern(
   const strongestDayName = dowToHebDay(dowStats[dowStats.length - 1].dow);
 
   const facts: string[] = [];
-  facts.push(`יום ${dayName}: ממוצע ₪${round2(weakest.avg)}`);
-  facts.push(`ממוצע כללי: ₪${round2(overallAvg)}`);
-  facts.push(`סטייה: ${deviationPct}%`);
+  facts.push(`יום ${dayName}: ממוצע ${formatShekel(String(weakest.avg))}`);
+  facts.push(`ממוצע כללי: ${formatShekel(String(overallAvg))}`);
+  facts.push(`סטייה: ${formatPercent(String(deviationPct))}`);
   facts.push(`מבוסס על ${weakest.count} דגימות`);
-  facts.push(`היום החזק ביותר: ${strongestDayName} (₪${round2(dowStats[dowStats.length - 1].avg)})`);
+  facts.push(`היום החזק ביותר: ${strongestDayName} (${formatShekel(String(dowStats[dowStats.length - 1].avg))})`);
 
   const periodStart = sorted[0].date;
   const periodEnd = sorted[sorted.length - 1].date;

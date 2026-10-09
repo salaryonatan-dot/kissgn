@@ -215,7 +215,11 @@ test("B2-P2 one clock: without nowMs exactly ONE Date.now() read feeds both the 
     calls = 0; await SB.buildSnapshotForBiz(T, B, { nowMs: NOW }); assert.equal(calls, 0, "an injected clock is used as is");
   } finally { Date.now = real; }
   const src = readFileSync(join(REPO, "src/snapshot/snapshotBuilder.ts"), "utf8");
-  assert.equal((src.match(/Date\.now\(\)/g) || []).length, 1); assert.doesNotMatch(src, /new Date\(/);
+  const perBusiness = src.slice(src.indexOf("export async function buildSnapshotForBiz"), src.indexOf("export async function buildSnapshotForAll"));
+  const allBusinesses = src.slice(src.indexOf("export async function buildSnapshotRun"));
+  assert.equal((perBusiness.match(/Date\.now\(\)/g) || []).length, 1, "one clock read per business entrypoint");
+  assert.equal((allBusinesses.match(/Date\.now\(\)/g) || []).length, 1, "one clock read per run entrypoint");
+  assert.doesNotMatch(src, /new Date\(/);
   assert.match(src, /loadCanonicalInputs\([^)]*nowMs,/); assert.match(src, /canonicalMonthProjection\(inputs, report, \{ nowMs \}\)/);
 });
 

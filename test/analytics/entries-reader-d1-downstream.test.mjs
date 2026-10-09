@@ -147,7 +147,7 @@ test("actual proactive flow (runForBiz): identical persisted insight and digest 
   assert.equal(ru.currentValue, 600);
 });
 
-test("NEGATIVE CONTROL — the PRE-FIX repository (f00568d2) let the detector verdict depend solely on UUID / physical order", async () => {
+test("NEGATIVE CONTROL — the PRE-FIX repository emits order-dependent duplicate dates; the current detector refuses them", async () => {
   const show = gitIn(ROOT, ["show", "f00568d26b1fc4c755efa4030733420c116ade40:src/repositories/analytics/dailyMetricsRepo.ts"]);
   assert.equal(show.status, 0, show.stderr);
   const ts = (await import(pathToFileURL(join(ROOT, "node_modules", "typescript", "lib", "typescript.js")).href)).default;
@@ -157,16 +157,18 @@ test("NEGATIVE CONTROL — the PRE-FIX repository (f00568d2) let the detector ve
   const PRE = await import(pathToFileURL(prePath).href);
   const history = past(15);
   const { A, B: Bv } = dup(lastDay, 1, 1000);
-  const verdicts = {};
+  const series = {};
   for (const [name, node] of Object.entries({ "legacy [A,B]": legacyNode([...history, A, Bv]), "legacy [B,A]": legacyNode([...history, Bv, A]), "v2 (reader sorts (date,id): A first)": v2Node([Bv, A, ...history]) })) {
     await seed(node);
     const daily = plain(await PRE.getDailyMetrics(T, dayBefore(28), today, B));
     assert.equal(daily.filter((d) => d.date === lastDay).length, 2, name + ": pre-fix emitted two records for one day");
-    verdicts[name] = plain(DET.detectDailyRevenueUnderperformance({ metrics: { daily } }, baseline));
+    series[name] = daily.filter((d) => d.date === lastDay).map((d) => d.revenue);
+    assert.equal(DET.detectDailyRevenueUnderperformance({ metrics: { daily } }, baseline), null,
+      "unproven and duplicate daily records cannot yield a current finding");
   }
-  assert.equal(verdicts["legacy [A,B]"], null, "pre-fix: last row 1000 → no anomaly");
-  assert.ok(verdicts["legacy [B,A]"] && verdicts["legacy [B,A]"].currentValue === 1, "pre-fix: last row 1 → anomaly, from nothing but array order");
-  assert.equal(verdicts["v2 (reader sorts (date,id): A first)"], null, "pre-fix V2: the uuid order decided");
+  assert.deepEqual(series["legacy [A,B]"], [1, 1000]);
+  assert.deepEqual(series["legacy [B,A]"], [1000, 1]);
+  assert.deepEqual(series["v2 (reader sorts (date,id): A first)"], [1, 1000]);
   // the R1 repository on the same nodes: one record, one verdict
   await seed(legacyNode([...history, Bv, A]));
   const fixed = plain(await DM.getDailyMetrics(T, dayBefore(28), today, B));

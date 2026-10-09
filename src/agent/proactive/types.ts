@@ -109,6 +109,8 @@ export interface DailyDigest {
   topInsights: InsightScore[];   // max 3, sorted by impactScore desc
   totalDetected: number;
   totalSuppressed: number;
+  /** Unsupported or incomplete source conclusions; absence of an insight is not a healthy result. */
+  limitations?: string[];
   generatedAt: string;           // ISO timestamp
 }
 

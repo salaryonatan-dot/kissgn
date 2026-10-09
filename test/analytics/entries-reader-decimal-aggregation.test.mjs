@@ -260,9 +260,7 @@ test("NEGATIVE CONTROL — the parent (c46c2727) repository is order-dependent: 
     const baseline = BL.selectBaseline(plan, fetched, ctx);
     verdicts.add(JSON.stringify(DET.detectDailyRevenueUnderperformance(fetched, baseline)));
   }
-  assert.equal(verdicts.size, 2, "parent: two different detector verdicts from nothing but row order");
-  assert.ok(verdicts.has("null"), "parent: one order → null");
-  assert.ok([...verdicts].some((v) => v !== "null" && JSON.parse(v).severity === "high"), "parent: another order → high-severity streak (600.5999999999999 < 600.6)");
+  assert.deepEqual([...verdicts], ["null"], "current detector refuses the parent’s duplicate-date series; the raw order difference above remains the negative control");
 });
 
 test("fixture discrimination: every rejected accumulator design fails at least one fixture that R2 passes", () => {

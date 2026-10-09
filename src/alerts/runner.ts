@@ -24,6 +24,7 @@ export interface AlertRunResult {
   alertsSkipped: number;
   emailSent: boolean;
   errors: string[];
+  limitations?: string[];
 }
 
 /**
@@ -42,6 +43,7 @@ export async function runAlertsForBiz(
     alertsSkipped: 0,
     emailSent: false,
     errors: [],
+    limitations: ["weak_day_exact_window_calendar_unavailable", "purchase_trend_exact_window_source_unavailable"],
   };
 
   // Load user-defined thresholds (or defaults)

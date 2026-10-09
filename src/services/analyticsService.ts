@@ -9,6 +9,8 @@ import { isEntriesReadError } from "../../lib/analytics/entriesReader.js";
 import { isCanonicalFinanceError } from "../finance-server/canonicalMetrics.js";
 import { logger } from "../utils/logging.js";
 import { withTimeout, TIMEOUT_CRITICAL_MS, TIMEOUT_SECONDARY_MS } from "../utils/async.js";
+import { agentRequestWindow, assembleAgentFinancialMonth, isFullMonthRequest, revenueCalendarMonths } from "../agent/financialMonth.js";
+import { loadAgentClosedDatesForMonths, loadAgentMonthSource } from "../agent/financialMonthSource.js";
 
 export async function fetchPlannedData(
   plan: MetricsPlan,
@@ -16,8 +18,10 @@ export async function fetchPlannedData(
 ): Promise<FetchedData> {
   const { tenantId, branchId } = context;
   const { start, end } = plan.timeRange;
+  const { asOfBusinessDate: asOfDate, actualEnd } = agentRequestWindow(context.nowIso, { start, end });
 
   const metrics: Record<string, unknown> = {};
+  if (asOfDate) metrics["asOfBusinessDate"] = asOfDate;
   const sources: string[] = [];
   const evidenceRefs: string[] = [];
   const fetchStatus: Record<string, "ok" | "failed" | "skipped"> = {};
@@ -26,7 +30,7 @@ export async function fetchPlannedData(
   // --- Daily: always fetch (critical source) ---
   try {
     const daily = await withTimeout(
-      getDailyMetrics(tenantId, start, end, context.bizId, branchId),
+      getDailyMetrics(tenantId, start, actualEnd, context.bizId, branchId),
       TIMEOUT_CRITICAL_MS,
       "getDailyMetrics"
     );
@@ -59,7 +63,7 @@ export async function fetchPlannedData(
   if (plan.metrics.some((m) => m.includes("labor"))) {
     try {
       const labor = await withTimeout(
-        getLaborMetrics(tenantId, start, end, context.bizId, branchId),
+        getLaborMetrics(tenantId, start, actualEnd, context.bizId, branchId),
         TIMEOUT_SECONDARY_MS,
         "getLaborMetrics"
       );
@@ -80,7 +84,7 @@ export async function fetchPlannedData(
   if (plan.metrics.some((m) => m.includes("product"))) {
     try {
       const products = await withTimeout(
-        getTopProducts(tenantId, start, end, context.bizId),
+        getTopProducts(tenantId, start, actualEnd, context.bizId),
         TIMEOUT_SECONDARY_MS,
         "getTopProducts"
       );
@@ -100,7 +104,7 @@ export async function fetchPlannedData(
   if (plan.metrics.some((m) => m.includes("supplier") || m.includes("purchase"))) {
     try {
       const purchases = await withTimeout(
-        getPurchaseMetrics(tenantId, start, end, context.bizId, branchId),
+        getPurchaseMetrics(tenantId, start, actualEnd, context.bizId, branchId),
         TIMEOUT_SECONDARY_MS,
         "getPurchaseMetrics"
       );
@@ -117,9 +121,53 @@ export async function fetchPlannedData(
     fetchStatus["purchases"] = "skipped";
   }
 
+  // Month-level financial conclusions consume the canonical report. Daily metrics do not
+  // include a supplier credit issued on a day without a gross purchase, so summing them
+  // would silently give a different Food Cost. A non-month period needs a source API for
+  // that exact window and is deliberately left unavailable here.
+  const needsFinancialMonth = plan.metrics.some((m) => m === "food_cost" || m === "food_cost_pct" || m === "food_cost_mtd" || m === "labor_cost" || m === "labor_pct" || m === "labor_cost_mtd" || m === "supplier_purchases") || plan.requiresForecast;
+  if (needsFinancialMonth) {
+    const month = start.slice(0, 7);
+    const asOfMs = Date.parse(context.nowIso);
+    const fullMonth = isFullMonthRequest({ start, end }, asOfDate);
+    const proactive = context.userQuestion === "__proactive_scan__";
+    if (fullMonth || proactive || plan.requiresForecast) {
+      try {
+        const nowMs = Date.parse(context.nowIso);
+        if (!Number.isFinite(nowMs)) throw new Error("invalid_agent_instant");
+        const financial = await withTimeout(
+          loadAgentMonthSource(tenantId, context.bizId, nowMs, proactive || plan.requiresForecast ? undefined : month)
+            .then(assembleAgentFinancialMonth),
+          TIMEOUT_CRITICAL_MS,
+          "loadAgentFinancialMonth"
+        );
+        metrics["financialMonth"] = financial;
+        sources.push("finance/month-report");
+        fetchStatus["financialMonth"] = "ok";
+      } catch (err) {
+        logger.error("Failed to fetch canonical financial month: unavailable");
+        if (isEntriesReadError(err) || isCanonicalFinanceError(err)) throw err;
+        fetchStatus["financialMonth"] = "failed";
+      }
+    } else {
+      fetchStatus["financialMonth"] = "skipped";
+    }
+  }
+
+  if (plan.metrics.includes("daily_revenue") || (plan.metrics as readonly string[]).includes("daily")) {
+    try {
+      const nowMs = Date.parse(context.nowIso);
+      const months = revenueCalendarMonths({ start, end });
+      metrics["revenueClosedDates"] = Number.isFinite(nowMs) && months !== null
+        ? await loadAgentClosedDatesForMonths(tenantId, context.bizId, nowMs, months) : null;
+    } catch {
+      metrics["revenueClosedDates"] = null;
+    }
+  }
+
   // Compute quality scores
   const daily = (metrics["daily"] as Array<{ date: string }>) ?? [];
-  const expectedDays = Math.max(1, daysBetweenSimple(start, end) + 1);
+  const expectedDays = Math.max(1, daysBetweenSimple(start, actualEnd) + 1);
   const completenessScore = Math.min(1, daily.length / expectedDays);
 
   // Freshness: check if latest data is recent
@@ -164,7 +212,7 @@ function daysBetweenSimple(a: string, b: string): number {
  * unreliable or contradictory data (not business anomalies — data quality issues).
  */
 function computeConsistencyScore(
-  daily: Array<{ date: string; revenue?: number; laborCost?: number; foodCost?: number }>,
+  daily: Array<{ date: string; revenue?: number; laborCost?: number; foodCost?: number; presence?: { revenue?: string; purchases?: string }; partial?: { revenue?: boolean; purchases?: boolean } }>,
   totalRecords: number
 ): number {
   if (totalRecords === 0) return 0.0;
@@ -178,9 +226,9 @@ function computeConsistencyScore(
     // Negative revenue is a data inconsistency
     if (d.revenue != null && d.revenue < 0) failures++;
     // Labor cost > revenue is suspicious (possible data error)
-    if (d.revenue != null && d.laborCost != null && d.laborCost > d.revenue * 1.5) failures++;
+    if (d.presence?.revenue === "present" && !d.partial?.revenue && d.revenue != null && d.revenue > 0 && d.laborCost != null && d.laborCost > d.revenue * 1.5) failures++;
     // Food cost > revenue is suspicious
-    if (d.revenue != null && d.foodCost != null && d.foodCost > d.revenue * 1.2) failures++;
+    if (d.presence?.revenue === "present" && d.presence?.purchases === "present" && !d.partial?.revenue && !d.partial?.purchases && d.revenue != null && d.revenue > 0 && d.foodCost != null && d.foodCost >= 0 && d.foodCost > d.revenue * 1.2) failures++;
   }
 
   // Check for duplicate dates

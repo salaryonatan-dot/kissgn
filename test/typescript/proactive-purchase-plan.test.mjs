@@ -43,7 +43,9 @@ test("the proactive plan metrics still trigger the purchase fetch", () => {
   assert.match(svc, /metrics\["purchases"\] = purchases/);
 });
 
-test("purchase detector still consumes fetched metrics", () => {
+test("purchase detector withholds unsupported exact-window conclusions and Daily discloses the source gap", () => {
   const det = read("src/agent/proactive/detectors/detectPurchasesWithoutRevenueSupport.ts");
-  assert.match(det, /fetched\.metrics\[/);
+  assert.match(det, /return null/);
+  const job = read("src/agent/proactive/runProactiveJob.ts");
+  assert.match(job, /purchase_trend_exact_window_source_unavailable/);
 });

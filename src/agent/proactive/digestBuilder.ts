@@ -12,6 +12,7 @@ import { getMemoryEntries } from "./memoryManager.js";
 import { getRecentInsights } from "../../repositories/proactive/insightsRepo.js";
 import { todayIso, daysAgoIso } from "../../utils/dates.js";
 import { logger } from "../../utils/logging.js";
+import { israelBusinessDate } from "../../finance/businessDate.js";
 
 // --- Constants ---
 const MAX_DAILY_INSIGHTS = 3;
@@ -30,9 +31,10 @@ export function buildDailyDigest(
   tenantId: string,
   bizId: string,
   generatedInsights: ProactiveInsight[],
-  suppressedCount: number
+  suppressedCount: number,
+  limitations: string[] = []
 ): DailyDigest {
-  const today = todayIso();
+  const today = israelBusinessDate(Date.now());
 
   // Only non-suppressed insights for ranking
   const active = generatedInsights.filter((i) => !i.suppressed);
@@ -45,6 +47,7 @@ export function buildDailyDigest(
     topInsights,
     totalDetected: generatedInsights.length + suppressedCount,
     totalSuppressed: suppressedCount,
+    limitations: [...new Set(limitations)].sort(),
     generatedAt: new Date().toISOString(),
   };
 }

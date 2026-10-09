@@ -3,6 +3,10 @@ import type { AgentContext } from "../types/agent.js";
 import { avg, round2 } from "../../utils/math.js";
 import { trendDirection } from "../../utils/stats.js";
 import { dowToHebDay } from "../../utils/dates.js";
+import { israelBusinessDate } from "../../finance/businessDate.js";
+import type { AgentFinancialMonth } from "../financialMonth.js";
+import { revenueClosedDates, trustedCompletedRevenueDays } from "../financialMonth.js";
+import { formatShekel } from "../../presenters/money.js";
 
 export function analyzeTrend(
   plan: MetricsPlan,
@@ -16,15 +20,21 @@ export function analyzeTrend(
   let answer = "";
   let meaning: string | undefined;
 
-  if (daily.length < 7) {
+  const asOfMs = Date.parse(context.nowIso);
+  const month = fetched.metrics["financialMonth"] as AgentFinancialMonth | undefined;
+  const closed = revenueClosedDates(fetched.metrics);
+  const trusted = Number.isFinite(asOfMs) && fetched.fetchStatus?.daily === "ok" && closed !== null
+    ? trustedCompletedRevenueDays(daily, plan.timeRange, israelBusinessDate(asOfMs), closed)
+    : null;
+  if (!trusted || trusted.days.length < 7) {
     return {
-      answer: "אין מספיק נתונים לניתוח מגמה",
+      answer: "אין מספיק נתוני הכנסות מאומתים לכל ימי הפעילות בטווח המבוקש",
       supportingFacts: [],
       usedSources: fetched.sources,
     };
   }
 
-  const sorted = [...daily].sort((a, b) => a.date.localeCompare(b.date));
+  const sorted = [...trusted.days];
   const revenues = sorted.map((d) => d.revenue);
   const direction = trendDirection(revenues);
 
@@ -48,9 +58,9 @@ export function analyzeTrend(
   const strongest = dowAvgs[dowAvgs.length - 1];
 
   answer = `מגמת הכנסות: ${direction === "rising" ? "עולה" : direction === "falling" ? "יורדת" : "יציבה"}`;
-  facts.push(`ממוצע יומי: ₪${round2(avg(revenues))}`);
-  facts.push(`היום החזק ביותר: ${dowToHebDay(strongest.dow)} (₪${round2(strongest.avg)})`);
-  facts.push(`היום החלש ביותר: ${dowToHebDay(weakest.dow)} (₪${round2(weakest.avg)})`);
+  facts.push(`ממוצע יומי: ${formatShekel(String(avg(revenues)))}`);
+  facts.push(`היום החזק ביותר: ${dowToHebDay(strongest.dow)} (${formatShekel(String(strongest.avg))})`);
+  facts.push(`היום החלש ביותר: ${dowToHebDay(weakest.dow)} (${formatShekel(String(weakest.avg))})`);
 
   if (direction === "falling") {
     meaning = "מגמה יורדת — שווה לבדוק אם מדובר בעונתיות או בבעיה מתמשכת";

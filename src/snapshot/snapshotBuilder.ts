@@ -3,6 +3,8 @@ import { loadCanonicalInputs } from "../finance-server/canonicalInputs.js";
 import { canonicalMonthProjection, canonicalMonthReport } from "../finance-server/canonicalMetrics.js";
 import type { SnapshotFinancials, SnapshotInsight } from "./snapshotEmail.js";
 import { buildSnapshotView, snapshotInsights } from "./snapshotEmail.js";
+import { classifyRegistryTarget, decodeRegistryNode, isRegistryBizId, resolveRegistryTarget } from "../../lib/businessRegistry.js";
+import { isValidId } from "../../lib/securityContext.js";
 
 // Financial Core B2: the morning snapshot is ONE canonical month report (Actual = completed
 // days through D-1) plus the ONE canonical projection (REV_FORECAST/v2 → MARJIN_PROJ/2), both
@@ -66,23 +68,42 @@ interface Business {
   name: string;
 }
 
-function parseFirebaseData<T>(value: any): T {
-  if (!value) return [] as T;
-  if (typeof value === "string") {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return [] as T;
-    }
-  }
-  if (value._v) {
-    try {
-      return JSON.parse(value._v);
-    } catch {
-      return [] as T;
-    }
-  }
-  return value as T;
+export interface SnapshotBusinessIdentity {
+  readonly tenantId: string;
+  readonly bizId: string;
+  readonly businessDate: string;
+}
+
+export interface SnapshotBuildFailure extends SnapshotBusinessIdentity {
+  readonly code: "snapshot_build_failed" | "business_name_unavailable" | "ambiguous_business_identity";
+}
+
+export interface SnapshotExclusion extends SnapshotBusinessIdentity {
+  readonly reason: "explicit_inactive" | "index_only" | "legacy_self";
+}
+
+export interface SnapshotDiscoveryFailure {
+  readonly source: "proactive_biz_index" | "app_business";
+  readonly code: "read_failed" | "malformed_source" | "malformed_entry";
+}
+
+/** One run's accounting. Every expected business has exactly one snapshot or failure. */
+export interface SnapshotBuildRun {
+  readonly version: "MARJIN_SNAPSHOT_BUILD_RUN/1";
+  readonly businessDate: string;
+  readonly status: "complete" | "incomplete";
+  readonly discovery: { readonly status: "complete" | "failed"; readonly failures: readonly SnapshotDiscoveryFailure[] };
+  readonly expectedBusinesses: readonly SnapshotBusinessIdentity[];
+  readonly snapshots: readonly SnapshotData[];
+  readonly failedBuilds: readonly SnapshotBuildFailure[];
+  readonly exclusions: readonly SnapshotExclusion[];
+}
+
+function registryRows(value: unknown): readonly unknown[] | null {
+  if (value === null || value === undefined) return null;
+  const decoded = decodeRegistryNode(value);
+  if (!decoded.ok) throw new Error("registry_unreadable");
+  return decoded.list;
 }
 
 function isUnknownBusinessName(value?: string | null): boolean {
@@ -95,20 +116,23 @@ export async function buildSnapshotForBiz(
   bizId: string,
   opts?: { readonly nowMs?: number }
 ): Promise<SnapshotData> {
+  if (!isValidId(tenantId) || !isRegistryBizId(bizId)) throw new Error("invalid_business_identity");
   const db = getDb();
   // ONE clock read for the whole snapshot: the same instant fixes the business date of the
   // loader (Actual = D-1) and the projection's engine run.
   const nowMs = opts?.nowMs ?? Date.now();
 
-  const [inputs, businessSnap] = await Promise.all([
-    loadCanonicalInputs(db, tenantId, bizId, { site: "snapshotBuilder", nowMs, need: { config: true, fixed: true, exceptions: true } }),
-    db.ref(`tenants/${tenantId}/app/business`).once("value"),
-  ]);
-
-  // Business name (not financial)
-  const businesses = parseFirebaseData<Business[]>(businessSnap.val());
-  const business = Array.isArray(businesses) ? businesses.find((b) => b.id === bizId) : undefined;
-  const bizName = business?.name || "Unknown";
+  // Resolve the exact registered identity before constructing a business-scoped
+  // financial path. A malformed twin is a refusal, never a name or authority.
+  const businessSnap = await db.ref(`tenants/${tenantId}/app/business`).once("value");
+  const selected = resolveRegistryTarget(businessSnap.val(), bizId);
+  if (selected.state === "ambiguous") throw new Error("ambiguous_business_identity");
+  if (selected.state !== "registered" || !selected.record) throw new Error("business_registry_unavailable");
+  const business = selected.record;
+  const bizName = typeof business?.name === "string" ? business.name : "Unknown";
+  const inputs = await loadCanonicalInputs(db, tenantId, bizId, {
+    site: "snapshotBuilder", nowMs, need: { config: true, fixed: true, exceptions: true },
+  });
 
   const month = inputs.asOfBusinessDate.slice(0, 7);
   const { report, provenance } = canonicalMonthReport(inputs, { kind: "open_month", month });
@@ -156,9 +180,36 @@ export async function buildSnapshotForBiz(
   };
 }
 
+/** Legacy array adapter for the existing delivery route; combined acceptance requires the structured result. */
 export async function buildSnapshotForAll(): Promise<SnapshotData[]> {
+  return [...(await buildSnapshotRun()).snapshots];
+}
+
+/** Israel date of an injected instant, using the same timezone and Intl parts as canonical inputs. */
+function runBusinessDate(nowMs: number): string {
+  if (!Number.isFinite(nowMs)) throw new Error("invalid_run_instant");
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jerusalem", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(nowMs);
+  const part = (type: string) => parts.find((x) => x.type === type)?.value;
+  const year = part("year"), month = part("month"), day = part("day");
+  if (!year || !month || !day) throw new Error("run_date_unavailable");
+  return `${year}-${month}-${day}`;
+}
+
+/** Structured builder-to-delivery handoff. The legacy array adapter above runs this same entrypoint. */
+export async function buildSnapshotRun(opts?: { readonly nowMs?: number }): Promise<SnapshotBuildRun> {
   const db = getDb();
+  const nowMs = opts?.nowMs ?? Date.now();
+  const businessDate = runBusinessDate(nowMs);
   const snapshots: SnapshotData[] = [];
+  const failedBuilds: SnapshotBuildFailure[] = [];
+  const discoveryFailures: SnapshotDiscoveryFailure[] = [];
+  const exclusions: SnapshotExclusion[] = [];
+  const identity = (tenantId: string, bizId: string): SnapshotBusinessIdentity => ({ tenantId, bizId, businessDate });
+  const discoveryFailed = (source: SnapshotDiscoveryFailure["source"], code: SnapshotDiscoveryFailure["code"]) => {
+    discoveryFailures.push({ source, code });
+  };
 
   // ── Hardened business discovery ────────────────────────────────────────────
   // Same pattern as the production-verified dailyBuilder discovery:
@@ -180,16 +231,16 @@ export async function buildSnapshotForAll(): Promise<SnapshotData[]> {
   const discovered = new Map<string, DiscoveredBusiness>();
   const addBiz = (source: "index" | "appBusiness", tenantId: unknown, bizId: unknown): boolean => {
     if (typeof tenantId !== "string" || typeof bizId !== "string") return false;
-    const t = tenantId.trim();
-    const b = bizId.trim();
-    if (!t || !b) return false;
+    const t = tenantId;
+    const b = bizId;
+    if (!isValidId(t) || !isRegistryBizId(b)) return false;
     if (t === b) {
       legacySelfSkipped++;
-      console.warn(`[snapshot/discovery] skipping legacy self business ${t}:${b}`);
+      exclusions.push({ ...identity(t, b), reason: "legacy_self" });
       return false;
     }
 
-    const key = `${t}|${b}`;
+    const key = JSON.stringify([t, b]);
     const existing = discovered.get(key);
     if (existing) {
       if (source === "index") existing.fromIndex = true;
@@ -232,17 +283,23 @@ export async function buildSnapshotForAll(): Promise<SnapshotData[]> {
     const indexSnap = await db.ref("proactive_biz_index").once("value");
     const indexData = indexSnap.val();
 
-    if (indexData && typeof indexData === "object") {
+    if (indexData !== null && indexData !== undefined && (typeof indexData !== "object" || Array.isArray(indexData))) {
+      discoveryFailed("proactive_biz_index", "malformed_source");
+    } else if (indexData && typeof indexData === "object") {
       for (const [key, rawValue] of Object.entries(indexData)) {
         // Primitive legacy entries: `"tenantId:bizId": true | false`.
         // `false` is an EXPLICIT inactive marker — skip it. Only `true` is
         // accepted as legacy-active (ids come from the colon key below);
         // any other primitive is malformed.
         if (rawValue === false) {
-          inactiveSkipped++;
-          console.log(
-            `[snapshot/discovery] skipping explicitly inactive index entry key="${key}" (false)`
-          );
+          const parts = key.split(":");
+          if (parts.length === 2 && isValidId(parts[0]) && isRegistryBizId(parts[1])) {
+            inactiveSkipped++;
+            exclusions.push({ ...identity(parts[0], parts[1]), reason: "explicit_inactive" });
+          } else {
+            malformedSkipped++;
+            discoveryFailed("proactive_biz_index", "malformed_entry");
+          }
           continue;
         }
         const value =
@@ -251,9 +308,7 @@ export async function buildSnapshotForAll(): Promise<SnapshotData[]> {
             : null;
         if (value === null && rawValue !== true) {
           malformedSkipped++;
-          console.warn(
-            `[snapshot/discovery] ignoring malformed proactive_biz_index entry key="${key}"`
-          );
+          discoveryFailed("proactive_biz_index", "malformed_entry");
           continue;
         }
 
@@ -272,20 +327,15 @@ export async function buildSnapshotForAll(): Promise<SnapshotData[]> {
           }
         }
 
-        if (!tenantId || !bizId) {
-          // Sanitized: key + ids only, never the value payload.
+        if (!isValidId(tenantId) || !isRegistryBizId(bizId)) {
           malformedSkipped++;
-          console.warn(
-            `[snapshot/discovery] ignoring malformed proactive_biz_index entry key="${key}"`
-          );
+          discoveryFailed("proactive_biz_index", "malformed_entry");
           continue;
         }
 
         if (value && isExplicitlyInactive(value)) {
           inactiveSkipped++;
-          console.log(
-            `[snapshot/discovery] skipping explicitly inactive index entry ${tenantId}:${bizId}`
-          );
+          exclusions.push({ ...identity(tenantId, bizId), reason: "explicit_inactive" });
           continue;
         }
 
@@ -293,7 +343,8 @@ export async function buildSnapshotForAll(): Promise<SnapshotData[]> {
       }
     }
   } catch (error) {
-    console.error("Error reading proactive_biz_index:", error);
+    discoveryFailed("proactive_biz_index", "read_failed");
+    console.error("[snapshot/discovery] proactive_biz_index read_failed");
   }
 
   // Source 2: ALWAYS scan tenants/*/app/business (merged, not fallback-only).
@@ -301,42 +352,64 @@ export async function buildSnapshotForAll(): Promise<SnapshotData[]> {
     const tenantsSnap = await db.ref("tenants").once("value");
     const tenantsData = tenantsSnap.val();
 
-    if (tenantsData && typeof tenantsData === "object") {
+    if (tenantsData !== null && tenantsData !== undefined && (typeof tenantsData !== "object" || Array.isArray(tenantsData))) {
+      discoveryFailed("app_business", "malformed_source");
+    } else if (tenantsData && typeof tenantsData === "object") {
       for (const [tenantId, tenantData] of Object.entries(tenantsData)) {
-        if (
-          typeof tenantData === "object" &&
-          tenantData !== null &&
-          (tenantData as any).app?.business
-        ) {
-          const businesses = parseFirebaseData<
-            Array<Business & Record<string, unknown>>
-          >((tenantData as any).app.business);
-          if (!Array.isArray(businesses)) continue;
-          for (const biz of businesses) {
-            if (!biz || typeof biz !== "object" || typeof biz.id !== "string" || !biz.id) {
-              malformedSkipped++;
-              console.warn(
-                `[snapshot/discovery] ignoring malformed app/business entry under tenant ${tenantId}`
-              );
-              continue;
-            }
-            if (isExplicitlyInactive(biz as Record<string, unknown>)) {
-              inactiveSkipped++;
-              console.log(
-                `[snapshot/discovery] skipping explicitly inactive business ${tenantId}:${biz.id}`
-              );
-              continue;
-            }
-            if (addBiz("appBusiness", tenantId, biz.id)) fromAppBusiness++;
+        if (!isValidId(tenantId)) {
+          discoveryFailed("app_business", "malformed_entry");
+          continue;
+        }
+        if (!tenantData || typeof tenantData !== "object" || Array.isArray(tenantData)) {
+          discoveryFailed("app_business", "malformed_source");
+          continue;
+        }
+        const app = (tenantData as Record<string, unknown>).app;
+        if (app !== null && app !== undefined && (typeof app !== "object" || Array.isArray(app))) {
+          discoveryFailed("app_business", "malformed_source");
+          continue;
+        }
+        if (app && Object.hasOwn(app, "business")) {
+          const raw = (app as Record<string, unknown>).business;
+          if (raw === null || raw === undefined) continue;
+          let businesses: readonly unknown[] | null;
+          try {
+            businesses = registryRows(raw);
+          } catch {
+            discoveryFailed("app_business", "malformed_source");
+            continue;
           }
+          if (!businesses) continue;
+          let nonNull = 0;
+          for (const biz of businesses) {
+            if (biz === null) continue;
+            nonNull++;
+            if (!biz || typeof biz !== "object" || Array.isArray(biz) || !isRegistryBizId((biz as Business).id)) {
+              malformedSkipped++;
+              discoveryFailed("app_business", "malformed_entry");
+              continue;
+            }
+            const record = biz as Business & Record<string, unknown>;
+            // The shared selector decides ambiguity before inactivity: a duplicate
+            // identity cannot disappear merely because one record is inactive.
+            if (classifyRegistryTarget(raw, record.id).state === "ambiguous") {
+              if (addBiz("appBusiness", tenantId, record.id)) fromAppBusiness++;
+              continue;
+            }
+            if (isExplicitlyInactive(record)) {
+              inactiveSkipped++;
+              exclusions.push({ ...identity(tenantId, record.id), reason: "explicit_inactive" });
+              continue;
+            }
+            if (addBiz("appBusiness", tenantId, record.id)) fromAppBusiness++;
+          }
+          if (businesses.length > 0 && nonNull === 0) discoveryFailed("app_business", "malformed_source");
         }
       }
     }
   } catch (error) {
-    console.error("Error discovering businesses from tenants:", error);
-    // Proceed with index results if we have any; abort only if BOTH sources
-    // produced nothing (previous behavior for a total discovery failure).
-    if (discovered.size === 0) return snapshots;
+    discoveryFailed("app_business", "read_failed");
+    console.error("[snapshot/discovery] app_business read_failed");
   }
 
   const afterDedupe = discovered.size;
@@ -344,9 +417,7 @@ export async function buildSnapshotForAll(): Promise<SnapshotData[]> {
     Array.from(discovered.values()).filter((candidate) => {
       if (candidate.fromAppBusiness) return true;
       indexOnlySkipped++;
-      console.warn(
-        `[snapshot/discovery] skipping index-only business ${candidate.tenantId}:${candidate.bizId}`
-      );
+      if (!discoveryFailures.some((f) => f.source === "app_business")) exclusions.push({ ...identity(candidate.tenantId, candidate.bizId), reason: "index_only" });
       return false;
     });
   console.log(
@@ -357,22 +428,35 @@ export async function buildSnapshotForAll(): Promise<SnapshotData[]> {
   );
 
   // Build snapshots for each active business
+  const expectedBusinesses = activeBusinesses.map(({ tenantId, bizId }) => identity(tenantId, bizId));
   for (const { tenantId, bizId } of activeBusinesses) {
     try {
-      const snapshot = await buildSnapshotForBiz(tenantId, bizId);
+      const snapshot = await buildSnapshotForBiz(tenantId, bizId, { nowMs });
       if (isUnknownBusinessName(snapshot.bizName)) {
-        console.warn("[snapshot/discovery] skipping snapshot with unknown business name", {
-          tenantId,
-          bizId,
-          reason: "unknown_business_name",
-        });
+        failedBuilds.push({ ...identity(tenantId, bizId), code: "business_name_unavailable" });
         continue;
       }
       snapshots.push(snapshot);
     } catch (error) {
-      console.error(`Error building snapshot for ${tenantId}:${bizId}:`, error);
+      failedBuilds.push({ ...identity(tenantId, bizId), code: error instanceof Error && error.message === "ambiguous_business_identity"
+        ? "ambiguous_business_identity" : "snapshot_build_failed" });
     }
   }
 
-  return snapshots;
+  const keyOf = (x: SnapshotBusinessIdentity) => JSON.stringify([x.tenantId, x.bizId, x.businessDate]);
+  const expectedKeys = new Set(expectedBusinesses.map(keyOf));
+  const accounted = [...snapshots.map((x) => ({ tenantId: x.tenantId, bizId: x.bizId, businessDate: x.date })), ...failedBuilds];
+  if (expectedKeys.size !== expectedBusinesses.length || accounted.length !== expectedKeys.size ||
+      new Set(accounted.map(keyOf)).size !== accounted.length || accounted.some((x) => !expectedKeys.has(keyOf(x)))) {
+    throw new Error("snapshot_accounting_invariant");
+  }
+  const status = discoveryFailures.length || failedBuilds.length ? "incomplete" : "complete";
+  return {
+    version: "MARJIN_SNAPSHOT_BUILD_RUN/1", businessDate, status,
+    discovery: { status: discoveryFailures.length ? "failed" : "complete", failures: discoveryFailures },
+    expectedBusinesses, snapshots, failedBuilds,
+    exclusions: Array.from(new Map(exclusions
+      .filter((x) => !expectedBusinesses.some((y) => x.tenantId === y.tenantId && x.bizId === y.bizId))
+      .map((x) => [keyOf(x), x])).values()),
+  };
 }

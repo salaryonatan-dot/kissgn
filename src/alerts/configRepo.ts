@@ -10,21 +10,26 @@ function configRef(tenantId: string, bizId: string) {
 }
 
 /**
- * Get alert thresholds for a biz. Returns defaults if not configured.
+ * An absent configuration uses compatibility defaults. A failed or malformed
+ * read is not an absent configuration and must not silently select defaults.
  */
 export async function getThresholds(
   tenantId: string,
   bizId: string
 ): Promise<AlertThresholds> {
-  try {
-    const snap = await configRef(tenantId, bizId).once("value");
-    const raw = snap.val();
-    if (!raw) return { ...DEFAULT_THRESHOLDS };
-    // Merge with defaults so new fields always have values
-    return { ...DEFAULT_THRESHOLDS, ...raw };
-  } catch {
-    return { ...DEFAULT_THRESHOLDS };
+  const snap = await configRef(tenantId, bizId).once("value");
+  const raw = snap.val();
+  if (raw === null || raw === undefined) return { ...DEFAULT_THRESHOLDS };
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new Error("alert_config_malformed");
+  const configured = raw as Partial<AlertThresholds>;
+  for (const key of Object.keys(DEFAULT_THRESHOLDS) as Array<keyof AlertThresholds>) {
+    if (configured[key] === undefined) continue;
+    const value = configured[key];
+    if (typeof DEFAULT_THRESHOLDS[key] === "number" ? typeof value !== "number" || !Number.isFinite(value) : typeof value !== "boolean") {
+      throw new Error(`alert_config_invalid:${key}`);
+    }
   }
+  return { ...DEFAULT_THRESHOLDS, ...configured };
 }
 
 /**

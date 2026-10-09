@@ -1,5 +1,7 @@
 import type { MetricsPlan, ValidationResult, ValidationIssue, FetchedData } from "../types/agent.js";
 import type { AgentContext } from "../types/agent.js";
+import type { AgentFinancialMonth } from "../financialMonth.js";
+import { coversRequestedMonth } from "../financialMonth.js";
 
 interface ValidateInput {
   fetched: FetchedData;
@@ -84,6 +86,25 @@ export function validateData({ fetched, plan, context }: ValidateInput): Validat
         severity: failedSources.includes("daily") ? "high" : "medium",
         message: `מקורות נתונים שלא נטענו: ${failedSources.join(", ")}`,
       });
+    }
+  }
+
+  const directFinancial = plan.intent === "direct_metric_query" || plan.intent === "direct_aggregation_query";
+  if (directFinancial && plan.metrics.some((m) => ["food_cost", "food_cost_pct", "food_cost_mtd", "supplier_purchases", "labor_cost", "labor_cost_mtd", "labor_pct"].includes(m))) {
+    const month = fetched.metrics["financialMonth"] as AgentFinancialMonth | undefined;
+    const food = plan.metrics.some((m) => ["food_cost", "food_cost_pct", "food_cost_mtd", "supplier_purchases"].includes(m));
+    const labor = plan.metrics.some((m) => ["labor_cost", "labor_cost_mtd", "labor_pct"].includes(m));
+    const trusted = coversRequestedMonth(month, plan.timeRange) && month !== undefined &&
+      (!food || (month.report.actual.purchases.complete && month.report.actual.purchases.value !== null)) &&
+      (!labor || month.report.actual.labor.employerCost.state === "complete");
+    if (!trusted) issues.push({ code: "financial_unavailable", severity: "high", message: "נתון פיננסי מאומת ושלם אינו זמין לתקופה המבוקשת" });
+  }
+  if (plan.requiresForecast) {
+    const month = fetched.metrics["financialMonth"] as AgentFinancialMonth | undefined;
+    if (month?.projection?.forecast.state !== "complete" || month.projection.forecast.projectedRevenue === null ||
+        month.report.window.kind !== "open_month" || !plan.timeRange.start.startsWith(month.month) ||
+        !plan.timeRange.end.startsWith(month.month)) {
+      issues.push({ code: "financial_unavailable", severity: "high", message: "תחזית פיננסית שלמה אינה זמינה" });
     }
   }
 

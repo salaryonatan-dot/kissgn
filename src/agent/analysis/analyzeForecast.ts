@@ -1,65 +1,30 @@
 import type { MetricsPlan, FetchedData, AnalysisResult, BaselineResult } from "../types/agent.js";
 import type { AgentContext } from "../types/agent.js";
-import { avg, round2 } from "../../utils/math.js";
-import { todayIso } from "../../utils/dates.js";
+import type { AgentFinancialMonth } from "../financialMonth.js";
+import { formatShekel } from "../../presenters/money.js";
 
+// Agent presents the same REV_FORECAST result used by the canonical month projection.
+// Partial and unavailable forecasts have no displayable number.
 export function analyzeForecast(
   plan: MetricsPlan,
   fetched: FetchedData,
-  baseline: BaselineResult,
-  context: AgentContext
+  _baseline: BaselineResult,
+  _context: AgentContext
 ): AnalysisResult {
-  const daily = (fetched.metrics["daily"] as Array<{ date: string; revenue: number }>) ?? [];
-  const facts: string[] = [];
-  let answer = "";
-  let meaning: string | undefined;
-  const recommendations: string[] = [];
-
-  if (daily.length < 7) {
+  const month = fetched.metrics["financialMonth"] as AgentFinancialMonth | undefined;
+  const forecast = month?.projection?.forecast;
+  if (!forecast || forecast.state !== "complete" || forecast.projectedRevenue === null ||
+      month?.report.window.kind !== "open_month" || !plan.timeRange.start.startsWith(month.month) ||
+      !plan.timeRange.end.startsWith(month.month)) {
     return {
-      answer: "אין מספיק נתונים לתחזית",
-      supportingFacts: [],
+      answer: "תחזית סוף החודש אינה זמינה ממקור פיננסי שלם",
+      supportingFacts: forecast ? [`מצב התחזית: ${forecast.state}`, ...forecast.warnings] : [],
       usedSources: fetched.sources,
     };
   }
-
-  const tz = context.timezone || "Asia/Jerusalem";
-  const today = todayIso(tz);
-  const dayOfMonth = new Date(today).getDate();
-  const daysInMonth = new Date(new Date(today).getFullYear(), new Date(today).getMonth() + 1, 0).getDate();
-  const remainingDays = daysInMonth - dayOfMonth;
-
-  // MTD revenue
-  const sorted = [...daily].sort((a, b) => a.date.localeCompare(b.date));
-  const mtdRevenue = sorted.reduce((sum, d) => sum + d.revenue, 0);
-  const dailyAvg = avg(sorted.map((d) => d.revenue));
-
-  // Simple projection: MTD + remaining * daily avg
-  const projectedTotal = mtdRevenue + remainingDays * dailyAvg;
-
-  answer = `תחזית סוף חודש: ₪${round2(projectedTotal)}`;
-  facts.push(`MTD עד היום: ₪${round2(mtdRevenue)}`);
-  facts.push(`ממוצע יומי: ₪${round2(dailyAvg)}`);
-  facts.push(`נותרו ${remainingDays} ימים בחודש`);
-
-  // Compare to baseline if available
-  if (baseline.valid && baseline.value) {
-    const baselineMonthly = baseline.value * daysInMonth;
-    const pctOfBaseline = (projectedTotal / baselineMonthly) * 100;
-    facts.push(`${round2(pctOfBaseline)}% מהביצועים ההיסטוריים הצפויים`);
-    if (pctOfBaseline < 90) {
-      meaning = "התחזית מתחת לביצועים ההיסטוריים — ייתכן שצריך לפעול";
-      recommendations.push("לבדוק מה גורם לביצועים נמוכים ולפעול בהתאם");
-    } else if (pctOfBaseline > 110) {
-      meaning = "התחזית מעל הצפי — חודש חזק";
-    }
-  }
-
   return {
-    answer,
-    supportingFacts: facts,
-    meaning,
-    recommendations: recommendations.length > 0 ? recommendations : undefined,
+    answer: `תחזית הכנסות סוף חודש: ${formatShekel(forecast.projectedRevenue)}`,
+    supportingFacts: [`נוסחה: ${forecast.formulaId}`, `נתוני Actual עד ${month.report.window.completedThrough}`],
     usedSources: fetched.sources,
   };
 }

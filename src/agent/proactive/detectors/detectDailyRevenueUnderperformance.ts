@@ -5,6 +5,11 @@ import type { FetchedData, BaselineResult } from "../../types/agent.js";
 import type { DetectorResult } from "../types.js";
 import { avg, pctChange, round2 } from "../../../utils/math.js";
 import { zScore } from "../../../utils/stats.js";
+import type { AgentFinancialMonth } from "../../financialMonth.js";
+import { revenueClosedDates, trustedCompletedRevenueDays } from "../../financialMonth.js";
+import { addDays } from "../../../finance/businessDate.js";
+import { formatShekel } from "../../../presenters/money.js";
+import { formatPercent } from "../../../presenters/percent.js";
 
 // --- Thresholds ---
 const Z_SCORE_EARLY_WARNING = 1.5;   // lower than anomaly's 2.0 — this is proactive
@@ -14,6 +19,8 @@ const CONSECUTIVE_DAYS_THRESHOLD = 3; // 3+ days below avg = trend signal
 interface DailyRecord {
   date: string;
   revenue: number;
+  presence?: { revenue?: string };
+  partial?: { revenue?: boolean };
 }
 
 /**
@@ -33,19 +40,29 @@ interface DailyRecord {
  */
 export function detectDailyRevenueUnderperformance(
   fetched: FetchedData,
-  baseline: BaselineResult
+  _baseline: BaselineResult
 ): DetectorResult | null {
   const daily = (fetched.metrics["daily"] as DailyRecord[] | undefined) ?? [];
-
-  if (daily.length < MIN_DATA_POINTS) return null;
-
-  const sorted = [...daily].sort((a, b) => a.date.localeCompare(b.date));
+  const month = fetched.metrics["financialMonth"] as AgentFinancialMonth | undefined;
+  if (fetched.fetchStatus?.daily !== "ok") return null;
+  const asOfBusinessDate = month?.asOfBusinessDate ??
+    (typeof fetched.metrics["asOfBusinessDate"] === "string" ? fetched.metrics["asOfBusinessDate"] : null);
+  if (!asOfBusinessDate) return null;
+  const end = month?.report.window.completedThrough ?? addDays(asOfBusinessDate, -1);
+  const start = daily.reduce<string | null>((min, d) => min === null || d.date < min ? d.date : min, null);
+  if (!start) return null;
+  const closed = revenueClosedDates(fetched.metrics);
+  if (closed === null) return null;
+  const trusted = trustedCompletedRevenueDays(daily, { start, end }, asOfBusinessDate, closed);
+  if (!trusted || !trusted.days.some((d) => d.date === end)) return null;
+  const sorted = trusted.days;
+  if (sorted.length < MIN_DATA_POINTS) return null;
   const revenues = sorted.map((d) => d.revenue);
 
-  // Use baseline values if valid, otherwise full dataset
-  const baselineValues = baseline.values && baseline.values.length >= 7
-    ? baseline.values
-    : revenues;
+  // The evaluated day must never influence its own expectation. The trusted
+  // preceding operating days are the independent, period-scoped baseline.
+  const baselineValues = revenues.slice(0, -1);
+  if (baselineValues.length < MIN_DATA_POINTS) return null;
 
   const baselineAvg = avg(baselineValues);
   if (baselineAvg <= 0) return null; // no meaningful baseline
@@ -74,9 +91,9 @@ export function detectDailyRevenueUnderperformance(
 
   // Build supporting facts
   const facts: string[] = [];
-  facts.push(`הכנסות אתמול: ₪${round2(recentRevenue)}`);
-  facts.push(`ממוצע baseline: ₪${round2(baselineAvg)}`);
-  facts.push(`סטייה: ${deviation}%`);
+  facts.push(`הכנסות אתמול: ${formatShekel(String(recentRevenue))}`);
+  facts.push(`ממוצע baseline: ${formatShekel(String(baselineAvg))}`);
+  facts.push(`סטייה: ${formatPercent(String(deviation))}`);
 
   if (consecutiveBelow >= CONSECUTIVE_DAYS_THRESHOLD) {
     facts.push(`${consecutiveBelow} ימים רצופים מתחת לממוצע`);

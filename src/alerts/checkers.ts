@@ -7,6 +7,9 @@ import { getDb } from "../firebase/admin.js";
 import { todayIso, daysAgoIso } from "../utils/dates.js";
 import { strictLegacyDailyMetric } from "../../lib/analytics/strictDailyMetrics.js";
 import { requireEntriesRows, rowsInRange } from "../../lib/analytics/entriesReader.js";
+import { loadAlertMonthReport } from "./alertMonthReport.js";
+import { amountToNumber } from "../metrics/adapters/legacyNumber.js";
+import { parseAmountString, ratCmp } from "../finance/decimal.js";
 
 // ── CTO D2 — entries-backed anomaly checkers stay NON-FIRING in this slice ────
 // checkSupplierAnomaly and checkExpensiveEmployee historically queried the entries
@@ -95,106 +98,46 @@ function makeAlert(
 
 // ââ 1. Labor % Exceeded ââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
-export async function checkLaborPct(
-  tenantId: string,
-  bizId: string,
-  thresholds: AlertThresholds
-): Promise<FiredAlert | null> {
-  const today = todayIso();
-  const db = getDb();
-
-  // Get last 7 days of daily metrics
-  const start = daysAgoIso(7);
-  const raw = await readLegacyShapedDaily(db, tenantId, bizId, start, today);
-  if (!raw) return null;
-
-  // Compute average labor %
-  const days = Object.values(raw) as any[];
-  let totalLabor = 0, totalRevenue = 0, count = 0;
-
-  for (const day of days) {
-    const entries = typeof day === "object" ? Object.values(day) : [day];
-    for (const entry of entries as any[]) {
-      if (entry?.laborCost && entry?.revenue && entry.revenue > 0) {
-        totalLabor += Number(entry.laborCost);
-        totalRevenue += Number(entry.revenue);
-        count++;
-      }
-    }
+function reachesThreshold(value: string, threshold: number): boolean {
+  return Number.isFinite(threshold) && ratCmp(parseAmountString(value), parseAmountString(String(threshold))) >= 0;
+}
+export async function checkLaborPct(tenantId: string, bizId: string, thresholds: AlertThresholds): Promise<FiredAlert | null> {
+  const report = await loadAlertMonthReport(tenantId, bizId, Date.now());
+  const ratio = report.actual.labor.employerCostPct;
+  if (report.window.state !== "actual" || report.actual.labor.employerCost.state !== "complete" || ratio.state !== "value") return null;
+  const value = amountToNumber(ratio.value);
+  if (value === null) return null;
+  const date = report.window.asOfBusinessDate;
+  const context = { period: report.window.month, completedThrough: report.window.completedThrough, formula: report.versions.fin };
+  if (reachesThreshold(ratio.value, thresholds.laborPctCritical)) {
+    return makeAlert(tenantId, bizId, "labor_pct_exceeded", "critical", `עלות כוח אדם קריטית — ${value}%`,
+      `עלות מעסיק מלאה בחודש עד D-1: ${value}% (סף: ${thresholds.laborPctCritical}%).`, value, thresholds.laborPctCritical, date, context);
   }
-
-  if (count === 0 || totalRevenue === 0) return null;
-
-  const laborPct = Math.round((totalLabor / totalRevenue) * 100 * 10) / 10;
-
-  if (laborPct >= thresholds.laborPctCritical) {
-    return makeAlert(tenantId, bizId, "labor_pct_exceeded", "critical",
-      `×¢×××ª ××× ××× ×§×¨××××ª â ${laborPct}%`,
-      `×-7 ××××× ××××¨×× ×× ×¢×××ª ××× ××× ×¢××× ×¢× ${laborPct}% ××××× ×¡××ª (×¡×£: ${thresholds.laborPctCritical}%). ×¡×"× ×¢×××ª: ${totalLabor.toLocaleString()} âª, ×¡×"× ××× ×¡××ª: ${totalRevenue.toLocaleString()} âª.`,
-      laborPct, thresholds.laborPctCritical, today);
+  if (reachesThreshold(ratio.value, thresholds.laborPctMax)) {
+    return makeAlert(tenantId, bizId, "labor_pct_exceeded", "warning", `עלות כוח אדם מעל הסף — ${value}%`,
+      `עלות מעסיק מלאה בחודש עד D-1: ${value}% (סף: ${thresholds.laborPctMax}%).`, value, thresholds.laborPctMax, date, context);
   }
-
-  if (laborPct >= thresholds.laborPctMax) {
-    return makeAlert(tenantId, bizId, "labor_pct_exceeded", "warning",
-      `×¢×××ª ××× ××× ××¢× ××¡×£ â ${laborPct}%`,
-      `×-7 ××××× ××××¨×× ×× ×¢×××ª ××× ××× ×¢××× ×¢× ${laborPct}% ××××× ×¡××ª (×¡×£: ${thresholds.laborPctMax}%). ×¡×"× ×¢×××ª: ${totalLabor.toLocaleString()} âª, ×¡×"× ××× ×¡××ª: ${totalRevenue.toLocaleString()} âª.`,
-      laborPct, thresholds.laborPctMax, today);
-  }
-
   return null;
 }
-
-// ââ 2. Food Cost % Exceeded âââââââââââââââââââââââââââââââââââââââââââââââââââ
-
-export async function checkFoodCostPct(
-  tenantId: string,
-  bizId: string,
-  thresholds: AlertThresholds
-): Promise<FiredAlert | null> {
-  const today = todayIso();
-  const db = getDb();
-  const start = daysAgoIso(7);
-
-  const raw = await readLegacyShapedDaily(db, tenantId, bizId, start, today);
-  if (!raw) return null;
-
-  const days = Object.values(raw) as any[];
-  let totalFood = 0, totalRevenue = 0, count = 0;
-
-  for (const day of days) {
-    const entries = typeof day === "object" ? Object.values(day) : [day];
-    for (const entry of entries as any[]) {
-      if (entry?.foodCost && entry?.revenue && entry.revenue > 0) {
-        totalFood += Number(entry.foodCost);
-        totalRevenue += Number(entry.revenue);
-        count++;
-      }
-    }
+export async function checkFoodCostPct(tenantId: string, bizId: string, thresholds: AlertThresholds): Promise<FiredAlert | null> {
+  const report = await loadAlertMonthReport(tenantId, bizId, Date.now());
+  const ratio = report.actual.purchasesPct;
+  if (report.window.state !== "actual" || !report.actual.purchases.complete || ratio.state !== "value") return null;
+  const value = amountToNumber(ratio.value);
+  if (value === null) return null;
+  const date = report.window.asOfBusinessDate;
+  const context = { period: report.window.month, completedThrough: report.window.completedThrough, formula: report.versions.fin, credits: report.actual.purchases.credits.value };
+  if (reachesThreshold(ratio.value, thresholds.foodCostPctCritical)) {
+    return makeAlert(tenantId, bizId, "food_cost_pct_exceeded", "critical", `עלות מזון קריטית — ${value}%`,
+      `עלות מזון נטו מזיכויי ספקים בחודש עד D-1: ${value}% (סף: ${thresholds.foodCostPctCritical}%).`, value, thresholds.foodCostPctCritical, date, context);
   }
-
-  if (count === 0 || totalRevenue === 0) return null;
-
-  const foodPct = Math.round((totalFood / totalRevenue) * 100 * 10) / 10;
-
-  if (foodPct >= thresholds.foodCostPctCritical) {
-    return makeAlert(tenantId, bizId, "food_cost_pct_exceeded", "critical",
-      `×¢×××ª ×××× ×§×¨××××ª â ${foodPct}%`,
-      `×-7 ××××× ××××¨×× ×× ×¢×××ª ×××× ×¢××× ×¢× ${foodPct}% ××××× ×¡××ª (×¡×£: ${thresholds.foodCostPctCritical}%). ×¡×"× ×¢×××ª: ${totalFood.toLocaleString()} âª.`,
-      foodPct, thresholds.foodCostPctCritical, today);
+  if (reachesThreshold(ratio.value, thresholds.foodCostPctMax)) {
+    return makeAlert(tenantId, bizId, "food_cost_pct_exceeded", "warning", `עלות מזון מעל הסף — ${value}%`,
+      `עלות מזון נטו מזיכויי ספקים בחודש עד D-1: ${value}% (סף: ${thresholds.foodCostPctMax}%).`, value, thresholds.foodCostPctMax, date, context);
   }
-
-  if (foodPct >= thresholds.foodCostPctMax) {
-    return makeAlert(tenantId, bizId, "food_cost_pct_exceeded", "warning",
-      `×¢×××ª ×××× ××¢× ××¡×£ â ${foodPct}%`,
-      `×-7 ××××× ××××¨×× ×× ×¢×××ª ×××× ×¢××× ×¢× ${foodPct}% ××××× ×¡××ª (×¡×£: ${thresholds.foodCostPctMax}%). ×¡×"× ×¢×××ª: ${totalFood.toLocaleString()} âª.`,
-      foodPct, thresholds.foodCostPctMax, today);
-  }
-
   return null;
 }
-
-// ââ 3. Supplier Anomaly (Leak Detection) ââââââââââââââââââââââââââââââââââââââ
-
+// Supplier and employee entry anomalies remain disabled until an approved evidence contract.
 export async function checkSupplierAnomaly(
   tenantId: string,
   bizId: string,
@@ -361,105 +304,24 @@ export async function checkExpensiveEmployee(
 // ââ 6. Weak Day Detection âââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 export async function checkWeakDay(
-  tenantId: string,
-  bizId: string,
-  thresholds: AlertThresholds
+  _tenantId: string,
+  _bizId: string,
+  _thresholds: AlertThresholds
 ): Promise<FiredAlert[]> {
-  const alerts: FiredAlert[] = [];
-  const today = todayIso();
-  const db = getDb();
-
-  const start = daysAgoIso(28);
-  const raw = await readLegacyShapedDaily(db, tenantId, bizId, start, today);
-  if (!raw) return alerts;
-
-  // Group revenue by day-of-week
-  const dayRevenues: Record<number, number[]> = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
-  const DAYS_HEB = ["×¨××©××", "×©× ×", "×©×××©×", "×¨×××¢×", "××××©×", "×©××©×", "×©××ª"];
-
-  for (const [dateStr, dayData] of Object.entries(raw)) {
-    const dow = new Date(dateStr + "T12:00:00").getDay();
-    let rev = 0;
-    if (typeof dayData === "object") {
-      for (const entry of Object.values(dayData) as any[]) {
-        rev += Number(entry?.revenue || 0);
-      }
-    }
-    if (rev > 0) dayRevenues[dow].push(rev);
-  }
-
-  // Calculate overall avg
-  const allRevs = Object.values(dayRevenues).flat();
-  if (allRevs.length < 14) return alerts; // need at least 2 weeks
-
-  const overallAvg = allRevs.reduce((a, b) => a + b, 0) / allRevs.length;
-  if (overallAvg === 0) return alerts;
-
-  // Check each day-of-week
-  for (let dow = 0; dow <= 6; dow++) {
-    const revs = dayRevenues[dow];
-    if (revs.length < 3) continue; // need history for this day
-
-    const dayAvg = revs.reduce((a, b) => a + b, 0) / revs.length;
-    const deviation = ((overallAvg - dayAvg) / overallAvg) * 100;
-
-    if (deviation >= thresholds.weakDayDeviationPct) {
-      alerts.push(makeAlert(tenantId, bizId, "weak_day_detected", "info",
-        `××× ×××©: ××× ${DAYS_HEB[dow]} â ${Math.round(deviation)}% ××ª××ª ×××××¦×¢`,
-        `××××¦×¢ ××× ×¡××ª ×××× ${DAYS_HEB[dow]}: ${Math.round(dayAvg).toLocaleString()} âª â ${Math.round(deviation)}% ××ª××ª ×××××¦×¢ ××××× (${Math.round(overallAvg).toLocaleString()} âª). ××××¡×¡ ×¢× ${revs.length} ×©×××¢××ª.`,
-        dayAvg, overallAvg, today,
-        { key: String(dow), dayOfWeek: dow, dayName: DAYS_HEB[dow] }
-      ));
-    }
-  }
-
-  return alerts;
+  // The legacy 28-day source cannot distinguish a declared closure from an
+  // operating-day zero across month boundaries. The Daily month detector uses
+  // the canonical calendar and reports only when its revenue coverage is complete.
+  return [];
 }
 
 // ââ 7. Purchase Trend Rising Without Revenue ââââââââââââââââââââââââââââââââââ
 
 export async function checkPurchaseTrend(
-  tenantId: string,
-  bizId: string,
-  thresholds: AlertThresholds
+  _tenantId: string,
+  _bizId: string,
+  _thresholds: AlertThresholds
 ): Promise<FiredAlert | null> {
-  const today = todayIso();
-  const db = getDb();
-
-  // Compare last 7 days vs prior 7 days
-  const weekStart = daysAgoIso(7);
-  const priorStart = daysAgoIso(14);
-
-  const raw = await readLegacyShapedDaily(db, tenantId, bizId, priorStart, today);
-  if (!raw) return null;
-
-  let recentRevenue = 0, recentFood = 0, priorRevenue = 0, priorFood = 0;
-
-  for (const [dateStr, dayData] of Object.entries(raw)) {
-    const isRecent = dateStr >= weekStart;
-    if (typeof dayData === "object") {
-      for (const entry of Object.values(dayData) as any[]) {
-        const rev = Number(entry?.revenue || 0);
-        const food = Number(entry?.foodCost || 0);
-        if (isRecent) { recentRevenue += rev; recentFood += food; }
-        else { priorRevenue += rev; priorFood += food; }
-      }
-    }
-  }
-
-  if (priorFood === 0 || priorRevenue === 0) return null;
-
-  const purchaseGrowth = ((recentFood - priorFood) / priorFood) * 100;
-  const revenueGrowth = ((recentRevenue - priorRevenue) / priorRevenue) * 100;
-
-  if (purchaseGrowth >= thresholds.purchaseRisePct &&
-      revenueGrowth <= thresholds.purchaseRevenueGapPct) {
-    return makeAlert(tenantId, bizId, "purchase_trend_rising",
-      purchaseGrowth >= 30 ? "critical" : "warning",
-      `×¨×××©××ª ×¢××××ª +${Math.round(purchaseGrowth)}% â ××× ×¡××ª ${revenueGrowth > 0 ? "+" : ""}${Math.round(revenueGrowth)}%`,
-      `×¨×××©××ª ×¢×× ×-${Math.round(purchaseGrowth)}% (${Math.round(recentFood).toLocaleString()} âª ××¢×××ª ${Math.round(priorFood).toLocaleString()} âª) ××× ××× ×¡××ª ${revenueGrowth >= 0 ? "×¢××" : "××¨××"} ×¨×§ ×-${Math.round(Math.abs(revenueGrowth))}%. ×¤×¢×¨ ××©××.`,
-      purchaseGrowth, thresholds.purchaseRisePct, today);
-  }
-
+  // A canonical exact-window total must include credits issued on dates with no
+  // gross purchase. The existing 7-day sums cannot establish that total.
   return null;
 }

@@ -85,11 +85,6 @@ export function evaluateSuppression(input: SuppressionInput): SuppressionOutput 
     // Otherwise: this is higher priority — it passes, oldest low-severity will be archived
   }
 
-  // Rule 8: Closed day detection (revenue = 0 on expected open day)
-  if (result.type === "revenue_underperformance" && result.currentValue === 0) {
-    return { suppressed: true, reason: "closed_day" };
-  }
-
   // All rules passed — insight is allowed
   return { suppressed: false };
 }

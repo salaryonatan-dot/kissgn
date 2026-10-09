@@ -1,5 +1,6 @@
 // Marjin — Parameter-Based Alert System
 // Pure threshold checks. Zero AI. User defines every number.
+import { COMPATIBILITY_PRODUCT_DEFAULTS } from "../policy/registry.js";
 
 // ── Alert Types ───────────────────────────────────────────────────────────────
 
@@ -69,10 +70,10 @@ export interface AlertThresholds {
 // ── Default Thresholds ────────────────────────────────────────────────────────
 
 export const DEFAULT_THRESHOLDS: AlertThresholds = {
-  laborPctMax: 30,
-  laborPctCritical: 35,
-  foodCostPctMax: 33,
-  foodCostPctCritical: 38,
+  laborPctMax: Number(COMPATIBILITY_PRODUCT_DEFAULTS["alert.laborPctMax"].value),
+  laborPctCritical: Number(COMPATIBILITY_PRODUCT_DEFAULTS["alert.laborPctCritical"].value),
+  foodCostPctMax: Number(COMPATIBILITY_PRODUCT_DEFAULTS["alert.foodCostPctMax"].value),
+  foodCostPctCritical: Number(COMPATIBILITY_PRODUCT_DEFAULTS["alert.foodCostPctCritical"].value),
   supplierDeviationPct: 30,
   minDailyRevenue: 0,
   employeeDeviationPct: 40,

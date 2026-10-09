@@ -61,7 +61,7 @@ export function scoreInsight(insight: ProactiveInsight): InsightScore {
 export function rankInsights(insights: ProactiveInsight[]): InsightScore[] {
   return insights
     .map(scoreInsight)
-    .sort((a, b) => b.impactScore - a.impactScore);
+    .sort((a, b) => b.impactScore - a.impactScore || a.type.localeCompare(b.type) || a.insightId.localeCompare(b.insightId));
 }
 
 /**

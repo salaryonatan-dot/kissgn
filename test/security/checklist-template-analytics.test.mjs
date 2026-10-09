@@ -21,6 +21,7 @@ const ROOT = join(__dirname, "..", "..");
 const rulesRaw = readFileSync(join(ROOT, "database.rules.json"), "utf8");
 const rules = JSON.parse(rulesRaw);
 const checkers = readFileSync(join(ROOT, "src", "alerts", "checkers.ts"), "utf8");
+const alertMonthReport = readFileSync(join(ROOT, "src", "alerts", "alertMonthReport.ts"), "utf8");
 const indexHtml = readFileSync(join(ROOT, "index.html"), "utf8");
 
 // The wildcard $dataKey read/write expressions under tenants/$tenantId.
@@ -161,10 +162,15 @@ test("checkers.ts: maps AnalyticsDoc.revenue via the strict finite-metric helper
   assert.match(strict, /foodCost/, "food_cost -> foodCost");
 });
 
-test("checkers.ts: all five daily checkers route through readLegacyShapedDaily", () => {
+test("checkers.ts: daily revenue uses scoped analytics; financial ratios use canonical month report", () => {
   const calls = checkers.match(/readLegacyShapedDaily\(db, tenantId, bizId,/g) || [];
-  assert.equal(calls.length, 5,
-    "expected 5 readLegacyShapedDaily call sites, found " + calls.length);
+  assert.equal(calls.length, 1, "only minimum daily revenue retains the scoped analytics read");
+  assert.match(checkers, /loadAlertMonthReport\(tenantId, bizId, Date\.now\(\)\)/);
+  assert.match(alertMonthReport, /loadCanonicalInputs\(getDb\(\), tenantId, bizId,/);
+  assert.match(alertMonthReport, /canonicalMonthReport\(inputs, \{ kind: "open_month", month: inputs\.asOfBusinessDate\.slice\(0, 7\) \}\)/);
+  assert.match(checkers, /report\.actual\.labor\.employerCostPct/);
+  assert.match(checkers, /report\.actual\.purchasesPct/);
+  assert.match(checkers, /report\.actual\.purchases\.complete/);
 });
 
 test("checkers.ts: helper scopes every read to the caller's bizId (no cross-business)", () => {

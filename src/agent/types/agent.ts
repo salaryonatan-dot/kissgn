@@ -82,6 +82,7 @@ export type ValidationCode =
   | "missing_baseline"
   | "wrong_branch_scope"
   | "wrong_time_range"
+  | "financial_unavailable"
   | "unsupported_hourly";
 
 export type Severity = "low" | "medium" | "high";

@@ -1,0 +1,7 @@
+{
+  "slice": "E",
+  "consumers": [
+    "src/agent/analysis/analyzeForecast.ts"
+  ],
+  "serverApiConsumers": []
+}

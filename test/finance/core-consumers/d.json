@@ -1,0 +1,22 @@
+{
+  "slice": "D",
+  "consumers": [
+    "src/agent/analysis/analyzeAnomaly.ts",
+    "src/agent/analysis/analyzeComparison.ts",
+    "src/agent/analysis/analyzeDirectMetric.ts",
+    "src/agent/analysis/analyzeTrend.ts",
+    "src/agent/financialMonth.ts",
+    "src/agent/proactive/detectors/detectDailyRevenueUnderperformance.ts",
+    "src/agent/proactive/detectors/detectForecastRisk.ts",
+    "src/agent/proactive/detectors/detectLaborInefficiency.ts",
+    "src/agent/proactive/detectors/detectWeakDayPattern.ts",
+    "src/agent/proactive/digestBuilder.ts",
+    "src/agent/proactive/runProactiveJob.ts",
+    "src/alerts/checkers.ts",
+    "src/alerts/types.ts"
+  ],
+  "serverApiConsumers": [
+    "src/agent/financialMonthSource.ts",
+    "src/alerts/alertMonthReport.ts"
+  ]
+}
