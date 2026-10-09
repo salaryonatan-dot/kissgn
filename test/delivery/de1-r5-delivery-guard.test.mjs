@@ -11,6 +11,9 @@
 //              rule; `:` is permitted for the tenant slot only; no trimming; the route refuses before resolving the recipient,
 //              the manual refusal table is exactly the decided one, no placeholder name and no `unknown_business_name`
 //              no-send remain, and the Hebrew notice text is the decided sentence
+// On a DE1 R6 tree (the provider-structure successor built on this R5 candidate, test/support/de1-r6-provider.mjs)
+// DE1R5G-01..05 verify the R5 commit itself from git objects (DE1R6_PARENT); the HEAD / index / checkout identity is held
+// by the R6 guard (DE1R6G-01).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -19,7 +22,8 @@ import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { gitBlobId, m1EffectivePins } from "../support/m1-r1-remediation.mjs";
 import { DE1R4_PINS } from "../support/de1-r4-email.mjs";
-import { de1EffectivePins, de1R4Pins, DE1_PINS } from "../support/de1-daily-email.mjs";
+import { de1EffectivePins, de1R4Pins, de1R5Pins, DE1_PINS } from "../support/de1-daily-email.mjs";
+import { isDE1R6Tree, DE1R6_PARENT } from "../support/de1-r6-provider.mjs";
 import { DE1R5_PARENT, DE1R5_PINS, DE1R5_NEW_FILES, DE1R5_EDITS, DE1R5_SCOPE, isDE1R5Tree, deriveDE1R5 } from "../support/de1-r5-delivery.mjs";
 
 const PROTECTED = /^(src\/(finance|metrics|policy|presenters|browser|finance-server|analytics|repositories|snapshot|agent|forecast)\/|fincore\/|api\/|lib\/|database\.rules\.json$|test\/support\/rules-authorized-delta\.mjs$|index\.html$|vercel\.json$|package(-lock)?\.json$)/;
@@ -30,21 +34,29 @@ const bytesOf = (spec) => { const r = gitIn(REPO, ["cat-file", "blob", spec], { 
 const lines = (r) => r.stdout.split("\n").map((x) => x.trim()).filter(Boolean);
 const MODIFIED = Object.keys(DE1R5_PINS).filter((f) => !DE1R5_NEW_FILES.includes(f)).sort();
 const ED = "lib/emailDelivery.js", RT = "api/daily-snapshot/run.ts";
+const LAYERED = isDE1R6Tree(REPO);
+const R5_TREE = LAYERED ? DE1R6_PARENT : "HEAD";          // the R5 commit itself when the R6 layer is checked out
+const readAt = (f) => (LAYERED ? bytesOf(`${R5_TREE}:${f}`).toString("utf8") : readFileSync(join(REPO, f), "utf8"));
 
 test("DE1R5G-01 the R5 change set vs R4 is exactly the recorded set; every effective pin holds committed / staged / checked out", { skip: SKIP }, () => {
   assert.equal(DE1R5_PARENT, "cdb74e4d2767307e730e7be3e950bcbe86d5d245", "R5 is built on the R4 candidate (under independent review)");
-  assert.equal(gitIn(REPO, ["rev-parse", "HEAD^"]).stdout.trim(), DE1R5_PARENT, "sole parent");
-  assert.equal(lines(gitIn(REPO, ["rev-list", "--parents", "-n1", "HEAD"]))[0].split(" ").length, 2, "exactly one parent");
+  assert.equal(gitIn(REPO, ["rev-parse", R5_TREE + "^"]).stdout.trim(), DE1R5_PARENT, "sole parent");
+  assert.equal(lines(gitIn(REPO, ["rev-list", "--parents", "-n1", R5_TREE]))[0].split(" ").length, 2, "exactly one parent");
   for (const [f, pin] of Object.entries(DE1R5_PINS)) assert.match(pin, /^[0-9a-f]{40}$/, f + ": literal blob id");
-  const committed = lines(gitIn(REPO, ["diff", "--name-only", DE1R5_PARENT, "HEAD", "--"])).filter((f) => PROTECTED.test(f));
-  const staged = lines(gitIn(REPO, ["diff", "--name-only", "--cached", DE1R5_PARENT, "--"])).filter((f) => PROTECTED.test(f));
-  const working = [...lines(gitIn(REPO, ["diff", "--name-only", DE1R5_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => PROTECTED.test(f));
-  for (const [label, set] of [["committed", committed], ["staged", staged], ["working tree", working]])
+  const committed = lines(gitIn(REPO, ["diff", "--name-only", DE1R5_PARENT, R5_TREE, "--"])).filter((f) => PROTECTED.test(f));
+  const sets = [["committed", committed]];
+  if (!LAYERED) {
+    sets.push(["staged", lines(gitIn(REPO, ["diff", "--name-only", "--cached", DE1R5_PARENT, "--"])).filter((f) => PROTECTED.test(f))]);
+    sets.push(["working tree", [...lines(gitIn(REPO, ["diff", "--name-only", DE1R5_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => PROTECTED.test(f))]);
+  }
+  for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), Object.keys(DE1R5_PINS).sort(), label + ": protected changes vs R4 = the recorded R5 set");
-  const eff = m1EffectivePins(REPO);
+  // the R5 commit's own pins: on an R6 tree the effective table without the R6 overlay
+  const eff = LAYERED ? { ...m1EffectivePins(REPO), ...de1R5Pins() } : m1EffectivePins(REPO);
   for (const [f, pin] of Object.entries(DE1R5_PINS)) assert.equal(eff[f], pin, f + ": the R5 pin is the effective pin");
   for (const [f, pin] of Object.entries(eff)) {
-    assert.equal(blobId("HEAD:" + f), pin, f + " committed");
+    assert.equal(blobId(R5_TREE + ":" + f), pin, f + " committed" + (LAYERED ? " (at the R5 commit)" : ""));
+    if (LAYERED) continue;
     assert.equal(blobId(":" + f), pin, f + " staged");
     assert.equal(gitBlobId(readFileSync(join(REPO, f))), pin, f + " checked out");
   }
@@ -63,7 +75,7 @@ test("DE1R5G-02 provenance: each R5 pin is the R4 pin's bytes + exactly the reco
 
 test("DE1R5G-03 scope: the delivery files only; the approved predicates, the SMTP wrapper, the builder, Rules and schedule are byte-identical to R4", { skip: SKIP }, () => {
   assert.deepEqual(MODIFIED, [...DE1R5_SCOPE].sort());
-  const all = lines(gitIn(REPO, ["diff", "--name-only", DE1R5_PARENT, "HEAD", "--"]));
+  const all = lines(gitIn(REPO, ["diff", "--name-only", DE1R5_PARENT, R5_TREE, "--"]));
   const outside = all.filter((f) => !/^test\/(delivery|finance|support)\//.test(f) && !DE1R5_SCOPE.includes(f));
   // the only changes outside the delivery / layering tests: the two P0 scheduled-auth sandboxes, which copy the real registry
   // predicate the receipt module now imports and seed the registry in its runtime shape (TEST_CONTRACT_TRANSITION.md)
@@ -71,16 +83,16 @@ test("DE1R5G-03 scope: the delivery files only; the approved predicates, the SMT
   for (const f of ["lib/sendEmail.js", "lib/sendEmail.d.ts", "database.rules.json", "test/emulator/database.rules.json", "vercel.json", "package.json", "package-lock.json",
     "src/snapshot/snapshotBuilder.ts", "src/snapshot/snapshotEmail.ts", "lib/securityContext.js", "lib/securityContext.d.ts", "lib/verifyToken.js", "lib/businessRegistry.js", "lib/bizAccess.js",
     "test/support/canary-fixtures.mjs", "test/support/daily-email-harness.mjs", "fincore/v1/MANIFEST.json", "index.html"])
-    assert.equal(blobId("HEAD:" + f), blobId(`${DE1R5_PARENT}:${f}`), f + " unchanged");
-  assert.deepEqual(lines(gitIn(REPO, ["diff", "--name-only", DE1R5_PARENT, "HEAD", "--", "src", "fincore", "tools", "index.html", "lib/securityContext.js", "lib/businessRegistry.js", "lib/sendEmail.js"])), [], "no src / fincore / tools / page / predicate / SMTP change");
-  assert.equal(blobId("HEAD:database.rules.json"), "27887d72da5431bd0b6ee69f53e0dfd10cc44caf", "Rules unchanged (the combined, unpublished candidate)");
+    assert.equal(blobId(R5_TREE + ":" + f), blobId(`${DE1R5_PARENT}:${f}`), f + " unchanged");
+  assert.deepEqual(lines(gitIn(REPO, ["diff", "--name-only", DE1R5_PARENT, R5_TREE, "--", "src", "fincore", "tools", "index.html", "lib/securityContext.js", "lib/businessRegistry.js", "lib/sendEmail.js"])), [], "no src / fincore / tools / page / predicate / SMTP change");
+  assert.equal(blobId(R5_TREE + ":database.rules.json"), "27887d72da5431bd0b6ee69f53e0dfd10cc44caf", "Rules unchanged (the combined, unpublished candidate)");
   // the route's authorization section is byte-identical to the approved P0 route; the approved consumer calls are kept
   const section = (src) => { const a = src.indexOf("export default async function handler"), b = src.indexOf("  try {\n    // GET = cron trigger"); assert.ok(a > 0 && b > a, "auth section located"); return src.slice(a, b); };
-  const run = readFileSync(join(REPO, RT), "utf8");
+  const run = readAt(RT);
   assert.equal(section(run), section(bytesOf(`${P0}:${RT}`).toString("utf8")), "CORS / method / requireCron / requireBizContext / owner gate unchanged");
   for (const lit of ["await buildSnapshotForAll()", "await buildSnapshotForBiz(tenantId, bizId)", "sendSnapshotEmail(recipient.email, snapshot)", "sendSnapshotEmail(ownerEmail, snapshot)"]) assert.ok(run.includes(lit), lit);
   // the resolved-result classifier and the claim protocol of the receipt module are byte-identical to R4
-  const r5 = readFileSync(join(REPO, ED), "utf8"), r4 = bytesOf(`${DE1R5_PARENT}:${ED}`).toString("utf8");
+  const r5 = readAt(ED), r4 = bytesOf(`${DE1R5_PARENT}:${ED}`).toString("utf8");
   const tail = (s) => { const a = s.indexOf("/** Pseudonymous recipient reference"); assert.ok(a > 0); return s.slice(a); };
   const head = (s) => { const a = s.indexOf("import { AsyncLocalStorage }"); assert.ok(a > 0); return s.slice(0, a); };
   assert.equal(tail(r5), tail(r4), "from recipientHash on (the classifier, the claim protocol, the finalization), the receipt module is the R4 bytes");
@@ -98,14 +110,14 @@ test("DE1R5G-04 non-vacuity: a changed anchor, a dropped or an altered edit is r
     assert.notEqual(DE1R5_PINS[f], de1R4Pins()[f], f + ": the R5 pin differs from the R4 pin");
   }
   assert.equal(DE1R5_PINS[ED] !== DE1R4_PINS[ED], true);
-  const eff = de1EffectivePins(REPO);
+  const eff = LAYERED ? de1R5Pins() : de1EffectivePins(REPO);
   assert.deepEqual(Object.keys(eff).sort(), Object.keys(DE1_PINS).sort(), "the overlay introduces no file outside the DE1 set");
   for (const f of MODIFIED) assert.equal(eff[f], DE1R5_PINS[f]);
   for (const f of Object.keys(de1R4Pins()).filter((x) => !MODIFIED.includes(x))) assert.equal(eff[f], de1R4Pins()[f], f + " keeps its R4 pin");
 });
 
 test("DE1R5G-05 the decision rules in the source", { skip: SKIP }, () => {
-  const ed = readFileSync(join(REPO, ED), "utf8"), run = readFileSync(join(REPO, RT), "utf8");
+  const ed = readAt(ED), run = readAt(RT);
   const code = (s) => s.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l)).join("\n");
   const e = code(ed), r = code(run);
   // the shared predicates are imported, never re-stated with a different rule; control characters are the SDK's own set
