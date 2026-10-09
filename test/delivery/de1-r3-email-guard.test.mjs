@@ -11,6 +11,8 @@
 //   DE1R3G-05  the evidence rules in the source: a resolved result is judged with all of its fields (the reply code, both
 //              lists, the refusal details and the envelope); a refusal needs a present 4xx/5xx reply code; R2's E1 evidence
 //              rules (no provider-controlled phase evidence, the trusted attempt state) are unchanged
+// On a DE1 R4 tree (the successor of this rejected R3 candidate, test/support/de1-r4-email.mjs) DE1R3G-01..05 verify the R3
+// commit itself from git objects (DE1R4_PARENT); the HEAD / index / checkout identity is held by the R4 guard (DE1R4G-01).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -19,7 +21,8 @@ import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { gitBlobId, m1EffectivePins } from "../support/m1-r1-remediation.mjs";
 import { DE1R2_PINS } from "../support/de1-r2-email.mjs";
-import { de1EffectivePins, de1R2Pins, DE1_PINS } from "../support/de1-daily-email.mjs";
+import { de1EffectivePins, de1R2Pins, de1R3Pins, DE1_PINS } from "../support/de1-daily-email.mjs";
+import { isDE1R4Tree, DE1R4_PARENT } from "../support/de1-r4-email.mjs";
 import { DE1R3_PARENT, DE1R3_PINS, DE1R3_NEW_FILES, DE1R3_EDITS, DE1R3_SCOPE, isDE1R3Tree, deriveDE1R3 } from "../support/de1-r3-email.mjs";
 
 const PROTECTED = /^(src\/(finance|metrics|policy|presenters|browser|finance-server|analytics|repositories|snapshot|agent|forecast)\/|fincore\/|api\/|lib\/|database\.rules\.json$|test\/support\/rules-authorized-delta\.mjs$|index\.html$|vercel\.json$|package(-lock)?\.json$)/;
@@ -29,21 +32,29 @@ const bytesOf = (spec) => { const r = gitIn(REPO, ["cat-file", "blob", spec], { 
 const lines = (r) => r.stdout.split("\n").map((x) => x.trim()).filter(Boolean);
 const MODIFIED = Object.keys(DE1R3_PINS).filter((f) => !DE1R3_NEW_FILES.includes(f)).sort();
 const ED = "lib/emailDelivery.js";
+const LAYERED = isDE1R4Tree(REPO);
+const R3_TREE = LAYERED ? DE1R4_PARENT : "HEAD";          // the R3 commit itself when the R4 layer is checked out
+const readAt = (f) => (LAYERED ? bytesOf(`${R3_TREE}:${f}`).toString("utf8") : readFileSync(join(REPO, f), "utf8"));
 
 test("DE1R3G-01 the R3 change set vs R2 is exactly the recorded set; every effective pin holds committed / staged / checked out", { skip: SKIP }, () => {
   assert.equal(DE1R3_PARENT, "3a66397c2aa83cf7e6d6cb3c6ca5cc37fdde9f13", "R3 is built on the rejected R2 candidate");
-  assert.equal(gitIn(REPO, ["rev-parse", "HEAD^"]).stdout.trim(), DE1R3_PARENT, "sole parent");
-  assert.equal(lines(gitIn(REPO, ["rev-list", "--parents", "-n1", "HEAD"]))[0].split(" ").length, 2, "exactly one parent");
+  assert.equal(gitIn(REPO, ["rev-parse", R3_TREE + "^"]).stdout.trim(), DE1R3_PARENT, "sole parent");
+  assert.equal(lines(gitIn(REPO, ["rev-list", "--parents", "-n1", R3_TREE]))[0].split(" ").length, 2, "exactly one parent");
   for (const [f, pin] of Object.entries(DE1R3_PINS)) assert.match(pin, /^[0-9a-f]{40}$/, f + ": literal blob id");
-  const committed = lines(gitIn(REPO, ["diff", "--name-only", DE1R3_PARENT, "HEAD", "--"])).filter((f) => PROTECTED.test(f));
-  const staged = lines(gitIn(REPO, ["diff", "--name-only", "--cached", DE1R3_PARENT, "--"])).filter((f) => PROTECTED.test(f));
-  const working = [...lines(gitIn(REPO, ["diff", "--name-only", DE1R3_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => PROTECTED.test(f));
-  for (const [label, set] of [["committed", committed], ["staged", staged], ["working tree", working]])
+  const committed = lines(gitIn(REPO, ["diff", "--name-only", DE1R3_PARENT, R3_TREE, "--"])).filter((f) => PROTECTED.test(f));
+  const sets = [["committed", committed]];
+  if (!LAYERED) {
+    sets.push(["staged", lines(gitIn(REPO, ["diff", "--name-only", "--cached", DE1R3_PARENT, "--"])).filter((f) => PROTECTED.test(f))]);
+    sets.push(["working tree", [...lines(gitIn(REPO, ["diff", "--name-only", DE1R3_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => PROTECTED.test(f))]);
+  }
+  for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), Object.keys(DE1R3_PINS).sort(), label + ": protected changes vs R2 = the recorded R3 set");
-  const eff = m1EffectivePins(REPO);
+  // the R3 commit's own pins: on an R4 tree the effective table without the R4 overlay
+  const eff = LAYERED ? { ...m1EffectivePins(REPO), ...de1R3Pins() } : m1EffectivePins(REPO);
   for (const [f, pin] of Object.entries(DE1R3_PINS)) assert.equal(eff[f], pin, f + ": the R3 pin is the effective pin");
   for (const [f, pin] of Object.entries(eff)) {
-    assert.equal(blobId("HEAD:" + f), pin, f + " committed");
+    assert.equal(blobId(R3_TREE + ":" + f), pin, f + " committed" + (LAYERED ? " (at the R3 commit)" : ""));
+    if (LAYERED) continue;
     assert.equal(blobId(":" + f), pin, f + " staged");
     assert.equal(gitBlobId(readFileSync(join(REPO, f))), pin, f + " checked out");
   }
@@ -62,16 +73,16 @@ test("DE1R3G-02 provenance: the R3 pin is the R2 pin's bytes + exactly the recor
 
 test("DE1R3G-03 scope: only the resolved-result classifier changes; everything else is byte-identical to R2", { skip: SKIP }, () => {
   assert.deepEqual(MODIFIED, [...DE1R3_SCOPE].sort());
-  const all = lines(gitIn(REPO, ["diff", "--name-only", DE1R3_PARENT, "HEAD", "--"]));
+  const all = lines(gitIn(REPO, ["diff", "--name-only", DE1R3_PARENT, R3_TREE, "--"]));
   const outside = all.filter((f) => !/^test\/(delivery|finance|support)\//.test(f) && !DE1R3_SCOPE.includes(f));
   assert.deepEqual(outside, [], "no runtime / config / tool / emulator / Rules change outside the receipt module");
   for (const f of ["lib/emailDelivery.d.ts", "api/daily-snapshot/run.ts", "lib/sendEmail.js", "lib/sendEmail.d.ts", "database.rules.json", "test/emulator/database.rules.json", "vercel.json", "package.json", "package-lock.json",
     "src/snapshot/snapshotBuilder.ts", "src/snapshot/snapshotEmail.ts", "lib/securityContext.js", "lib/verifyToken.js", "lib/businessRegistry.js", "test/support/canary-fixtures.mjs", "test/support/daily-email-harness.mjs", "fincore/v1/MANIFEST.json"])
-    assert.equal(blobId("HEAD:" + f), blobId(`${DE1R3_PARENT}:${f}`), f + " unchanged");
-  assert.deepEqual(lines(gitIn(REPO, ["diff", "--name-only", DE1R3_PARENT, "HEAD", "--", "src", "fincore", "api", "tools", "index.html"])), [], "no src / fincore / api / tools / page change");
+    assert.equal(blobId(R3_TREE + ":" + f), blobId(`${DE1R3_PARENT}:${f}`), f + " unchanged");
+  assert.deepEqual(lines(gitIn(REPO, ["diff", "--name-only", DE1R3_PARENT, R3_TREE, "--", "src", "fincore", "api", "tools", "index.html"])), [], "no src / fincore / api / tools / page change");
   // outside classifyTransportInfo (and its doc comment) the receipt module is byte-identical to R2
   const cut = (s) => { const a = s.indexOf("/**\n * Classify a resolved sendMail result for one recipient."), b = s.indexOf("// ── the per-attempt context lib/sendEmail.js reads"); assert.ok(a > 0 && b > a); return s.slice(0, a) + s.slice(b); };
-  assert.equal(cut(readFileSync(join(REPO, ED), "utf8")), cut(bytesOf(`${DE1R3_PARENT}:${ED}`).toString("utf8")), "only the resolved-result classifier changed");
+  assert.equal(cut(readAt(ED)), cut(bytesOf(`${DE1R3_PARENT}:${ED}`).toString("utf8")), "only the resolved-result classifier changed");
 });
 
 test("DE1R3G-04 non-vacuity: a changed anchor, a dropped or an altered edit is refused; the R2 module is not the R3 one", { skip: SKIP }, () => {
@@ -84,14 +95,14 @@ test("DE1R3G-04 non-vacuity: a changed anchor, a dropped or an altered edit is r
     assert.ok(altered.ok && gitBlobId(altered.bytes) !== DE1R3_PINS[f], f + ": an altered edit is not the pin");
     assert.notEqual(DE1R3_PINS[f], DE1R2_PINS[f], f + ": the R3 pin differs from the rejected R2 pin");
   }
-  const eff = de1EffectivePins(REPO);
+  const eff = LAYERED ? de1R3Pins() : de1EffectivePins(REPO);
   assert.deepEqual(Object.keys(eff).sort(), Object.keys(DE1_PINS).sort(), "the overlay introduces no file outside the DE1 set");
   for (const f of MODIFIED) assert.equal(eff[f], DE1R3_PINS[f]);
   for (const f of Object.keys(DE1R2_PINS).filter((x) => !MODIFIED.includes(x))) assert.equal(eff[f], de1R2Pins()[f], f + " keeps its R2 pin");
 });
 
 test("DE1R3G-05 the evidence rules in the source", { skip: SKIP }, () => {
-  const src = readFileSync(join(REPO, ED), "utf8");
+  const src = readAt(ED);
   const code = src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l)).join("\n");     // executable lines only
   // R2's E1 rules are unchanged
   for (const gone of ['"deliveryPhase"', "deliveryPhase =", '"syscall"', "SYSCALLS", '"message")', "Connection timeout", "provider_unreachable"])

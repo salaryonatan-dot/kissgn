@@ -98,7 +98,7 @@ test("DR3-04 malformed fields are unknown and held", async () => {
     ["rejectedErrors not a list", (m) => ({ messageId: m.messageId, accepted: [], rejected: [m.to], rejectedErrors: "fake-detail", response: "550 5.1.1 no" })],
     ["envelope.to unreadable", (m) => ({ messageId: m.messageId, accepted: [m.to], rejected: [], response: "250 2.0.0 OK", envelope: { to: [{ get address() { throw new Error("fake-detail"); } }] } })],
     ["refusal detail with a non-reply code", (m) => ({ messageId: m.messageId, accepted: [], rejected: [m.to], rejectedErrors: [{ responseCode: "550", recipient: m.to }], response: "550 5.1.1 no" })],
-  ]) await heldCase(label, answer, label === "refusal detail with a non-reply code" ? "provider_result_inconsistent" : M);
+  ]) await heldCase(label, answer, M);   // R4: an unreadable refusal-detail code is malformed (was inconsistent)
 });
 
 test("DR3-05 controls keep their R2 behaviour: acceptance, definite refusals and a deferral", async () => {
@@ -152,15 +152,15 @@ test("DR3-07 the classifier judges the fields together (pure table)", () => {
     [{ accepted: [to], rejected: [OTHER], response: "250 OK" }, "unknown", "provider_result_inconsistent"],
     [{ accepted: [to], rejected: [], response: "550 no" }, "unknown", "provider_result_inconsistent"],
     [{ accepted: [to], rejected: [], response: "354 go" }, "unknown", "provider_result_inconsistent"],
-    [{ accepted: [to], rejected: [], rejectedErrors: [{}], response: "250 OK" }, "unknown", "provider_result_inconsistent"],
+    [{ accepted: [to], rejected: [], rejectedErrors: [{}], response: "250 OK" }, "unknown", "provider_result_malformed"],   // R4: an unreadable detail record (was inconsistent)
     [{ accepted: [to], rejected: [], response: "250 OK", envelope: { to: [OTHER] } }, "unknown", "provider_result_inconsistent"],
     [{ accepted: [to], rejected: [], response: "250 OK", envelope: { to: [to, OTHER] } }, "unknown", "provider_result_inconsistent"],
     [{ accepted: [], rejected: [to, OTHER], response: "550 no" }, "unknown", "provider_result_inconsistent"],
     [{ accepted: [], rejected: [to], response: "354 go" }, "unknown", "provider_result_inconsistent"],
-    [{ accepted: [], rejected: [to], response: "550 no", rejectedErrors: [{ responseCode: 421 }] }, "unknown", "provider_result_inconsistent"],
+    [{ accepted: [], rejected: [to], response: "550 no", rejectedErrors: [{ responseCode: 421 }] }, "unknown", "provider_result_malformed"],   // R4: names no recipient (was inconsistent)
     [{ accepted: [], rejected: [to], response: "550 no", rejectedErrors: [{ responseCode: 550, recipient: OTHER }] }, "unknown", "provider_result_inconsistent"],
-    [{ accepted: [], rejected: [to], response: "550 no", rejectedErrors: [{ responseCode: 550, recipient: 7 }] }, "unknown", "provider_result_inconsistent"],
-    [{ accepted: [], rejected: [to], response: "550 no", rejectedErrors: [{ responseCode: "550" }] }, "unknown", "provider_result_inconsistent"],
+    [{ accepted: [], rejected: [to], response: "550 no", rejectedErrors: [{ responseCode: 550, recipient: 7 }] }, "unknown", "provider_result_malformed"],   // R4: unreadable recipient (was inconsistent)
+    [{ accepted: [], rejected: [to], response: "550 no", rejectedErrors: [{ responseCode: "550" }] }, "unknown", "provider_result_malformed"],   // R4: unreadable code, no recipient (was inconsistent)
     [{ accepted: [], rejected: [to] }, "unknown", "provider_result_incomplete"],
     [{ accepted: [], rejected: [], response: "250 OK" }, "unknown", "provider_result_indeterminate"],
     [{ accepted: [], rejected: [OTHER], response: "250 OK" }, "unknown", "provider_result_indeterminate"],
@@ -179,6 +179,8 @@ test("DR3-07 the classifier judges the fields together (pure table)", () => {
   // hostile objects prove nothing
   const revoked = Proxy.revocable({}, {}); revoked.revoke();
   assert.deepEqual(C(revoked.proxy), ["unknown", "provider_result_malformed"]);
-  assert.deepEqual(C({ accepted: [to], rejected: [], get response() { throw new Error("x"); } }), ["accepted", null], "an unreadable reply text is absent, never an acceptance on its own (the accepted list decides)");
-  assert.deepEqual(C({ accepted: [], rejected: [to], get response() { throw new Error("x"); } }), ["unknown", "provider_result_incomplete"]);
+  // R4 (review E2/D4 continuation): an unreadable reply text is UNREADABLE evidence, never "absent" (R3 accepted the first and
+  // called the second incomplete)
+  assert.deepEqual(C({ accepted: [to], rejected: [], get response() { throw new Error("x"); } }), ["unknown", "provider_result_malformed"]);
+  assert.deepEqual(C({ accepted: [], rejected: [to], get response() { throw new Error("x"); } }), ["unknown", "provider_result_malformed"]);
 });
