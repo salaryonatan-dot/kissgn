@@ -179,6 +179,25 @@ test('an unrelated financial read error cannot spoof a registry refusal code', a
   failReads(db, [['tenantA', 'a']], 'registry_unreadable');
   const run = await buildSnapshotRun({ nowMs: NOW });
   assert.deepEqual(run.failedBuilds, [{ ...identity('tenantA', 'a'), code: 'snapshot_build_failed' }]);
+  await assert.rejects(buildSnapshotForBiz('tenantA', 'a', { nowMs: NOW }), (error) => {
+    assert.equal(error.name, 'Error');
+    assert.equal(error.message, 'registry_unreadable');
+    assert.equal(Object.hasOwn(error, 'code'), false);
+    return true;
+  });
+});
+
+test('manual registry refusals carry a distinct bounded provenance marker', async () => {
+  const db = installDb(makeDb());
+  seed(db, 'tenantA', ['a']);
+  db.seed('tenants/tenantA/app/business', { _v: '[' });
+  await assert.rejects(buildSnapshotForBiz('tenantA', 'a', { nowMs: NOW }), (error) => {
+    assert.equal(error.name, 'SnapshotIdentityRefusal');
+    assert.equal(Object.hasOwn(error, 'code'), true);
+    assert.equal(error.code, 'registry_unreadable');
+    assert.equal(error.message, error.code);
+    return true;
+  });
 });
 
 test('control characters are discovery failures; valid tenant colon remains exact', async () => {

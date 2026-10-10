@@ -81,7 +81,10 @@ export interface SnapshotBuildFailure extends SnapshotBusinessIdentity {
 
 type SnapshotRefusalCode = Exclude<SnapshotBuildFailure["code"], "snapshot_build_failed">;
 class SnapshotIdentityRefusal extends Error {
-  constructor(readonly code: SnapshotRefusalCode) { super(code); }
+  constructor(readonly code: SnapshotRefusalCode) {
+    super(code);
+    this.name = "SnapshotIdentityRefusal";
+  }
 }
 
 export interface SnapshotExclusion extends SnapshotBusinessIdentity {
