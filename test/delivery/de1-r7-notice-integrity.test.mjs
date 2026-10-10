@@ -125,18 +125,28 @@ test("DR7-01 G10 attribution: the source of a failure is the operation that fail
     assert.ok(!JSON.stringify(r.body).includes(SECRET_TEXT) && !JSON.stringify(r.body).includes(SECRET_NAME), label + ": no raw text in the body");
     assert.ok(lines.some((l) => l.endsWith(`manual build failed (${cls})`)), label + ": class logged\n" + lines.join("\n"));
   }
-  // the builder's own attribution (contract §3: message EQUAL to the bounded code) is mapped to the owner's status, whatever the class
+  // R8 (test-contract transition, review finding CF5-01): the builder's own attribution is its PROVENANCE MARKER — an Error named
+  // "SnapshotIdentityRefusal" whose own `code` equals its message, the message in the bounded set (contract §3 as refined by the
+  // Builder successor 690a07d9). The R7 assertion attributed a plain Error(code) / SyntaxError(code) / a record by message alone;
+  // those are now build failures (DR8-01 holds the full matrix). The six genuine codes map to the owner's statuses whatever the
+  // Error subclass that carries the marker.
   const attributed = [["invalid_business_identity", 400], ["business_not_registered", 404], ["ambiguous_business_identity", 422],
     ["registry_unreadable", 422], ["business_name_unavailable", 422], ["registry_unavailable", 503]];
+  const refusal = (code, Base = Error) => { const e = new Base(code); e.name = "SnapshotIdentityRefusal"; Object.defineProperty(e, "code", { value: code, enumerable: false, writable: false, configurable: false }); return e; };
   for (const [code, status] of attributed) {
-    for (const [cls, make] of [["Error", () => new Error(code)], ["SyntaxError", () => new SyntaxError(code)], ["TypeError", () => new TypeError(code)],
-      ["record (the message IS the code, whatever the class)", () => ({ message: code, name: "BuilderFailure" })],
-      ["throwing name getter", () => Object.defineProperty(new Error(code), "name", { get() { throw new Error(SECRET_TEXT); } })]]) {
+    for (const [cls, make] of [["Error marker", () => refusal(code)], ["SyntaxError marker", () => refusal(code, SyntaxError)], ["TypeError marker", () => refusal(code, TypeError)]]) {
       seedWorld({ withSecondBiz: false, withSecondTenant: false }); const smtp = installSmtp([SMTP.accept()]);
       globalThis.__STUB_THROW = make;
       const { value: r, lines } = await captureConsole(() => at(AT, () => post(stub, { tenantId: T, bizId: B })));
       assert.deepEqual([r.statusCode, r.body.code, smtp.calls.length], [status, code, 0], `${cls}(${code}): ` + JSON.stringify(r.body));
       assert.ok(r.body.error.endsWith("email not sent") && lines.filter(leaks).length === 0, `${cls}(${code})`);
+    }
+    // the same text WITHOUT the marker is a build failure (CF5-01)
+    for (const [cls, make] of [["plain Error", () => new Error(code)], ["SyntaxError", () => new SyntaxError(code)], ["record", () => ({ message: code, name: "BuilderFailure" })]]) {
+      seedWorld({ withSecondBiz: false, withSecondTenant: false }); const smtp = installSmtp([SMTP.accept()]);
+      globalThis.__STUB_THROW = make;
+      const r = await at(AT, () => post(stub, { tenantId: T, bizId: B }));
+      assert.deepEqual([r.statusCode, r.body.code, smtp.calls.length], [503, "snapshot_build_failed", 0], `${cls}(${code}) without the marker: ` + JSON.stringify(r.body));
     }
   }
   globalThis.__STUB_THROW = null;

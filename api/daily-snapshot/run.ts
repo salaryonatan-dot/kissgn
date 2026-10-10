@@ -145,7 +145,8 @@ function errorClass(error: unknown): string {
 //   503  snapshot_build_failed       the snapshot could not be built: ANY builder throw that the builder itself did not
 //                                    attribute to the registry (R7, review finding OD-01 — a failure is classified by the
 //                                    operation that failed, never by the exception class: a SyntaxError raised while the
-//                                    snapshot data is read is a build failure, not a malformed registry)
+//                                    snapshot data is read is a build failure, not a malformed registry; R8, review finding
+//                                    CF5-01 — an attribution needs the builder's provenance marker, never the message alone)
 // Bodies are a fixed sentence plus the bounded code (and the caller-supplied, already authorized ids); never raw error
 // text, never registry bytes (a Node SyntaxError message embeds the input), never an address or a financial figure.
 const MANUAL_REFUSALS: Record<DeliveryTargetCode | "snapshot_build_failed", { status: number; error: string }> = {
@@ -157,21 +158,33 @@ const MANUAL_REFUSALS: Record<DeliveryTargetCode | "snapshot_build_failed", { st
   registry_unavailable:        { status: 503, error: "Business registry temporarily unavailable; email not sent" },
   snapshot_build_failed:       { status: 503, error: "Snapshot could not be built; email not sent" },
 };
-// The bounded codes a builder may attribute itself (delivery coordination contract §3: `throw new Error(<code>)`, the message
-// EQUAL to the code). Only the builder knows which of its operations failed; the route never infers the source from the
-// exception class or from any other property of the thrown value.
+// The bounded codes a builder may attribute itself (delivery coordination contract §3). Only the builder knows which of its
+// operations failed; the route never infers the source from the exception class or from the message text alone.
 const BUILDER_ATTRIBUTED_CODES: ReadonlySet<string> = new Set<DeliveryTargetCode>(["invalid_business_identity", "business_not_registered",
   "ambiguous_business_identity", "registry_unreadable", "business_name_unavailable", "registry_unavailable"]);
+// The builder's provenance marker (R8, review finding CF5-01; contract §3 as refined by the Builder successor 690a07d9): a
+// genuine refusal is an Error whose `name` is exactly this, whose OWN `code` property equals its `message`, and whose
+// message is one of the bounded codes. The class itself stays private to the builder; nothing else is read.
+const BUILDER_REFUSAL_NAME = "SnapshotIdentityRefusal";
 /**
- * The bounded manual refusal for a builder throw (R7): the code the builder attributed (its message, compared for exact
- * equality against the bounded set — never logged, never echoed), else snapshot_build_failed. The registry itself was
- * already read and found deliverable by the route's own gate before the builder ran, so an unattributed throw — of any
- * class, a SyntaxError included — is a failure of the build, not of the registry.
+ * The bounded manual refusal for a builder throw (R8): the code the builder attributed — only when all three fields of the
+ * provenance marker agree (name, own code, message in the bounded set; every read guarded against a throwing accessor or
+ * Proxy) — else snapshot_build_failed. A plain Error(code), a SyntaxError(code), a record { message, code }, a marker
+ * with a mismatched or inherited code, or a value whose properties cannot be read is a failure of the build, not of the
+ * registry: the route's own gate already read the registry and found the business deliverable before the builder ran.
+ * Nothing of the thrown value is logged or echoed (the caller logs the bounded class only).
  */
 function builderRefusal(error: unknown): keyof typeof MANUAL_REFUSALS {
-  let message: unknown;
-  try { message = (error as { message?: unknown } | null)?.message; } catch { message = undefined; }
-  return typeof message === "string" && BUILDER_ATTRIBUTED_CODES.has(message) ? (message as DeliveryTargetCode) : "snapshot_build_failed";
+  let name: unknown, message: unknown, code: unknown, ownCode = false;
+  try {
+    if (!(error instanceof Error)) return "snapshot_build_failed";     // a revoked Proxy throws even here
+    name = error.name;
+    message = error.message;
+    ownCode = Object.prototype.hasOwnProperty.call(error, "code");
+    code = ownCode ? (error as { code?: unknown }).code : undefined;
+  } catch { return "snapshot_build_failed"; }
+  if (name !== BUILDER_REFUSAL_NAME || !ownCode || typeof message !== "string" || code !== message) return "snapshot_build_failed";
+  return BUILDER_ATTRIBUTED_CODES.has(message) ? (message as DeliveryTargetCode) : "snapshot_build_failed";
 }
 
 // ── the owner notice read (action: "notice"; R7, review finding OD-02) ─────────────────────────────────────────────────
@@ -372,7 +385,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       let snapshot: Awaited<ReturnType<typeof buildSnapshotForBiz>>;
       try { snapshot = await buildSnapshotForBiz(tenantId, bizId); }
       catch (error) {
-        // the error is untrusted (D4): only its class is logged; the refusal is the code the builder attributed, else a build failure
+        // the error is untrusted (D4): only its class is logged; the refusal is the code the builder attributed (provenance marker), else a build failure
         console.error(`[daily-snapshot] manual build failed (${errorClass(error)})`);
         return refuse(builderRefusal(error));
       }

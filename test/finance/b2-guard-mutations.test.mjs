@@ -49,6 +49,7 @@ import { isDE1R4Tree, DE1R4_PARENT } from "../support/de1-r4-email.mjs";
 import { isDE1R5Tree, DE1R5_PARENT } from "../support/de1-r5-delivery.mjs";
 import { isDE1R6Tree, DE1R6_PARENT } from "../support/de1-r6-provider.mjs";
 import { isDE1R7Tree, DE1R7_PARENT } from "../support/de1-r7-notice.mjs";
+import { isDE1R8Tree, DE1R8_PARENT } from "../support/de1-r8-provenance.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -206,7 +207,7 @@ function assertB2Scope(root) {
     const DE1_ADDED = de1 ? DE1_SCOPE.filter((f) => !P0_APPROVED.includes(f)) : [];
     // the delivery pins: DE1's, with the DE1 R1 successor's overlaid on its tree (same file set)
     const DE1_EFF = de1 ? de1EffectivePins(root) : {};
-    const DE1_LABEL = de1 && isDE1R7Tree(root) ? "DE1 R7 successor fixed blob " : de1 && isDE1R6Tree(root) ? "DE1 R6 successor fixed blob " : de1 && isDE1R5Tree(root) ? "DE1 R5 successor fixed blob " : de1 && isDE1R4Tree(root) ? "DE1 R4 successor fixed blob " : de1 && isDE1R3Tree(root) ? "DE1 R3 successor fixed blob " : de1 && isDE1R2Tree(root) ? "DE1 R2 successor fixed blob " : de1 && isDE1R1Tree(root) ? "DE1 R1 successor fixed blob " : "DE1 checkpoint fixed blob ";
+    const DE1_LABEL = de1 && isDE1R8Tree(root) ? "DE1 R8 successor fixed blob " : de1 && isDE1R7Tree(root) ? "DE1 R7 successor fixed blob " : de1 && isDE1R6Tree(root) ? "DE1 R6 successor fixed blob " : de1 && isDE1R5Tree(root) ? "DE1 R5 successor fixed blob " : de1 && isDE1R4Tree(root) ? "DE1 R4 successor fixed blob " : de1 && isDE1R3Tree(root) ? "DE1 R3 successor fixed blob " : de1 && isDE1R2Tree(root) ? "DE1 R2 successor fixed blob " : de1 && isDE1R1Tree(root) ? "DE1 R1 successor fixed blob " : "DE1 checkpoint fixed blob ";
     const vd50Runtime = ["src/metrics/report.ts", "fincore/v1/metrics/report.js", "fincore/v1/MANIFEST.json"];
     const f1Runtime = ["database.rules.json", "fincore/v1/MANIFEST.json", "fincore/v1/browser/marjinFinanceGlobal.js", "fincore/v1/finance/costHistory.js", "fincore/v1/metrics/report.js", "fincore/v1/policy/productFinance.js", "lib/finance/costHistoryWriter.js", "src/browser/marjinFinanceGlobal.ts", "src/finance-server/canonicalInputs.ts", "src/finance/costHistory.ts", "src/finance/labor.ts", "src/finance/types.ts", "src/metrics/costTimeline.ts", "src/metrics/report.ts", "src/policy/productFinance.ts", "test/support/rules-authorized-delta.mjs"];
     const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES, ...M1_R1_ADDED, ...DE1_ADDED])] : CDM2_APPROVED;
@@ -726,6 +727,10 @@ test("B2G-05-M1b M1 tree: committed substitutions of either input, page edits, r
     ...(isDE1R7Tree(REPO) ? [
       ["DE1 R7: the receipt module = the R6 bytes (no notice store state: a failed read is indistinguishable from an absent notice)", put("lib/emailDelivery.js", DE1R7_PARENT + ":lib/emailDelivery.js"), PIN("lib/emailDelivery.js")],
       ["DE1 R7: the route = the R6 bytes (a SyntaxError is a malformed registry by class; a failed notice read / clear is HTTP 200)", put("api/daily-snapshot/run.ts", DE1R7_PARENT + ":api/daily-snapshot/run.ts"), PIN("api/daily-snapshot/run.ts")],
+    ] : []),
+    // DE1 R8 overlay (only on a DE1 R8 tree): the route cannot fall back to the R7 bytes (a builder throw attributed by message alone)
+    ...(isDE1R8Tree(REPO) ? [
+      ["DE1 R8: the route = the R7 bytes (an unrelated Error(code) from the loader attributed as a registry refusal)", put("api/daily-snapshot/run.ts", DE1R8_PARENT + ":api/daily-snapshot/run.ts"), PIN("api/daily-snapshot/run.ts")],
     ] : []),
   ];
   for (const [label, mut, re] of cases) {

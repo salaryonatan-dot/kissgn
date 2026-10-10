@@ -25,6 +25,8 @@ import { isDE1R5Tree, DE1R5_PINS } from "./de1-r5-delivery.mjs";
 import { isDE1R6Tree, DE1R6_PINS } from "./de1-r6-provider.mjs";
 // DE1 R7 (the notice-integrity successor, built on the R6 commit): its pins overlay the R6 pins on an R7 tree.
 import { isDE1R7Tree, DE1R7_PINS } from "./de1-r7-notice.mjs";
+// DE1 R8 (the refusal-provenance successor, built on the R7 commit): its pin overlays the R7 pins on an R8 tree.
+import { isDE1R8Tree, DE1R8_PINS } from "./de1-r8-provenance.mjs";
 
 const RECORD = JSON.parse(readFileSync(new URL("./de1-daily-email.json", import.meta.url), "utf8"));
 export const DE1_PARENT = RECORD.parent;
@@ -59,6 +61,7 @@ export function deriveDE1(repo, file, edits = DE1_EDITS) { return applyDE1Edits(
  *  successor's overlaid on an R2 tree (an R2 tree is always an R1 tree). */
 export function de1EffectivePins(repo) {
   if (!isDE1R1Tree(repo)) return { ...DE1_PINS };
+  if (isDE1R8Tree(repo)) return { ...DE1_PINS, ...DE1R1_PINS, ...DE1R2_PINS, ...DE1R3_PINS, ...DE1R4_PINS, ...DE1R5_PINS, ...DE1R6_PINS, ...DE1R7_PINS, ...DE1R8_PINS };
   if (isDE1R7Tree(repo)) return { ...DE1_PINS, ...DE1R1_PINS, ...DE1R2_PINS, ...DE1R3_PINS, ...DE1R4_PINS, ...DE1R5_PINS, ...DE1R6_PINS, ...DE1R7_PINS };
   if (isDE1R6Tree(repo)) return { ...DE1_PINS, ...DE1R1_PINS, ...DE1R2_PINS, ...DE1R3_PINS, ...DE1R4_PINS, ...DE1R5_PINS, ...DE1R6_PINS };
   if (isDE1R5Tree(repo)) return { ...DE1_PINS, ...DE1R1_PINS, ...DE1R2_PINS, ...DE1R3_PINS, ...DE1R4_PINS, ...DE1R5_PINS };
@@ -66,6 +69,8 @@ export function de1EffectivePins(repo) {
   if (isDE1R3Tree(repo)) return { ...DE1_PINS, ...DE1R1_PINS, ...DE1R2_PINS, ...DE1R3_PINS };
   return isDE1R2Tree(repo) ? { ...DE1_PINS, ...DE1R1_PINS, ...DE1R2_PINS } : { ...DE1_PINS, ...DE1R1_PINS };
 }
+/** The pins of the R7 commit itself (DE1 ⊕ R1 … ⊕ R7), whatever later layer is checked out. */
+export function de1R7Pins() { return { ...DE1_PINS, ...DE1R1_PINS, ...DE1R2_PINS, ...DE1R3_PINS, ...DE1R4_PINS, ...DE1R5_PINS, ...DE1R6_PINS, ...DE1R7_PINS }; }
 /** The pins of the R6 commit itself (DE1 ⊕ R1 ⊕ R2 ⊕ R3 ⊕ R4 ⊕ R5 ⊕ R6), whatever later layer is checked out. */
 export function de1R6Pins() { return { ...DE1_PINS, ...DE1R1_PINS, ...DE1R2_PINS, ...DE1R3_PINS, ...DE1R4_PINS, ...DE1R5_PINS, ...DE1R6_PINS }; }
 /** The pins of the R5 commit itself (DE1 ⊕ R1 ⊕ R2 ⊕ R3 ⊕ R4 ⊕ R5), whatever later layer is checked out. */

@@ -1,0 +1,35 @@
+{
+ "parent": "d5e1f30102ff88db985a6ff60392cfbdbafd856b",
+ "pins": {
+  "api/daily-snapshot/run.ts": "d2135a6b0f5a8c4218e1b7c3aab41f272c7e7f51"
+ },
+ "newFiles": [],
+ "edits": {
+  "api/daily-snapshot/run.ts": [
+   {
+    "from": "        // the error is untrusted (D4): only its class is logged; the refusal is the code the builder attributed, else a build failure\n",
+    "to": "        // the error is untrusted (D4): only its class is logged; the refusal is the code the builder attributed (provenance marker), else a build failure\n"
+   },
+   {
+    "from": "  let message: unknown;\n  try { message = (error as { message?: unknown } | null)?.message; } catch { message = undefined; }\n  return typeof message === \"string\" && BUILDER_ATTRIBUTED_CODES.has(message) ? (message as DeliveryTargetCode) : \"snapshot_build_failed\";\n",
+    "to": "  let name: unknown, message: unknown, code: unknown, ownCode = false;\n  try {\n    if (!(error instanceof Error)) return \"snapshot_build_failed\";     // a revoked Proxy throws even here\n    name = error.name;\n    message = error.message;\n    ownCode = Object.prototype.hasOwnProperty.call(error, \"code\");\n    code = ownCode ? (error as { code?: unknown }).code : undefined;\n  } catch { return \"snapshot_build_failed\"; }\n  if (name !== BUILDER_REFUSAL_NAME || !ownCode || typeof message !== \"string\" || code !== message) return \"snapshot_build_failed\";\n  return BUILDER_ATTRIBUTED_CODES.has(message) ? (message as DeliveryTargetCode) : \"snapshot_build_failed\";\n"
+   },
+   {
+    "from": " * The bounded manual refusal for a builder throw (R7): the code the builder attributed (its message, compared for exact\n * equality against the bounded set — never logged, never echoed), else snapshot_build_failed. The registry itself was\n * already read and found deliverable by the route's own gate before the builder ran, so an unattributed throw — of any\n * class, a SyntaxError included — is a failure of the build, not of the registry.\n",
+    "to": " * The bounded manual refusal for a builder throw (R8): the code the builder attributed — only when all three fields of the\n * provenance marker agree (name, own code, message in the bounded set; every read guarded against a throwing accessor or\n * Proxy) — else snapshot_build_failed. A plain Error(code), a SyntaxError(code), a record { message, code }, a marker\n * with a mismatched or inherited code, or a value whose properties cannot be read is a failure of the build, not of the\n * registry: the route's own gate already read the registry and found the business deliverable before the builder ran.\n * Nothing of the thrown value is logged or echoed (the caller logs the bounded class only).\n"
+   },
+   {
+    "from": "  \"ambiguous_business_identity\", \"registry_unreadable\", \"business_name_unavailable\", \"registry_unavailable\"]);\n",
+    "to": "  \"ambiguous_business_identity\", \"registry_unreadable\", \"business_name_unavailable\", \"registry_unavailable\"]);\n// The builder's provenance marker (R8, review finding CF5-01; contract §3 as refined by the Builder successor 690a07d9): a\n// genuine refusal is an Error whose `name` is exactly this, whose OWN `code` property equals its `message`, and whose\n// message is one of the bounded codes. The class itself stays private to the builder; nothing else is read.\nconst BUILDER_REFUSAL_NAME = \"SnapshotIdentityRefusal\";\n"
+   },
+   {
+    "from": "// The bounded codes a builder may attribute itself (delivery coordination contract §3: `throw new Error(<code>)`, the message\n// EQUAL to the code). Only the builder knows which of its operations failed; the route never infers the source from the\n// exception class or from any other property of the thrown value.\n",
+    "to": "// The bounded codes a builder may attribute itself (delivery coordination contract §3). Only the builder knows which of its\n// operations failed; the route never infers the source from the exception class or from the message text alone.\n"
+   },
+   {
+    "from": "//                                    snapshot data is read is a build failure, not a malformed registry)\n",
+    "to": "//                                    snapshot data is read is a build failure, not a malformed registry; R8, review finding\n//                                    CF5-01 — an attribution needs the builder's provenance marker, never the message alone)\n"
+   }
+  ]
+ }
+}
