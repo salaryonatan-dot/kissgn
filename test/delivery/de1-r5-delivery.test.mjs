@@ -136,18 +136,25 @@ test("DR5-03 a `:` tenant is delivered with its own receipt; a repeat run is alr
 });
 
 // ── DR5-04 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-test("DR5-04 a registry business id with a control character: failed invalid_business_identity, no send, no receipt, no node", async () => {
+test("DR5-04 a registry business id with a control character: never built, never sent, no receipt, no node; the run is not clean", async () => {
+  // INTEGRATION I1 (test-contract transition, TEST_CONTRACT_TRANSITION.md): on R5..R8 the builder pin handed the refused
+  // identity to the route, whose gate failed it as a ROW `invalid_business_identity`. The carried Builder applies the same
+  // rule at DISCOVERY (BUILDER_DELIVERY_CONTRACT §2.2: an id refused by the identity rule is a discovery failure
+  // `malformed_entry`, never a silent drop and never a built business), so the identity never becomes an expected business:
+  // the run reports the discovery failure (G2: completed_with_failures, 500) and every no-send / no-receipt / no-node
+  // assertion is kept.
   for (const bad of ["biz\u0001c", "biz\u007fc", "b:c"]) {
     const db = seedWorld({ withSecondBiz: false, withSecondTenant: false }); const smtp = installSmtp([SMTP.accept()]);
     seedTenant(db, T2, bad, "Ctrl Biz");
     const { value: r, lines } = await captureConsole(() => cron());
     assert.equal(r.statusCode, 500, JSON.stringify(r.body));
-    const row = rowOf(r, T2, bad);
-    assert.deepEqual([r.body.status, row.outcome, row.code, row.settlement, row.receipt], ["completed_with_failures", "failed", "invalid_business_identity", "failed", "not_written"], JSON.stringify(bad));
+    assert.equal(r.body.status, "completed_with_failures", JSON.stringify(bad));
+    assert.deepEqual(r.body.discovery, { status: "failed", failures: [{ source: "app_business", code: "malformed_entry" }] }, JSON.stringify(bad));
+    assert.ok(!r.body.results.some((x) => x.tenantId === T2), JSON.stringify(bad) + ": the refused identity is never an expected business");
     assert.deepEqual([rowOf(r, T, B).settlement, smtp.calls.length], ["delivered", 1], "the valid business is delivered");
     assert.equal(db.read(`${RECEIPTS}/${T2}`), null, "no receipt under the refused identity");
     assert.equal(db.read(NOTICES), null, "no notice for an identity refusal");
-    assert.ok(lines.some((l) => l.includes("business not deliverable") && l.includes("invalid_business_identity")));
+    assert.ok(!lines.some((l) => l.includes(bad)), JSON.stringify(bad) + ": the refused id is never logged");
   }
 });
 
@@ -231,33 +238,18 @@ test("DR5-06 G4 on the manual path with the real builder: a missing name is refu
   }
 });
 
-// ── DR5-07 / DR5-08: the scheduled path with a STUBBED builder output ─────────────────────────────────────────────────────
-// The builder pin of this tree (buildSnapshotForAll) drops a nameless business and a business named "Unknown" before the
-// route sees them, so the scheduled G4 case cannot be exercised end to end here: it is PENDING the carried Builder (R4), which
-// reports the business as a failed build. What IS exercised is the route's gate on the builder's output shape: a copy of
-// the compiled sandbox whose builder module returns the snapshots the test seeds (otherwise the real route, sender, receipts).
-// The stub keeps the REAL builder for every snapshot it returns: buildSnapshotForAll = the real discovery + the businesses
-// listed in globalThis.__STUB_EXTRA built by the REAL buildSnapshotForBiz, with the builder's own name field replaced by
-// the value the test states (the old pin's placeholder "Unknown", or a real name) — i.e. exactly the rows the pin filters out.
-async function stubbedRoute() {
-  const dir = mkdtempSync(join(tmpdir(), "de1-r5-stub-"));
-  cpSync(SANDBOX, dir, { recursive: true, verbatimSymlinks: true });
-  const sb = join(dir, "src", "snapshot");
-  renameSync(join(sb, "snapshotBuilder.js"), join(sb, "snapshotBuilder.real.js"));
-  writeFileSync(join(sb, "snapshotBuilder.js"),
-    `import * as real from "./snapshotBuilder.real.js";\n` +
-    `export const buildSnapshotForBiz = real.buildSnapshotForBiz;\n` +
-    `export async function buildSnapshotForAll() { const all = await real.buildSnapshotForAll();\n` +
-    `  for (const [t, b, bizName] of globalThis.__STUB_EXTRA || []) { const s = await real.buildSnapshotForBiz(t, b); all.push({ ...s, bizName }); }\n` +
-    `  return all; }\n`);
-  return (await import(pathToFileURL(join(dir, "api", "daily-snapshot", "run.js")).href)).default;
-}
-const stub = await stubbedRoute();
+// ── DR5-07 / DR5-08: the scheduled path ───────────────────────────────────────────────────────────────────────────────────
+// INTEGRATION I1 (test-contract transition, TEST_CONTRACT_TRANSITION.md): on the R5..R8 trees the builder pin dropped a
+// nameless business before the route saw it, so DR5-07 exercised the route gate on a STUBBED builder output (a snapshot with
+// the old pin's placeholder name). On the integrated tree the carried Builder (690a07d9) reports the business itself as a
+// failed build `business_name_unavailable` (BUILDER_DELIVERY_CONTRACT §1.1) and the route consumes buildSnapshotRun: the
+// scenario now runs END TO END on the real route → real builder → real receipt store, with every outcome assertion kept.
+// (The route gate on a builder-returned snapshot stays covered as defence in depth by test/delivery/i1-integration.test.mjs.)
+const stub = route;
 
-test("DR5-07 G4 scheduled (route gate, stubbed builder output): failed row, no send, no receipt, notice recorded and counted; cleared when named", async () => {
+test("DR5-07 G4 scheduled (real builder, end to end since I1): failed row, no send, no receipt, notice recorded and counted; cleared when named", async () => {
   const db = seedWorld({ withSecondTenant: false }); const smtp = installSmtp([SMTP.accept()]);
   db.seed(`tenants/${T}/app/business`, env([{ id: B, name: "מסעדה א" }, { id: B2 }]));            // B2 has no name
-  globalThis.__STUB_EXTRA = [[T, B2, "Unknown"]];                                                 // the builder's placeholder for a nameless record, as the old pin emits it
   const { value: r1, lines } = await captureConsole(() => cron(stub));
   assert.equal(r1.statusCode, 500, JSON.stringify(r1.body));
   const row = rowOf(r1, T, B2);
@@ -281,13 +273,11 @@ test("DR5-07 G4 scheduled (route gate, stubbed builder output): failed row, no s
   const read2 = await at(AT, () => post(stub, { tenantId: T, bizId: B2, action: "notice" }));
   assert.deepEqual([read2.statusCode, read2.body.deliverable, read2.body.notice, db.read(`${NOTICES}/${T}/${B2}`)], [200, true, null, null]);
   // and the next run delivers it with its real name
-  globalThis.__STUB_EXTRA = [];                                                                   // the real discovery now includes the named B2
   const r3 = await cron(stub, AT + 4 * LEASE);
   assert.deepEqual([r3.statusCode, rowOf(r3, T, B2).settlement, smtp.calls.length], [200, "delivered", 2]);
-  // a business genuinely named "Unknown" on the scheduled path is delivered (route gate; end-to-end pending the carried Builder)
+  // a business genuinely named "Unknown" on the scheduled path is delivered (end to end: the carried Builder builds it)
   const db2 = seedWorld({ withSecondBiz: false, withSecondTenant: false }); const smtp2 = installSmtp([SMTP.accept()]);
   db2.seed(`tenants/${T}/app/business`, env([{ id: B, name: "Unknown" }]));
-  globalThis.__STUB_EXTRA = [[T, B, "Unknown"]];                                                   // the pin drops it; the gate sees a named business
   const r4 = await cron(stub);
   assert.deepEqual([r4.statusCode, rowOf(r4, T, B).settlement, smtp2.calls.length, db2.read(NOTICES)], [200, "delivered", 1, null]);
   // a notice read before any scheduled run (R7 test-contract transition, review finding OD-02): the business state says the

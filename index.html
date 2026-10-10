@@ -2443,6 +2443,65 @@
   })();
   </script>
 
+  <script>
+  // ── Owner notice: the Daily e-mail cannot be prepared (owner decision D-G4, 2026-10-09) ───────────────────────────────
+  // The page never reads the notice store (email_delivery/… is server-only under the Rules). It asks the owner-authorized
+  // route — POST /api/daily-snapshot/run with action: "notice" (delivery R7 contract: status, deliverable, code, notice,
+  // noticeState, clearState) — and decides from the BUSINESS state the server confirmed, never from a stored or synthesized
+  // record. Three outcomes, kept distinct:
+  //   "active"   the server confirmed the business has no usable name: the Daily is blocked → the alert is shown
+  //   "clear"    the server confirmed the name is present (and any stored notice is cleared or was never there) → hidden
+  //   "unknown"  anything else — a failed / refused / unreachable read, a 503 (registry or notice store unavailable, a failed
+  //              clear), a reply of another shape, another business state — changes NOTHING: a visible alert stays visible,
+  //              nothing new appears, and the page is unaffected. A failed read is never "resolved".
+  (function () {
+    "use strict";
+    var MESSAGE_HE = "לא ניתן להכין את הסיכום היומי כי חסר שם העסק. נדרש תיקון פרטי העסק.";
+    var NOTICE_ENDPOINT = "/api/daily-snapshot/run";
+    var OWNER_ROLES = Object.freeze(["owner", "super_owner"]);
+    function isRecord(x) { return x !== null && typeof x === "object" && !Array.isArray(x); }
+    /** The request body of the authorized read. `action` is mandatory: without it the same route is a manual Daily send. */
+    function noticeRequest(tenantId, bizId) { return { tenantId: tenantId, bizId: bizId, action: "notice" }; }
+    /** Whether this page may ask at all: an owner / super_owner with a live (tenantId, bizId) selection, not in demo mode. */
+    function shouldAsk(role, tenantId, bizId, demo) {
+      return OWNER_ROLES.indexOf(role) >= 0 && typeof tenantId === "string" && tenantId !== "" && typeof bizId === "string" && bizId !== "" && demo !== true;
+    }
+    /**
+     * Decide from one reply. `status` is the HTTP status (null = no reply), `body` the parsed JSON (or null).
+     *   { kind: "active", businessDate, runs }  200 ok, deliverable === false, code === "business_name_unavailable", for THIS business
+     *   { kind: "clear" }                        200 ok, deliverable === true, for THIS business
+     *   { kind: "unknown", reason }              everything else
+     * A stored record (body.notice) may only decorate an active decision (its date / count); it never decides.
+     */
+    function decide(status, body, tenantId, bizId) {
+      if (status !== 200 || !isRecord(body)) return { kind: "unknown", reason: status === null ? "no_reply" : "http_" + status };
+      if (body.status !== "ok" || body.tenantId !== tenantId || body.bizId !== bizId) return { kind: "unknown", reason: "shape_or_identity" };
+      if (typeof body.noticeState !== "string" || typeof body.clearState !== "string") return { kind: "unknown", reason: "shape" };  // not the R7 contract
+      if (body.deliverable === true) return { kind: "clear" };
+      if (body.deliverable === false && body.code === "business_name_unavailable") {
+        var rec = isRecord(body.notice) && body.notice.code === "business_name_unavailable" ? body.notice : null;
+        return { kind: "active", businessDate: rec && typeof rec.businessDate === "string" ? rec.businessDate : null, runs: rec && Number.isInteger(rec.runs) && rec.runs > 0 ? rec.runs : null };
+      }
+      return { kind: "unknown", reason: "other_business_state" };
+    }
+    /** The displayed states are kept PER BUSINESS (a switch away and back never loses what was confirmed for a business). */
+    function key(tenantId, bizId) { return String(tenantId) + "\u0000" + String(bizId); }
+    function stateFor(states, tenantId, bizId) { var s = isRecord(states) ? states[key(tenantId, bizId)] : null; return isRecord(s) ? s : { kind: "idle" }; }
+    /** The next map of displayed states after one decision for (tenantId, bizId): "unknown" leaves that business's state as it is. */
+    function next(states, decision, tenantId, bizId) {
+      var map = isRecord(states) ? states : {};
+      var cur = stateFor(map, tenantId, bizId), out = Object.assign({}, map);
+      if (!isRecord(decision) || decision.kind === "unknown") { if (cur.kind !== "idle") out[key(tenantId, bizId)] = Object.assign({}, cur, { lastReadFailed: true }); return out; }
+      if (decision.kind === "clear") { out[key(tenantId, bizId)] = { kind: "clear" }; return out; }
+      if (decision.kind === "active") { out[key(tenantId, bizId)] = { kind: "active", businessDate: decision.businessDate, runs: decision.runs }; return out; }
+      return out;
+    }
+    /** Whether the alert is shown for the selected business. */
+    function visible(states, tenantId, bizId) { return stateFor(states, tenantId, bizId).kind === "active"; }
+    window.MarjinDailyNotice = Object.freeze({ MESSAGE_HE: MESSAGE_HE, NOTICE_ENDPOINT: NOTICE_ENDPOINT, OWNER_ROLES: OWNER_ROLES, noticeRequest: noticeRequest, shouldAsk: shouldAsk, decide: decide, next: next, stateFor: stateFor, visible: visible });
+  })();
+  </script>
+
   <script type="text/babel" data-presets="react">
 
 
@@ -6381,6 +6440,8 @@ function PilotDashboard() {
   // M1 R2: the business-list load outcome — "unknown" until read; "unavailable" ends loading with an explicit state.
   const [bizRegistry, setBizRegistry] = useState({ state: "unknown" });
   const [currentBizId, setCurrentBizId_] = useState(null);
+  // ── Owner notice (D-G4): the Daily cannot be prepared for the selected business (window.MarjinDailyNotice) ───────────
+  const [dailyNotice, setDailyNotice] = useState({});   // per-business displayed states (MarjinDailyNotice.next / stateFor)
   // ── Insight Engine v1 — Dashboard card state (Phase 3, read-only) ──────────
   const [dashboardInsights, setDashboardInsights] = useState(null);        // null = no doc found; [] = doc exists but no insights
   const [dashboardInsightsDate, setDashboardInsightsDate] = useState(null);
@@ -6998,6 +7059,31 @@ function PilotDashboard() {
   const [finLedgerFloor, setFinLedgerFloor] = useState(null);
   useEffect(() => { setFinLedgerFloor(null); }, [currentBizId]);
   const requestFinanceFrom = (date) => { if (typeof date === "string") setFinLedgerFloor(prev => (prev === null || date < prev ? date : prev)); };
+  // Owner notice (D-G4): one authorized read per live selection (and after the registry name of the selected business
+  // changes, i.e. after the setup wizard saved a name), bound to the captured (tenantId, bizId, generation) exactly like the
+  // raw-node subscription (finRaw) above. Owner / super_owner only; never in demo mode; never for a staff session. A reply for a
+  // selection that is no longer live is dropped. The decision is the server-confirmed BUSINESS state (MarjinDailyNotice.decide);
+  // a failed / refused / unreachable read changes nothing (a visible alert stays, nothing new appears) and the page is unaffected.
+  const dailyNoticeRole = loggedInUser?.role;
+  const dailyNoticeBizName = React.useMemo(() => { const b = Array.isArray(businesses) ? businesses.find((x) => x && typeof x === "object" && x.id === currentBizId) : null; return b && typeof b.name === "string" ? b.name : null; }, [businesses, currentBizId]);
+  useEffect(() => {
+    const ctx = captureSelectionCtx();
+    const bound = !!(currentBizId && ctx && typeof ctx.tenantId === "string" && ctx.tenantId && ctx.bizId === currentBizId);
+    if (!bound || !window.MarjinDailyNotice || !window.MarjinDailyNotice.shouldAsk(dailyNoticeRole, ctx.tenantId, currentBizId, isDemoMode) || typeof window.apiFetch !== "function") return;
+    let live = true;
+    (async () => {
+      let status = null, body = null;
+      try {
+        const res = await window.apiFetch(window.MarjinDailyNotice.NOTICE_ENDPOINT, { method: "POST", body: JSON.stringify(window.MarjinDailyNotice.noticeRequest(ctx.tenantId, currentBizId)) });
+        status = res && Number.isInteger(res.status) ? res.status : null;
+        try { body = await res.json(); } catch (_) { body = null; }
+      } catch (_) { status = null; body = null; }
+      if (!live || !isSelectionLive(ctx)) return;
+      const decision = window.MarjinDailyNotice.decide(status, body, ctx.tenantId, currentBizId);
+      setDailyNotice((prev) => window.MarjinDailyNotice.next(prev, decision, ctx.tenantId, currentBizId));
+    })();
+    return () => { live = false; };
+  }, [currentBizId, finSel.gen, finSel.tenantId, dailyNoticeRole, isDemoMode, dailyNoticeBizName]);
   const finF = finCoreState === "ready" ? window.MarjinFinance : null;
   const finAsOf = finF ? finF.finance.businessDate.israelBusinessDate(finNowMs) : null;
   // Entries are usable only once the coordinator hydrated them (or confirmed the node absent)
@@ -8393,6 +8479,16 @@ function PilotDashboard() {
             {b.reload && <button onClick={()=>{ window.location.reload(); }} style={{marginRight:10,background:fg,color:"#fff",border:"none",borderRadius:4,padding:"4px 10px",cursor:"pointer",fontWeight:600}}>רענן</button>}
           </div>
         ); })()}
+      {/* Owner notice (D-G4): the Daily e-mail cannot be prepared — the business has no name (server-confirmed, owner-only). */}
+      {window.MarjinDailyNotice && window.MarjinDailyNotice.visible(dailyNotice, finSel.tenantId, currentBizId) && window.MarjinDailyNotice.OWNER_ROLES.includes(loggedInUser?.role) && (() => { const n = window.MarjinDailyNotice.stateFor(dailyNotice, finSel.tenantId, currentBizId); return (
+        <div role="alert" data-daily-notice="active" data-daily-notice-stale={n.lastReadFailed ? "1" : "0"} style={{background:"#FEF2F2",border:"1px solid #B91C1C33",borderRadius:6,padding:"10px 14px",textAlign:"center",fontWeight:600,color:"#B91C1C",fontSize:13,margin:"8px 12px 0"}}>
+          <span data-daily-notice="message">{window.MarjinDailyNotice.MESSAGE_HE}</span>
+          {n.businessDate && <span data-daily-notice="date" style={{display:"block",marginTop:4,fontWeight:400,fontSize:12}}>הסיכום היומי האחרון שלא הוכן: {n.businessDate}</span>}
+          {!currentUser && (
+            <button data-daily-notice="settings" onClick={()=>setShowSetup(true)} style={{marginRight:10,background:"#B91C1C",color:"#fff",border:"none",borderRadius:4,padding:"4px 10px",cursor:"pointer",fontWeight:600,fontFamily:"inherit"}}>לתיקון פרטי העסק</button>
+          )}
+        </div>
+      ); })()}
 
       {/* Business Switch Modal */}
       {showBizSelect && (

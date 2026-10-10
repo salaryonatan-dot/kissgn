@@ -58,6 +58,7 @@ async function throwingBuilderRoute() {
   writeFileSync(join(sb, "snapshotBuilder.js"),
     `import * as real from "./snapshotBuilder.real.js";\n` +
     `export const buildSnapshotForAll = real.buildSnapshotForAll;\n` +
+    `export const buildSnapshotRun = real.buildSnapshotRun;\n` +   // I1: the scheduled path consumes the structured run
     `export async function buildSnapshotForBiz(t, b, o) { globalThis.__STUB_CALLS = (globalThis.__STUB_CALLS || 0) + 1; if (globalThis.__STUB_THROW) throw globalThis.__STUB_THROW(); return real.buildSnapshotForBiz(t, b, o); }\n`);
   return (await import(pathToFileURL(join(dir, "api", "daily-snapshot", "run.js")).href)).default;
 }

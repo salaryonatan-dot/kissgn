@@ -11,6 +11,7 @@ import { seedRaw, env, entry, uid, configWithGlobal, fixedItems, T, B, nowMsFor,
 import { INVARIANTS, INV_NOW_MS, completeSeptember, fullDay, GLOBAL_3000, FIXED_3100, MONTH_LENGTHS, monthDates } from "../support/financial-invariants.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { isDE1Tree, de1EffectivePins } from "../support/de1-daily-email.mjs";
+import { isI1Tree, I1_PINS } from "../support/i1-integration.mjs";
 
 offlineFetch();
 const srv = compileServer();
@@ -247,13 +248,23 @@ test("B2-T14 run.ts compatibility: the endpoint file is byte-identical (pre-B2, 
     // DE1 tree the file is held to its literal DE1 pin, which DE1G-02 re-derives from the P0 bytes by recorded exact edits and
     // DE1G-03 proves leaves the authorization section byte-identical to P0.
     // (On a DE1 R1 successor tree the R1 pin overlays the DE1 pin; DE1R1G-02 re-derives it from the DE1 bytes.)
-    const want = isDE1Tree(REPO) ? de1EffectivePins(REPO)[RUN] : gitIn(REPO, ["rev-parse", `${P0}:${RUN}`]).stdout.trim();
+    // INTEGRATION I1 (G8, contract transition): on an I1 tree the scheduled path consumes the builder's structured run; the file
+    // is held to its literal I1 pin (I1G-02 re-derives it from the R8 bytes by recorded exact edits; the authorization section
+    // stays the P0 bytes — DE1G-03 / I1G-03). The B2 builder / e-mail consumer calls are otherwise unchanged.
+    const i1 = isI1Tree(REPO);
+    const want = i1 ? I1_PINS[RUN] : isDE1Tree(REPO) ? de1EffectivePins(REPO)[RUN] : gitIn(REPO, ["rev-parse", `${P0}:${RUN}`]).stdout.trim();
     assert.equal(gitIn(REPO, ["rev-parse", `HEAD:${RUN}`]).stdout.trim(), want, "committed run.ts = approved P0 blob (or the DE1 pin)");
     assert.equal(gitIn(REPO, ["hash-object", RUN]).stdout.trim(), want, "checked-out run.ts = approved P0 blob (or the DE1 pin)");
     const src = readFileSync(join(REPO, RUN), "utf8");
-    assert.match(src, /import \{ buildSnapshotForBiz, buildSnapshotForAll \} from "\.\.\/\.\.\/src\/snapshot\/snapshotBuilder\.js";/);
+    if (i1) {
+      assert.match(src, /import \{ buildSnapshotForBiz, buildSnapshotRun \} from "\.\.\/\.\.\/src\/snapshot\/snapshotBuilder\.js";/);
+      assert.match(src, /await buildSnapshotRun\(\{ nowMs: Date\.now\(\) \}\)/); assert.doesNotMatch(src, /buildSnapshotForAll/, "the lossy array adapter is no longer consumed (G1)");
+    } else {
+      assert.match(src, /import \{ buildSnapshotForBiz, buildSnapshotForAll \} from "\.\.\/\.\.\/src\/snapshot\/snapshotBuilder\.js";/);
+      assert.match(src, /await buildSnapshotForAll\(\)/);
+    }
     assert.match(src, /import \{ sendSnapshotEmail \} from "\.\.\/\.\.\/src\/snapshot\/snapshotEmail\.js";/);
-    assert.match(src, /await buildSnapshotForBiz\(tenantId, bizId\)/); assert.match(src, /await buildSnapshotForAll\(\)/);
+    assert.match(src, /await buildSnapshotForBiz\(tenantId, bizId\)/);
   } else {
     assert.equal(gitIn(REPO, ["diff", "--name-only", "4675eb20a97e8750429fad3e2ebda94f42f187b5", "--", RUN]).stdout.trim(), "");
   }

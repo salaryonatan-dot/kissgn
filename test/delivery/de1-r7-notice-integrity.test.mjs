@@ -83,6 +83,7 @@ async function throwingBuilderRoute() {
   writeFileSync(join(sb, "snapshotBuilder.js"),
     `import * as real from "./snapshotBuilder.real.js";\n` +
     `export const buildSnapshotForAll = real.buildSnapshotForAll;\n` +
+    `export const buildSnapshotRun = real.buildSnapshotRun;\n` +   // I1: the scheduled path consumes the structured run
     `export async function buildSnapshotForBiz(t, b, o) { if (globalThis.__STUB_THROW) throw globalThis.__STUB_THROW(); return real.buildSnapshotForBiz(t, b, o); }\n`);
   return (await import(pathToFileURL(join(dir, "api", "daily-snapshot", "run.js")).href)).default;
 }
@@ -303,18 +304,12 @@ test("DR7-08 a stored notice for a business that is not deliverable for another 
 
 // ── DR7-09 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 test("DR7-09 the scheduled path still records the notice; an owner read that fails never hides it; a successful read returns it as stored", async () => {
-  // the route gate on the scheduled path with a stubbed builder output (the pin of this tree drops a nameless business): as DR5-07
-  const dir = mkdtempSync(join(tmpdir(), "de1-r7-stub-"));
-  cpSync(SANDBOX, dir, { recursive: true, verbatimSymlinks: true });
-  const sb = join(dir, "src", "snapshot");
-  renameSync(join(sb, "snapshotBuilder.js"), join(sb, "snapshotBuilder.real.js"));
-  writeFileSync(join(sb, "snapshotBuilder.js"),
-    `import * as real from "./snapshotBuilder.real.js";\nexport const buildSnapshotForBiz = real.buildSnapshotForBiz;\n` +
-    `export async function buildSnapshotForAll() { const all = await real.buildSnapshotForAll(); for (const [t, b, bizName] of globalThis.__STUB_EXTRA || []) { const s = await real.buildSnapshotForBiz(t, b); all.push({ ...s, bizName }); } return all; }\n`);
-  const stub = (await import(pathToFileURL(join(dir, "api", "daily-snapshot", "run.js")).href)).default;
+  // INTEGRATION I1 (test-contract transition, as DR5-07): the R7 tree's builder pin dropped a nameless business, so this test
+  // stubbed the builder output; the carried Builder reports it as a failed build `business_name_unavailable` and the route
+  // consumes buildSnapshotRun — the scenario now runs end to end on the real route and the real builder, assertions kept.
+  const stub = route;
   const db = seedWorld({ withSecondBiz: false, withSecondTenant: false }); const smtp = installSmtp([SMTP.accept()]);
   db.seed(`tenants/${T}/app/business`, env([{ id: B }]));
-  globalThis.__STUB_EXTRA = [[T, B, "Unknown"]];
   const r1 = await at(AT, () => runCron(stub));
   const row = (r1.body.results || []).find((x) => x.tenantId === T && x.bizId === B);
   assert.deepEqual([r1.statusCode, row.code, row.notice, smtp.calls.length], [500, "business_name_unavailable", "recorded", 0]);
@@ -333,7 +328,6 @@ test("DR7-09 the scheduled path still records the notice; an owner read that fai
   db.seed(`tenants/${T}/app/business`, env([{ id: B, name: "מסעדה א" }]));
   const r4 = await at(AT, () => notice(stub));
   assert.deepEqual([r4.statusCode, r4.body.deliverable, r4.body.noticeState, r4.body.clearState, db.read(noticePath())], [200, true, "none", "cleared", null]);
-  globalThis.__STUB_EXTRA = [];
   const r5 = await at(AT + 2 * LEASE, () => runCron(stub));
   assert.deepEqual([r5.statusCode, (r5.body.results || []).find((x) => x.bizId === B).settlement, smtp.calls.length], [200, "delivered", 1]);
 });

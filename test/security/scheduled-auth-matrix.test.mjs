@@ -57,9 +57,10 @@ export function yesterdayInIsrael(){ return "2026-09-28"; }`,
     },
   },
   "daily-snapshot": {
-    src: "api/daily-snapshot/run.ts", out: "api/daily-snapshot/run.js", job: "buildSnapshotForAll",
+    // INTEGRATION I1 (test-contract transition): the scheduled job is the builder's structured run (buildSnapshotRun)
+    src: "api/daily-snapshot/run.ts", out: "api/daily-snapshot/run.js", job: "buildSnapshotRun",
     stubs: {
-      "src/snapshot/snapshotBuilder.js": `export async function buildSnapshotForAll(){ ${rec("buildSnapshotForAll", "[]")} }
+      "src/snapshot/snapshotBuilder.js": `export async function buildSnapshotRun(){ ${rec("buildSnapshotRun", '{version:"MARJIN_SNAPSHOT_BUILD_RUN/1",businessDate:"2026-09-28",status:"complete",discovery:{status:"complete",failures:[]},expectedBusinesses:[],snapshots:[],failedBuilds:[],exclusions:[]}')} }
 export async function buildSnapshotForBiz(t,b){ ${rec("buildSnapshotForBiz", "{tenantId:t,bizId:b,bizName:'Biz'}")} }`,
       "src/snapshot/snapshotEmail.js": `import { currentDeliveryAttempt } from "../../lib/emailDelivery.js";
 export async function sendSnapshotEmail(to){ const a = currentDeliveryAttempt(); if (a) { await a.beforeTransport(); a.info = { messageId: "<stub>", accepted: [to], rejected: [] }; } ${rec("sendSnapshotEmail", "undefined")} }`,

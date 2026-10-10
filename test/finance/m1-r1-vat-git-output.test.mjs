@@ -36,9 +36,15 @@ test("GO-01 the guard's diff exceeds the legacy 1 MiB default; gitIn returns it 
   const bytes = Buffer.byteLength(r.stdout);
   assert.ok(bytes > LEGACY_DEFAULT, `the guard's diff (${bytes} bytes) is beyond the legacy default buffer — the boundary under test`);
   assert.ok(bytes < GIT_OUTPUT_LIMIT / 8, "and far inside the explicit bound");
-  const numstat = gitIn(REPO, ["diff", "--numstat", BASE, "--", ...PATHS]);
+  // INTEGRATION I1 (test-contract transition): the additions are counted by --numstat over EXACTLY the guard's query (-U0).
+  // Without -U0, git's default-context alignment of index.html (after the owner-notice UI's four additive edits) yields a
+  // different edit script (5,844 vs 5,789 additions for the page; both complete) — the count compared must be the same diff.
+  // (-U0 implies the patch: the numstat lines are the ones before the first "diff --git" header)
+  const numstat = gitIn(REPO, ["diff", "--numstat", "--unified=0", BASE, "--", ...PATHS]);
   assert.equal(numstat.status, 0);
-  assert.equal(guardAdded(r.stdout).length, numstatAdded(numstat.stdout), "every added line reached the guard (complete output)");
+  const statLines = numstat.stdout.slice(0, numstat.stdout.indexOf("diff --git"));
+  assert.ok(statLines.split("\n").filter(Boolean).length > 50 && !statLines.includes("@@"), "the numstat lines are located");
+  assert.equal(guardAdded(r.stdout).length, numstatAdded(statLines), "every added line reached the guard (complete output)");
 });
 
 test("GO-02 overflow is deterministic and loud: below the output size gitIn throws ENOBUFS; the raw legacy call shows the hazard", () => {

@@ -30,6 +30,10 @@ import { isM1R5Tree, M1_R5_PINS } from "./m1-r5-remediation.mjs";
 // DE1 (daily e-mail delivery reliability, built on the R1 candidate): its pins overlay the M1 ⊕ R1 pins on a DE1 tree.
 // DE1 R1 (its successor) overlays DE1 in turn: de1EffectivePins.
 import { isDE1Tree, de1EffectivePins } from "./de1-daily-email.mjs";
+// Agent/Daily integration I1 (on the merge of the two lineages): its two pins (the route that consumes buildSnapshotRun, and the
+// page that carries the owner-notice UI) overlay everything below on an I1 tree; its page is the M1 R5 page + exactly the
+// recorded UI edits (test/support/i1-integration.mjs). Candidate pins, pending independent review.
+import { isI1Tree, I1_PINS, applyI1Edits } from "./i1-integration.mjs";
 
 const RECORD = JSON.parse(readFileSync(new URL("./m1-r1-remediation.json", import.meta.url), "utf8"));
 export const M1_R1_PARENT = RECORD.parent;
@@ -53,11 +57,14 @@ export function isM1R1Tree(repo) {
 export function m1EffectivePins(repo) {
   if (!isM1R1Tree(repo)) return { ...M1_PINS.blobs };
   const de1 = isDE1Tree(repo) ? de1EffectivePins(repo) : {};
-  if (!isM1R2Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...de1 };
-  if (!isM1R3Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...de1 };
-  if (isM1R5Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS, ...M1_R5_PINS, ...de1 };
-  return isM1R4Tree(repo) ? { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS, ...de1 } : { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...de1 };
+  const i1 = isI1Tree(repo) ? I1_PINS : {};   // the I1 layer overlays both lineages (route + page)
+  if (!isM1R2Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...de1, ...i1 };
+  if (!isM1R3Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...de1, ...i1 };
+  if (isM1R5Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS, ...M1_R5_PINS, ...de1, ...i1 };
+  return isM1R4Tree(repo) ? { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS, ...de1, ...i1 } : { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...de1, ...i1 };
 }
+/** The pins of the R5 commit itself (M1 ⊕ R1 … ⊕ R5), whatever later layer is checked out (CF-04 layering, I1). */
+export function m1R5Pins() { return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS, ...M1_R5_PINS }; }
 /** The pins of the R4 commit itself (M1 ⊕ R1 ⊕ R2 ⊕ R3 ⊕ R4), whatever later layer is checked out. */
 export function m1R4Pins() { return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS }; }
 /** The pins of the R3 commit itself (M1 ⊕ R1 ⊕ R2 ⊕ R3), whatever later layer is checked out. */
@@ -94,7 +101,9 @@ export function deriveR1(repo, file, edits = M1_R1_EDITS) {
  * must satisfy the M1 contract (it is the recorded derivation, with both lines' invariants), and the candidate bytes must be
  * EXACTLY that page with the recorded R1 page edits applied — nothing else.
  */
-export function m1EffectivePageVerdict(repo, candidateBytes, edits = M1_R1_EDITS) {
+/** `withLaterLayers: false` judges a HISTORICAL page (the R4 / R5 commit's own) against the M1 derivation without the I1 page
+ *  edits — the layered positive controls of the M1 guards (I1 layering transition). */
+export function m1EffectivePageVerdict(repo, candidateBytes, edits = M1_R1_EDITS, { withLaterLayers = true } = {}) {
   if (!isM1R1Tree(repo)) return m1PageVerdict(repo, candidateBytes);
   const parent = parentBytes(repo, "index.html");
   const base = m1PageVerdict(repo, parent);
@@ -108,6 +117,8 @@ export function m1EffectivePageVerdict(repo, candidateBytes, edits = M1_R1_EDITS
   if (isM1R3Tree(repo)) { const d3 = applyR3Edits("index.html", want); if (!d3.ok) return d3; want = d3.bytes; }
   // R4 tree: … + exactly the recorded R4 page edits on top of the R3 page
   if (isM1R4Tree(repo)) { const d4 = applyR4Edits("index.html", want); if (!d4.ok) return d4; want = d4.bytes; }
+  // I1 tree: … + exactly the recorded owner-notice UI edits (carried with the route they depend on); R5 changed no page byte
+  if (withLaterLayers && isI1Tree(repo)) { const di = applyI1Edits("index.html", want); if (!di.ok) return di; want = di.bytes; }
   const B = Buffer.isBuffer(candidateBytes) ? candidateBytes : Buffer.from(String(candidateBytes), "utf8");
   if (!want.equals(B)) return { ok: false, reason: "not_the_recorded_derivation" };
   return { ok: true };

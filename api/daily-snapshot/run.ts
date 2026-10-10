@@ -1,6 +1,6 @@
 import { VercelRequest, VercelResponse } from "@vercel/node";
 import { getDb } from "../../src/firebase/admin.js";
-import { buildSnapshotForBiz, buildSnapshotForAll } from "../../src/snapshot/snapshotBuilder.js";
+import { buildSnapshotForBiz, buildSnapshotRun } from "../../src/snapshot/snapshotBuilder.js";
 import { sendSnapshotEmail } from "../../src/snapshot/snapshotEmail.js";
 import { requireCron, requireBizContext } from "../../lib/securityContext.js";
 import { deliverWithReceipt, deliverWithoutReceipt, boundedCode, DAILY_SNAPSHOT_KIND,
@@ -256,7 +256,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     // GET = cron trigger (run for all businesses)
     if (req.method === "GET") {
-      const snapshots = await buildSnapshotForAll();
+      // Agent/Daily integration (I1; Builder contract G1/G2/G7): the scheduled run consumes the builder's STRUCTURED result,
+      // never the lossy array adapter. ONE clock read fixes the run's business date for discovery, every build and every
+      // failure row. A throw here (the builder's accounting invariant, an unusable run instant) fails the WHOLE run before
+      // any delivery: the outer catch answers 500 with a fixed body and logs the class only (G7 — never an empty success).
+      const run = await buildSnapshotRun({ nowMs: Date.now() });
       const db = getDb();
 
       // Daily e-mail reliability: every business ends in exactly one recorded outcome. A message is sent at most once per
@@ -266,6 +270,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         attempt?: number; receipt?: string; phase?: string; recipientSelection?: RecipientSelection; notice?: "recorded" | "not_recorded" };
       const results: Row[] = [];
       const registryCache = new Map<string, unknown>();   // one registry read per tenant per run
+
+      // Every EXPECTED business becomes exactly one row (G1 / G3), in discovery order within each class: its snapshot is
+      // delivered below, or its failed build is a FAILED row with the builder's bounded code and the run's business date — no
+      // send, no receipt, no claim (G6). A missing name additionally records the owner notice (D-G4; contract §1.3).
+      // Identities are matched by the structured pair, never by a delimiter concatenation of the ids.
+      const pairKey = (t: string, b: string) => JSON.stringify([t, b]);
+      const builtByPair = new Map(run.snapshots.map((s) => [pairKey(s.tenantId, s.bizId), s] as const));
+      const failedByPair = new Map(run.failedBuilds.map((f) => [pairKey(f.tenantId, f.bizId), f] as const));
+      const snapshots: typeof run.snapshots[number][] = [];
+      for (const expected of run.expectedBusinesses) {
+        const key = pairKey(expected.tenantId, expected.bizId);
+        const built = builtByPair.get(key);
+        if (built) { snapshots.push(built); continue; }
+        const failure = failedByPair.get(key);
+        const code = boundedCode(failure?.code) ?? "snapshot_build_failed";
+        console.warn("[daily-snapshot] business not deliverable (build failed)", { tenantId: expected.tenantId, bizId: expected.bizId, code });
+        const row: Row = { tenantId: expected.tenantId, bizId: expected.bizId, businessDate: expected.businessDate, outcome: "failed", code,
+          settlement: "failed", receipt: "not_written" };
+        if (code === "business_name_unavailable") row.notice = await recordMissingNameNotice(db, { tenantId: expected.tenantId, bizId: expected.bizId, businessDate: expected.businessDate });
+        results.push(row);
+      }
 
       for (const snapshot of snapshots) {
         const base = { tenantId: snapshot.tenantId, bizId: snapshot.bizId, businessDate: snapshot.date ?? null };
@@ -319,14 +344,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const skippedCount = count((x) => x.settlement === "no_send");
       const deliveredCount = count((x) => x.settlement === "delivered");
       const receiptWriteFailures = count((x) => x.receipt === "write_failed" || x.receipt === "unavailable");
-      const broken = failureCount > 0 || unknownCount > 0 || unrecordedCount > 0 || receiptWriteFailures > 0;
-      const complete = !broken && inProgressCount === 0 && deliveredCount + skippedCount === results.length;
+      // G2: a failed discovery breaks the run even with zero known businesses; G1: the builder's own status must be complete
+      const discoveryFailed = run.discovery.status !== "complete";
+      const broken = failureCount > 0 || unknownCount > 0 || unrecordedCount > 0 || receiptWriteFailures > 0 || discoveryFailed;
+      const complete = !broken && run.status === "complete" && inProgressCount === 0 && deliveredCount + skippedCount === results.length;
 
       // A run with any undelivered, ambiguous, unrecorded OR still-unresolved message is NOT reported as success to the
       // scheduler: only a run whose every message is durably recorded as accepted (or a contract no-send) is "completed".
       return res.status(complete ? 200 : broken ? 500 : 503).json({
         status: complete ? "completed" : broken ? "completed_with_failures" : "incomplete",
-        totalSnapshots: snapshots.length,
+        businessDate: run.businessDate,
+        expectedBusinesses: run.expectedBusinesses.length,
+        totalSnapshots: run.snapshots.length,
+        failedBuildCount: run.failedBuilds.length,
+        // G2: the builder's discovery accounting, verbatim (sources and bounded codes only — no identity, no raw text)
+        discovery: { status: run.discovery.status, failures: run.discovery.failures.map((f) => ({ source: f.source, code: f.code })) },
+        // G5: legitimate exclusions are reported as non-deliverable rows and a count; they never make the run incomplete
+        exclusionCount: run.exclusions.length,
+        exclusions: run.exclusions.map((x) => ({ tenantId: x.tenantId, bizId: x.bizId, businessDate: x.businessDate, reason: x.reason })),
         successCount: sentCount,
         alreadyAcceptedCount,
         inProgressCount,

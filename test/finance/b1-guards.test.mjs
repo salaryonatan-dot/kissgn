@@ -12,6 +12,8 @@ import {
   SERVER_READER_EFFECTIVE_BLOBS, SERVER_READER_AUTHORIZED_FILES, SERVER_READER_BASE, collectServerReaderScopeInputs, serverReaderScopeVerdict,
 } from "../support/server-reader-authorized-delta.mjs";
 import { authorizedVersionFenceRulesDelta } from "../support/rules-authorized-delta.mjs";
+import { isADB06Tree, ADB06_ENTRY, ADB06_FILES } from "../support/adb06-builder-layer.mjs";
+import { SERVER_READER_APPROVED_BLOBS as SERVER_READER_APPROVED_LITERAL } from "../support/server-reader-authorized-delta.mjs";
 import { importerVerdict, loadConsumerFiles, repoKindOf, validateConsumerFiles, importsCore, importsServerApi } from "../support/b1-fixtures.mjs";
 
 const B1_BASE = "213fb350019c3e212156eb032e34f4da8c179d6f";
@@ -103,10 +105,22 @@ test("GUARD-05 server-reader pins: the 4 B1 files re-pinned to their git hash-ob
   const raw = collectServerReaderScopeInputs(REPO);
   const core = JSON.parse(gitIn(REPO, ["show", `${SERVER_READER_BASE}:database.rules.json`]).stdout);
   const fence = authorizedVersionFenceRulesDelta(core, JSON.parse(read("database.rules.json"))).ok === true;
+  // ADB-06 successor layer (Agent/Daily integration I1, PROPOSED): its own verdict validates its Agent files first; only those
+  // are projected out of the reader layer's protected set (the six-file table itself is unchanged and never names an Agent file)
+  assert.equal(raw.adb06.ok, true, "the ADB-06 layer verdict (run by the collector): " + JSON.stringify(raw.adb06));
   const live = { ...raw, changedProtectedPaths: raw.changedProtectedPaths.filter((r) => !(fence && r === "database.rules.json")) };
   assert.deepEqual(serverReaderScopeVerdict(live), { ok: true });
-  const b1Protected = gitIn(REPO, ["diff", "--name-only", B1_BASE, "--"]).stdout.trim().split("\n").filter((f) => /^src\/(analytics|repositories|agent|snapshot|forecast)\//.test(f));
-  assert.deepEqual(b1Protected.sort(), [...MIGRATED, ...SNAPSHOT_FILES].sort(), "B1 + B2 change no other protected file");
+  const protectedRoots = (rev) => gitIn(REPO, ["diff", "--name-only", B1_BASE, ...(rev ? [rev] : []), "--"]).stdout.trim().split("\n").filter((f) => /^src\/(analytics|repositories|agent|snapshot|forecast)\//.test(f));
+  if (isADB06Tree(REPO)) {
+    // the historical B1 + B2 proof, read from the approved M1 R5 entry base OBJECT (where the six-file table held exactly), and
+    // the later layer: exactly the ADB-06 record's protected files on top, each identical to its pin (ADB6G-01..03 hold the rest)
+    assert.deepEqual(protectedRoots(ADB06_ENTRY).sort(), [...MIGRATED, ...SNAPSHOT_FILES].sort(), "B1 + B2 change no other protected file (at the entry base object)");
+    assert.equal(gitIn(REPO, ["rev-parse", `${ADB06_ENTRY}:src/snapshot/snapshotBuilder.ts`]).stdout.trim(), SERVER_READER_APPROVED_LITERAL["src/snapshot/snapshotBuilder.ts"], "the entry base carries the approved B2 builder");
+    const layer = ADB06_FILES.filter((f) => /^src\/(analytics|repositories|agent|snapshot|forecast)\//.test(f));
+    assert.deepEqual(protectedRoots(null).sort(), [...new Set([...MIGRATED, ...SNAPSHOT_FILES, ...layer])].sort(), "the working tree adds exactly the ADB-06 layer's protected files");
+  } else {
+    assert.deepEqual(protectedRoots(null).sort(), [...MIGRATED, ...SNAPSHOT_FILES].sort(), "B1 + B2 change no other protected file");
+  }
 });
 
 test("GUARD-06 ServerProvenance constants are imported from the core, never re-typed", () => {

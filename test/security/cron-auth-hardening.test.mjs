@@ -130,7 +130,9 @@ export function yesterdayInIsrael(){ return "2026-07-18"; }`,
 };
 const SNAP_STUBS = {
   "src/firebase/admin.js": STUB_FBADMIN,
-  "src/snapshot/snapshotBuilder.js": `export async function buildSnapshotForAll(){ globalThis.__H.calls.push("buildSnapshotForAll"); return globalThis.__H.snapshotsAll||[]; }
+  // INTEGRATION I1 (test-contract transition): the scheduled path consumes the builder's structured run (buildSnapshotRun);
+  // the stub answers an empty complete run (or the snapshots the test states) — the authorization assertions are unchanged
+  "src/snapshot/snapshotBuilder.js": `export async function buildSnapshotRun(){ globalThis.__H.calls.push("buildSnapshotRun"); const s = globalThis.__H.snapshotsAll||[]; return { version: "MARJIN_SNAPSHOT_BUILD_RUN/1", businessDate: "2026-07-18", status: "complete", discovery: { status: "complete", failures: [] }, expectedBusinesses: s.map((x) => ({ tenantId: x.tenantId, bizId: x.bizId, businessDate: "2026-07-18" })), snapshots: s, failedBuilds: [], exclusions: [] }; }
 export async function buildSnapshotForBiz(t,b){ globalThis.__H.calls.push("buildSnapshotForBiz"); return {tenantId:t,bizId:b,bizName:"Biz",date:"2026-07-18",netProfit:1,totalSales:2}; }`,
   // the stub stands for a provider-accepted send: inside a delivery attempt it reports the provider result like lib/sendEmail.js
   "src/snapshot/snapshotEmail.js": `import { currentDeliveryAttempt } from "../../lib/emailDelivery.js";
@@ -242,14 +244,14 @@ test("daily-snapshot GET: spoofed x-vercel-cron only -> 401, no build/email", as
   setH(); setSecret(SECRET);
   const res = mkRes(); await snapHandler(GET({ "x-vercel-cron": "1" }), res);
   assert.equal(res.statusCode, 401);
-  assert.ok(!globalThis.__H.calls.includes("buildSnapshotForAll"));
+  assert.ok(!globalThis.__H.calls.includes("buildSnapshotRun"));
   assert.ok(!globalThis.__H.calls.includes("sendSnapshotEmail"));
 });
 test("daily-snapshot GET: correct Bearer -> 200, scheduled job runs", async () => {
   setH(); setSecret(SECRET);
   const res = mkRes(); await snapHandler(GET(bearer(SECRET)), res);
   assert.equal(res.statusCode, 200);
-  assert.ok(globalThis.__H.calls.includes("buildSnapshotForAll"));
+  assert.ok(globalThis.__H.calls.includes("buildSnapshotRun"));
 });
 test("daily-snapshot POST: verified owner -> 200, email sent", async () => {
   setH({ role: "owner" }); setSecret(SECRET);

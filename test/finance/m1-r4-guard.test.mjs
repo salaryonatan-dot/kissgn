@@ -124,7 +124,8 @@ test("R4G-04 non-vacuity: changed anchors, dropped or altered edits are refused;
   }
   assert.equal(applyR4Edits("index.html", "no anchors here").reason, "edit_anchor_not_unique");
   assert.equal(m1EffectivePageVerdict(REPO, bytesOf(`${M1_R4_PARENT}:index.html`)).reason, "not_the_recorded_derivation", "the rejected R3 page is refused on the R4 tree");
-  assert.deepEqual(m1EffectivePageVerdict(REPO, LAYERED ? bytesOf(`${R4_TREE}:index.html`) : readFileSync(join(REPO, "index.html"))), { ok: true }, "positive control");
+  // I1 layering: the R4 commit's own page is judged by the M1 derivation WITHOUT the later I1 page edits (it predates them)
+  assert.deepEqual((LAYERED ? m1EffectivePageVerdict(REPO, bytesOf(`${R4_TREE}:index.html`), undefined, { withLaterLayers: false }) : m1EffectivePageVerdict(REPO, readFileSync(join(REPO, "index.html")))), { ok: true }, "positive control");
   assert.equal(M1_R3_PINS["index.html"], blobId(`${M1_R4_PARENT}:index.html`), "the parent page is the R3 pin");
 });
 

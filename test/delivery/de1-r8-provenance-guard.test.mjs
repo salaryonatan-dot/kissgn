@@ -15,7 +15,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
-import { gitBlobId, m1EffectivePins } from "../support/m1-r1-remediation.mjs";
+import { gitBlobId, m1EffectivePins, m1R1Pins } from "../support/m1-r1-remediation.mjs";
+// INTEGRATION I1 (layering transition): on an I1 tree DE1R8G-01..03 verify the R8 commit itself from git objects (the HEAD /
+// index / checkout identity of the integrated tree is held by I1G-01); DE1R8G-05 keeps reading the checked-out route, so the
+// attribution rule must survive the integration unchanged.
+import { isI1Tree, I1_DELIVERY } from "../support/i1-integration.mjs";
 import { de1EffectivePins, de1R7Pins, DE1_PINS } from "../support/de1-daily-email.mjs";
 import { DE1R8_PARENT, DE1R8_PINS, DE1R8_NEW_FILES, DE1R8_EDITS, DE1R8_SCOPE, isDE1R8Tree, deriveDE1R8 } from "../support/de1-r8-provenance.mjs";
 
@@ -27,21 +31,29 @@ const bytesOf = (spec) => { const r = gitIn(REPO, ["cat-file", "blob", spec], { 
 const lines = (r) => r.stdout.split("\n").map((x) => x.trim()).filter(Boolean);
 const MODIFIED = Object.keys(DE1R8_PINS).filter((f) => !DE1R8_NEW_FILES.includes(f)).sort();
 const RT = "api/daily-snapshot/run.ts";
+const LAYERED = isI1Tree(REPO);
+const R8_TREE = LAYERED ? I1_DELIVERY : "HEAD";          // the R8 commit itself when the I1 layer is checked out
+const readAt = (f) => (LAYERED ? bytesOf(`${R8_TREE}:${f}`).toString("utf8") : readFileSync(join(REPO, f), "utf8"));
 
 test("DE1R8G-01 the R8 change set vs R7 is exactly { api/daily-snapshot/run.ts }; the pin holds committed / staged / checked out", { skip: SKIP }, () => {
   assert.equal(DE1R8_PARENT, "d5e1f30102ff88db985a6ff60392cfbdbafd856b", "R8 is built on the R7 candidate");
-  assert.equal(gitIn(REPO, ["rev-parse", "HEAD^"]).stdout.trim(), DE1R8_PARENT, "sole parent");
-  assert.equal(lines(gitIn(REPO, ["rev-list", "--parents", "-n1", "HEAD"]))[0].split(" ").length, 2, "exactly one parent");
+  assert.equal(gitIn(REPO, ["rev-parse", R8_TREE + "^"]).stdout.trim(), DE1R8_PARENT, "sole parent");
+  assert.equal(lines(gitIn(REPO, ["rev-list", "--parents", "-n1", R8_TREE]))[0].split(" ").length, 2, "exactly one parent");
   for (const [f, pin] of Object.entries(DE1R8_PINS)) assert.match(pin, /^[0-9a-f]{40}$/, f + ": literal blob id");
-  const committed = lines(gitIn(REPO, ["diff", "--name-only", DE1R8_PARENT, "HEAD", "--"])).filter((f) => PROTECTED.test(f));
-  const staged = lines(gitIn(REPO, ["diff", "--name-only", "--cached", DE1R8_PARENT, "--"])).filter((f) => PROTECTED.test(f));
-  const working = [...lines(gitIn(REPO, ["diff", "--name-only", DE1R8_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => PROTECTED.test(f));
-  for (const [label, set] of [["committed", committed], ["staged", staged], ["working tree", working]])
+  const committed = lines(gitIn(REPO, ["diff", "--name-only", DE1R8_PARENT, R8_TREE, "--"])).filter((f) => PROTECTED.test(f));
+  const sets = [["committed", committed]];
+  if (!LAYERED) {
+    sets.push(["staged", lines(gitIn(REPO, ["diff", "--name-only", "--cached", DE1R8_PARENT, "--"])).filter((f) => PROTECTED.test(f))]);
+    sets.push(["working tree", [...lines(gitIn(REPO, ["diff", "--name-only", DE1R8_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => PROTECTED.test(f))]);
+  }
+  for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), [RT], label + ": protected changes vs R7 = { the route }");
-  const eff = m1EffectivePins(REPO);
-  assert.equal(eff[RT], DE1R8_PINS[RT], "the R8 pin is the effective pin");
+  // the pins of the R8 commit itself when layered (M1 ⊕ R1 ⊕ DE1 … R8); the tree's effective pins otherwise
+  const eff = LAYERED ? { ...m1R1Pins(), ...de1EffectivePins(REPO) } : m1EffectivePins(REPO);
+  assert.equal(eff[RT], DE1R8_PINS[RT], "the R8 pin is the effective pin" + (LAYERED ? " of the R8 commit" : ""));
   for (const [f, pin] of Object.entries(eff)) {
-    assert.equal(blobId("HEAD:" + f), pin, f + " committed");
+    assert.equal(blobId(R8_TREE + ":" + f), pin, f + " committed" + (LAYERED ? " (at the R8 commit)" : ""));
+    if (LAYERED) continue;
     assert.equal(blobId(":" + f), pin, f + " staged");
     assert.equal(gitBlobId(readFileSync(join(REPO, f))), pin, f + " checked out");
   }
@@ -56,14 +68,14 @@ test("DE1R8G-02 provenance: the R8 pin is the R7 pin's bytes + exactly the recor
 
 test("DE1R8G-03 scope: builderRefusal only; everything else of the route and of the tree is byte-identical to R7", { skip: SKIP }, () => {
   assert.deepEqual(MODIFIED, [...DE1R8_SCOPE].sort());
-  const all = lines(gitIn(REPO, ["diff", "--name-only", DE1R8_PARENT, "HEAD", "--"]));
+  const all = lines(gitIn(REPO, ["diff", "--name-only", DE1R8_PARENT, R8_TREE, "--"]));
   assert.deepEqual(all.filter((f) => !/^test\/(delivery|finance|support)\//.test(f) && f !== RT), [], "no runtime / config / tool / emulator / Rules change outside the route");
   for (const f of ["lib/emailDelivery.js", "lib/emailDelivery.d.ts", "lib/sendEmail.js", "lib/sendEmail.d.ts", "database.rules.json", "test/emulator/database.rules.json", "vercel.json", "package.json", "package-lock.json",
     "src/snapshot/snapshotBuilder.ts", "src/snapshot/snapshotEmail.ts", "lib/securityContext.js", "lib/verifyToken.js", "lib/businessRegistry.js", "lib/bizAccess.js", "test/support/daily-email-harness.mjs", "fincore/v1/MANIFEST.json", "index.html"])
-    assert.equal(blobId("HEAD:" + f), blobId(`${DE1R8_PARENT}:${f}`), f + " unchanged");
-  assert.deepEqual(lines(gitIn(REPO, ["diff", "--name-only", DE1R8_PARENT, "HEAD", "--", "src", "fincore", "lib", "tools", "index.html"])), [], "no src / fincore / lib / tools / page change");
-  assert.equal(blobId("HEAD:database.rules.json"), "27887d72da5431bd0b6ee69f53e0dfd10cc44caf", "Rules unchanged (the combined, unpublished candidate)");
-  const run = readFileSync(join(REPO, RT), "utf8"), run7 = bytesOf(`${DE1R8_PARENT}:${RT}`).toString("utf8");
+    assert.equal(blobId(R8_TREE + ":" + f), blobId(`${DE1R8_PARENT}:${f}`), f + " unchanged");
+  assert.deepEqual(lines(gitIn(REPO, ["diff", "--name-only", DE1R8_PARENT, R8_TREE, "--", "src", "fincore", "lib", "tools", "index.html"])), [], "no src / fincore / lib / tools / page change");
+  assert.equal(blobId(R8_TREE + ":database.rules.json"), "27887d72da5431bd0b6ee69f53e0dfd10cc44caf", "Rules unchanged (the combined, unpublished candidate)");
+  const run = readAt(RT), run7 = bytesOf(`${DE1R8_PARENT}:${RT}`).toString("utf8");
   const section = (src) => { const a = src.indexOf("export default async function handler"), b = src.indexOf("  try {\n    // GET = cron trigger"); assert.ok(a > 0 && b > a, "auth section located"); return src.slice(a, b); };
   assert.equal(section(run), section(bytesOf(`${P0}:${RT}`).toString("utf8")), "CORS / method / requireCron / requireBizContext / owner gate = the approved P0 bytes");
   // everything from the handler on is R7 except one reworded comment line in the manual catch

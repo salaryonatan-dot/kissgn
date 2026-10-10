@@ -19,7 +19,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
-import { gitBlobId, m1EffectivePins } from "../support/m1-r1-remediation.mjs";
+import { gitBlobId, m1EffectivePins, m1R1Pins } from "../support/m1-r1-remediation.mjs";
 import { DE1R2_PINS } from "../support/de1-r2-email.mjs";
 import { de1EffectivePins, de1R2Pins, de1R3Pins, DE1_PINS } from "../support/de1-daily-email.mjs";
 import { isDE1R4Tree, DE1R4_PARENT } from "../support/de1-r4-email.mjs";
@@ -50,7 +50,9 @@ test("DE1R3G-01 the R3 change set vs R2 is exactly the recorded set; every effec
   for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), Object.keys(DE1R3_PINS).sort(), label + ": protected changes vs R2 = the recorded R3 set");
   // the R3 commit's own pins: on an R4 tree the effective table without the R4 overlay
-  const eff = LAYERED ? { ...m1EffectivePins(REPO), ...de1R3Pins() } : m1EffectivePins(REPO);
+  // INTEGRATION I1 (layering transition): the historical proof at the R3 commit uses the pins OF THAT COMMIT — the M1 ⊕ R1
+  // pins its lineage carried, plus DE1 … R3 — never the checked-out tree's M1 R2..R5 / I1 pins (a later lineage's files)
+  const eff = LAYERED ? { ...m1R1Pins(), ...de1R3Pins() } : m1EffectivePins(REPO);
   for (const [f, pin] of Object.entries(DE1R3_PINS)) assert.equal(eff[f], pin, f + ": the R3 pin is the effective pin");
   for (const [f, pin] of Object.entries(eff)) {
     assert.equal(blobId(R3_TREE + ":" + f), pin, f + " committed" + (LAYERED ? " (at the R3 commit)" : ""));

@@ -60,6 +60,8 @@ import { isDE1R5Tree, DE1R5_PARENT } from "../support/de1-r5-delivery.mjs";
 import { isDE1R6Tree, DE1R6_PARENT } from "../support/de1-r6-provider.mjs";
 import { isDE1R7Tree, DE1R7_PARENT } from "../support/de1-r7-notice.mjs";
 import { isDE1R8Tree, DE1R8_PARENT } from "../support/de1-r8-provenance.mjs";
+import { isADB06Tree, ADB06_SOURCE } from "../support/adb06-builder-layer.mjs";
+import { isI1Tree, I1_PINS, I1_PARENT } from "../support/i1-integration.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -104,6 +106,9 @@ test("B2G-03 importer mutants fail: the builder importing the core, the e-mail i
 test("B2G-04 pins: the reviewed builder/e-mail bytes pass; stale (pre-B2, checkpoint c16ac110) or altered bytes fail; the four B1 pins are the approved ones", () => {
   assert.deepEqual([SERVER_READER_APPROVED_BLOBS["src/analytics/dailyBuilder.ts"], SERVER_READER_APPROVED_BLOBS["src/repositories/analytics/dailyMetricsRepo.ts"], SERVER_READER_APPROVED_BLOBS["src/repositories/analytics/laborRepo.ts"], SERVER_READER_APPROVED_BLOBS["src/repositories/analytics/purchasesRepo.ts"]].map((h) => h.slice(0, 8)), ["6b70d03c", "4a5cb8f8", "14eff463", "7916308f"]);
   const inputs = collectServerReaderScopeInputs(REPO);
+  // ADB-06 successor layer (Agent/Daily integration I1, PROPOSED): the collector runs the layer's own verdict first and projects
+  // out only the Agent paths it validated (fail-closed; the six-file table is unchanged)
+  assert.equal(inputs.adb06.ok, true, "the ADB-06 layer verdict: " + JSON.stringify(inputs.adb06));
   const fence = (raw) => ({ ...raw, changedProtectedPaths: raw.changedProtectedPaths.filter((r) => r !== "database.rules.json") });
   assert.deepEqual(serverReaderScopeVerdict(fence(inputs)), { ok: true });
   const CHECKPOINT = "c16ac110e29913bcab9e6c598fa4b508c8f9fc63";
@@ -221,8 +226,10 @@ function assertB2Scope(root) {
     const de1 = m1 && isDE1Tree(root);
     const DE1_ADDED = de1 ? DE1_SCOPE.filter((f) => !P0_APPROVED.includes(f)) : [];
     // the delivery pins: DE1's, with the DE1 R1 successor's overlaid on its tree (same file set)
-    const DE1_EFF = de1 ? de1EffectivePins(root) : {};
-    const DE1_LABEL = de1 && isDE1R8Tree(root) ? "DE1 R8 successor fixed blob " : de1 && isDE1R7Tree(root) ? "DE1 R7 successor fixed blob " : de1 && isDE1R6Tree(root) ? "DE1 R6 successor fixed blob " : de1 && isDE1R5Tree(root) ? "DE1 R5 successor fixed blob " : de1 && isDE1R4Tree(root) ? "DE1 R4 successor fixed blob " : de1 && isDE1R3Tree(root) ? "DE1 R3 successor fixed blob " : de1 && isDE1R2Tree(root) ? "DE1 R2 successor fixed blob " : de1 && isDE1R1Tree(root) ? "DE1 R1 successor fixed blob " : "DE1 checkpoint fixed blob ";
+    // I1 (the integration layer): the route is held to its literal I1 pin (the R8 bytes + the recorded buildSnapshotRun edits)
+    const i1 = de1 && isI1Tree(root);
+    const DE1_EFF = de1 ? { ...de1EffectivePins(root), ...(i1 ? I1_PINS : {}) } : {};
+    const DE1_LABEL = i1 ? "I1 integration fixed blob " : de1 && isDE1R8Tree(root) ? "DE1 R8 successor fixed blob " : de1 && isDE1R7Tree(root) ? "DE1 R7 successor fixed blob " : de1 && isDE1R6Tree(root) ? "DE1 R6 successor fixed blob " : de1 && isDE1R5Tree(root) ? "DE1 R5 successor fixed blob " : de1 && isDE1R4Tree(root) ? "DE1 R4 successor fixed blob " : de1 && isDE1R3Tree(root) ? "DE1 R3 successor fixed blob " : de1 && isDE1R2Tree(root) ? "DE1 R2 successor fixed blob " : de1 && isDE1R1Tree(root) ? "DE1 R1 successor fixed blob " : "DE1 checkpoint fixed blob ";
     const vd50Runtime = ["src/metrics/report.ts", "fincore/v1/metrics/report.js", "fincore/v1/MANIFEST.json"];
     const f1Runtime = ["database.rules.json", "fincore/v1/MANIFEST.json", "fincore/v1/browser/marjinFinanceGlobal.js", "fincore/v1/finance/costHistory.js", "fincore/v1/metrics/report.js", "fincore/v1/policy/productFinance.js", "lib/finance/costHistoryWriter.js", "src/browser/marjinFinanceGlobal.ts", "src/finance-server/canonicalInputs.ts", "src/finance/costHistory.ts", "src/finance/labor.ts", "src/finance/types.ts", "src/metrics/costTimeline.ts", "src/metrics/report.ts", "src/policy/productFinance.ts", "test/support/rules-authorized-delta.mjs"];
     const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES, ...M1_R1_ADDED, ...M1_R2_ADDED, ...DE1_ADDED])] : CDM2_APPROVED;
@@ -250,7 +257,9 @@ function assertB2Scope(root) {
     const expected = [
       ...(assembled ? [] : [["index.html", blobBytes(root, CDM2R1 + ":index.html"), CDM2R1.slice(0, 8) + ":index.html"]]),
       ["lib/repositories/entryExceptionsRepo.js", blobBytes(root, CDM2R1 + ":lib/repositories/entryExceptionsRepo.js"), CDM2R1.slice(0, 8) + ":lib/repositories/entryExceptionsRepo.js"],
-      [SB, blobBytes(root, B2 + ":" + SB), B2.slice(0, 8) + ":" + SB],
+      // ADB-06 successor layer (PROPOSED): on a layer tree the builder is the reviewed Builder successor's blob (read from the
+      // git object 690a07d9 — never from the working tree); the historical B2 bytes remain the B2 object's (b2Delta above)
+      (isADB06Tree(root) ? [SB, blobBytes(root, ADB06_SOURCE + ":" + SB), "ADB-06 layer " + ADB06_SOURCE.slice(0, 8) + ":" + SB] : [SB, blobBytes(root, B2 + ":" + SB), B2.slice(0, 8) + ":" + SB]),
       [SE, blobBytes(root, B2 + ":" + SE), B2.slice(0, 8) + ":" + SE],
       ...(vd50 && !m1 ? vd50Runtime.filter((f) => !f1 || !f1Runtime.includes(f)).map((f) => [f, blobBytes(root, VD50_COMMIT + ":" + f), "VD-50 candidate " + VD50_COMMIT.slice(0, 8) + ":" + f]) : []),
       ...(f1 && !m1 ? f1Runtime.map((f) => r4 && Object.prototype.hasOwnProperty.call(R4_RUNTIME_BLOBS,f)
@@ -774,6 +783,13 @@ test("B2G-05-M1b M1 tree: committed substitutions of either input, page edits, r
     // DE1 R8 overlay (only on a DE1 R8 tree): the route cannot fall back to the R7 bytes (a builder throw attributed by message alone)
     ...(isDE1R8Tree(REPO) ? [
       ["DE1 R8: the route = the R7 bytes (an unrelated Error(code) from the loader attributed as a registry refusal)", put("api/daily-snapshot/run.ts", DE1R8_PARENT + ":api/daily-snapshot/run.ts"), PIN("api/daily-snapshot/run.ts")],
+    ] : []),
+    // I1 overlay (only on an I1 tree): the route cannot fall back to the R8 bytes (the lossy array adapter: a failed build
+    // disappears), the page cannot drop the owner notice, and the builder cannot fall back to the approved B2 bytes
+    ...(isI1Tree(REPO) ? [
+      ["I1: the route = the R8 bytes (buildSnapshotForAll: failed builds and discovery failures vanish)", put("api/daily-snapshot/run.ts", I1_PARENT + ":api/daily-snapshot/run.ts"), PIN("api/daily-snapshot/run.ts")],
+      ["I1: the page = the M1 R5 page (owner notice dropped)", put("index.html", I1_PARENT + ":index.html"), PAGE],
+      ["I1 / ADB-06: the builder = the approved B2 bytes (no structured run, no refusal marker)", put("src/snapshot/snapshotBuilder.ts", "3fd28e7c6b7001004ebd25b0dd92eb3ffe1cddac:src/snapshot/snapshotBuilder.ts"), /snapshotBuilder\.ts is byte-identical to the approved ADB-06 layer/],
     ] : []),
   ];
   for (const [label, mut, re] of cases) {

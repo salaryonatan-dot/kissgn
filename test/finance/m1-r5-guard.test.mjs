@@ -15,7 +15,13 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
-import { m1EffectivePins, m1R4Pins, gitBlobId } from "../support/m1-r1-remediation.mjs";
+import { m1EffectivePins, m1R4Pins, m1R5Pins, gitBlobId } from "../support/m1-r1-remediation.mjs";
+// CF-04 (layering transition, Agent/Daily integration I1; PROPOSED for the M1 integration owner): on a tree that carries a later
+// layer on top of the approved R5 commit (the Builder chain 690a07d9 and the I1 integration), R5G-01..03 verify the R5 commit
+// ITSELF from git objects — its sole parent is still the rejected R4 candidate and its delta still the three pair-key lines —
+// and the HEAD / index / checkout identity of the later tree is held by its own guards (ADB6G-01, I1G-01). The expected R5
+// parent is NOT replaced by a later parent, and nothing is skipped.
+import { isADB06Tree, ADB06_ENTRY } from "../support/adb06-builder-layer.mjs";
 import { M1_R2_PROTECTED } from "../support/m1-r2-remediation.mjs";
 import { M1_R5_PARENT, M1_R5_PINS, M1_R5_NEW_FILES, M1_R5_EDITS, M1_R5_SCOPE, isM1R5Tree, deriveR5, applyR5Edits } from "../support/m1-r5-remediation.mjs";
 import { SERVER_READER_EFFECTIVE_BLOBS, SERVER_READER_APPROVED_BLOBS } from "../support/server-reader-authorized-delta.mjs";
@@ -25,22 +31,33 @@ const blobId = (spec) => { const r = gitIn(REPO, ["rev-parse", "--verify", "-q",
 const lines = (r) => r.stdout.split("\n").map((x) => x.trim()).filter(Boolean);
 const MODIFIED = Object.keys(M1_R5_PINS).filter((f) => !M1_R5_NEW_FILES.includes(f)).sort();
 const DB = "src/analytics/dailyBuilder.ts";
-const read = (f) => readFileSync(join(REPO, f), "utf8");
+const bytesOf = (spec) => { const r = gitIn(REPO, ["cat-file", "blob", spec], { encoding: "buffer", maxBuffer: 1 << 28 }); assert.equal(r.status, 0, spec); return r.stdout; };
+const LAYERED = isADB06Tree(REPO);
+const R5_TREE = LAYERED ? ADB06_ENTRY : "HEAD";          // the R5 commit itself when a later layer is checked out
+const read = (f) => (LAYERED ? bytesOf(`${R5_TREE}:${f}`).toString("utf8") : readFileSync(join(REPO, f), "utf8"));
 
 test("R5G-01 the R5 change set vs the rejected R4 parent is exactly the recorded set; every effective pin holds committed / staged / checked out", { skip: SKIP }, () => {
   assert.equal(M1_R5_PARENT, "6d4600275bb8a80dc147880c5776cacfd4c0090c", "R5 is built on the rejected R4 candidate");
-  assert.equal(gitIn(REPO, ["rev-parse", "HEAD^"]).stdout.trim(), M1_R5_PARENT, "the R4 candidate is the SOLE parent");
-  assert.equal(gitIn(REPO, ["rev-list", "--parents", "-n", "1", "HEAD"]).stdout.trim().split(" ").length, 2, "one parent");
+  if (LAYERED) assert.equal(R5_TREE, "cfa7e8016e9d1b7440485de7911d133d9340f1e6", "the approved R5 commit (APPROVED_FOR_AGENT_DAILY_ENTRY) is verified");
+  assert.equal(gitIn(REPO, ["rev-parse", R5_TREE + "^"]).stdout.trim(), M1_R5_PARENT, "the R4 candidate is the SOLE parent");
+  assert.equal(gitIn(REPO, ["rev-list", "--parents", "-n", "1", R5_TREE]).stdout.trim().split(" ").length, 2, "one parent");
   for (const [f, pin] of Object.entries(M1_R5_PINS)) assert.match(pin, /^[0-9a-f]{40}$/, f + ": literal blob id");
-  const committed = lines(gitIn(REPO, ["diff", "--name-only", M1_R5_PARENT, "HEAD", "--"])).filter((f) => M1_R2_PROTECTED.test(f));
-  const staged = lines(gitIn(REPO, ["diff", "--name-only", "--cached", M1_R5_PARENT, "--"])).filter((f) => M1_R2_PROTECTED.test(f));
-  const working = [...lines(gitIn(REPO, ["diff", "--name-only", M1_R5_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => M1_R2_PROTECTED.test(f));
-  for (const [label, set] of [["committed", committed], ["staged", staged], ["working tree", working]])
+  const committed = lines(gitIn(REPO, ["diff", "--name-only", M1_R5_PARENT, R5_TREE, "--"])).filter((f) => M1_R2_PROTECTED.test(f));
+  const sets = [["committed", committed]];
+  if (!LAYERED) {
+    sets.push(["staged", lines(gitIn(REPO, ["diff", "--name-only", "--cached", M1_R5_PARENT, "--"])).filter((f) => M1_R2_PROTECTED.test(f))]);
+    sets.push(["working tree", [...lines(gitIn(REPO, ["diff", "--name-only", M1_R5_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => M1_R2_PROTECTED.test(f))]);
+  }
+  for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), Object.keys(M1_R5_PINS).sort(), label + ": protected changes vs the R4 parent = the recorded R5 set");
-  const eff = { ...m1EffectivePins(REPO), ...SERVER_READER_EFFECTIVE_BLOBS };
+  // the R5 commit's own pin table when layered: M1 ⊕ R1 … ⊕ R5 and the approved reader table with the R5 builder pin
+  const r5Reader = { ...SERVER_READER_APPROVED_BLOBS };
+  for (const f of Object.keys(r5Reader)) if (M1_R5_PINS[f]) r5Reader[f] = M1_R5_PINS[f];
+  const eff = LAYERED ? { ...m1R5Pins(), ...r5Reader } : { ...m1EffectivePins(REPO), ...SERVER_READER_EFFECTIVE_BLOBS };
   for (const f of Object.keys(M1_R5_PINS)) assert.equal(eff[f], M1_R5_PINS[f], f + " is held to its R5 pin by the effective tables");
   for (const [f, pin] of Object.entries(eff)) {
-    assert.equal(blobId("HEAD:" + f), pin, f + " committed");
+    assert.equal(blobId(R5_TREE + ":" + f), pin, f + " committed" + (LAYERED ? " (at the R5 commit)" : ""));
+    if (LAYERED) continue;
     assert.equal(blobId(":" + f), pin, f + " staged");
     assert.equal(gitBlobId(readFileSync(join(REPO, f))), pin, f + " checked out");
   }
@@ -61,12 +78,12 @@ test("R5G-02 provenance: the R5 pin is the R4 parent's bytes + exactly the recor
 });
 
 test("R5G-03 scope: the nightly discovery pair key only", { skip: SKIP }, () => {
-  const all = lines(gitIn(REPO, ["diff", "--name-only", M1_R5_PARENT, "HEAD", "--"]));
+  const all = lines(gitIn(REPO, ["diff", "--name-only", M1_R5_PARENT, R5_TREE, "--"]));
   assert.deepEqual(all.filter((f) => M1_R2_PROTECTED.test(f) && !M1_R5_SCOPE.includes(f)), [], "no other protected file");
   assert.deepEqual(all.filter((f) => /^(database\.rules\.json|vercel\.json|package(-lock)?\.json|fincore\/|lib\/|api\/|index\.html$|tools\/|test\/emulator\/database\.rules\.json$)/.test(f)), [], "no Rules / config / shared module / route / page / Core / tool change");
   for (const f of ["index.html", "api/admin.js", "api/analytics/daily-builder.ts", "lib/businessRegistry.js", "lib/securityContext.js", "lib/emailDelivery.js", "lib/sendEmail.js", "api/daily-snapshot/run.ts", "vercel.json", "database.rules.json", "src/snapshot/snapshotBuilder.ts", "src/alerts/runner.ts"])
-    assert.equal(blobId("HEAD:" + f), blobId(`${M1_R5_PARENT}:${f}`), f + " is the R4 bytes");
-  const diff = gitIn(REPO, ["diff", "-U0", M1_R5_PARENT, "HEAD", "--", DB]).stdout.split("\n");
+    assert.equal(blobId(R5_TREE + ":" + f), blobId(`${M1_R5_PARENT}:${f}`), f + " is the R4 bytes");
+  const diff = gitIn(REPO, ["diff", "-U0", M1_R5_PARENT, R5_TREE, "--", DB]).stdout.split("\n");
   const removed = diff.filter((l) => l.startsWith("-") && !l.startsWith("---")).map((l) => l.slice(1));
   const added = diff.filter((l) => l.startsWith("+") && !l.startsWith("+++")).map((l) => l.slice(1));
   assert.equal(removed.length, 3, "exactly the three pair-key lines are replaced");

@@ -21,7 +21,7 @@
 //               never reach logs, responses or receipts; the classification stays bounded
 //   DR1-11  D4  the bounded representations (unit); DR1-11b lib/sendEmail.js outside an attempt uses its own Message-ID
 //   DR1-12      receipt contents: exactly the allow-listed fields; tenant / business isolation of the receipt and its hash
-//   DR1-C1      (todo — combined-flow acceptance pending the builder interface) a failed build keeps the run incomplete
+//   DR1-C1      combined-flow acceptance (todo removed by I1 once the real route passed it on the reconciled tree; G9) — a failed build keeps the run incomplete
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -464,7 +464,9 @@ test("DR1-12 receipts hold exactly the allow-listed fields; tenant / business is
   assert.notEqual(all[T][B][DATE].messageId, all[T2][B][DATE].messageId);
 });
 
-test("DR1-C1 (combined flow) a business whose summary fails to build keeps the run from being reported clean", { todo: "PENDING, not a pass: the route still uses buildSnapshotForAll() (a failed build disappears; HTTP 200). The builder contract exists (f4d00fcb, BUILDER_DELIVERY_CONTRACT.md) but that consumer/builder chain was rejected (AGENT_DAILY_BUILDER_VERDICT: CHANGES_REQUIRED); delivery adaptation G1-G9 awaits an approved builder" }, async () => {
+// INTEGRATION I1 (G9): the `todo` is removed because the real route now passes this combined scenario on the reconciled tree
+// (route → buildSnapshotRun → failed row); its assertions are unchanged. The removal itself awaits the independent review.
+test("DR1-C1 (combined flow) a business whose summary fails to build keeps the run from being reported clean", async () => {
   const db = seedWorld({ withSecondTenant: false }); installSmtp([SMTP.accept()]);
   const ref = db.ref; db.ref = (p, q) => { const x = ref(p, q); return p === `tenants/${T}/biz:${B2}:entries` ? { ...x, once: async () => { throw new Error("isolated build failure"); } } : x; };
   const r = await cron();

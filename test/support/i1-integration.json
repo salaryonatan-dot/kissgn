@@ -1,0 +1,37 @@
+{
+ "parent": "32d1b76084a46a158b63c5dd3c820ae2e9798e28",
+ "entryBase": "cfa7e8016e9d1b7440485de7911d133d9340f1e6",
+ "builder": "690a07d9e3aabc82821975e097e1135417eb20c1",
+ "delivery": "3d48398818f064fce68184092e8003586f33d3fc",
+ "ui": "2a9df535b5a0c94940724158cf24c905f4cd17b6",
+ "pins": {
+  "api/daily-snapshot/run.ts": "6d1ac088782c3c65550b30ad6199aed33f695c8a",
+  "index.html": "ccbdc086a2ded5ea97c05dab62c0d7158ef77bf2"
+ },
+ "newFiles": [],
+ "edits": {
+  "api/daily-snapshot/run.ts": [
+   {
+    "from": "        totalSnapshots: snapshots.length,\n",
+    "to": "        businessDate: run.businessDate,\n        expectedBusinesses: run.expectedBusinesses.length,\n        totalSnapshots: run.snapshots.length,\n        failedBuildCount: run.failedBuilds.length,\n        // G2: the builder's discovery accounting, verbatim (sources and bounded codes only — no identity, no raw text)\n        discovery: { status: run.discovery.status, failures: run.discovery.failures.map((f) => ({ source: f.source, code: f.code })) },\n        // G5: legitimate exclusions are reported as non-deliverable rows and a count; they never make the run incomplete\n        exclusionCount: run.exclusions.length,\n        exclusions: run.exclusions.map((x) => ({ tenantId: x.tenantId, bizId: x.bizId, businessDate: x.businessDate, reason: x.reason })),\n"
+   },
+   {
+    "from": "      const broken = failureCount > 0 || unknownCount > 0 || unrecordedCount > 0 || receiptWriteFailures > 0;\n      const complete = !broken && inProgressCount === 0 && deliveredCount + skippedCount === results.length;\n",
+    "to": "      // G2: a failed discovery breaks the run even with zero known businesses; G1: the builder's own status must be complete\n      const discoveryFailed = run.discovery.status !== \"complete\";\n      const broken = failureCount > 0 || unknownCount > 0 || unrecordedCount > 0 || receiptWriteFailures > 0 || discoveryFailed;\n      const complete = !broken && run.status === \"complete\" && inProgressCount === 0 && deliveredCount + skippedCount === results.length;\n"
+   },
+   {
+    "from": "      const registryCache = new Map<string, unknown>();   // one registry read per tenant per run\n",
+    "to": "      const registryCache = new Map<string, unknown>();   // one registry read per tenant per run\n\n      // Every EXPECTED business becomes exactly one row (G1 / G3), in discovery order within each class: its snapshot is\n      // delivered below, or its failed build is a FAILED row with the builder's bounded code and the run's business date — no\n      // send, no receipt, no claim (G6). A missing name additionally records the owner notice (D-G4; contract §1.3).\n      // Identities are matched by the structured pair, never by a delimiter concatenation of the ids.\n      const pairKey = (t: string, b: string) => JSON.stringify([t, b]);\n      const builtByPair = new Map(run.snapshots.map((s) => [pairKey(s.tenantId, s.bizId), s] as const));\n      const failedByPair = new Map(run.failedBuilds.map((f) => [pairKey(f.tenantId, f.bizId), f] as const));\n      const snapshots: typeof run.snapshots[number][] = [];\n      for (const expected of run.expectedBusinesses) {\n        const key = pairKey(expected.tenantId, expected.bizId);\n        const built = builtByPair.get(key);\n        if (built) { snapshots.push(built); continue; }\n        const failure = failedByPair.get(key);\n        const code = boundedCode(failure?.code) ?? \"snapshot_build_failed\";\n        console.warn(\"[daily-snapshot] business not deliverable (build failed)\", { tenantId: expected.tenantId, bizId: expected.bizId, code });\n        const row: Row = { tenantId: expected.tenantId, bizId: expected.bizId, businessDate: expected.businessDate, outcome: \"failed\", code,\n          settlement: \"failed\", receipt: \"not_written\" };\n        if (code === \"business_name_unavailable\") row.notice = await recordMissingNameNotice(db, { tenantId: expected.tenantId, bizId: expected.bizId, businessDate: expected.businessDate });\n        results.push(row);\n      }\n"
+   },
+   {
+    "from": "      const snapshots = await buildSnapshotForAll();\n",
+    "to": "      // Agent/Daily integration (I1; Builder contract G1/G2/G7): the scheduled run consumes the builder's STRUCTURED result,\n      // never the lossy array adapter. ONE clock read fixes the run's business date for discovery, every build and every\n      // failure row. A throw here (the builder's accounting invariant, an unusable run instant) fails the WHOLE run before\n      // any delivery: the outer catch answers 500 with a fixed body and logs the class only (G7 — never an empty success).\n      const run = await buildSnapshotRun({ nowMs: Date.now() });\n"
+   },
+   {
+    "from": "import { buildSnapshotForBiz, buildSnapshotForAll } from \"../../src/snapshot/snapshotBuilder.js\";\n",
+    "to": "import { buildSnapshotForBiz, buildSnapshotRun } from \"../../src/snapshot/snapshotBuilder.js\";\n"
+   }
+  ]
+ },
+ "pageEdits": "owner-notice-ui.json"
+}

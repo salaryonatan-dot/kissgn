@@ -32,6 +32,9 @@ import { isM1R2Tree, M1_R2_PINS } from "./m1-r2-remediation.mjs";
 import { isM1R3Tree, M1_R3_PINS } from "./m1-r3-remediation.mjs";
 import { isM1R4Tree, M1_R4_PINS } from "./m1-r4-remediation.mjs";
 import { isM1R5Tree, M1_R5_PINS } from "./m1-r5-remediation.mjs";
+// ADB-06 successor layer (Agent/Daily integration I1, PROPOSED): the B2-owned snapshot builder is held to its ADB-06 pin on a
+// layer tree; the Agent files are authorized by that layer's own verdict (adb06-builder-layer.mjs), never by this table.
+import { adb06ReaderOverlay, adb06Projection } from "./adb06-builder-layer.mjs";
 
 /** The Codex-approved Storage V2 core; the reader files are authorized on top of it. */
 export const SERVER_READER_BASE = "8cac71c1248ad5cc49dfa1a727bf292398ae74e8";
@@ -109,7 +112,10 @@ export const SERVER_READER_AUTHORIZED_FILES = Object.freeze(Object.keys(SERVER_R
  */
 const MODULE_REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 export function serverReaderEffectiveBlobs(root = MODULE_REPO) {
-  if (!isM1R2Tree(root)) return SERVER_READER_APPROVED_BLOBS;
+  if (!isM1R2Tree(root)) {
+    const o = adb06ReaderOverlay(root);
+    return Object.keys(o).length ? Object.freeze({ ...SERVER_READER_APPROVED_BLOBS, ...o }) : SERVER_READER_APPROVED_BLOBS;
+  }
   const out = { ...SERVER_READER_APPROVED_BLOBS };
   for (const f of Object.keys(out)) if (M1_R2_PINS[f]) out[f] = M1_R2_PINS[f];
   // M1 R3 (LOCAL CANDIDATE, pending independent review): the nightly registry interpretation changes the same ONE file again;
@@ -121,6 +127,10 @@ export function serverReaderEffectiveBlobs(root = MODULE_REPO) {
   // M1 R5 (LOCAL CANDIDATE, pending independent review): the collision-free nightly pair key changes it once more; on an R5
   // tree it is held to its literal R5 pin (R5G-02 re-derives it from the R4 bytes). Nothing here approves R5.
   if (isM1R5Tree(root)) for (const f of Object.keys(out)) if (M1_R5_PINS[f]) out[f] = M1_R5_PINS[f];
+  // ADB-06 (PROPOSED transition, Agent/Daily integration I1): on a tree that carries the reviewed Builder successor 690a07d9,
+  // the ONE B2-owned builder file is held to its literal ADB-06 pin (= its blob at 690a07d9, verified by ADB6G-02 from git
+  // objects). The file set is unchanged; SERVER_READER_APPROVED_BLOBS keeps the approved B2 value. Nothing here approves it.
+  for (const [f, pin] of Object.entries(adb06ReaderOverlay(root))) if (Object.prototype.hasOwnProperty.call(out, f)) out[f] = pin;
   return Object.freeze(out);
 }
 export const SERVER_READER_EFFECTIVE_BLOBS = serverReaderEffectiveBlobs();
@@ -163,7 +173,15 @@ export function collectServerReaderScopeInputs(root, base = SERVER_READER_BASE) 
   const names = gitIn(root, ["diff", "--name-only", base, "--"]);
   if (names.status !== 0) throw new Error("git diff --name-only failed: " + names.stderr);
   const changedAll = names.stdout.trim().split(/\n/).filter(Boolean);
-  const changedProtectedPaths = changedAll.filter(isProtectedPath);
+  const changedProtectedPathsUnprojected = changedAll.filter(isProtectedPath);
+  // ADB-06 successor layer (Agent/Daily integration I1, PROPOSED transition): on a tree that carries the reviewed Builder
+  // successor, the layer's OWN verdict runs first (record checked against git objects; every Agent file's working-tree bytes =
+  // its pin) and ONLY the Agent paths it validated are left out of the protected set handed to the reader verdict — the same
+  // discipline as the Rules fence projection, done here so the S0 guard (vat-invariant, byte-identical since the M1 R1 parent:
+  // GO-05) keeps its own bytes. FAIL-CLOSED: if the layer verdict fails, nothing is projected and the reader verdict refuses
+  // every changed Agent path by name. The six-file table is never widened (test H); on any other tree nothing changes.
+  const adb06 = adb06Projection(root, changedProtectedPathsUnprojected);
+  const changedProtectedPaths = adb06.ok ? adb06.projected : changedProtectedPathsUnprojected;
   const blobs = {}, baseBlobs = {};
   for (const rel of SERVER_READER_AUTHORIZED_FILES) {
     let bytes = null;
@@ -172,5 +190,5 @@ export function collectServerReaderScopeInputs(root, base = SERVER_READER_BASE) 
     const b = gitIn(root, ["rev-parse", `${base}:${rel}`]);
     baseBlobs[rel] = b.status === 0 ? b.stdout.trim() : null;
   }
-  return { changedAll, changedProtectedPaths, blobs, baseBlobs };
+  return { changedAll, changedProtectedPaths, blobs, baseBlobs, changedProtectedPathsUnprojected, adb06 };
 }

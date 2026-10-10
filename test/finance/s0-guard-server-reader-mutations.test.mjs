@@ -34,6 +34,7 @@ import { isM1R5Tree, M1_R5_PINS } from "../support/m1-r5-remediation.mjs";
 // src/analytics/dailyBuilder.ts overlaid (pending independent review). Every mutation class below runs against it.
 const SERVER_READER_APPROVED_BLOBS = SERVER_READER_EFFECTIVE_BLOBS;
 import { gitIn } from "../support/git-context.mjs";
+import { isADB06Tree, ADB06_PINS, ADB06_AGENT_FILES } from "../support/adb06-builder-layer.mjs";
 import { authorizedVersionFenceRulesDelta } from "../support/rules-authorized-delta.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -44,6 +45,11 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const RAW = collectServerReaderScopeInputs(ROOT);
 const CORE_RULES = JSON.parse(gitIn(ROOT, ["show", `${SERVER_READER_BASE}:database.rules.json`]).stdout);
 const FENCE_OK = authorizedVersionFenceRulesDelta(CORE_RULES, JSON.parse(readFileSync(join(ROOT, "database.rules.json"), "utf8"))).ok === true;
+// ADB-06 successor layer (Agent/Daily integration I1, PROPOSED): on a tree that carries the reviewed Builder successor, the
+// layer validates its OWN Agent files first (exact identity, record checked against git objects) and only the paths it
+// validated are projected out — the same discipline as the fence above. The reader table itself is never widened (test H).
+// (the collector runs the layer verdict and projects fail-closed: RAW.adb06 is that verdict, RAW.changedProtectedPathsUnprojected the raw set)
+const ADB06 = RAW.adb06;
 const REAL = { ...RAW, changedProtectedPaths: RAW.changedProtectedPaths.filter((rel) => !(FENCE_OK && rel === "database.rules.json")) };
 const DB = "src/analytics/dailyBuilder.ts", DM = "src/repositories/analytics/dailyMetricsRepo.ts", SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const src = (rel) => readFileSync(join(ROOT, rel), "utf8");
@@ -57,6 +63,14 @@ const line = (text, needle) => { const l = text.split("\n").find((x) => x.includ
 test("I. positive control: the exact approved tree passes; six plain files (B2 adds the e-mail presenter); pins are reviewed changes on top of the core; git agrees on the identity", () => {
   assert.equal(SERVER_READER_BASE, "8cac71c1248ad5cc49dfa1a727bf292398ae74e8");
   assert.deepEqual(serverReaderScopeVerdict(REAL), { ok: true });
+  if (isADB06Tree(ROOT)) {
+    // ADB-06: the layer validated EXACTLY its Agent files (all changed, all identical to their pins); without the projection
+    // the reader layer still refuses them — the layer is the only authority for them
+    assert.equal(ADB06.ok, true, JSON.stringify(ADB06));
+    assert.deepEqual(ADB06.validated, [...ADB06_AGENT_FILES].sort(), "the layer validated exactly its Agent files");
+    const unprojected = { ...RAW, changedProtectedPaths: RAW.changedProtectedPathsUnprojected.filter((rel) => !(FENCE_OK && rel === "database.rules.json")) };
+    assert.deepEqual(serverReaderScopeVerdict(unprojected), { ok: false, reason: "unauthorized_protected_path", detail: [...ADB06_AGENT_FILES].sort() }, "the reader table alone never authorizes an Agent file");
+  }
   // the reader layer itself still rejects the Rules change: only the validated fence projection admits it
   assert.equal(FENCE_OK, true);
   assert.ok(RAW.changedProtectedPaths.includes("database.rules.json"));
@@ -68,7 +82,9 @@ test("I. positive control: the exact approved tree passes; six plain files (B2 a
     else if (isM1R3Tree(ROOT)) assert.equal(SERVER_READER_APPROVED_BLOBS[DB], M1_R3_PINS[DB], "R3 tree: dailyBuilder is held to its literal R3 candidate pin");
     else assert.equal(SERVER_READER_APPROVED_BLOBS[DB], M1_R2_PINS[DB], "R2 tree: dailyBuilder is held to its literal R2 candidate pin");
     assert.equal(APPROVED_LITERAL[DB], "6b70d03c245d163264f1bad2cefa71c0d85ff761", "the approved B1 R1 pin itself is unchanged");
-    for (const f of SERVER_READER_AUTHORIZED_FILES) if (f !== DB) assert.equal(SERVER_READER_APPROVED_BLOBS[f], APPROVED_LITERAL[f], f + ": approved pin");
+    // ADB-06 (PROPOSED): the B2-owned builder is held to its literal layer pin; every other entry is the approved pin
+    for (const f of SERVER_READER_AUTHORIZED_FILES) if (f !== DB) assert.equal(SERVER_READER_APPROVED_BLOBS[f], isADB06Tree(ROOT) && f === SB ? ADB06_PINS[SB] : APPROVED_LITERAL[f], f + (isADB06Tree(ROOT) && f === SB ? ": ADB-06 layer pin" : ": approved pin"));
+    assert.equal(APPROVED_LITERAL[SB], "b7ad0f76904876e71739208b4019573a0879d6c4", "the approved B2 builder pin itself is unchanged");
   } else assert.equal(SERVER_READER_APPROVED_BLOBS, APPROVED_LITERAL);
   for (const f of SERVER_READER_AUTHORIZED_FILES) {
     assert.ok(isPlainAuthorizedFile(f) && isProtectedPath(f), f);
