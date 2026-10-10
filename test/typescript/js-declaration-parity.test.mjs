@@ -27,6 +27,7 @@ const PAIRS = [
   ["lib/verifyToken.js", "lib/verifyToken.d.ts"],
   ["lib/helpers.js", "lib/helpers.d.ts"],
   ["lib/sendEmail.js", "lib/sendEmail.d.ts"],
+  ["lib/emailDelivery.js", "lib/emailDelivery.d.ts"],   // daily e-mail delivery receipts
   ["lib/analytics/sources.js", "lib/analytics/sources.d.ts"],
   ["lib/memoryInsightType.js", "lib/memoryInsightType.d.ts"],
   ["lib/llmResponse.js", "lib/llmResponse.d.ts"],

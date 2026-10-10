@@ -21,6 +21,9 @@ import { M1_R1_PARENT, M1_R1_PINS, M1_R1_NEW_FILES, M1_R1_EDITS, isM1R1Tree, m1E
 // The R2 layer (successor of this R1 candidate): on an R2 tree R1G-01/03 verify the R1 commit from git objects, and the HEAD /
 // index / checkout identity is held by the R2 guard (test/finance/m1-r2-guard.test.mjs R2G-01).
 import { isM1R2Tree, M1_R2_PARENT } from "../support/m1-r2-remediation.mjs";
+// A later layer (DE1, daily e-mail delivery) built on the R1 commit: R1G-01 then verifies the R1 commit from git objects, and the
+// HEAD / index / checkout identity is held by the layer's own guard (test/delivery/de1-daily-email-guard.test.mjs DE1G-01).
+import { isDE1Tree, DE1_PARENT } from "../support/de1-daily-email.mjs";
 
 const PROTECTED = /^(src\/(finance|metrics|policy|presenters|browser|finance-server)\/|fincore\/|api\/|lib\/|database\.rules\.json$|test\/support\/rules-authorized-delta\.mjs$|index\.html$)/;
 const SKIP = !isM1R1Tree(REPO) && "not an M1 R1 tree";
@@ -32,8 +35,11 @@ const R1_MODIFIED = Object.keys(M1_R1_PINS).filter((f) => !M1_R1_NEW_FILES.inclu
 test("R1G-01 the R1 change set relative to the rejected parent is exactly the recorded set; committed / staged / checked-out bytes are the effective pins", { skip: SKIP }, () => {
   assert.equal(M1_R1_PARENT, "8511d7b2d3e4c89659b1ae006f6bdb1e9670b826", "the R1 parent is the rejected M1 candidate");
   for (const [f, pin] of Object.entries(M1_R1_PINS)) assert.match(pin, /^[0-9a-f]{40}$/, f + ": literal blob id");
-  const layered = isM1R2Tree(REPO);
-  const R1_TREE = layered ? M1_R2_PARENT : "HEAD";          // the R1 commit itself when the R2 layer is checked out
+  // INTEGRATION (I1): the M1 R2 layer and the DE1 layer are BOTH built on the R1 commit; on a tree that carries either (or
+  // both) R1G-01 verifies the R1 commit itself from git objects. The two records name the same R1 commit (asserted).
+  const layered = isM1R2Tree(REPO) || isDE1Tree(REPO);
+  assert.equal(M1_R2_PARENT, DE1_PARENT, "the M1 R2 and DE1 layers are built on the same R1 commit");
+  const R1_TREE = layered ? M1_R2_PARENT : "HEAD";          // the R1 commit itself when a later layer is checked out
   const committed = lines(gitIn(REPO, ["diff", "--name-only", M1_R1_PARENT, R1_TREE, "--"])).filter((f) => PROTECTED.test(f));
   const sets = [["committed", committed]];
   if (!layered) {

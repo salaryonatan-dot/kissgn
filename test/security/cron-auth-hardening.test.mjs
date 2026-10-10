@@ -43,8 +43,11 @@ function build(routeRel, outRel, extraStubs) {
   mkdirSync(join(dir, "lib"), { recursive: true });
   copyFileSync(join(REPO, "lib", "securityContext.js"), join(dir, "lib", "securityContext.js"));
   copyFileSync(join(REPO, "lib", "bizAccess.js"), join(dir, "lib", "bizAccess.js"));
-  // M1 R2: the analytics endpoint resolves its target through the REAL shared registry rule
+  // M1 R2: the analytics endpoint resolves its target through the REAL shared registry rule; DE1 R5 (delivery owner decisions):
+  // the receipt module composes the same REAL shared registry predicate (dependency-free) — one copy serves both (I1)
   copyFileSync(join(REPO, "lib", "businessRegistry.js"), join(dir, "lib", "businessRegistry.js"));
+  // daily e-mail reliability: the snapshot route's delivery receipts / outcome classification (real, dependency-free)
+  if (existsSync(join(REPO, "lib", "emailDelivery.js"))) copyFileSync(join(REPO, "lib", "emailDelivery.js"), join(dir, "lib", "emailDelivery.js"));
   // lazy deps of requireBizContext
   mk("lib/verifyToken.js", STUB_VERIFYTOKEN);
   mk("lib/helpers.js", STUB_HELPERS);
@@ -91,7 +94,9 @@ function setH(o = {}) {
   const calls = [];
   const state = {
     bizAccessVal: o.bizAccessVal !== undefined ? o.bizAccessVal : true,
-    business: o.business || { _v: JSON.stringify([{ id: "b1", name: "Biz" }]) },   // the runtime registry node (M1 R2: the only shape that establishes identity)
+    // the runtime registry node (M1 R2: the only shape that establishes identity); the delivery route resolves the target
+    // against it with the approved predicate before a manual send (DE1 R5)
+    business: o.business || { _v: JSON.stringify([{ id: "b1", name: "Biz" }]) },
     users: o.users || [{ firebaseUid: "u1", role: "owner", email: "owner@x.com", allowedBizIds: ["b1"] }],
     insights: o.insights !== undefined ? o.insights : null,
   };
@@ -127,7 +132,9 @@ const SNAP_STUBS = {
   "src/firebase/admin.js": STUB_FBADMIN,
   "src/snapshot/snapshotBuilder.js": `export async function buildSnapshotForAll(){ globalThis.__H.calls.push("buildSnapshotForAll"); return globalThis.__H.snapshotsAll||[]; }
 export async function buildSnapshotForBiz(t,b){ globalThis.__H.calls.push("buildSnapshotForBiz"); return {tenantId:t,bizId:b,bizName:"Biz",date:"2026-07-18",netProfit:1,totalSales:2}; }`,
-  "src/snapshot/snapshotEmail.js": `export async function sendSnapshotEmail(to,s){ globalThis.__H.calls.push("sendSnapshotEmail"); }`,
+  // the stub stands for a provider-accepted send: inside a delivery attempt it reports the provider result like lib/sendEmail.js
+  "src/snapshot/snapshotEmail.js": `import { currentDeliveryAttempt } from "../../lib/emailDelivery.js";
+export async function sendSnapshotEmail(to,s){ globalThis.__H.calls.push("sendSnapshotEmail"); const a = currentDeliveryAttempt(); if (a) { await a.beforeTransport(); a.info = { messageId: "<stub>", accepted: [to], rejected: [] }; } }`,
 };
 const PRO_STUBS = {
   "src/firebase/admin.js": STUB_FBADMIN,

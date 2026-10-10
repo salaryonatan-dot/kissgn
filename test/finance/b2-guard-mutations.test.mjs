@@ -48,6 +48,18 @@ import { isM1R3Tree, M1_R3_PARENT } from "../support/m1-r3-remediation.mjs";
 // none can fall back to the rejected R3 bytes.
 import { isM1R4Tree, M1_R4_PARENT, M1_R4_PINS } from "../support/m1-r4-remediation.mjs";
 import { isM1R5Tree, M1_R5_PARENT } from "../support/m1-r5-remediation.mjs";
+// DE1 (daily e-mail delivery reliability, built on R1): EXACTLY the DE1 files carry DE1 pins — the P0 route
+// api/daily-snapshot/run.ts is then held to its DE1 pin (no longer the P0 bytes), and the DE1 lib files join the protected set.
+import { isDE1Tree, de1EffectivePins, DE1_SCOPE } from "../support/de1-daily-email.mjs";
+import { isDE1R1Tree } from "../support/de1-r1-email.mjs";
+// DE1 R2 (successor of the rejected R1): the receipt module carries R2 pins (via de1EffectivePins); it cannot fall back to R1.
+import { isDE1R2Tree, DE1R2_PARENT } from "../support/de1-r2-email.mjs";
+import { isDE1R3Tree, DE1R3_PARENT } from "../support/de1-r3-email.mjs";
+import { isDE1R4Tree, DE1R4_PARENT } from "../support/de1-r4-email.mjs";
+import { isDE1R5Tree, DE1R5_PARENT } from "../support/de1-r5-delivery.mjs";
+import { isDE1R6Tree, DE1R6_PARENT } from "../support/de1-r6-provider.mjs";
+import { isDE1R7Tree, DE1R7_PARENT } from "../support/de1-r7-notice.mjs";
+import { isDE1R8Tree, DE1R8_PARENT } from "../support/de1-r8-provenance.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -205,9 +217,15 @@ function assertB2Scope(root) {
     // M1 R4: the P0 route api/analytics/daily-builder.ts changes again (review A1 / A2) and is held to its literal R4 pin
     const r4m = m1 && isM1R4Tree(root);
     const M1_R2_ADDED = r2m ? M1_R2_NEW_FILES.filter((f) => PROTECTED.test(f)) : [];
+    // INTEGRATION (I1): the DE1 delivery layers (built on M1 R1) are carried beside M1 R2..R5; their files are disjoint
+    const de1 = m1 && isDE1Tree(root);
+    const DE1_ADDED = de1 ? DE1_SCOPE.filter((f) => !P0_APPROVED.includes(f)) : [];
+    // the delivery pins: DE1's, with the DE1 R1 successor's overlaid on its tree (same file set)
+    const DE1_EFF = de1 ? de1EffectivePins(root) : {};
+    const DE1_LABEL = de1 && isDE1R8Tree(root) ? "DE1 R8 successor fixed blob " : de1 && isDE1R7Tree(root) ? "DE1 R7 successor fixed blob " : de1 && isDE1R6Tree(root) ? "DE1 R6 successor fixed blob " : de1 && isDE1R5Tree(root) ? "DE1 R5 successor fixed blob " : de1 && isDE1R4Tree(root) ? "DE1 R4 successor fixed blob " : de1 && isDE1R3Tree(root) ? "DE1 R3 successor fixed blob " : de1 && isDE1R2Tree(root) ? "DE1 R2 successor fixed blob " : de1 && isDE1R1Tree(root) ? "DE1 R1 successor fixed blob " : "DE1 checkpoint fixed blob ";
     const vd50Runtime = ["src/metrics/report.ts", "fincore/v1/metrics/report.js", "fincore/v1/MANIFEST.json"];
     const f1Runtime = ["database.rules.json", "fincore/v1/MANIFEST.json", "fincore/v1/browser/marjinFinanceGlobal.js", "fincore/v1/finance/costHistory.js", "fincore/v1/metrics/report.js", "fincore/v1/policy/productFinance.js", "lib/finance/costHistoryWriter.js", "src/browser/marjinFinanceGlobal.ts", "src/finance-server/canonicalInputs.ts", "src/finance/costHistory.ts", "src/finance/labor.ts", "src/finance/types.ts", "src/metrics/costTimeline.ts", "src/metrics/report.ts", "src/policy/productFinance.ts", "test/support/rules-authorized-delta.mjs"];
-    const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES, ...M1_R1_ADDED, ...M1_R2_ADDED])] : CDM2_APPROVED;
+    const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES, ...M1_R1_ADDED, ...M1_R2_ADDED, ...DE1_ADDED])] : CDM2_APPROVED;
     const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f));
     assert.deepEqual([...new Set(whole)].sort(), [...allowed].sort(), assembled
       ? "assembled tree: protected changes are exactly CD-M2 R1's approved runtime files + P0 Scheduled Auth's three API routes" + (c2 ? " + the C2-03 retirement of " + C2_RETIRED.join(", ") : "") + (m1 ? " + the pinned P1 Supplier Credits files (M1 integration)" : "")
@@ -250,7 +268,9 @@ function assertB2Scope(root) {
       ...(r4 && !m1 ? R4_NEW_FILES.map((f) => [f, blobBytes(root, R4_RUNTIME_BLOBS[f]), "R4 candidate fixed blob " + R4_RUNTIME_BLOBS[f]]) : []),
       ...(assembled ? [
         ...(c1 ? [] : [["index.html", approvedIndexMerge(root), "merge(" + CDM2R1.slice(0, 8) + ", " + HF1R1.slice(0, 8) + ")"]]),
-        ...P0_APPROVED.map((f) => (r4m && M1_R4_PINS[f]
+        ...P0_APPROVED.map((f) => (de1 && DE1_EFF[f]
+          ? [f, blobBytes(root, DE1_EFF[f]), DE1_LABEL + DE1_EFF[f].slice(0, 8)]
+          : r4m && M1_R4_PINS[f]
           ? [f, blobBytes(root, M1_R4_PINS[f]), "M1 R4 candidate fixed blob " + M1_R4_PINS[f].slice(0, 8)]
           : r2m && M1_R2_PINS[f]
           ? [f, blobBytes(root, M1_R2_PINS[f]), "M1 R2 candidate fixed blob " + M1_R2_PINS[f].slice(0, 8)]
@@ -709,6 +729,51 @@ test("B2G-05-M1b M1 tree: committed substitutions of either input, page edits, r
     // M1 R5 overlay (only on an R5 tree): the nightly builder cannot fall back to the rejected R4 bytes (colliding pair key)
     ...(isM1R5Tree(REPO) ? [
       ["R5: the analytics builder = the rejected R4 bytes (`${tenantId}|${bizId}` discovery key)", put("src/analytics/dailyBuilder.ts", M1_R5_PARENT + ":src/analytics/dailyBuilder.ts"), PIN("src/analytics/dailyBuilder.ts")],
+    ] : []),
+    // DE1 overlay (only on a DE1 tree): the delivery files cannot fall back to their R1 bytes, and the receipt module cannot vanish
+    ...(isDE1Tree(REPO) ? [
+      ["DE1: run.ts = the approved P0 bytes (receipts dropped)", put("api/daily-snapshot/run.ts", P0 + ":api/daily-snapshot/run.ts"), /api\/daily-snapshot\/run\.ts \(committed\) is not the pinned M1 integration blob|api\/daily-snapshot\/run\.ts is byte-identical to the approved DE1/],
+      ["DE1: sendEmail.js = the R1 bytes (unbounded transport back)", put("lib/sendEmail.js", "45e760c893f682b71d8e8e8e962528c385206609:lib/sendEmail.js"), /protected changes are exactly|lib\/sendEmail\.js \(committed\) is not the pinned M1 integration blob/],
+      ["DE1: the receipt module removed", (dir) => rmSync(join(dir, "lib", "emailDelivery.js")), /protected changes are exactly/],
+      ["DE1: the receipt module edited", (dir) => appendTo(dir, "lib/emailDelivery.js", "\n// edit\n"), PIN("lib/emailDelivery.js")],
+    ] : []),
+    // DE1 R1 overlay (only on a DE1 R1 tree): no delivery file can fall back to the rejected DE1 bytes
+    ...(isDE1R1Tree(REPO) ? [
+      ["DE1 R1: run.ts = the rejected DE1 bytes (in-progress reported clean, address in the response)", put("api/daily-snapshot/run.ts", "9baf695c8f7d8c03e47dfaa4a67c3a795a4f1073:api/daily-snapshot/run.ts"), /api\/daily-snapshot\/run\.ts \(committed\) is not the pinned M1 integration blob|api\/daily-snapshot\/run\.ts is byte-identical to the approved DE1/],
+      ["DE1 R1: the receipt module = the rejected DE1 bytes (provider Message-ID persisted)", put("lib/emailDelivery.js", "9baf695c8f7d8c03e47dfaa4a67c3a795a4f1073:lib/emailDelivery.js"), PIN("lib/emailDelivery.js")],
+      ["DE1 R1: sendEmail.js = the rejected DE1 bytes (raw provider fields logged)", put("lib/sendEmail.js", "9baf695c8f7d8c03e47dfaa4a67c3a795a4f1073:lib/sendEmail.js"), PIN("lib/sendEmail.js")],
+      ["DE1 R1: the receipt declarations edited", (dir) => appendTo(dir, "lib/emailDelivery.d.ts", "\n// edit\n"), PIN("lib/emailDelivery.d.ts")],
+    ] : []),
+    // DE1 R2 overlay (only on a DE1 R2 tree): the receipt module cannot fall back to the rejected R1 bytes
+    ...(isDE1R2Tree(REPO) ? [
+      ["DE1 R2: the receipt module = the rejected R1 bytes (provider marker / text trusted as phase evidence)", put("lib/emailDelivery.js", DE1R2_PARENT + ":lib/emailDelivery.js"), PIN("lib/emailDelivery.js")],
+      ["DE1 R2: the receipt declarations = the R1 bytes", put("lib/emailDelivery.d.ts", DE1R2_PARENT + ":lib/emailDelivery.d.ts"), PIN("lib/emailDelivery.d.ts")],
+    ] : []),
+    // DE1 R3 overlay (only on a DE1 R3 tree): the receipt module cannot fall back to the rejected R2 bytes
+    ...(isDE1R3Tree(REPO) ? [
+      ["DE1 R3: the receipt module = the rejected R2 bytes (a contradictory resolved result recorded as a definite refusal)", put("lib/emailDelivery.js", DE1R3_PARENT + ":lib/emailDelivery.js"), PIN("lib/emailDelivery.js")],
+    ] : []),
+    // DE1 R4 overlay (only on a DE1 R4 tree): the receipt module cannot fall back to the rejected R3 bytes
+    ...(isDE1R4Tree(REPO) ? [
+      ["DE1 R4: the receipt module = the rejected R3 bytes (a present empty envelope read as absent: final acceptance)", put("lib/emailDelivery.js", DE1R4_PARENT + ":lib/emailDelivery.js"), PIN("lib/emailDelivery.js")],
+    ] : []),
+    // DE1 R5 overlay (only on a DE1 R5 tree): neither the receipt module nor the route can fall back to the R4 bytes
+    ...(isDE1R5Tree(REPO) ? [
+      ["DE1 R5: the receipt module = the R4 bytes (a `:` tenant refused at the receipt; control characters reach the SDK)", put("lib/emailDelivery.js", DE1R5_PARENT + ":lib/emailDelivery.js"), PIN("lib/emailDelivery.js")],
+      ["DE1 R5: the route = the R4 bytes (a nameless business is a silent no-send; builder refusals are a generic 500)", put("api/daily-snapshot/run.ts", DE1R5_PARENT + ":api/daily-snapshot/run.ts"), PIN("api/daily-snapshot/run.ts")],
+    ] : []),
+    // DE1 R6 overlay (only on a DE1 R6 tree): the receipt module cannot fall back to the R5 bytes (a decorated array accepted)
+    ...(isDE1R6Tree(REPO) ? [
+      ["DE1 R6: the receipt module = the R5 bytes (a decorated array recorded as a final acceptance)", put("lib/emailDelivery.js", DE1R6_PARENT + ":lib/emailDelivery.js"), PIN("lib/emailDelivery.js")],
+    ] : []),
+    // DE1 R7 overlay (only on a DE1 R7 tree): neither the receipt module nor the route can fall back to the R6 bytes
+    ...(isDE1R7Tree(REPO) ? [
+      ["DE1 R7: the receipt module = the R6 bytes (no notice store state: a failed read is indistinguishable from an absent notice)", put("lib/emailDelivery.js", DE1R7_PARENT + ":lib/emailDelivery.js"), PIN("lib/emailDelivery.js")],
+      ["DE1 R7: the route = the R6 bytes (a SyntaxError is a malformed registry by class; a failed notice read / clear is HTTP 200)", put("api/daily-snapshot/run.ts", DE1R7_PARENT + ":api/daily-snapshot/run.ts"), PIN("api/daily-snapshot/run.ts")],
+    ] : []),
+    // DE1 R8 overlay (only on a DE1 R8 tree): the route cannot fall back to the R7 bytes (a builder throw attributed by message alone)
+    ...(isDE1R8Tree(REPO) ? [
+      ["DE1 R8: the route = the R7 bytes (an unrelated Error(code) from the loader attributed as a registry refusal)", put("api/daily-snapshot/run.ts", DE1R8_PARENT + ":api/daily-snapshot/run.ts"), PIN("api/daily-snapshot/run.ts")],
     ] : []),
   ];
   for (const [label, mut, re] of cases) {

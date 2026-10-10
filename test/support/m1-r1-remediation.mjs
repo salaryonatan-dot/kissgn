@@ -27,6 +27,9 @@ import { isM1R4Tree, M1_R4_PINS, applyR4Edits } from "./m1-r4-remediation.mjs";
 // M1 R5 (successor of the rejected R4 candidate): its ONE pin (the nightly builder) overlays the M1 ⊕ R1 ⊕ R2 ⊕ R3 ⊕ R4 pins on
 // an R5 tree (test/support/m1-r5-remediation.mjs). R5 changes no page byte.
 import { isM1R5Tree, M1_R5_PINS } from "./m1-r5-remediation.mjs";
+// DE1 (daily e-mail delivery reliability, built on the R1 candidate): its pins overlay the M1 ⊕ R1 pins on a DE1 tree.
+// DE1 R1 (its successor) overlays DE1 in turn: de1EffectivePins.
+import { isDE1Tree, de1EffectivePins } from "./de1-daily-email.mjs";
 
 const RECORD = JSON.parse(readFileSync(new URL("./m1-r1-remediation.json", import.meta.url), "utf8"));
 export const M1_R1_PARENT = RECORD.parent;
@@ -42,13 +45,18 @@ export function isM1R1Tree(repo) {
   return git(repo, ["rev-parse", "HEAD"]).stdout.trim() !== M1_R1_PARENT;
 }
 /** The pins that hold the tree under test: the M1 pins, with the R1 pins (and new files) overlaid on an R1 tree, the R2
- *  pins overlaid on an R2 tree (an R2 tree is always an R1 tree), and the R3 pins overlaid on an R3 tree (always an R2 tree). */
+ *  pins overlaid on an R2 tree (an R2 tree is always an R1 tree), and the R3 pins overlaid on an R3 tree (always an R2 tree).
+ *  INTEGRATION (I1, merge of delivery R8 onto the M1 R5 lineage): the DE1 lineage forks from M1 R1, so a tree that carries
+ *  both lineages overlays the M1 R2..R5 pins (page, registry, analytics builder, admin) AND the DE1 pins (the delivery
+ *  files). The two pin sets are disjoint by path (the delivery files are not M1 R2..R5 pins and vice versa), so the order
+ *  of the overlay cannot hide a pin of either lineage. */
 export function m1EffectivePins(repo) {
   if (!isM1R1Tree(repo)) return { ...M1_PINS.blobs };
-  if (!isM1R2Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS };
-  if (!isM1R3Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS };
-  if (isM1R5Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS, ...M1_R5_PINS };
-  return isM1R4Tree(repo) ? { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS } : { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS };
+  const de1 = isDE1Tree(repo) ? de1EffectivePins(repo) : {};
+  if (!isM1R2Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...de1 };
+  if (!isM1R3Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...de1 };
+  if (isM1R5Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS, ...M1_R5_PINS, ...de1 };
+  return isM1R4Tree(repo) ? { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS, ...de1 } : { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...de1 };
 }
 /** The pins of the R4 commit itself (M1 ⊕ R1 ⊕ R2 ⊕ R3 ⊕ R4), whatever later layer is checked out. */
 export function m1R4Pins() { return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS }; }

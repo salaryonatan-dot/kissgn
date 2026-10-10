@@ -1,0 +1,31 @@
+{
+ "parent": "054fd87316839a8d6e2f66d9594f0ef867d21ba7",
+ "pins": {
+  "lib/emailDelivery.js": "0d508337c97522ed39e37aa0e54740752383c14e"
+ },
+ "newFiles": [],
+ "edits": {
+  "lib/emailDelivery.js": [
+   {
+    "from": "    if (envelope === UNREADABLE || envelope === null || typeof envelope !== \"object\") return malformed(rc);\n",
+    "to": "    if (!isPlainRecord(envelope)) return malformed(rc);   // R6: the envelope is a plain record (never an array / instance)\n"
+   },
+   {
+    "from": "        if (e === null || typeof e !== \"object\") return malformed(rc);\n",
+    "to": "        if (e === null || typeof e !== \"object\" || Array.isArray(e)) return malformed(rc);   // a detail is a record, never a list\n"
+   },
+   {
+    "from": "  if (info === null || typeof info !== \"object\") return malformed(null);\n",
+    "to": "  if (!isPlainRecord(info)) return malformed(null);     // R6: the result itself must be a plain record (never an array)\n"
+   },
+   {
+    "from": "    try { return obj[k]; } catch { return UNREADABLE; }\n",
+    "to": "    try { return obj[k]; } catch { return UNREADABLE; }\n  };\n  // a PLAIN record: a non-null object that is not an array, whose prototype is Object.prototype or null and can be read\n  const isPlainRecord = (x) => {\n    if (x === null || typeof x !== \"object\") return false;\n    try {                                             // a revoked Proxy throws even on Array.isArray: unreadable, not a record\n      if (Array.isArray(x)) return false;\n      const proto = Object.getPrototypeOf(x);\n      return proto === Object.prototype || proto === null;\n    } catch { return false; }\n"
+   },
+   {
+    "from": " * The provider-reported Message-ID is not judged here: it stays the bounded diagnostic of R1 (providerIdEcho on the receipt).\n",
+    "to": " * The provider-reported Message-ID is not judged here: it stays the bounded diagnostic of R1 (providerIdEcho on the receipt).\n *\n * R6 (independent R4 review, finding E4-01): the STRUCTURE of the whole resolved result is validated before any field is\n * read as evidence. The adapter's resolved result is a plain record { accepted: string[], rejected: string[], rejectedErrors?,\n * response: string, envelope: { from, to: string[] }, messageId, … }: a value that is not a plain record (an array — even one\n * decorated with the right properties — a function, a class instance, a Proxy whose prototype cannot be read) is malformed\n * evidence, exactly like a wrong-typed field; so is an `envelope` that is not a plain record or a refusal detail that is a\n * list. R4 accepted a decorated array as the result (`typeof [] === \"object\"`) and recorded a final acceptance from it.\n"
+   }
+  ]
+ }
+}
