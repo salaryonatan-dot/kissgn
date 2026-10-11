@@ -65,7 +65,7 @@ test("I1G-01 identity: sole parent the recorded merge (Builder ⊕ delivery R8);
   for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), [...I1_SCOPE].sort(), label + ": protected changes vs the merge = { route, page }");
   // the I1 commit's own pin table when layered: the effective tables with the I1 pins (the I2 page pin is not the I1 commit's)
-  const eff = LAYERED ? { ...m1EffectivePins(REPO), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS, ...I1_PINS } : { ...m1EffectivePins(REPO), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS };
+  const eff = LAYERED ? { ...m1EffectivePins(REPO, { withI3: false }), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS, ...I1_PINS } : { ...m1EffectivePins(REPO), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS };
   for (const f of I1_SCOPE) assert.equal(eff[f], I1_PINS[f], f + " is held to its I1 pin by the effective tables");
   for (const [f, pin] of Object.entries(eff)) {
     assert.equal(blobId(I1_TREE + ":" + f), pin, f + " committed" + (LAYERED ? " (at the I1 commit)" : ""));
@@ -112,7 +112,7 @@ test("I1G-04 non-vacuity: a changed anchor, a dropped or an altered edit is refu
   const dropped = deriveI1(REPO, RT, tamper((l) => { l.pop(); })); assert.ok(!dropped.ok || gitBlobId(dropped.bytes) !== I1_PINS[RT]);
   const altered = deriveI1(REPO, RT, tamper((l) => { l[l.length - 1].to += "\n"; })); assert.ok(altered.ok && gitBlobId(altered.bytes) !== I1_PINS[RT]);
   assert.notEqual(I1_PINS[RT], DE1R8_PINS[RT]); assert.notEqual(I1_PINS[PG], m1R5Pins()[PG]);
-  const eff = m1EffectivePins(REPO);
+  const eff = m1EffectivePins(REPO, { withI3: false });   // (the I3 D-CTRL overlay is held by I3G-01)
   assert.equal(eff[RT], I1_PINS[RT]); assert.equal(eff[PG], LAYERED ? I2_PINS[PG] : I1_PINS[PG], "the effective page pin: I1's, or the I2 layer's on an I2 tree");
   for (const f of Object.keys(de1EffectivePins(REPO)).filter((x) => x !== RT)) assert.equal(eff[f], de1EffectivePins(REPO)[f], f + " keeps its DE1 pin");
 });

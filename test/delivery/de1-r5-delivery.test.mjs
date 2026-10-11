@@ -161,9 +161,7 @@ test("DR5-04 a registry business id with a control character: never built, never
 // ── DR5-05 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 test("DR5-05 manual POST refusals before any provider hand-off (G10); the provider classes are unchanged after the gate", async () => {
   const refusals = [
-    ["control character in the business id", { tenantId: T, bizId: "biz\u0001c" }, (db) => seedTenant(db, T, "biz\u0001c", "Ctrl"), 400, "invalid_business_identity"],
     ["`:` in the business id", { tenantId: T, bizId: "b:c" }, (db) => seedTenant(db, T, "b:c", "Colon"), 400, "invalid_business_identity"],
-    ["control character in the tenant id", { tenantId: "ten\u0001ant", bizId: B }, (db) => seedTenant(db, "ten\u0001ant", B, "Ctrl T"), 400, "invalid_business_identity"],
     ["not registered", { tenantId: T, bizId: B }, (db) => db.seed(`tenants/${T}/app/business`, env([{ id: "other", name: "Other" }])), 404, "business_not_registered"],
     ["duplicate record", { tenantId: T, bizId: B }, (db) => db.seed(`tenants/${T}/app/business`, env([{ id: B, name: "A" }, { id: B, name: "A twin" }])), 422, "ambiguous_business_identity"],
     ["padded twin", { tenantId: T, bizId: B }, (db) => db.seed(`tenants/${T}/app/business`, env([{ id: B, name: "A" }, { id: " " + B, name: SECRET_NAME }])), 422, "ambiguous_business_identity"],
@@ -187,6 +185,23 @@ test("DR5-05 manual POST refusals before any provider hand-off (G10); the provid
     assert.deepEqual(lines.filter(leaks), [], label + ": no registry bytes in the log");
     assert.ok(!JSON.stringify(r.body).includes(SECRET_NAME) && !JSON.stringify(r.body).includes("is not valid JSON"), label + ": no registry bytes in the body");
     assert.ok(lines.some((l) => l.includes("manual send refused") && l.includes(`"code":"${code}"`)), label + ": bounded log");
+  }
+  // I3 (test-contract transition T-I3-TEST; Builder coordination contract §2.3 "expected effect of the M1 change"): with D-CTRL
+  // adopted INSIDE the shared predicates, a control-character tenant or business id is refused by requireBizContext — 400 with
+  // its documented body, before the delivery gate, any registry read or the provider — exactly like every other
+  // non-addressable id (the `/` row is the pre-existing comparison). It was the delivery gate's 400 invalid_business_identity.
+  for (const [label, body, setup, msg] of [
+    ["control character in the business id", { tenantId: T, bizId: "biz\u0001c" }, (db) => seedTenant(db, T, "biz\u0001c", "Ctrl"), "invalid bizId"],
+    ["control character in the tenant id", { tenantId: "ten\u0001ant", bizId: B }, (db) => seedTenant(db, "ten\u0001ant", B, "Ctrl T"), "invalid tenantId"],
+    ["`/` in the business id (comparison: refused the same way before I3)", { tenantId: T, bizId: "biz/c" }, () => {}, "invalid bizId"]]) {
+    const db = seedWorld({ withSecondBiz: false, withSecondTenant: false }); const smtp = installSmtp([SMTP.accept()]);
+    setup(db);
+    const refs = []; const ref0 = db.ref; db.ref = (p, q) => { refs.push(p); return ref0(p, q); };
+    const { value: r, lines } = await captureConsole(() => at(AT, () => post(route, body)));
+    assert.deepEqual([r.statusCode, r.body], [400, { error: msg }], label + ": " + JSON.stringify(r.body));
+    assert.equal(smtp.calls.length, 0, label + ": no provider call");
+    assert.deepEqual(refs.filter((p) => p.includes(body.tenantId === T ? body.bizId : body.tenantId)), [], label + ": no reference carries the refused identity");
+    assert.deepEqual(lines.filter(leaks), [], label + ": nothing leaked");
   }
   // 503: the registry read fails (transport) / the build fails after the gate
   for (const [label, path, status, code, logRe] of [["registry read failure", `tenants/${T}/app/business`, 503, "registry_unavailable", /manual send refused/],

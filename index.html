@@ -1457,7 +1457,7 @@
      * requested business unavailable.
      */
     function registryTargetRegistered(list, bizId) {
-      if (!Array.isArray(list) || typeof bizId !== "string" || !bizId || bizId.length > 128 || /[.#$\[\]\/:]/.test(bizId)) return false;
+      if (!Array.isArray(list) || typeof bizId !== "string" || !bizId || bizId.length > 128 || /[.#$\[\]\/:\u0000-\u001f\u007f]/.test(bizId)) return false;   // D-CTRL: = isRegistryBizId
       var canonical = 0, collisions = 0;
       for (var i = 0; i < list.length; i++) {
         var e = list[i], rec = e !== null && typeof e === "object" && !Array.isArray(e);

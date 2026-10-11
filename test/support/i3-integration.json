@@ -1,0 +1,31 @@
+{
+ "parent": "cfe900dd2073701b2392c186f95a9107cd5291ce",
+ "decision": "D-CTRL (owner, 2026-10-09)",
+ "contract": "BUILDER_COORDINATION_CONTRACT.md §2.3",
+ "pins": {
+  "lib/securityContext.js": "b6d16d413b5e0860dc3a3998dc54e4c45911673a",
+  "lib/businessRegistry.js": "5d2a82248e56b9b52063cc5953681cc889692f6c",
+  "index.html": "c6b4996ec7fc9cc8620c05af8209e1697c93cb0f"
+ },
+ "newFiles": [],
+ "edits": {
+  "lib/securityContext.js": [
+   {
+    "from": "export function isValidId(v) {\n  return typeof v === \"string\" && v.length > 0 && v.length <= MAX_ID_LEN && !RTDB_FORBIDDEN.test(v);\n",
+    "to": "// D-CTRL (owner decision 2026-10-09; M1 D-CTRL shared-predicate layer): the RTDB-forbidden control characters\n// U+0000–U+001F and U+007F (the Admin SDK's own key rule) are refused HERE, in the shared identity predicate, before any\n// database reference is built. An identity is refused, never trimmed, replaced, normalized or aliased; every id this\n// predicate accepted before and that carries no such character keeps exactly the same verdict.\nconst RTDB_CONTROL_CHARS = /[\\u0000-\\u001f\\u007f]/;\nexport function isValidId(v) {\n  return typeof v === \"string\" && v.length > 0 && v.length <= MAX_ID_LEN && !RTDB_FORBIDDEN.test(v) && !RTDB_CONTROL_CHARS.test(v);\n"
+   }
+  ],
+  "lib/businessRegistry.js": [
+   {
+    "from": "const MAX_ID_LEN = 128;\n\n/** A requested business id that both per-business node keys can address. */\nexport function isRegistryBizId(v) {\n  return typeof v === \"string\" && v.length > 0 && v.length <= MAX_ID_LEN && !RTDB_FORBIDDEN.test(v) && !v.includes(\":\");\n",
+    "to": "// D-CTRL (owner decision 2026-10-09; M1 D-CTRL shared-predicate layer): U+0000–U+001F and U+007F are refused by the shared\n// business predicate exactly as by lib/securityContext.js isValidId — refused, never trimmed, replaced or aliased.\nconst RTDB_CONTROL_CHARS = /[\\u0000-\\u001f\\u007f]/;\nconst MAX_ID_LEN = 128;\n\n/** A requested business id that both per-business node keys can address. */\nexport function isRegistryBizId(v) {\n  return typeof v === \"string\" && v.length > 0 && v.length <= MAX_ID_LEN && !RTDB_FORBIDDEN.test(v) && !v.includes(\":\") && !RTDB_CONTROL_CHARS.test(v);\n"
+   }
+  ],
+  "index.html": [
+   {
+    "from": "      if (!Array.isArray(list) || typeof bizId !== \"string\" || !bizId || bizId.length > 128 || /[.#$\\[\\]\\/:]/.test(bizId)) return false;\n",
+    "to": "      if (!Array.isArray(list) || typeof bizId !== \"string\" || !bizId || bizId.length > 128 || /[.#$\\[\\]\\/:\\u0000-\\u001f\\u007f]/.test(bizId)) return false;   // D-CTRL: = isRegistryBizId\n"
+   }
+  ]
+ }
+}

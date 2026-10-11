@@ -36,6 +36,9 @@ import { isDE1Tree, de1EffectivePins } from "./de1-daily-email.mjs";
 import { isI1Tree, I1_PINS, applyI1Edits } from "./i1-integration.mjs";
 // I2 (Agent/Daily integration I2, PROPOSED page-layer transition): the I2 page layer overlays the I1 page (index.html only).
 import { isI2Tree, I2_PINS, applyI2Edits } from "./i2-integration.mjs";
+// I3 (Agent/Daily integration I3 — the M1 D-CTRL shared-predicate layer, PROPOSED for the M1 identity owner and the page owner):
+// overlays lib/securityContext.js, lib/businessRegistry.js and the page's registry-rule mirror.
+import { isI3Tree, I3_PINS, applyI3Edits } from "./i3-integration.mjs";
 
 const RECORD = JSON.parse(readFileSync(new URL("./m1-r1-remediation.json", import.meta.url), "utf8"));
 export const M1_R1_PARENT = RECORD.parent;
@@ -56,10 +59,11 @@ export function isM1R1Tree(repo) {
  *  both lineages overlays the M1 R2..R5 pins (page, registry, analytics builder, admin) AND the DE1 pins (the delivery
  *  files). The two pin sets are disjoint by path (the delivery files are not M1 R2..R5 pins and vice versa), so the order
  *  of the overlay cannot hide a pin of either lineage. */
-export function m1EffectivePins(repo) {
+/** `withI3: false` = the effective table of the tree WITHOUT the I3 D-CTRL overlay (the I1 / I2 commits' own tables, I3 layering). */
+export function m1EffectivePins(repo, { withI3 = true } = {}) {
   if (!isM1R1Tree(repo)) return { ...M1_PINS.blobs };
   const de1 = isDE1Tree(repo) ? de1EffectivePins(repo) : {};
-  const i1 = isI1Tree(repo) ? { ...I1_PINS, ...(isI2Tree(repo) ? I2_PINS : {}) } : {};   // the I1 layer overlays both lineages (route + page); I2 overlays the page
+  const i1 = isI1Tree(repo) ? { ...I1_PINS, ...(isI2Tree(repo) ? I2_PINS : {}), ...(withI3 && isI3Tree(repo) ? I3_PINS : {}) } : {};   // the I1 layer overlays both lineages (route + page); I2 overlays the page; I3 the shared predicates + page mirror
   if (!isM1R2Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...de1, ...i1 };
   if (!isM1R3Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...de1, ...i1 };
   if (isM1R5Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS, ...M1_R5_PINS, ...de1, ...i1 };
@@ -123,6 +127,8 @@ export function m1EffectivePageVerdict(repo, candidateBytes, edits = M1_R1_EDITS
   if (withLaterLayers && isI1Tree(repo)) { const di = applyI1Edits("index.html", want); if (!di.ok) return di; want = di.bytes; }
   // I2 tree: … + exactly the recorded I2 page edit (the entries hydration defined before its listener is registered)
   if (withLaterLayers && isI2Tree(repo)) { const d2 = applyI2Edits("index.html", want); if (!d2.ok) return d2; want = d2.bytes; }
+  // I3 tree: … + exactly the recorded I3 page edit (the registry-rule mirror refuses control characters, = isRegistryBizId)
+  if (withLaterLayers && isI3Tree(repo)) { const d3 = applyI3Edits("index.html", want); if (!d3.ok) return d3; want = d3.bytes; }
   const B = Buffer.isBuffer(candidateBytes) ? candidateBytes : Buffer.from(String(candidateBytes), "utf8");
   if (!want.equals(B)) return { ok: false, reason: "not_the_recorded_derivation" };
   return { ok: true };

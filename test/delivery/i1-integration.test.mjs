@@ -206,7 +206,7 @@ test("I1-06 G7: a throw from the builder run fails the whole run before any deli
 
 test("I1-07 G10 on the integrated route: the exact manual statuses, zero provider calls (D-G10)", async () => {
   const cases = [
-    ["invalid identity (control character)", (db) => seedTenant(db, T, "biz\u0001c", "Ctrl"), { tenantId: T, bizId: "biz\u0001c" }, 400, "invalid_business_identity"],
+    ["invalid identity (`:` in the business id)", (db) => seedTenant(db, T, "b:c", "Colon"), { tenantId: T, bizId: "b:c" }, 400, "invalid_business_identity"],
     ["not registered", (db) => db.seed(`tenants/${T}/app/business`, env([{ id: "other", name: "Other" }])), { tenantId: T, bizId: B }, 404, "business_not_registered"],
     ["ambiguous (duplicate record)", (db) => db.seed(`tenants/${T}/app/business`, env([{ id: B, name: "א" }, { id: B, name: "א (twin)" }])), { tenantId: T, bizId: B }, 422, "ambiguous_business_identity"],
     ["raw array registry", (db) => db.seed(`tenants/${T}/app/business`, [{ id: B, name: "x" }]), { tenantId: T, bizId: B }, 422, "registry_unreadable"],
@@ -222,6 +222,20 @@ test("I1-07 G10 on the integrated route: the exact manual statuses, zero provide
     assert.deepEqual([r.statusCode, r.body.code, smtp.calls.length, r.body.snapshot], [status, code, 0, undefined], label);
     assert.ok(!JSON.stringify(r.body).includes("Secret Cafe") && !JSON.stringify(r.body).includes("is not valid JSON"), label + ": no registry bytes, no parser text");
     noLeak(r, lines, label);
+  }
+});
+
+// I3 (test-contract transition T-I3-TEST, Builder coordination contract §2.3): the control-character identity of this case moved
+// from the delivery gate to the shared requireBizContext — still 400, still zero provider calls, now before any registry read.
+test("I1-07c D-CTRL on the integrated route: a control-character identity is a 400 from the shared predicate, before any read or send", async () => {
+  for (const [body, msg] of [[{ tenantId: T, bizId: "biz\u0001c" }, "invalid bizId"], [{ tenantId: "t\u001fx", bizId: B }, "invalid tenantId"], [{ tenantId: T, bizId: "biz\u007f" }, "invalid bizId"]]) {
+    const db = seedWorld({ withSecondBiz: false, withSecondTenant: false }); const smtp = installSmtp([SMTP.accept()]);
+    seedTenant(db, T, "biz\u0001c", "Ctrl");
+    const refs = []; const ref0 = db.ref; db.ref = (p, q) => { refs.push(p); return ref0(p, q); };
+    const { value: r, lines } = await captureConsole(() => at(AT, () => post(route, body)));
+    assert.deepEqual([r.statusCode, r.body, smtp.calls.length], [400, { error: msg }, 0], JSON.stringify(body));
+    assert.deepEqual(refs.filter((p) => /[\u0000-\u001f\u007f]/.test(p)), [], "no reference carries a control character");
+    noLeak(r, lines, JSON.stringify(body));
   }
 });
 
