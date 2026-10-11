@@ -6889,20 +6889,8 @@ function PilotDashboard() {
       window.addEventListener("online", __policyRefresh);
       unsubs.push(() => { window.removeEventListener("visibilitychange", __onVisible); window.removeEventListener("online", __policyRefresh); });
     }
-    subNodeEntries(`biz:${currentBizId}:entries`, (raw) => {
-      const read = window.MarjinStorageV2.readEntriesNode(raw);
-      if (read.status) {
-        entriesStorageModeRef.current = { mode: "malformed", reason: read.reason || read.status };
-        __policyPublish();
-        entriesWriteCoordRef.current.onListenerError(ctxAtSetup);
-        return;
-      }
-      entriesStorageModeRef.current = { mode: read.mode, generation: read.generation === undefined ? null : read.generation };
-      __policyPublish();
-      __entriesHydrate(read.rows);
-    }, () => {
-      entriesWriteCoordRef.current.onListenerError(ctxAtSetup);
-    });
+    // I2 (I1-R-03): defined BEFORE the entries listener is registered. Firebase delivers an already-cached value
+    // synchronously inside onValue(), so the callback below may run during registration (temporal dead zone otherwise).
     const __entriesHydrate = (val) => {
       if(!Array.isArray(val)) return;
       // R5: hydration/echo AND duplicate self-heal go through the production entries-
@@ -6917,6 +6905,20 @@ function PilotDashboard() {
       //    never the mutable-tenant global write, so it cannot race a supplier write.
       entriesWriteCoordRef.current.onListenerEcho(val, ctxAtSetup);
     };
+    subNodeEntries(`biz:${currentBizId}:entries`, (raw) => {
+      const read = window.MarjinStorageV2.readEntriesNode(raw);
+      if (read.status) {
+        entriesStorageModeRef.current = { mode: "malformed", reason: read.reason || read.status };
+        __policyPublish();
+        entriesWriteCoordRef.current.onListenerError(ctxAtSetup);
+        return;
+      }
+      entriesStorageModeRef.current = { mode: read.mode, generation: read.generation === undefined ? null : read.generation };
+      __policyPublish();
+      __entriesHydrate(read.rows);
+    }, () => {
+      entriesWriteCoordRef.current.onListenerError(ctxAtSetup);
+    });
     // R9 invariant B (hydration bootstrap): Firebase `onValue` NEVER fires for a node
     // that does not exist, so a business with no entries yet would otherwise stay
     // permanently un-hydrated and unable to save its first entry. This READ-ONLY probe

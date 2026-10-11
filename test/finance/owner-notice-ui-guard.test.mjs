@@ -20,6 +20,10 @@ import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { gitBlobId } from "../support/m1-r1-remediation.mjs";
 import { isI1Tree, I1_UI } from "../support/i1-integration.mjs";
+// I2 layering (PROPOSED for the page owner): on an I2 tree the I2 page layer sits on the carried UI page; UIG-01 then also
+// verifies the I1 commit's page (= the UI pin) from git objects, and the HEAD / index / checkout page identity is held by
+// I2G-01 (I1 page + exactly the recorded I2 edit). UIG-02..05 are unchanged.
+import { isI2Tree, I2_PARENT } from "../support/i2-integration.mjs";
 import { OWNUI_PARENT, OWNUI_PINS, OWNUI_NEW_FILES, OWNUI_EDITS, OWNUI_SCOPE, isOwnerNoticeUiTree, deriveOwnerNoticeUi } from "../support/owner-notice-ui.mjs";
 
 const PROTECTED = /^(src\/(finance|metrics|policy|presenters|browser|finance-server|analytics|repositories|snapshot|agent|forecast)\/|fincore\/|api\/|lib\/|database\.rules\.json$|test\/support\/rules-authorized-delta\.mjs$|index\.html$|vercel\.json$|package(-lock)?\.json$)/;
@@ -50,6 +54,7 @@ test("UIG-01 the change set vs the approved M1 R5 commit is exactly { index.html
   if (LAYERED) assert.equal(blobId(UI_TREE + ":" + PAGE), OWNUI_PINS[PAGE], "the UI candidate commit carries the pinned page");
   for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), [PAGE], label + ": protected changes vs M1 R5 = { index.html }");
+  if (isI2Tree(REPO)) { assert.equal(blobId(I2_PARENT + ":" + PAGE), OWNUI_PINS[PAGE], "the I1 commit carries the UI page (the I2 layer is held by I2G-01)"); return; }
   assert.equal(blobId("HEAD:" + PAGE), OWNUI_PINS[PAGE], "committed");
   assert.equal(blobId(":" + PAGE), OWNUI_PINS[PAGE], "staged");
   assert.equal(gitBlobId(readFileSync(join(REPO, PAGE))), OWNUI_PINS[PAGE], "checked out");

@@ -34,6 +34,8 @@ import { isDE1Tree, de1EffectivePins } from "./de1-daily-email.mjs";
 // page that carries the owner-notice UI) overlay everything below on an I1 tree; its page is the M1 R5 page + exactly the
 // recorded UI edits (test/support/i1-integration.mjs). Candidate pins, pending independent review.
 import { isI1Tree, I1_PINS, applyI1Edits } from "./i1-integration.mjs";
+// I2 (Agent/Daily integration I2, PROPOSED page-layer transition): the I2 page layer overlays the I1 page (index.html only).
+import { isI2Tree, I2_PINS, applyI2Edits } from "./i2-integration.mjs";
 
 const RECORD = JSON.parse(readFileSync(new URL("./m1-r1-remediation.json", import.meta.url), "utf8"));
 export const M1_R1_PARENT = RECORD.parent;
@@ -57,7 +59,7 @@ export function isM1R1Tree(repo) {
 export function m1EffectivePins(repo) {
   if (!isM1R1Tree(repo)) return { ...M1_PINS.blobs };
   const de1 = isDE1Tree(repo) ? de1EffectivePins(repo) : {};
-  const i1 = isI1Tree(repo) ? I1_PINS : {};   // the I1 layer overlays both lineages (route + page)
+  const i1 = isI1Tree(repo) ? { ...I1_PINS, ...(isI2Tree(repo) ? I2_PINS : {}) } : {};   // the I1 layer overlays both lineages (route + page); I2 overlays the page
   if (!isM1R2Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...de1, ...i1 };
   if (!isM1R3Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...de1, ...i1 };
   if (isM1R5Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS, ...M1_R5_PINS, ...de1, ...i1 };
@@ -119,6 +121,8 @@ export function m1EffectivePageVerdict(repo, candidateBytes, edits = M1_R1_EDITS
   if (isM1R4Tree(repo)) { const d4 = applyR4Edits("index.html", want); if (!d4.ok) return d4; want = d4.bytes; }
   // I1 tree: … + exactly the recorded owner-notice UI edits (carried with the route they depend on); R5 changed no page byte
   if (withLaterLayers && isI1Tree(repo)) { const di = applyI1Edits("index.html", want); if (!di.ok) return di; want = di.bytes; }
+  // I2 tree: … + exactly the recorded I2 page edit (the entries hydration defined before its listener is registered)
+  if (withLaterLayers && isI2Tree(repo)) { const d2 = applyI2Edits("index.html", want); if (!d2.ok) return d2; want = d2.bytes; }
   const B = Buffer.isBuffer(candidateBytes) ? candidateBytes : Buffer.from(String(candidateBytes), "utf8");
   if (!want.equals(B)) return { ok: false, reason: "not_the_recorded_derivation" };
   return { ok: true };
