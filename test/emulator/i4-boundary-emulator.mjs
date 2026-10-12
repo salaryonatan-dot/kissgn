@@ -115,8 +115,10 @@ await run("I4E-04", "non-control requests keep their outcome and persist over th
   eq((await db.ref(`tenants/${T}/biz_access/bizB/u_new`).once("value")).val(), true, "scope persisted");
   await seed(); r = await call("roles", { tenantId: T, targetUid: "u_sub", role: "manager", allowedBizIds: ["bizB"] }); eq(r.code, 200, "roles " + JSON.stringify(r.body));
   eq([(await db.ref(`tenants/${T}/biz_access/bizB/u_sub`).once("value")).val(), (await db.ref(`tenants/${T}/biz_access/bizA/u_sub`).once("value")).val()], [true, null], "scope moved");
-  await seed(); r = await call("update-user", { tenantId: T, firebaseUid: "u_sub", allowedBizIds: [" bizB "] }); eq(r.code, 200, "update-user (padded, pre-existing normalization)");
-  eq((await db.ref(`tenants/${T}/biz_access/bizB/u_sub`).once("value")).val(), true, "padded non-control entry still normalized (unchanged)");
+  // I5 test-contract transition (T-I5-TEST; was: the padded entry is trimmed and bizB granted — the inherited alias the independent
+  // I4 review found, I4-R-01): the padded entry is its own identity and is granted exactly; bizB is not granted.
+  await seed(); r = await call("update-user", { tenantId: T, firebaseUid: "u_sub", allowedBizIds: [" bizB "] }); eq(r.code, 200, "update-user (padded entry)");
+  eq([(await db.ref(`tenants/${T}/biz_access/ bizB /u_sub`).once("value")).val(), (await db.ref(`tenants/${T}/biz_access/bizB/u_sub`).once("value")).val()], [true, null], "padded entry granted exactly, never trimmed into bizB");
   return "4 flows persisted";
 });
 

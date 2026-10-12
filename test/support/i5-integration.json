@@ -1,0 +1,61 @@
+{
+ "parent": "e1c432f3c8ac066f1e6ed8fa7b6a1e7da1702a62",
+ "decision": "D-CTRL (owner, 2026-10-09)",
+ "review": "agent-daily-integration-i4-independent-review I4-R-01..03 / NEXT_WORK.md",
+ "contract": "exact identity: isValidId (tenant), isRegistryBizId (business)",
+ "pins": {
+  "api/admin.js": "b075912676ca32d3beebdfacc2eeccf09ed26e95",
+  "lib/bizAccess.js": "af468807a01ecc20ad3dabc6460a65ec84b3238b"
+ },
+ "newFiles": [],
+ "edits": {
+  "api/admin.js": [
+   {
+    "from": "import { readRegistryTarget } from \"../lib/businessRegistry.js\";\n",
+    "to": "import { readRegistryTarget, isRegistryBizId } from \"../lib/businessRegistry.js\";\n"
+   },
+   {
+    "from": "  return Array.isArray(list) && list.some((v) => typeof v === \"string\" && RTDB_CONTROL_CHARS.test(v));\n",
+    "to": "  return Array.isArray(list) && list.some((v) => typeof v === \"string\" && RTDB_CONTROL_CHARS.test(v));\n}\n/** I5 (exact identity): a raw allowedBizIds list holds a non-empty string entry the approved business predicate refuses, judged\n *  exactly as sent (= the entries lib/bizAccess.js normalizeAllowedBizIds refuses; non-string entries keep their own handling). */\nfunction allowedBizIdsCarryInvalid(list) {\n  return Array.isArray(list) && list.some((v) => typeof v === \"string\" && v !== \"\" && !isRegistryBizId(v));\n"
+   },
+   {
+    "from": "    console.error(\"[edit-client] auth failed:\", e.message);\n    res.status(401).json({ error: \"unauthorized\" }); return;\n  }\n\n  // D-CTRL (I4): a control-character tenant id is refused after authentication and BEFORE the super_owner lookup or any reference.\n  if (carriesControlChar((req.body || {}).tenantId)) { res.status(400).json({ error: \"invalid tenantId\" }); return; }\n\n  const db   = getAdminDb();\n  const auth = getAdminAuth();\n",
+    "to": "    console.error(\"[edit-client] auth failed:\", e.message);\n    res.status(401).json({ error: \"unauthorized\" }); return;\n  }\n\n  // I5 (exact identity; I4-R-02): a PRESENT tenant id that is not a string the approved tenant predicate accepts (isValidId —\n  // a string, 1..128, no RTDB-forbidden or control character; \":\" allowed) is refused after authentication and BEFORE the\n  // super_owner lookup, any reference, Auth change or e-mail — never coerced (an array or object is not interpolated). This\n  // includes the I4 control-character refusal. An absent / empty id keeps its existing answer below.\n  { const t = (req.body || {}).tenantId; if (t && !scIsValidId(t)) { res.status(400).json({ error: \"invalid tenantId\" }); return; } }\n\n  const db   = getAdminDb();\n  const auth = getAdminAuth();\n"
+   },
+   {
+    "from": "    console.error(\"[delete-client] auth failed:\", e.message);\n    res.status(401).json({ error: \"unauthorized\" }); return;\n  }\n\n  // D-CTRL (I4): a control-character tenant id is refused after authentication and BEFORE the super_owner lookup or any reference.\n  if (carriesControlChar((req.body || {}).tenantId)) { res.status(400).json({ error: \"invalid tenantId\" }); return; }\n\n  const db   = getAdminDb();\n  const auth = getAdminAuth();\n",
+    "to": "    console.error(\"[delete-client] auth failed:\", e.message);\n    res.status(401).json({ error: \"unauthorized\" }); return;\n  }\n\n  // I5 (exact identity; I4-R-02): a PRESENT tenant id that is not a string the approved tenant predicate accepts (isValidId —\n  // a string, 1..128, no RTDB-forbidden or control character; \":\" allowed) is refused after authentication and BEFORE the\n  // super_owner lookup, any reference, Auth change or e-mail — never coerced (an array or object is not interpolated). This\n  // includes the I4 control-character refusal. An absent / empty id keeps its existing answer below.\n  { const t = (req.body || {}).tenantId; if (t && !scIsValidId(t)) { res.status(400).json({ error: \"invalid tenantId\" }); return; } }\n\n  const db   = getAdminDb();\n  const auth = getAdminAuth();\n"
+   },
+   {
+    "from": "  // D-CTRL (I4): a control-character tenant id is refused after authentication and BEFORE the super_owner lookup or any reference.\n  if (carriesControlChar((req.body || {}).tenantId)) { res.status(400).json({ error: \"invalid tenantId\" }); return; }\n",
+    "to": "  // I5 (exact identity; I4-R-02): a PRESENT tenant id that is not a string the approved tenant predicate accepts (isValidId —\n  // a string, 1..128, no RTDB-forbidden or control character; \":\" allowed) is refused after authentication and BEFORE the\n  // super_owner lookup, any reference, Auth change or e-mail — never coerced (an array or object is not interpolated). This\n  // includes the I4 control-character refusal. An absent / empty id keeps its existing answer below.\n  { const t = (req.body || {}).tenantId; if (t && !scIsValidId(t)) { res.status(400).json({ error: \"invalid tenantId\" }); return; } }\n"
+   },
+   {
+    "from": "  if (allowedBizIdsCarryControl(allowedBizIds)) {\n",
+    "to": "  // I5: the same early refusal for every entry the approved business predicate refuses (e.g. \":\"), so update-user never changes\n  // the Auth e-mail and then refuses the scope (normalizeAllowedBizIds runs only in Phase 5).\n  if (allowedBizIdsCarryControl(allowedBizIds) || allowedBizIdsCarryInvalid(allowedBizIds)) {\n"
+   },
+   {
+    "from": "            const prevBiz = Array.isArray(currentUser.allowedBizIds) ? normalizeAllowedBizIds(currentUser.allowedBizIds) : [];\n",
+    "to": "            // I5 (stored scope): the grants to keep or revoke are the user's ACTUAL biz_access entries (as `roles` already does),\n            // not the stored list re-normalized — a legacy list such as [\" bizB \"] whose grant was written trimmed (bizB) is\n            // reconciled to the requested exact scope instead of leaving the trimmed grant behind.\n            const treeSnap = await db.ref(`tenants/${tenantId}/biz_access`).once(\"value\");\n            const prevBiz = bizIdsForUid(treeSnap.val(), firebaseUid);\n"
+   },
+   {
+    "from": "    !RTDB_FORBIDDEN.test(tenantId) && !RTDB_FORBIDDEN.test(bizId) && !RTDB_CONTROL_CHARS.test(tenantId) && !RTDB_CONTROL_CHARS.test(bizId);\n",
+    "to": "    !RTDB_FORBIDDEN.test(tenantId) && !RTDB_FORBIDDEN.test(bizId) && !RTDB_CONTROL_CHARS.test(tenantId) && !RTDB_CONTROL_CHARS.test(bizId) &&\n    isRegistryBizId(bizId);   // I5 (I4-R-03): the business slot follows the approved business predicate (no \":\", non-empty); the tenant slot keeps its rule\n"
+   }
+  ],
+  "lib/bizAccess.js": [
+   {
+    "from": "\n// RTDB-forbidden characters in a key segment.\n",
+    "to": "\nimport { isRegistryBizId } from \"./businessRegistry.js\";\n\n// RTDB-forbidden characters in a key segment.\n"
+   },
+   {
+    "from": " * Rejects malformed input (fail-closed) rather than silently guessing.\n",
+    "to": " * Rejects malformed input (fail-closed) rather than silently guessing.\n * I5 (exact identity; independent I4 review I4-R-01 / I4-R-03): every non-empty entry is judged EXACTLY, as sent, by the approved\n * shared business predicate (lib/businessRegistry.js isRegistryBizId: 1..128 chars, no RTDB-forbidden character, no \":\", no\n * U+0000–U+001F / U+007F) and kept byte for byte — never trimmed into another business's id (\" bizB \" and \"bizB\" are two\n * identities). Only an exactly empty entry is skipped, and only exact duplicates are collapsed.\n"
+   },
+   {
+    "from": "    const id = raw.trim();\n    if (!id) continue; // skip blank entries\n    if (id.length > 128 || RTDB_FORBIDDEN.test(id)) throw { status: 400, msg: \"invalid bizId in allowedBizIds\" };\n    if (!seen.has(id)) { seen.add(id); out.push(id); }\n",
+    "to": "    if (raw === \"\") continue; // skip an empty entry (nothing is trimmed)\n    if (!isRegistryBizId(raw)) throw { status: 400, msg: \"invalid bizId in allowedBizIds\" };\n    if (!seen.has(raw)) { seen.add(raw); out.push(raw); }\n"
+   }
+  ]
+ }
+}

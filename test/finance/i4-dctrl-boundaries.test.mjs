@@ -38,6 +38,14 @@ import { pathToFileURL } from "node:url";
 import { join } from "node:path";
 import { adminHarness, observe, seed, CTRL, withCtrl, realSdk, closeSdk, recordingDb, clone } from "../support/i4-boundary-harness.mjs";
 import { I4_PARENT } from "../support/i4-integration.mjs";
+// I5 layering (T-I5-TEST; PROPOSED for the M1 integration and user-access owners — the CF-04 / I3G / I4G pattern applied to this
+// behavioural contract): the PARITY rows (DB-06's non-control corpus and DB-11a/b) state a property of the I4 LAYER — "I4 changed
+// nothing but the control class relative to I3". On an I5 tree, whose exact-identity correction deliberately changes the inherited
+// padded / ":" / non-string behaviours (independent I4 review I4-R-01..03), those rows verify the I4 commit's OWN bytes (git objects)
+// against I3, exactly as before; the I5 behaviour is held by test/finance/i5-exact-identity.test.mjs. Every refusal row (DB-01..10,
+// the control half of DB-06) still runs on the checked-out tree. Nothing is skipped and no expectation is changed.
+import { isI5Tree, I5_PARENT } from "../support/i5-integration.mjs";
+import { ROOT } from "../support/i4-boundary-harness.mjs";
 
 const FROM = "2026-10-01", TO = "2026-10-02";
 const SDK_TEXT = /path argument|Paths must|invalid path|child failed/i;
@@ -45,6 +53,9 @@ const show = (s) => JSON.stringify(s);
 let HEAD = null, PARENT = null;
 const head = async () => (HEAD ??= await adminHarness());
 const parent = async () => (PARENT ??= await adminHarness({ source: I4_PARENT }));
+const LAYERED = isI5Tree(ROOT);
+let LAYER = null;
+const layer = async () => (LAYERED ? (LAYER ??= await adminHarness({ source: I5_PARENT })) : head());   // the I4 layer's bytes
 after(async () => { await closeSdk(); });
 
 /** A refusal: the expected status/body, and NOTHING else happened — no reference (built or SDK-refused), no Auth, no e-mail,
@@ -180,6 +191,7 @@ test("DB-05 persisted state and retries: a stored control entry is refused, neve
 
 test("DB-06 normalizeAllowedBizIds: a raw control entry throws BEFORE the trim; every non-control list keeps its I3 result", async () => {
   const cur = (await (await head()).bizAccess()).normalizeAllowedBizIds;
+  const lay = (await (await layer()).bizAccess()).normalizeAllowedBizIds;   // = cur unless an I5 tree is checked out (layering)
   const old = (await (await parent()).bizAccess()).normalizeAllowedBizIds;
   const run = (fn, x) => { try { return { ok: fn(x) }; } catch (e) { return { err: clone(e) }; } };
   for (const c of CTRL) for (const raw of withCtrl("bizB", c).concat([c, " " + c + " ", c + "bizB" + c]))
@@ -187,7 +199,7 @@ test("DB-06 normalizeAllowedBizIds: a raw control entry throws BEFORE the trim; 
   for (const raw of ["\nbiz", "biz\n", "biz\u0001"]) assert.deepEqual(run(cur, [raw]), { err: { status: 400, msg: "invalid bizId in allowedBizIds" } }, "the review's cases " + show(raw));
   const corpus = [[], ["bizA"], [" bizA "], ["bizA", "bizA"], [""], ["   "], ["bizB", "bizA"], ["biz.A"], ["biz/A"], ["biz:A"], ["ביז א"], ["biz\u0080"], ["biz\u00a0"], ["biz\u2028"], ["\ufeffbiz"],
     ["x".repeat(128)], ["x".repeat(129)], [" " + "x".repeat(128) + " "], [5], [null], "bizA", null, undefined, {}, [["bizA"]]];
-  for (const x of corpus) assert.deepEqual(run(cur, x), run(old, x), "non-control " + show(x) + " keeps its I3 result");
+  for (const x of corpus) assert.deepEqual(run(lay, x), run(old, x), "non-control " + show(x) + " keeps its I3 result" + (LAYERED ? " (the I4 layer's bytes)" : ""));
 });
 
 test("DB-07 requireTenantAccess: control tenant → 400 before any reference; every non-control tenant keeps its I3 outcome", async () => {
@@ -258,7 +270,7 @@ async function frozen(fn) {
 }
 async function parity(action, body, actor, method = "POST") {
   const one = async (h) => { h.reset(); const res = await frozen(() => h.call(action, clone(body), actor, method)); return scrub(observe(h, res)); };
-  const [a, b] = [await one(await head()), await one(await parent())];
+  const [a, b] = [await one(await layer()), await one(await parent())];
   assert.deepEqual(a, b, `${action} ${show(body)} as ${actor}: identical to I3`);
 }
 const TENANTS = ["tenantA", "t:1", "tenantB", "missing", "tenantA ", " tenantA", "סניף", "tenant\u0080A", "tenant\u00a0A", "tenant\u2028A", "", "tenant.A", "tenant/A", "x".repeat(128), "x".repeat(129), 12, null, ["tenantA"], { a: 1 }];

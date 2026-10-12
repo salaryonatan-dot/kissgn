@@ -142,7 +142,10 @@ test("parseAppUsers accepts array | {_v} | string; fails closed otherwise", () =
 test("normalizeAllowedBizIds fail-closed", () => {
   assert.equal(normalizeAllowedBizIds("nope").ok, false);
   assert.equal(normalizeAllowedBizIds([1]).ok, false);
-  assert.deepEqual(normalizeAllowedBizIds(["a", "a", " b "]).ids, ["a", "b"]);
+  // I5 test-contract transition (T-I5-AUDIT-MODEL; was ["a", "b"]): the model mirrors the server's exact business identity —
+  // " b " is its own identity, never trimmed into "b"; exact duplicates still collapse; ":" is refused like the shared predicate.
+  assert.deepEqual(normalizeAllowedBizIds(["a", "a", " b "]).ids, ["a", " b "]);
+  assert.equal(normalizeAllowedBizIds(["b:1"]).ok, false);
 });
 
 // ─── PR-005: deterministic ordering + biz-access safeguards ───────────────────

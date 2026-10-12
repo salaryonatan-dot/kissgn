@@ -9,6 +9,8 @@
 // Fail-closed: malformed source data can never be classified READY.
 
 import { makeRedactor } from "./redact.mjs";
+// I5 (exact identity; T-I5-AUDIT-MODEL): scope entries are judged by the SAME approved business predicate the server uses.
+import { isRegistryBizId } from "../../../lib/businessRegistry.js";
 
 export const RTDB_FORBIDDEN = /[.#$\[\]\/]/;
 export const VALID_ROLES = new Set(["owner", "super_owner", "manager", "shift_manager", "viewer"]);
@@ -60,10 +62,10 @@ export function normalizeAllowedBizIds(allowed) {
   const out = []; const seen = new Set();
   for (const raw of allowed) {
     if (typeof raw !== "string") return { ok: false, reason: "allowedBizIds entries must be strings" };
-    const id = raw.trim();
-    if (!id) continue;
-    if (id.length > 128 || RTDB_FORBIDDEN.test(id)) return { ok: false, reason: "invalid bizId in allowedBizIds" };
-    if (!seen.has(id)) { seen.add(id); out.push(id); }
+    // I5: mirrors lib/bizAccess.js — exact identity, never trimmed (" b " ≠ "b"); only "" is skipped, only exact duplicates collapse
+    if (raw === "") continue;
+    if (!isRegistryBizId(raw)) return { ok: false, reason: "invalid bizId in allowedBizIds" };
+    if (!seen.has(raw)) { seen.add(raw); out.push(raw); }
   }
   return { ok: true, ids: out };
 }

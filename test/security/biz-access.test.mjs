@@ -42,7 +42,10 @@ T("H4 clear nulls all", () => assert.deepStrictEqual(bizAccessClearUpdates("t1",
 T("H5 bizIdsForUid lists true entries", () => assert.deepStrictEqual(bizIdsForUid({a:{u:true},b:{u:true,x:true},c:{x:true}},"u").sort(), ["a","b"]));
 T("H6 tenantId===bizId valid", () => assert.deepStrictEqual(bizAccessSetUpdates("t1","u",["t1"]), {"tenants/t1/biz_access/t1/u":true}));
 T("H7 malformed allowedBizIds rejected", () => { assert.throws(()=>normalizeAllowedBizIds("a")); assert.throws(()=>normalizeAllowedBizIds([1])); assert.throws(()=>normalizeAllowedBizIds(["a/b"])); assert.throws(()=>normalizeAllowedBizIds(["x".repeat(129)])); });
-T("H8 duplicates normalized (no dup writes)", () => { const ids=normalizeAllowedBizIds(["a","a"," a ","b"]); assert.deepStrictEqual(ids,["a","b"]); assert.strictEqual(Object.keys(bizAccessSetUpdates("t","u",ids)).length,2); });
+// I5 test-contract transition (T-I5-H8, user-access owner; was ["a","b"] / 2 writes): exact duplicates still collapse (no dup
+// writes), but " a " is a DIFFERENT valid business identity under the approved M1 business predicate and is kept exactly — it
+// is never trimmed into "a" (independent I4 review I4-R-01: the trim granted another business).
+T("H8 duplicates normalized (no dup writes)", () => { const ids=normalizeAllowedBizIds(["a","a"," a ","b"]); assert.deepStrictEqual(ids,["a"," a ","b"]); assert.strictEqual(Object.keys(bizAccessSetUpdates("t","u",ids)).length,3); assert.ok(!("tenants/t/biz_access/a/u" in bizAccessSetUpdates("t","u",normalizeAllowedBizIds([" a "])))); });
 
 // ── Codex finding: NEW SCOPED CREATE-USER (validate-before-auth, persist app/users+users+biz_access) ──
 T("C1 [static-src] create-user validates allowedBizIds BEFORE Auth creation", () => {

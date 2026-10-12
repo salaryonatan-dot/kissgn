@@ -69,6 +69,9 @@ import { isI3Tree, I3_SCOPE } from "../support/i3-integration.mjs";
 // lib/businessRegistry.js and lib/bizAccess.js join the protected set of an I4 tree, each held to its literal I4 pin
 // (m1EffectivePins overlays the I4 pins).
 import { isI4Tree, I4_SCOPE } from "../support/i4-integration.mjs";
+// I5 (Agent/Daily integration I5, the exact-identity correction; PROPOSED): api/admin.js and lib/bizAccess.js stay in the
+// protected set of an I5 tree, each held to its literal I5 pin (m1EffectivePins overlays the I5 pins).
+import { isI5Tree, I5_SCOPE } from "../support/i5-integration.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -238,10 +241,11 @@ function assertB2Scope(root) {
     const DE1_EFF = de1 ? { ...de1EffectivePins(root), ...(i1 ? I1_PINS : {}) } : {};
     const I3_ADDED = i1 && isI3Tree(root) ? I3_SCOPE.filter((f) => f !== "index.html") : [];
     const I4_ADDED = i1 && isI4Tree(root) ? [...I4_SCOPE] : [];
+    const I5_ADDED = i1 && isI5Tree(root) ? [...I5_SCOPE] : [];
     const DE1_LABEL = i1 ? "I1 integration fixed blob " : de1 && isDE1R8Tree(root) ? "DE1 R8 successor fixed blob " : de1 && isDE1R7Tree(root) ? "DE1 R7 successor fixed blob " : de1 && isDE1R6Tree(root) ? "DE1 R6 successor fixed blob " : de1 && isDE1R5Tree(root) ? "DE1 R5 successor fixed blob " : de1 && isDE1R4Tree(root) ? "DE1 R4 successor fixed blob " : de1 && isDE1R3Tree(root) ? "DE1 R3 successor fixed blob " : de1 && isDE1R2Tree(root) ? "DE1 R2 successor fixed blob " : de1 && isDE1R1Tree(root) ? "DE1 R1 successor fixed blob " : "DE1 checkpoint fixed blob ";
     const vd50Runtime = ["src/metrics/report.ts", "fincore/v1/metrics/report.js", "fincore/v1/MANIFEST.json"];
     const f1Runtime = ["database.rules.json", "fincore/v1/MANIFEST.json", "fincore/v1/browser/marjinFinanceGlobal.js", "fincore/v1/finance/costHistory.js", "fincore/v1/metrics/report.js", "fincore/v1/policy/productFinance.js", "lib/finance/costHistoryWriter.js", "src/browser/marjinFinanceGlobal.ts", "src/finance-server/canonicalInputs.ts", "src/finance/costHistory.ts", "src/finance/labor.ts", "src/finance/types.ts", "src/metrics/costTimeline.ts", "src/metrics/report.ts", "src/policy/productFinance.ts", "test/support/rules-authorized-delta.mjs"];
-    const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES, ...M1_R1_ADDED, ...M1_R2_ADDED, ...DE1_ADDED, ...I3_ADDED, ...I4_ADDED])] : CDM2_APPROVED;
+    const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES, ...M1_R1_ADDED, ...M1_R2_ADDED, ...DE1_ADDED, ...I3_ADDED, ...I4_ADDED, ...I5_ADDED])] : CDM2_APPROVED;
     const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f));
     assert.deepEqual([...new Set(whole)].sort(), [...allowed].sort(), assembled
       ? "assembled tree: protected changes are exactly CD-M2 R1's approved runtime files + P0 Scheduled Auth's three API routes" + (c2 ? " + the C2-03 retirement of " + C2_RETIRED.join(", ") : "") + (m1 ? " + the pinned P1 Supplier Credits files (M1 integration)" : "")
