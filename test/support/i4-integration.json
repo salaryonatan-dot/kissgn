@@ -1,0 +1,90 @@
+{
+ "parent": "40b8a8a6f548389ce8c9dc4b7f0be5ce669c3ab1",
+ "decision": "D-CTRL (owner, 2026-10-09)",
+ "review": "agent-daily-integration-i3-independent-review I3-R-01 / NEXT_WORK.md",
+ "pins": {
+  "api/admin.js": "0b041cb009f6a55f4c6c19dfe68fab53b7e18ef0",
+  "lib/bizAccess.js": "ff8c5abd1ee2680d9f77d3e52228632473b12907",
+  "lib/businessRegistry.js": "fb11a9ba1c62e5648595302be1c5b336ae6b9114",
+  "lib/helpers.js": "90a8105c92017f8822dff929322bc8949e4b7e99"
+ },
+ "newFiles": [],
+ "edits": {
+  "api/admin.js": [
+   {
+    "from": "const RTDB_FORBIDDEN = /[.#$\\[\\]\\/]/;\n",
+    "to": "const RTDB_FORBIDDEN = /[.#$\\[\\]\\/]/;\n// D-CTRL (owner decision 2026-10-09; Agent/Daily integration I4 — the M1 D-CTRL application-boundary layer): a tenant or business\n// identifier carrying U+0000–U+001F or U+007F is REFUSED with a 400 before any database reference is built and before any\n// database, rate-limiter or Auth call — never trimmed, replaced or aliased. Only these characters are added: every other verdict\n// of the local checks below is unchanged (their RTDB_FORBIDDEN / length / empty-id rules stay as they were).\nconst RTDB_CONTROL_CHARS = /[\\u0000-\\u001f\\u007f]/;\n/** D-CTRL (I4): `v` carries a control character as a path template would interpolate it (an array interpolates its elements). */\nfunction carriesControlChar(v) {\n  if (typeof v === \"string\") return RTDB_CONTROL_CHARS.test(v);\n  if (v === null || typeof v !== \"object\") return false;\n  try { return RTDB_CONTROL_CHARS.test(String(v)); } catch { return false; }\n}\n/** D-CTRL (I4): a raw allowedBizIds list holds a string entry with a control character (judged on the RAW entry, before any trim). */\nfunction allowedBizIdsCarryControl(list) {\n  return Array.isArray(list) && list.some((v) => typeof v === \"string\" && RTDB_CONTROL_CHARS.test(v));\n}\n"
+   },
+   {
+    "from": "    console.error(\"[edit-client] auth failed:\", e.message);\n    res.status(401).json({ error: \"unauthorized\" }); return;\n  }\n\n  const db   = getAdminDb();\n  const auth = getAdminAuth();\n\n",
+    "to": "    console.error(\"[edit-client] auth failed:\", e.message);\n    res.status(401).json({ error: \"unauthorized\" }); return;\n  }\n\n  // D-CTRL (I4): a control-character tenant id is refused after authentication and BEFORE the super_owner lookup or any reference.\n  if (carriesControlChar((req.body || {}).tenantId)) { res.status(400).json({ error: \"invalid tenantId\" }); return; }\n\n  const db   = getAdminDb();\n  const auth = getAdminAuth();\n\n"
+   },
+   {
+    "from": "    console.error(\"[delete-client] auth failed:\", e.message);\n    res.status(401).json({ error: \"unauthorized\" }); return;\n  }\n\n  const db   = getAdminDb();\n",
+    "to": "    console.error(\"[delete-client] auth failed:\", e.message);\n    res.status(401).json({ error: \"unauthorized\" }); return;\n  }\n\n  // D-CTRL (I4): a control-character tenant id is refused after authentication and BEFORE the super_owner lookup or any reference.\n  if (carriesControlChar((req.body || {}).tenantId)) { res.status(400).json({ error: \"invalid tenantId\" }); return; }\n\n  const db   = getAdminDb();\n"
+   },
+   {
+    "from": "    console.error(\"[resend-invite] auth failed:\", e.message);\n    res.status(401).json({ error: \"unauthorized\" }); return;\n  }\n\n  const db   = getAdminDb();\n  const auth = getAdminAuth();\n\n",
+    "to": "    console.error(\"[resend-invite] auth failed:\", e.message);\n    res.status(401).json({ error: \"unauthorized\" }); return;\n  }\n\n  // D-CTRL (I4): a control-character tenant id is refused after authentication and BEFORE the super_owner lookup or any reference.\n  if (carriesControlChar((req.body || {}).tenantId)) { res.status(400).json({ error: \"invalid tenantId\" }); return; }\n\n  const db   = getAdminDb();\n  const auth = getAdminAuth();\n\n"
+   },
+   {
+    "from": "  if (!tenantId) {\n    res.status(400).json({ error: \"missing tenantId\" }); return;\n  }\n",
+    "to": "  if (!tenantId) {\n    res.status(400).json({ error: \"missing tenantId\" }); return;\n  }\n  // D-CTRL (I4): a raw allowedBizIds entry with a control character is refused before any database or Auth call (a control\n  // tenant id is refused by requireTenantAccess, also before any reference).\n  if (allowedBizIdsCarryControl((req.body || {}).allowedBizIds)) {\n    res.status(400).json({ error: \"invalid bizId in allowedBizIds\" }); return;\n  }\n"
+   },
+   {
+    "from": "    res.status(400).json({ error: \"missing tenantId or firebaseUid\" }); return;\n  }\n  if (typeof tenantId !== \"string\" || typeof firebaseUid !== \"string\" ||\n      tenantId.length > 128 || firebaseUid.length > 128 ||\n      RTDB_FORBIDDEN.test(tenantId) || RTDB_FORBIDDEN.test(firebaseUid)) {\n    res.status(400).json({ error: \"invalid tenantId or firebaseUid\" }); return;\n  }\n\n  // Verify caller is owner/super_owner in this tenant\n",
+    "to": "    res.status(400).json({ error: \"missing tenantId or firebaseUid\" }); return;\n  }\n  if (typeof tenantId !== \"string\" || typeof firebaseUid !== \"string\" ||\n      tenantId.length > 128 || firebaseUid.length > 128 ||\n      RTDB_FORBIDDEN.test(tenantId) || RTDB_FORBIDDEN.test(firebaseUid) || RTDB_CONTROL_CHARS.test(tenantId)) {\n    res.status(400).json({ error: \"invalid tenantId or firebaseUid\" }); return;\n  }\n\n  // Verify caller is owner/super_owner in this tenant\n"
+   },
+   {
+    "from": "      RTDB_FORBIDDEN.test(tenantId) || RTDB_FORBIDDEN.test(firebaseUid)) {\n",
+    "to": "      RTDB_FORBIDDEN.test(tenantId) || RTDB_FORBIDDEN.test(firebaseUid) || RTDB_CONTROL_CHARS.test(tenantId)) {\n"
+   },
+   {
+    "from": "    res.status(400).json({ error: \"invalid tenantId or firebaseUid\" }); return;\n  }\n\n  const db   = getAdminDb();\n",
+    "to": "    res.status(400).json({ error: \"invalid tenantId or firebaseUid\" }); return;\n  }\n  // D-CTRL (I4): a raw allowedBizIds entry with a control character is refused before any database or Auth call (it would\n  // otherwise be stored verbatim in the user records and trimmed into another business's biz_access key).\n  if (allowedBizIdsCarryControl(allowedBizIds)) {\n    res.status(400).json({ error: \"invalid bizId in allowedBizIds\" }); return;\n  }\n\n  const db   = getAdminDb();\n"
+   },
+   {
+    "from": "    res.status(200).json({ ok: true, noop: true }); return;\n",
+    "to": "    res.status(200).json({ ok: true, noop: true }); return;\n  }\n  // D-CTRL (I4): a STORED scope entry carrying a control character (the biz_access diff below normalizes the stored list) is\n  // refused HERE, before any Auth or database write — never trimmed into another business's key, never after an e-mail change.\n  if (Array.isArray(allowedBizIdsResolved) && !isImplicitAllRole(currentUser.role) && allowedBizIdsCarryControl(currentUser.allowedBizIds)) {\n    res.status(400).json({ error: \"invalid bizId in allowedBizIds\" }); return;\n"
+   },
+   {
+    "from": "  if (!tenantId || typeof tenantId !== \"string\" || tenantId.length > 128 || RTDB_FORBIDDEN.test(tenantId)) {\n",
+    "to": "  if (!tenantId || typeof tenantId !== \"string\" || tenantId.length > 128 || RTDB_FORBIDDEN.test(tenantId) || RTDB_CONTROL_CHARS.test(tenantId)) {\n"
+   },
+   {
+    "from": "  try { claims = await requireAuth(req); }\n  catch { res.status(401).json({ error: \"unauthorized\" }); return; }\n\n  const ip = getIP(req);\n",
+    "to": "  try { claims = await requireAuth(req); }\n  catch { res.status(401).json({ error: \"unauthorized\" }); return; }\n\n  // D-CTRL (I4): control-character identities are refused BEFORE the rate limiter or any database call. The body is only peeked\n  // here; its parsing and every check below (including the local tenantId rule) are unchanged.\n  {\n    let peek = req.body;\n    if (typeof peek === \"string\") { try { peek = JSON.parse(peek); } catch { peek = null; } }\n    if (peek && typeof peek === \"object\") {\n      if (carriesControlChar(peek.tenantId)) { res.status(400).json({ error: \"invalid tenantId\" }); return; }\n      if (allowedBizIdsCarryControl(peek.allowedBizIds)) { res.status(400).json({ error: \"invalid bizId in allowedBizIds\" }); return; }\n    }\n  }\n\n  const ip = getIP(req);\n"
+   },
+   {
+    "from": "    !RTDB_FORBIDDEN.test(tenantId) && !RTDB_FORBIDDEN.test(bizId);\n",
+    "to": "    !RTDB_FORBIDDEN.test(tenantId) && !RTDB_FORBIDDEN.test(bizId) && !RTDB_CONTROL_CHARS.test(tenantId) && !RTDB_CONTROL_CHARS.test(bizId);\n"
+   }
+  ],
+  "lib/bizAccess.js": [
+   {
+    "from": "export const RTDB_FORBIDDEN = /[.#$\\[\\]\\/]/;\n",
+    "to": "export const RTDB_FORBIDDEN = /[.#$\\[\\]\\/]/;\n// D-CTRL (owner decision 2026-10-09; I4): U+0000–U+001F and U+007F in a business id are refused on the RAW entry, before the trim —\n// never trimmed, replaced or aliased into another id. Not part of RTDB_FORBIDDEN (lib/apiScope.js imports that rule unchanged).\nconst RTDB_CONTROL_CHARS = /[\\u0000-\\u001f\\u007f]/;\n"
+   },
+   {
+    "from": "    if (typeof raw !== \"string\") throw { status: 400, msg: \"allowedBizIds entries must be strings\" };\n",
+    "to": "    if (typeof raw !== \"string\") throw { status: 400, msg: \"allowedBizIds entries must be strings\" };\n    if (RTDB_CONTROL_CHARS.test(raw)) throw { status: 400, msg: \"invalid bizId in allowedBizIds\" };\n"
+   }
+  ],
+  "lib/businessRegistry.js": [
+   {
+    "from": "\n/** Read tenants/{tenantId}/app/business through `db` (Admin SDK shape: ref(path).get() → snapshot.val()) and classify. */\n",
+    "to": "\n/** D-CTRL (I4): the tenant key carries a control character as the path template would interpolate it (arrays: their elements). */\nfunction tenantKeyCarriesControlChar(v) {\n  if (typeof v === \"string\") return RTDB_CONTROL_CHARS.test(v);\n  if (v === null || typeof v !== \"object\") return false;\n  try { return RTDB_CONTROL_CHARS.test(String(v)); } catch { return false; }\n}\n\n/** Read tenants/{tenantId}/app/business through `db` (Admin SDK shape: ref(path).get() → snapshot.val()) and classify. */\n"
+   },
+   {
+    "from": "  if (!isRegistryBizId(bizId)) return { state: \"invalid_request\" };\n  let raw;\n",
+    "to": "  if (!isRegistryBizId(bizId)) return { state: \"invalid_request\" };\n  // D-CTRL (I4): a tenant key carrying a control character is an invalid request — refused before any reference, never reported\n  // as an availability failure. Only these characters: every other tenant value keeps its classification (the tenant slot's\n  // own rule, which permits \":\", is the caller's isValidId).\n  if (tenantKeyCarriesControlChar(tenantId)) return { state: \"invalid_request\" };\n  let raw;\n"
+   }
+  ],
+  "lib/helpers.js": [
+   {
+    "from": "  if (RTDB_FORBIDDEN.test(uid) || RTDB_FORBIDDEN.test(tenantId)) throw { status: 400, msg: \"invalid characters in id\" };\n",
+    "to": "  if (RTDB_FORBIDDEN.test(uid) || RTDB_FORBIDDEN.test(tenantId)) throw { status: 400, msg: \"invalid characters in id\" };\n  // D-CTRL (owner decision 2026-10-09; I4): a tenant id carrying U+0000–U+001F / U+007F is refused before any reference is built\n  // (same 400 as the other forbidden characters; the uid comes from the verified token and keeps its rule).\n  if (/[\\u0000-\\u001f\\u007f]/.test(tenantId)) throw { status: 400, msg: \"invalid characters in id\" };\n"
+   }
+  ]
+ }
+}

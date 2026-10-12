@@ -41,6 +41,21 @@ import { canonicalizeChecklistDocument } from "../lib/checklistVersion.js";
 import { sendEmail } from "../lib/sendEmail.js";
 
 const RTDB_FORBIDDEN = /[.#$\[\]\/]/;
+// D-CTRL (owner decision 2026-10-09; Agent/Daily integration I4 — the M1 D-CTRL application-boundary layer): a tenant or business
+// identifier carrying U+0000–U+001F or U+007F is REFUSED with a 400 before any database reference is built and before any
+// database, rate-limiter or Auth call — never trimmed, replaced or aliased. Only these characters are added: every other verdict
+// of the local checks below is unchanged (their RTDB_FORBIDDEN / length / empty-id rules stay as they were).
+const RTDB_CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+/** D-CTRL (I4): `v` carries a control character as a path template would interpolate it (an array interpolates its elements). */
+function carriesControlChar(v) {
+  if (typeof v === "string") return RTDB_CONTROL_CHARS.test(v);
+  if (v === null || typeof v !== "object") return false;
+  try { return RTDB_CONTROL_CHARS.test(String(v)); } catch { return false; }
+}
+/** D-CTRL (I4): a raw allowedBizIds list holds a string entry with a control character (judged on the RAW entry, before any trim). */
+function allowedBizIdsCarryControl(list) {
+  return Array.isArray(list) && list.some((v) => typeof v === "string" && RTDB_CONTROL_CHARS.test(v));
+}
 const APP_BASE_URL   = process.env.APP_BASE_URL || "https://kissgn.vercel.app";
 
 /* ── HTML template for invite emails ───────────────────────────────────── */
@@ -376,6 +391,9 @@ async function handleEditClient(req, res) {
     res.status(401).json({ error: "unauthorized" }); return;
   }
 
+  // D-CTRL (I4): a control-character tenant id is refused after authentication and BEFORE the super_owner lookup or any reference.
+  if (carriesControlChar((req.body || {}).tenantId)) { res.status(400).json({ error: "invalid tenantId" }); return; }
+
   const db   = getAdminDb();
   const auth = getAdminAuth();
 
@@ -487,6 +505,9 @@ async function handleDeleteClient(req, res) {
     console.error("[delete-client] auth failed:", e.message);
     res.status(401).json({ error: "unauthorized" }); return;
   }
+
+  // D-CTRL (I4): a control-character tenant id is refused after authentication and BEFORE the super_owner lookup or any reference.
+  if (carriesControlChar((req.body || {}).tenantId)) { res.status(400).json({ error: "invalid tenantId" }); return; }
 
   const db   = getAdminDb();
   const auth = getAdminAuth();
@@ -677,6 +698,9 @@ async function handleResendInvite(req, res) {
     res.status(401).json({ error: "unauthorized" }); return;
   }
 
+  // D-CTRL (I4): a control-character tenant id is refused after authentication and BEFORE the super_owner lookup or any reference.
+  if (carriesControlChar((req.body || {}).tenantId)) { res.status(400).json({ error: "invalid tenantId" }); return; }
+
   const db   = getAdminDb();
   const auth = getAdminAuth();
 
@@ -794,6 +818,11 @@ async function handleCreateUser(req, res) {
   const { tenantId } = req.body || {};
   if (!tenantId) {
     res.status(400).json({ error: "missing tenantId" }); return;
+  }
+  // D-CTRL (I4): a raw allowedBizIds entry with a control character is refused before any database or Auth call (a control
+  // tenant id is refused by requireTenantAccess, also before any reference).
+  if (allowedBizIdsCarryControl((req.body || {}).allowedBizIds)) {
+    res.status(400).json({ error: "invalid bizId in allowedBizIds" }); return;
   }
 
   // Caller must be owner or super_owner in this tenant
@@ -1035,7 +1064,7 @@ async function handleDeleteUser(req, res) {
   }
   if (typeof tenantId !== "string" || typeof firebaseUid !== "string" ||
       tenantId.length > 128 || firebaseUid.length > 128 ||
-      RTDB_FORBIDDEN.test(tenantId) || RTDB_FORBIDDEN.test(firebaseUid)) {
+      RTDB_FORBIDDEN.test(tenantId) || RTDB_FORBIDDEN.test(firebaseUid) || RTDB_CONTROL_CHARS.test(tenantId)) {
     res.status(400).json({ error: "invalid tenantId or firebaseUid" }); return;
   }
 
@@ -1178,8 +1207,13 @@ async function handleUpdateUser(req, res) {
   }
   if (typeof tenantId !== "string" || typeof firebaseUid !== "string" ||
       tenantId.length > 128 || firebaseUid.length > 128 ||
-      RTDB_FORBIDDEN.test(tenantId) || RTDB_FORBIDDEN.test(firebaseUid)) {
+      RTDB_FORBIDDEN.test(tenantId) || RTDB_FORBIDDEN.test(firebaseUid) || RTDB_CONTROL_CHARS.test(tenantId)) {
     res.status(400).json({ error: "invalid tenantId or firebaseUid" }); return;
+  }
+  // D-CTRL (I4): a raw allowedBizIds entry with a control character is refused before any database or Auth call (it would
+  // otherwise be stored verbatim in the user records and trimmed into another business's biz_access key).
+  if (allowedBizIdsCarryControl(allowedBizIds)) {
+    res.status(400).json({ error: "invalid bizId in allowedBizIds" }); return;
   }
 
   const db   = getAdminDb();
@@ -1381,6 +1415,11 @@ async function handleUpdateUser(req, res) {
 
   if (Object.keys(changedFields).length === 0 && !allowedBizIdsActuallyChanged && !selfHeal) {
     res.status(200).json({ ok: true, noop: true }); return;
+  }
+  // D-CTRL (I4): a STORED scope entry carrying a control character (the biz_access diff below normalizes the stored list) is
+  // refused HERE, before any Auth or database write — never trimmed into another business's key, never after an e-mail change.
+  if (Array.isArray(allowedBizIdsResolved) && !isImplicitAllRole(currentUser.role) && allowedBizIdsCarryControl(currentUser.allowedBizIds)) {
+    res.status(400).json({ error: "invalid bizId in allowedBizIds" }); return;
   }
 
   // Phase 4 — Firebase Auth update (only if email changed)
@@ -1627,7 +1666,7 @@ async function handleBootstrapSelf(req, res) {
   catch { res.status(401).json({ error: "unauthorized" }); return; }
 
   const { tenantId } = req.body || {};
-  if (!tenantId || typeof tenantId !== "string" || tenantId.length > 128 || RTDB_FORBIDDEN.test(tenantId)) {
+  if (!tenantId || typeof tenantId !== "string" || tenantId.length > 128 || RTDB_FORBIDDEN.test(tenantId) || RTDB_CONTROL_CHARS.test(tenantId)) {
     res.status(400).json({ error: "invalid tenantId" }); return;
   }
   const db = getAdminDb();
@@ -1744,6 +1783,17 @@ async function handleRoles(req, res) {
   let claims;
   try { claims = await requireAuth(req); }
   catch { res.status(401).json({ error: "unauthorized" }); return; }
+
+  // D-CTRL (I4): control-character identities are refused BEFORE the rate limiter or any database call. The body is only peeked
+  // here; its parsing and every check below (including the local tenantId rule) are unchanged.
+  {
+    let peek = req.body;
+    if (typeof peek === "string") { try { peek = JSON.parse(peek); } catch { peek = null; } }
+    if (peek && typeof peek === "object") {
+      if (carriesControlChar(peek.tenantId)) { res.status(400).json({ error: "invalid tenantId" }); return; }
+      if (allowedBizIdsCarryControl(peek.allowedBizIds)) { res.status(400).json({ error: "invalid bizId in allowedBizIds" }); return; }
+    }
+  }
 
   const ip = getIP(req);
   try {
@@ -1896,7 +1946,7 @@ async function requireBizAccess(db, tenantId, bizId, uid, role) {
 function eeValidIds(tenantId, bizId) {
   return typeof tenantId === "string" && typeof bizId === "string" &&
     tenantId.length <= 128 && bizId.length <= 128 &&
-    !RTDB_FORBIDDEN.test(tenantId) && !RTDB_FORBIDDEN.test(bizId);
+    !RTDB_FORBIDDEN.test(tenantId) && !RTDB_FORBIDDEN.test(bizId) && !RTDB_CONTROL_CHARS.test(tenantId) && !RTDB_CONTROL_CHARS.test(bizId);
 }
 
 async function handleListEntryExceptions(req, res) {
