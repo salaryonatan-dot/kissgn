@@ -8,7 +8,9 @@ import { getTopActiveInsights } from "../../src/agent/proactive/getTopActiveInsi
 import { buildWeeklySummary } from "../../src/agent/proactive/digestBuilder.js";
 import { tenantRef } from "../../src/firebase/refs.js";
 import { getDb } from "../../src/firebase/admin.js";
-import { requireBizContext, requireCron } from "../../lib/securityContext.js";
+// I6 (independent I5 review I5-R-01): the read actions and the manual single-business scan are authorized by
+// requireBizContext + the authoritative registration of the business (requireRegisteredBizContext).
+import { requireRegisteredBizContext, requireCron } from "../../lib/securityContext.js";
 import { handleProactiveRead } from "../../lib/proactiveCore.js";
 
 
@@ -61,7 +63,7 @@ async function handleRead(req: VercelRequest, res: VercelResponse) {
     getWeeklySummary: buildWeeklySummary,
   };
   const out = await handleProactiveRead(req, {
-    requireBizContext,
+    requireBizContext: requireRegisteredBizContext,
     repos,
     logError: (where: string, err: unknown) => {
       console.error("[Marjin AI] Proactive read failed:", where, (err as { message?: string })?.message ?? err);
@@ -112,7 +114,7 @@ async function handleCronScan(req: VercelRequest, res: VercelResponse) {
   const branchId = (req.body as { branchId?: unknown } | undefined)?.branchId;
   let ctx;
   try {
-    ctx = await requireBizContext(req, {
+    ctx = await requireRegisteredBizContext(req, {
       tenantId: rawTenantId as string,
       bizId: rawBizId as string,
       mode: "write",

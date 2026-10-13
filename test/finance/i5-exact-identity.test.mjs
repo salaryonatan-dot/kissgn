@@ -25,8 +25,15 @@ import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { syncBuiltinESMExports } from "node:module";
-import { adminHarness, observe, seed, closeSdk, clone, env } from "../support/i4-boundary-harness.mjs";
+import { adminHarness, observe, seed, closeSdk, clone, env, ROOT } from "../support/i4-boundary-harness.mjs";
 import { I5_PARENT } from "../support/i5-integration.mjs";
+// I6 layering (T-I6-TEST-LAYER; M1 integration owner — the DB-06 / DB-11 pattern of T-I5-TEST): on a tree that carries the I6
+// registry-binding successor, the EX-06 parity rows compare the I5 commit's OWN bytes (git objects) with the I4 commit's — exactly
+// the I5 layer property, unchanged. I6's behaviour against I5 is held by test/finance/i6-registry-binding.test.mjs (RB-10).
+import { isI6Tree, I6_PARENT } from "../support/i6-integration.mjs";
+const LAYERED = isI6Tree(ROOT);
+let I5OBJ = null;
+const i5obj = async () => (I5OBJ ??= await adminHarness({ source: I6_PARENT }));   // the I5 commit's bytes
 
 const FROM = "2026-10-01", TO = "2026-10-02";
 const show = (s) => JSON.stringify(s);
@@ -53,7 +60,12 @@ function assertRefused(h, res, body, label, { allowRefs = false } = {}) {
   assert.ok(!SDK_TEXT.test(JSON.stringify(o.body)), label + ": no SDK text");
 }
 
-test("EX-01 a padded business id is its own identity: exactly that business is granted, never the trimmed one", async () => {
+// I6 test-contract transition (T-I6-EX01; user-access / M1 identity owners — independent I5 review I5-R-01): the I5 rows granted
+// " bizB " while the registry held BOTH "bizB" and " bizB " — a registry the approved M1 classifier calls AMBIGUOUS — so their
+// success was not authorization evidence. The exact-identity / no-alias / raw-id / role / persisted-state / retry checks are kept,
+// over registries that REGISTER the requested id; the twin registry is now a refusal with nothing written.
+const regSeed = (ids) => { const s = seed(); s.tenants.tenantA.app.business = env(ids.map((id) => ({ id, name: id }))); return s; };
+test("EX-01 a padded business id is its own identity: exactly the registered requested business is granted, never the trimmed one", async () => {
   const h = await head();
   const cases = [
     ["create-user", (ids) => ({ tenantId: "tenantA", email: "n@example.test", username: "nn", role: "viewer", allowedBizIds: ids }), "newuid"],
@@ -61,20 +73,27 @@ test("EX-01 a padded business id is its own identity: exactly that business is g
     ["roles", (ids) => ({ tenantId: "tenantA", targetUid: "sub1", role: "viewer", allowedBizIds: ids }), "sub1"],
   ];
   for (const [action, body, uid] of cases) {
-    for (const [ids, want] of [[[" bizB "], [" bizB "]], [["bizB"], ["bizB"]], [[" bizB ", "bizB"], [" bizB ", "bizB"]], [["bizB ", " bizB"], ["bizB ", " bizB"]]]) {
-      h.reset(bothSeed());
+    // registered requested ids: exactly those are granted and stored, byte for byte
+    for (const [registry, ids] of [[["bizA", " bizB "], [" bizB "]], [["bizA", "bizB"], ["bizB"]], [["bizA", " bizB "], [" bizB ", "bizA"]], [["bizA", "bizB "], ["bizB "]]]) {
+      h.reset(regSeed(registry));
       const r = await h.call(action, body(ids), "own");
-      assert.equal(r.code, 200, `${action} ${show(ids)}: ${show(r.body)}`);
-      for (const b of ["bizB", " bizB ", "bizB ", " bizB"]) assert.equal(ba(h, b, uid) === true, want.includes(b), `${action} ${show(ids)}: grant ${show(b)} ⇔ requested exactly`);
+      assert.equal(r.code, 200, `${action} ${show(ids)} over ${show(registry)}: ${show(r.body)}`);
+      for (const b of ["bizB", " bizB ", "bizB ", " bizB"]) assert.equal(ba(h, b, uid) === true, ids.includes(b), `${action} ${show(ids)}: grant ${show(b)} ⇔ requested exactly`);
       assert.deepEqual(h.db.refused, [], "every exact key is a valid RTDB key (the SDK accepts it)");
-      const rec = action === "create-user" ? h.db.read(`tenants/tenantA/users/${uid}`) : h.db.read(`tenants/tenantA/users/${uid}`);
-      if (action !== "roles") assert.deepEqual(rec.allowedBizIds, ids, `${action}: the stored scope is the exact list`);
+      if (action !== "roles") assert.deepEqual(h.db.read(`tenants/tenantA/users/${uid}`).allowedBizIds, ids, `${action}: the stored scope is the exact list`);
       const appUser = JSON.parse(h.db.read("tenants/tenantA/app/users")._v).find((u) => u.firebaseUid === uid);
-      assert.deepEqual(appUser.allowedBizIds, action === "roles" ? want : ids, `${action}: app/users carries the exact list`);
+      assert.deepEqual(appUser.allowedBizIds, ids, `${action}: app/users carries the exact list`);
+    }
+    // an id the registry cannot establish uniquely (plain / padded twin, in both directions): refused, NOTHING written, no alias
+    for (const [registry, ids] of [[["bizA", "bizB"], [" bizB "]], [["bizA", " bizB "], ["bizB"]], [["bizA", "bizB", " bizB "], [" bizB "]], [["bizA", " bizB ", "bizB"], ["bizB"]], [["bizA", "bizB", " bizB "], [" bizB ", "bizB"]]]) {
+      const before = regSeed(registry); h.reset(before);
+      const o = observe(h, await h.call(action, body(ids), "own"));
+      assert.deepEqual([o.status, o.body], [503, { error: "business_registry_ambiguous" }], `${action} ${show(ids)} over ${show(registry)}`);
+      assert.deepEqual(o.state, before, `${action}: nothing written`); assert.deepEqual(o.auth, [], `${action}: no Auth call`); assert.equal(o.emails, 0);
     }
   }
   // retry of the same request: identical, no extra grant
-  h.reset(bothSeed());
+  h.reset(regSeed(["bizA", " bizB "]));
   const first = observe(h, await h.call("roles", cases[2][1]([" bizB "]), "own"));
   const again = observe(h, await h.call("roles", cases[2][1]([" bizB "]), "own"));
   assert.equal(again.status, 200); assert.deepEqual(again.state.tenants.tenantA.biz_access, first.state.tenants.tenantA.biz_access, "retry: same grants");
@@ -188,7 +207,7 @@ async function frozen(fn) {
  *  removed once from I5's reference list (it must be there) and everything else must be identical. */
 async function parity(action, body, actor, method = "POST", { extraRef = null } = {}) {
   const one = async (h) => { h.reset(); const res = await frozen(() => h.call(action, clone(body), actor, method)); return scrub(observe(h, res)); };
-  const [a, b] = [await one(await head()), await one(await parent())];
+  const [a, b] = [await one(LAYERED ? await i5obj() : await head()), await one(await parent())];
   if (extraRef && a.refs.includes(extraRef) && a.refs.filter((r) => r === extraRef).length === b.refs.filter((r) => r === extraRef).length + 1) a.refs.splice(a.refs.lastIndexOf(extraRef), 1);
   assert.deepEqual(a, b, `${action} ${show(body)} as ${actor}: identical to I4`);
 }

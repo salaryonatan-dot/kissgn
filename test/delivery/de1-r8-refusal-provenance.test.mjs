@@ -140,7 +140,10 @@ test("DR8-02 the reviewer's cases through the real pinned builder: the registry 
   }
   // the gate's own refusals are untouched (they never reach the builder): a sample of each status
   for (const [label, setup, status, code] of [
-    ["`:` in the business id", null, 400, "invalid_business_identity"],
+    // I6 (test-contract transition T-I6-TEST-DAILY; delivery + M1 identity owners — independent I5 review I5-R-02): a business ":"
+    // is now refused by the shared requireBizContext (400 { error: "invalid bizId" }) before the delivery gate; still no builder
+    // call and no provider call. It was the delivery gate's 400 invalid_business_identity.
+    ["`:` in the business id", null, 400, undefined],
     ["not registered", (db) => db.seed(`tenants/${T}/app/business`, env([{ id: "other", name: "Other" }])), 404, "business_not_registered"],
     ["duplicate record", (db) => db.seed(`tenants/${T}/app/business`, env([{ id: B, name: "A" }, { id: B, name: "A twin" }])), 422, "ambiguous_business_identity"],
     ["invalid JSON", (db) => db.seed(`tenants/${T}/app/business`, { _v: "[{" }), 422, "registry_unreadable"],
@@ -150,6 +153,7 @@ test("DR8-02 the reviewer's cases through the real pinned builder: the registry 
     globalThis.__STUB_CALLS = 0;
     const r = await at(AT, () => post(stub, { tenantId: T, bizId: label === "`:` in the business id" ? "b:c" : B }));
     assert.deepEqual([r.statusCode, r.body.code, smtp.calls.length, globalThis.__STUB_CALLS], [status, code, 0, 0], label + ": refused by the gate, the builder never called: " + JSON.stringify(r.body));
+    if (code === undefined) assert.deepEqual(r.body, { error: "invalid bizId" }, label + ": the shared gate's documented body (I6)");
   }
   // a registry read failure: 503 registry_unavailable from the gate, builder never called
   { const db = seedWorld({ withSecondBiz: false, withSecondTenant: false }); const smtp = installSmtp([SMTP.accept()]);

@@ -77,13 +77,21 @@ async function run(id, description, fn) {
 const eq = (a, b, m) => { const x = JSON.stringify(a), y = JSON.stringify(b); if (x !== y) throw new Error(`${m}: expected ${y}, got ${x}`); };
 const val = async (p) => (await db.ref(p).once("value")).val();
 
-await run("I5E-01", "a padded business id is granted EXACTLY by create-user / update-user / roles over the real transport — never the trimmed business", async () => {
+// I6 test-contract transition (T-I6-I5E01; user-access / M1 identity owners — independent I5 review I5-R-01): the fixture registers
+// BOTH "bizB" and " bizB " — an ambiguous registry for either id under the M1 classifier — so I5's grant-success row was not
+// authorization evidence. The exact grant is proven over a registry that registers " bizB " only; over the twin fixture the same
+// request is refused (503 business_registry_ambiguous) with no Auth call and the database unchanged.
+await run("I5E-01", "a padded business id is granted EXACTLY by create-user / update-user / roles over the real transport when it is registered — never the trimmed business; the twin registry refuses", async () => {
   for (const [action, body, uid] of [["create-user", { tenantId: T, email: "n@example.test", username: "nn", role: "viewer", allowedBizIds: [" bizB "] }, "u_new"],
     ["update-user", { tenantId: T, firebaseUid: "u_sub", allowedBizIds: [" bizB "] }, "u_sub"], ["roles", { tenantId: T, targetUid: "u_sub", role: "viewer", allowedBizIds: [" bizB "] }, "u_sub"]]) {
-    await seed(); const r = await call(action, body); eq(r.code, 200, action + " " + JSON.stringify(r.body));
+    await seed(); await db.ref(`tenants/${T}/app/business`).set(env([{ id: "bizA", name: "Alpha" }, { id: " bizB ", name: "Padded" }]));
+    let r = await call(action, body); eq(r.code, 200, action + " " + JSON.stringify(r.body));
     eq([await val(`tenants/${T}/biz_access/ bizB /${uid}`), await val(`tenants/${T}/biz_access/bizB/${uid}`)], [true, null], action + ": exactly \" bizB \" granted");
+    await seed(); const before = await readAll(); globalThis.__AUTH = [];
+    r = await call(action, body); eq([r.code, r.body], [503, { error: "business_registry_ambiguous" }], action + " over the twin registry");
+    eq(globalThis.__AUTH, [], action + ": no Auth call"); eq(await readAll(), before, action + ": database unchanged");
   }
-  return "3 exact grants";
+  return "3 exact grants + 3 twin refusals";
 });
 await run("I5E-02", "business \":\" refused before any grant (allowedBizIds in create-user / update-user / roles; entry exceptions) — nothing written", async () => {
   for (const [action, body, method] of [["create-user", { tenantId: T, email: "n@example.test", username: "nn", role: "viewer", allowedBizIds: ["biz:B"] }],

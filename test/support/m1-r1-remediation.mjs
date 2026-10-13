@@ -45,6 +45,10 @@ import { isI4Tree, I4_PINS } from "./i4-integration.mjs";
 // I5 (Agent/Daily integration I5 — the exact-identity correction, PROPOSED for the M1 identity / admin-API / P0 / P1 / user-access
 // owners): overlays api/admin.js and lib/bizAccess.js. No page byte.
 import { isI5Tree, I5_PINS } from "./i5-integration.mjs";
+// I6 (Agent/Daily integration I6 — registry binding of grants and consumers, the shared business-slot predicate and the update-user
+// ordering, PROPOSED for the M1 identity / user-access / admin-API / P0 / P1 / consumer owners): overlays api/admin.js,
+// lib/securityContext.js (+ .d.ts) and the three consumer routes. No page byte.
+import { isI6Tree, I6_PINS } from "./i6-integration.mjs";
 
 const RECORD = JSON.parse(readFileSync(new URL("./m1-r1-remediation.json", import.meta.url), "utf8"));
 export const M1_R1_PARENT = RECORD.parent;
@@ -67,11 +71,12 @@ export function isM1R1Tree(repo) {
  *  of the overlay cannot hide a pin of either lineage. */
 /** `withI3: false` = the effective table of the tree WITHOUT the I3 D-CTRL overlay (the I1 / I2 commits' own tables, I3 layering);
  *  it also drops every later overlay. `withI4: false` = WITHOUT the I4 boundary overlay (the I3 commit's own table, I4 layering);
- *  `withI5: false` = WITHOUT the I5 exact-identity overlay (the I4 commit's own table, I5 layering). */
-export function m1EffectivePins(repo, { withI3 = true, withI4 = withI3, withI5 = withI4 } = {}) {
+ *  `withI5: false` = WITHOUT the I5 exact-identity overlay (the I4 commit's own table, I5 layering); `withI6: false` = WITHOUT the
+ *  I6 registry-binding overlay (the I5 commit's own table, I6 layering). */
+export function m1EffectivePins(repo, { withI3 = true, withI4 = withI3, withI5 = withI4, withI6 = withI5 } = {}) {
   if (!isM1R1Tree(repo)) return { ...M1_PINS.blobs };
   const de1 = isDE1Tree(repo) ? de1EffectivePins(repo) : {};
-  const i1 = isI1Tree(repo) ? { ...I1_PINS, ...(isI2Tree(repo) ? I2_PINS : {}), ...(withI3 && isI3Tree(repo) ? I3_PINS : {}), ...(withI3 && withI4 && isI4Tree(repo) ? I4_PINS : {}), ...(withI3 && withI4 && withI5 && isI5Tree(repo) ? I5_PINS : {}) } : {};   // the I1 layer overlays both lineages (route + page); I2 overlays the page; I3 the shared predicates + page mirror
+  const i1 = isI1Tree(repo) ? { ...I1_PINS, ...(isI2Tree(repo) ? I2_PINS : {}), ...(withI3 && isI3Tree(repo) ? I3_PINS : {}), ...(withI3 && withI4 && isI4Tree(repo) ? I4_PINS : {}), ...(withI3 && withI4 && withI5 && isI5Tree(repo) ? I5_PINS : {}), ...(withI3 && withI4 && withI5 && withI6 && isI6Tree(repo) ? I6_PINS : {}) } : {};   // the I1 layer overlays both lineages (route + page); I2 overlays the page; I3 the shared predicates + page mirror
   if (!isM1R2Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...de1, ...i1 };
   if (!isM1R3Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...de1, ...i1 };
   if (isM1R5Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS, ...M1_R5_PINS, ...de1, ...i1 };

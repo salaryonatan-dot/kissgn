@@ -8,8 +8,8 @@
 // never against the code under test.
 //   DC-01  the two predicates refuse every control character in every position; for every other value the verdict is EXACTLY
 //          the I2 verdict (corpus: colon / padded / unicode / C1-range / boundary-length / non-string / RTDB-forbidden)
-//   DC-02  requireBizContext answers 400 for a control-character tenant or business id BEFORE tenant access or any database
-//          handle is requested; valid colon / padded / unicode ids proceed with their exact bytes
+//   DC-02  requireBizContext answers 400 for a control-character tenant or business id (I6: and a business ":") BEFORE tenant
+//          access or any database handle is requested; valid tenant-colon / padded / unicode ids proceed with their exact bytes
 //   DC-03  the registry: classify / read refuse a control-character request before any db.ref; for every other request and
 //          every registry (control-character records included) the state and the resolved record are exactly I2's
 //   DC-04  Core cost history (requireBusinessInTenant): 400 before any read
@@ -98,6 +98,15 @@ test("DC-02 requireBizContext: 400 before tenant access or a database handle; va
       assert.deepEqual([r.e.status, r.e.msg], [400, msg], JSON.stringify([t, b]));
       assert.deepEqual(r.calls, [], "nothing before the refusal: " + JSON.stringify([t, b]));
     }
+  }
+  // I6 test-contract transition (T-I6-DC02; M1 identity owner — independent I5 review I5-R-02): the business slot follows the
+  // approved BUSINESS predicate, so a business ":" is refused like a control character — 400 invalid bizId before tenant access or
+  // any database handle; the tenant ":" stays valid (the rows below). Additive: every control-character row above is unchanged.
+  for (const [t, b] of [["tenantA", "biz:A"], ["t:1", "biz:A"], ["tenantA", ":"], ["tenantA", "bizA:"], [" tenantA", " biz:A "]]) {
+    const r = await run(t, b);
+    assert.equal(r.ok, false, JSON.stringify([t, b]));
+    assert.deepEqual([r.e.status, r.e.msg], [400, "invalid bizId"], JSON.stringify([t, b]));
+    assert.deepEqual(r.calls, [], "nothing before the refusal: " + JSON.stringify([t, b]));
   }
   for (const [t, b] of [["t:1", "bizA"], [" tenantA", " bizA"], ["tenantA", "סניף א"], ["tenantA", "biz@A"]]) {
     const r = await run(t, b);

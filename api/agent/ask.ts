@@ -6,7 +6,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { routeQuestion } from "../../src/agent/orchestrator/routeQuestion.js";
 import { handleAgentAsk } from "../../lib/agentAskCore.js";
-import { requireBizContext } from "../../lib/securityContext.js";
+// I6 (independent I5 review I5-R-01): requireBizContext + the authoritative registration of the business — a stale or
+// ambiguous biz_access grant never reaches the agent's data path.
+import { requireRegisteredBizContext } from "../../lib/securityContext.js";
 
 // Per-instance in-memory rate limiter, keyed by the authorized principal
 // (uid:tenant:biz — the core builds the key). Returns true when allowed.
@@ -36,7 +38,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const logError = (where: string, err: unknown): void => {
     console.error("[ask]", where, (err as { message?: string })?.message ?? err);
   };
-  const out = await handleAgentAsk(req, { requireBizContext, routeQuestion, rateLimit, logError });
+  const out = await handleAgentAsk(req, { requireBizContext: requireRegisteredBizContext, routeQuestion, rateLimit, logError });
   if (out.end) return res.status(out.status).end();
   return res.status(out.status).json(out.json);
 }

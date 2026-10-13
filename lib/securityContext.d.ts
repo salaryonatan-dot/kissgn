@@ -21,3 +21,9 @@ export function requireBizContext(
   opts: BizContextOptions,
   deps?: BizContextDeps
 ): Promise<BizContext>;
+// I6: requireBizContext + the authoritative registration of the requested business (lib/businessRegistry.js readRegistryTarget).
+export function requireRegisteredBizContext(
+  req: SecurityContextRequestLike,
+  opts: BizContextOptions,
+  deps?: BizContextDeps
+): Promise<BizContext>;

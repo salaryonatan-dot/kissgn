@@ -9,7 +9,9 @@ import { runAlertsForBiz, runAlertsForAll } from "../../src/alerts/runner.js";
 import { getActiveAlerts, dismissAlert } from "../../src/alerts/alertsRepo.js";
 import { getThresholds, saveThresholds } from "../../src/alerts/configRepo.js";
 import { handleAlerts } from "../../lib/alertsCore.js";
-import { requireCron, requireBizContext } from "../../lib/securityContext.js";
+// I6 (independent I5 review I5-R-01): the user branches are authorized by requireBizContext + the authoritative registration of
+// the business (requireRegisteredBizContext) — a stale or ambiguous biz_access grant never reaches alerts data or writes.
+import { requireCron, requireRegisteredBizContext } from "../../lib/securityContext.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const origin = req.headers.origin || "";
@@ -25,7 +27,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const logError = (where: string, err: unknown): void => {
     console.error("[alerts]", where, (err as { message?: string })?.message ?? err);
   };
-  const out = await handleAlerts(req, { requireCron, requireBizContext, repos, logError });
+  const out = await handleAlerts(req, { requireCron, requireBizContext: requireRegisteredBizContext, repos, logError });
   if (out.end) return res.status(out.status).end();
   return res.status(out.status).json(out.json);
 }

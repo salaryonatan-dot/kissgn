@@ -117,8 +117,15 @@ await run("I4E-04", "non-control requests keep their outcome and persist over th
   eq([(await db.ref(`tenants/${T}/biz_access/bizB/u_sub`).once("value")).val(), (await db.ref(`tenants/${T}/biz_access/bizA/u_sub`).once("value")).val()], [true, null], "scope moved");
   // I5 test-contract transition (T-I5-TEST; was: the padded entry is trimmed and bizB granted — the inherited alias the independent
   // I4 review found, I4-R-01): the padded entry is its own identity and is granted exactly; bizB is not granted.
-  await seed(); r = await call("update-user", { tenantId: T, firebaseUid: "u_sub", allowedBizIds: [" bizB "] }); eq(r.code, 200, "update-user (padded entry)");
+  // I6 test-contract transition (T-I6-I4E04; M1 identity + admin-API owners — independent I5 review I5-R-01): the I5 row granted
+  // " bizB " while only plain "bizB" was registered (the M1 classifier: ambiguous). The exact grant is now proven over a registry
+  // that REGISTERS " bizB "; over the plain-only registry the padded request is refused with nothing written (no alias, no grant).
+  await seed(); await db.ref(`tenants/${T}/app/business`).set(env([{ id: "bizA", name: "Alpha" }, { id: " bizB ", name: "Padded" }]));
+  r = await call("update-user", { tenantId: T, firebaseUid: "u_sub", allowedBizIds: [" bizB "] }); eq(r.code, 200, "update-user (padded entry, registered)");
   eq([(await db.ref(`tenants/${T}/biz_access/ bizB /u_sub`).once("value")).val(), (await db.ref(`tenants/${T}/biz_access/bizB/u_sub`).once("value")).val()], [true, null], "padded entry granted exactly, never trimmed into bizB");
+  await seed(); const before = JSON.stringify((await db.ref("/").once("value")).val());
+  r = await call("update-user", { tenantId: T, firebaseUid: "u_sub", allowedBizIds: [" bizB "] }); eq([r.code, r.body], [503, { error: "business_registry_ambiguous" }], "update-user (padded entry, only plain bizB registered)");
+  eq(JSON.stringify((await db.ref("/").once("value")).val()), before, "nothing written over the ambiguous registry");
   return "4 flows persisted";
 });
 

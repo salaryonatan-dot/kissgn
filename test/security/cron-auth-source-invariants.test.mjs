@@ -59,9 +59,12 @@ for (const rel of ROUTES) {
 }
 
 test("daily-snapshot + proactive manual flows require owner/super_owner", () => {
-  for (const rel of ["api/daily-snapshot/run.ts", "api/proactive/run.ts"]) {
+  // I6 test-contract transition (T-I6-TEST-P0; P0 / proactive owners): the proactive manual scan calls the registered variant of
+  // the shared gate (requireBizContext + the authoritative registration); the Daily manual send keeps requireBizContext (its
+  // delivery receipt applies the same registry rule itself)
+  for (const [rel, gate] of [["api/daily-snapshot/run.ts", /requireBizContext\s*\(/], ["api/proactive/run.ts", /requireRegisteredBizContext\s*\(/]]) {
     const code = codeOnly(read(rel));
-    assert.ok(/requireBizContext\s*\(/.test(code), rel + " must call requireBizContext for manual flow");
+    assert.ok(gate.test(code), rel + " must call " + gate.source.split("\\")[0] + " for manual flow");
     assert.ok(/"owner"/.test(code) && /"super_owner"/.test(code), rel + " must gate on owner/super_owner");
   }
 });

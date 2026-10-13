@@ -161,7 +161,6 @@ test("DR5-04 a registry business id with a control character: never built, never
 // ── DR5-05 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 test("DR5-05 manual POST refusals before any provider hand-off (G10); the provider classes are unchanged after the gate", async () => {
   const refusals = [
-    ["`:` in the business id", { tenantId: T, bizId: "b:c" }, (db) => seedTenant(db, T, "b:c", "Colon"), 400, "invalid_business_identity"],
     ["not registered", { tenantId: T, bizId: B }, (db) => db.seed(`tenants/${T}/app/business`, env([{ id: "other", name: "Other" }])), 404, "business_not_registered"],
     ["duplicate record", { tenantId: T, bizId: B }, (db) => db.seed(`tenants/${T}/app/business`, env([{ id: B, name: "A" }, { id: B, name: "A twin" }])), 422, "ambiguous_business_identity"],
     ["padded twin", { tenantId: T, bizId: B }, (db) => db.seed(`tenants/${T}/app/business`, env([{ id: B, name: "A" }, { id: " " + B, name: SECRET_NAME }])), 422, "ambiguous_business_identity"],
@@ -193,7 +192,12 @@ test("DR5-05 manual POST refusals before any provider hand-off (G10); the provid
   for (const [label, body, setup, msg] of [
     ["control character in the business id", { tenantId: T, bizId: "biz\u0001c" }, (db) => seedTenant(db, T, "biz\u0001c", "Ctrl"), "invalid bizId"],
     ["control character in the tenant id", { tenantId: "ten\u0001ant", bizId: B }, (db) => seedTenant(db, "ten\u0001ant", B, "Ctrl T"), "invalid tenantId"],
-    ["`/` in the business id (comparison: refused the same way before I3)", { tenantId: T, bizId: "biz/c" }, () => {}, "invalid bizId"]]) {
+    ["`/` in the business id (comparison: refused the same way before I3)", { tenantId: T, bizId: "biz/c" }, () => {}, "invalid bizId"],
+    // I6 (test-contract transition T-I6-TEST-DAILY; delivery + M1 identity owners — independent I5 review I5-R-02): the shared gate
+    // judges the business slot by the approved business predicate, so a business ":" is refused by requireBizContext — 400 with its
+    // documented body, before the delivery gate, any registry read or the provider. It was the delivery gate's 400
+    // invalid_business_identity (moved out of the DR5-05 refusal table above; still zero provider calls).
+    ["`:` in the business id (I6: the shared business predicate)", { tenantId: T, bizId: "b:c" }, (db) => seedTenant(db, T, "b:c", "Colon"), "invalid bizId"]]) {
     const db = seedWorld({ withSecondBiz: false, withSecondTenant: false }); const smtp = installSmtp([SMTP.accept()]);
     setup(db);
     const refs = []; const ref0 = db.ref; db.ref = (p, q) => { refs.push(p); return ref0(p, q); };

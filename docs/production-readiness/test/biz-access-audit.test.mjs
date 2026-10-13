@@ -148,6 +148,61 @@ test("normalizeAllowedBizIds fail-closed", () => {
   assert.equal(normalizeAllowedBizIds(["b:1"]).ok, false);
 });
 
+// ─── I6 (T-I6-AUDIT-MODEL; production-readiness audit + user-access + M1 registry owners — independent I5 review I5-R-03) ───
+// The audit's registry reading is the runtime's: exact identities (never trimmed), the approved business predicate, and the
+// runtime classifier's verdict for every requested business (registered / not_registered / ambiguous / unreadable). Additive rows.
+import { registryVerdict } from "../lib/biz-access-model.mjs";
+import { classifyRegistryTarget } from "../../../lib/businessRegistry.js";
+const scoped = (bizIds, grants, reg) => run({ appBusinessRaw: reg, members: { uV: true }, roles: { uV: "viewer" }, bizAccess: Object.fromEntries(grants.map((b) => [b, { uV: true }])),
+  appUsersRaw: users([{ firebaseUid: "uV", role: "viewer", allowedBizIds: bizIds }]) });
+
+test("I6-A1 registry ids are exact: a sole padded record is registered under its exact id, never as the trimmed id", () => {
+  const reg = biz([{ id: " bizB ", name: "Padded" }]);
+  assert.deepEqual([...parseAppBusiness(reg).businesses], [" bizB "]);
+  for (const id of [" bizB ", "bizB"]) assert.equal(registryVerdict(parseAppBusiness(reg), id), classifyRegistryTarget(reg, id).state, id);
+  const r = scoped([" bizB "], [" bizB "], reg);
+  assert.deepEqual([r.categories.READY, r.categories.UNKNOWN_BUSINESS, r.categories.AMBIGUOUS_MAPPING], [1, 0, 0], "exact padded scope + grant → READY");
+  const plain = scoped(["bizB"], [], reg);
+  assert.equal(plain.categories.READY + plain.categories.NEEDS_BACKFILL, 0, "the plain id is not the padded business");
+  assert.equal(plain.proposedGrants.length, 0, "no grant proposed for an id the runtime refuses");
+});
+
+test("I6-A2 plain / padded twin (both orders): ambiguous like the runtime classifier — never READY, never a proposed grant", () => {
+  for (const reg of [biz([{ id: "bizB" }, { id: " bizB " }]), biz([{ id: " bizB " }, { id: "bizB" }])]) {
+    const pb = parseAppBusiness(reg);
+    assert.deepEqual([...pb.collisions].sort(), [" bizB ", "bizB"], "both twins listed as colliding");
+    for (const id of [" bizB ", "bizB"]) { assert.equal(classifyRegistryTarget(reg, id).state, "ambiguous"); assert.equal(registryVerdict(pb, id), "ambiguous", id); }
+    for (const id of [" bizB ", "bizB"]) {
+      const r = scoped([id], [id], reg);
+      assert.equal(r.categories.READY, 0, id); assert.equal(r.categories.NEEDS_BACKFILL, 0, id); assert.equal(r.proposedGrants.length, 0, id);
+      assert.ok(r.findings.some((f) => f.category === "AMBIGUOUS_MAPPING" && /ambiguous/.test(f.note || "")), id + ": reported as ambiguous");
+      const missing = scoped([id], [], reg); assert.equal(missing.proposedGrants.length, 0, id + ": no backfill over an ambiguous identity");
+    }
+  }
+});
+
+test("I6-A3 unknown, unreadable, colon and duplicate registries agree with the runtime and never produce READY or a grant", () => {
+  const cases = [
+    [biz([{ id: "bizA" }]), "bizB", "not_registered"],
+    [{ _v: "{bad" }, "bizA", "unreadable"],
+    [{ _v: JSON.stringify({ id: "bizA" }) }, "bizA", "unreadable"],
+    [biz([{ id: "biz:B" }]), "biz:B", "invalid_request"],
+    [biz([{ id: "bizA" }, { id: "bizA" }]), "bizA", "ambiguous"],
+    [biz([{ id: "bizA" }, "bizA"]), "bizA", "ambiguous"],
+    [biz([{ id: "bizA" }, { id: null }]), "bizA", "registered"],
+  ];
+  for (const [reg, id, state] of cases) {
+    assert.equal(classifyRegistryTarget(reg, id).state, state, JSON.stringify([reg, id]));
+    assert.equal(registryVerdict(parseAppBusiness(reg), id), state, "model ≡ runtime: " + JSON.stringify([reg, id]));
+  }
+  assert.equal(parseAppBusiness(biz([{ id: "biz:B" }])).businesses.size, 0, "a colon id is not a business");
+  for (const [reg, id, state] of cases) {
+    if (state === "registered" || state === "invalid_request") continue;
+    const r = scoped([id], [id], reg);
+    assert.equal(r.categories.READY, 0, JSON.stringify([reg, id])); assert.equal(r.proposedGrants.length, 0, JSON.stringify([reg, id]));
+  }
+});
+
 // ─── PR-005: deterministic ordering + biz-access safeguards ───────────────────
 import { byCodePoint } from "../lib/biz-access-model.mjs";
 

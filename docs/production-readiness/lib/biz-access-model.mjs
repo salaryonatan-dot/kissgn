@@ -10,7 +10,7 @@
 
 import { makeRedactor } from "./redact.mjs";
 // I5 (exact identity; T-I5-AUDIT-MODEL): scope entries are judged by the SAME approved business predicate the server uses.
-import { isRegistryBizId } from "../../../lib/businessRegistry.js";
+import { isRegistryBizId, classifyRegistryTarget } from "../../../lib/businessRegistry.js";
 
 export const RTDB_FORBIDDEN = /[.#$\[\]\/]/;
 export const VALID_ROLES = new Set(["owner", "super_owner", "manager", "shift_manager", "viewer"]);
@@ -39,22 +39,41 @@ export function parseCanonicalArray(raw) {
 
 export function parseAppUsers(raw) { return parseCanonicalArray(raw); }
 
-// app/business -> { ok, businesses:Set<id>, duplicates:Set<id>, missingIdCount, malformed }
+// app/business -> { ok, businesses:Set<id>, duplicates:Set<id>, collisions:Set<id>, missingIdCount, malformed, list }
+// I6 (independent I5 review I5-R-03; T-I6-AUDIT-MODEL): registry ids are EXACT identities, never trimmed — the same semantics
+// as the runtime registry rule (lib/businessRegistry.js). A record id is listed only when the approved business predicate
+// (isRegistryBizId: 1..128, no RTDB-forbidden / control character, no ":") accepts it exactly as stored; every other id counts
+// as missing/invalid. `duplicates` = an exact id stored more than once; `collisions` = an id that collides with ANOTHER element
+// only after trimming (" b " and "b") — both are ambiguous identities for the runtime classifier.
 export function parseAppBusiness(raw) {
   const p = parseCanonicalArray(raw);
-  if (!p.ok) return { ok: false, malformed: true, reason: p.reason, businesses: new Set(), duplicates: new Set(), missingIdCount: 0 };
+  if (!p.ok) return { ok: false, malformed: true, reason: p.reason, businesses: new Set(), duplicates: new Set(), collisions: new Set(), missingIdCount: 0, list: [] };
   const businesses = new Set();
   const duplicates = new Set();
+  const collisions = new Set();
   let missingIdCount = 0;
+  const byTrim = new Map();
   p.list.forEach((item) => {
-    // Reject array indexes as ids: the id MUST come from item.id (a non-empty string).
-    const id = item && typeof item === "object" ? item.id : undefined;
-    if (typeof id !== "string" || id.trim() === "" || RTDB_FORBIDDEN.test(id)) { missingIdCount++; return; }
-    const clean = id.trim();
-    if (businesses.has(clean)) duplicates.add(clean);
-    businesses.add(clean);
+    // Reject array indexes as ids: the id MUST come from item.id (a string the approved business predicate accepts exactly).
+    const id = item && typeof item === "object" && !Array.isArray(item) ? item.id : undefined;
+    if (typeof id !== "string" || !isRegistryBizId(id)) { missingIdCount++; return; }
+    if (businesses.has(id)) duplicates.add(id);
+    businesses.add(id);
+    const k = id.trim();
+    if (!byTrim.has(k)) byTrim.set(k, new Set());
+    byTrim.get(k).add(id);
   });
-  return { ok: true, businesses, duplicates, missingIdCount, malformed: false };
+  for (const ids of byTrim.values()) if (ids.size > 1) for (const id of ids) collisions.add(id);
+  return { ok: true, businesses, duplicates, collisions, missingIdCount, malformed: false, list: p.list };
+}
+
+// I6 (T-I6-AUDIT-MODEL): whether ONE business is registered is decided by the runtime classifier itself
+// (classifyRegistryTarget — exact identity; duplicate / trim-collision / coerced-record twin ⇒ ambiguous), applied to the
+// element list the audit parsed (the audit's tolerated input shapes are wrapped as the runtime `{ _v }` node). An
+// uninterpretable registry registers nothing.
+export function registryVerdict(biz, bizId) {
+  if (!biz.ok) return "unreadable";
+  return classifyRegistryTarget({ _v: JSON.stringify(biz.list) }, bizId).state;
 }
 
 export function normalizeAllowedBizIds(allowed) {
@@ -87,9 +106,10 @@ export function classifyBizAccess(input) {
   const biz = parseAppBusiness(appBusinessRaw);
   const registry = biz.businesses;
   const businessUniverse = new Set([...registry, ...Object.keys(bizAccess), ...dataKeyBizIds]);
-  const inRegistry = (b) => registry.has(b);
+  const verdict = (b) => registryVerdict(biz, b);   // I6: registered | not_registered | ambiguous | unreadable | invalid_request
   if (!biz.ok) add("AMBIGUOUS_MAPPING", { subject: "app/business", note: "malformed business registry: " + biz.reason, malformed: true });
   for (const d of biz.duplicates) add("AMBIGUOUS_MAPPING", { subject: "app/business", businessRef: redact("biz", d), note: "duplicate business id in registry" });
+  for (const c of biz.collisions) add("AMBIGUOUS_MAPPING", { subject: "app/business", businessRef: redact("biz", c), note: "business id collides with another registry id after trimming (ambiguous identity)" });
   if (biz.missingIdCount > 0) add("AMBIGUOUS_MAPPING", { subject: "app/business", note: biz.missingIdCount + " business record(s) with missing/invalid id (array index is NOT an id)" });
 
   const usersParsed = parseAppUsers(appUsersRaw);
@@ -136,7 +156,9 @@ export function classifyBizAccess(input) {
     if (norm.ids.length === 0) { add("AMBIGUOUS_MAPPING", { userRef, appUsersIndex: idx, role, note: "scoped role with empty allowedBizIds (no business assigned)" }); continue; }
     for (const b of norm.ids) {
       const businessRef = redact("biz", b);
-      if (!inRegistry(b)) { add("UNKNOWN_BUSINESS", { userRef, businessRef, appUsersIndex: idx, role, note: "allowedBizId not in business registry" }); continue; }
+      const v = verdict(b);
+      if (v === "ambiguous") { add("AMBIGUOUS_MAPPING", { userRef, businessRef, appUsersIndex: idx, role, note: "allowedBizId identity is ambiguous in the business registry (no grant proposed)" }); continue; }
+      if (v !== "registered") { add("UNKNOWN_BUSINESS", { userRef, businessRef, appUsersIndex: idx, role, note: "allowedBizId not in business registry" }); continue; }
       const hasGrant = bizAccess[b]?.[uid] === true;
       if (hasGrant) add("READY", { userRef, businessRef, appUsersIndex: idx, role });
       else {
@@ -150,7 +172,9 @@ export function classifyBizAccess(input) {
     for (const [uid, val] of Object.entries(grants || {})) {
       if (val !== true) continue;
       const userRef = redact("uid", uid); const businessRef = redact("biz", b);
-      if (!inRegistry(b)) { add("UNKNOWN_BUSINESS", { userRef, businessRef, note: "biz_access grant to business absent from registry" }); continue; }
+      const v = verdict(b);
+      if (v === "ambiguous") { add("AMBIGUOUS_MAPPING", { userRef, businessRef, note: "biz_access grant to a business whose registry identity is ambiguous" }); continue; }
+      if (v !== "registered") { add("UNKNOWN_BUSINESS", { userRef, businessRef, note: "biz_access grant to business absent from registry" }); continue; }
       if (members[uid] !== true) { add("ORPHANED_ACCESS", { userRef, businessRef, note: "biz_access grant without membership" }); continue; }
       if (isImplicitAllRole(roles[uid])) add("AMBIGUOUS_MAPPING", { userRef, businessRef, role: roles[uid], note: "owner/super_owner has explicit biz_access entry (implicit-all role should have none)" });
     }

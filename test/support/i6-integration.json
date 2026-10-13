@@ -1,0 +1,124 @@
+{
+ "parent": "59b87a6a9c77af80637ad5fb7f5a2f92560f5ef5",
+ "decision": "M1 registry contract + approved identity predicates (no new policy)",
+ "review": "agent-daily-integration-i5-independent-review I5-R-01..04 / NEXT_WORK.md",
+ "pins": {
+  "api/admin.js": "f0b371577117628c4a7f0b64e4f5a125cbd86926",
+  "api/agent/ask.ts": "15141c558cd16817c4c2cb42f44f81fa297e81e6",
+  "api/alerts/run.ts": "5cc0dca84b9cb6a05529042d4769fd7952261d23",
+  "api/proactive/run.ts": "0ebc63c3cc7412ee0f2fbff8a3193b35e0d416ff",
+  "lib/securityContext.d.ts": "bc8f633654bf492e924ca419fcef51bc98880c44",
+  "lib/securityContext.js": "2a9d0c22af1c2cdf95062a59d78b193d88d9f9d9"
+ },
+ "newFiles": [],
+ "edits": {
+  "api/admin.js": [
+   {
+    "from": "import { readRegistryTarget, isRegistryBizId } from \"../lib/businessRegistry.js\";\n",
+    "to": "import { readRegistryTarget, isRegistryBizId, classifyRegistryTarget } from \"../lib/businessRegistry.js\";\n"
+   },
+   {
+    "from": "  return Array.isArray(list) && list.some((v) => typeof v === \"string\" && v !== \"\" && !isRegistryBizId(v));\n",
+    "to": "  return Array.isArray(list) && list.some((v) => typeof v === \"string\" && v !== \"\" && !isRegistryBizId(v));\n}\n/** I6 (independent I5 review I5-R-01): a scoped grant is written ONLY for a business the authoritative registry resolves as\n *  `registered` for the EXACT requested id. ONE read of tenants/{tenantId}/app/business (the caller has already authorized\n *  the tenant and validated it), every requested id classified by the approved M1 shared rule (lib/businessRegistry.js\n *  classifyRegistryTarget — a plain/padded twin, a duplicate or a coerced record is ambiguous; syntax alone is not\n *  registration). Called before any Auth creation / e-mail change and before any RTDB write; the first refused id (request\n *  order) decides, with the existing approved registry mapping (scRequireRegisteredBusiness): not_registered → 403\n *  business_not_in_tenant; ambiguous / unavailable / unreadable → 503 business_registry_{ambiguous,unavailable,unreadable}.\n *  No requested id ⇒ no read. Throws { status, msg }. */\nasync function requireRegisteredGrantTargets(db, tenantId, bizIds) {\n  if (!Array.isArray(bizIds) || bizIds.length === 0) return;\n  let raw;\n  try { raw = (await db.ref(`tenants/${tenantId}/app/business`).get()).val(); }\n  catch { throw { status: 503, msg: \"business_registry_unavailable\" }; }\n  for (const bizId of bizIds) {\n    const t = classifyRegistryTarget(raw, bizId);\n    if (t.state === \"registered\") continue;\n    if (t.state === \"not_registered\") throw { status: 403, msg: \"business_not_in_tenant\" };\n    if (t.state === \"ambiguous\") throw { status: 503, msg: \"business_registry_ambiguous\" };\n    if (t.state === \"invalid_request\") throw { status: 400, msg: \"invalid bizId in allowedBizIds\" };\n    throw { status: 503, msg: \"business_registry_unreadable\" };\n  }\n"
+   },
+   {
+    "from": "\n  // ── Phase 2: Create Firebase Auth user ────────────────────────────────────\n",
+    "to": "\n  // I6 (independent I5 review I5-R-01 / I5-R-04 pattern): every read the RTDB write needs, and the authoritative registration\n  //   of every requested business, run BEFORE the Auth user is created — a refused scope or a failed / malformed read leaves\n  //   no Auth account to compensate.\n  const db  = getAdminDb();\n  if (!isImplicitAllRole(role)) {\n    try { await requireRegisteredGrantTargets(db, tenantId, createBiz); }\n    catch (be) { res.status(be?.status || 503).json({ error: be?.msg || \"business_registry_unavailable\" }); return; }\n  }\n  // app/users — server-authoritative append so app/users, users/{uid} and\n  //   biz_access are persisted in ONE atomic flow (no client/server divergence).\n  //   A malformed existing blob stops the create rather than guessing (now before Auth creation: nothing to roll back).\n  let appUsersList;\n  try {\n    const appUsersSnap = await db.ref(`tenants/${tenantId}/app/users`).once(\"value\");\n    appUsersList = parseAppUsers(appUsersSnap.val());\n  } catch (be) {\n    res.status(500).json({ error: \"רשימת המשתמשים פגומה — פנה לתמיכה\" }); return;\n  }\n\n  // ── Phase 2: Create Firebase Auth user ────────────────────────────────────\n"
+   },
+   {
+    "from": "  // ── Phase 3: Atomic RTDB write (rollback auth user on failure) ────────────\n  const db  = getAdminDb();\n",
+    "to": "  // ── Phase 3: Atomic RTDB write (rollback auth user on failure) ────────────\n"
+   },
+   {
+    "from": "  // app/users — server-authoritative append so app/users, users/{uid} and\n  //   biz_access are persisted in ONE atomic flow (no client/server divergence).\n  //   A malformed existing blob stops the create rather than guessing.\n  let appUsersList;\n  try {\n    const appUsersSnap = await db.ref(`tenants/${tenantId}/app/users`).once(\"value\");\n    appUsersList = parseAppUsers(appUsersSnap.val());\n  } catch (be) {\n    try { await auth.deleteUser(firebaseUid); } catch (_) {}\n    res.status(500).json({ error: \"רשימת המשתמשים פגומה — פנה לתמיכה\" }); return;\n  }\n",
+    "to": ""
+   },
+   {
+    "from": "  //   validated ABOVE (before Auth creation); clients never write biz_access.\n",
+    "to": "  //   validated and its registration classified ABOVE (before Auth creation); clients never write biz_access.\n"
+   },
+   {
+    "from": "  // Phase 4 — Firebase Auth update (only if email changed)\n  const oldEmail = currentUser.email;\n  if (emailChanged) {\n    // Pre-flight collision check against tenants/{tid}/app/users.\n    //   Firebase Auth alone is not sufficient: legacy users (e.g. those with\n    //   `mustCompleteProfile:true`) may have a public email recorded in\n    //   app/users that was never written to Firebase Auth, or whose Auth\n    //   email is a temp/`@temp.marjin.app` alias. In those cases\n    //   `auth.updateUser` succeeds and we silently steal the public email.\n    //   This check looks ONLY at the aggregated app/users list for the same\n    //   tenant — same scope as the data we'd corrupt. It must run BEFORE\n    //   auth.updateUser, and on collision we return without touching Auth\n    //   or RTDB. Self-collisions (same firebaseUid) are not blocked here:\n    //   when `emailChanged` is true the email is already different from\n    //   currentUser.email, but the duplicate-firebaseUid guard is kept for\n    //   safety in case future refactors loosen that invariant.\n    try {\n      const newEmailLower = String(newEmail).trim().toLowerCase();\n      const appUsersCollisionSnap = await db.ref(`tenants/${tenantId}/app/users`).once(\"value\");\n      if (appUsersCollisionSnap.exists()) {\n        const raw = appUsersCollisionSnap.val();\n        let listJson = null;\n        if (raw && typeof raw === \"object\" && typeof raw._v === \"string\") listJson = raw._v;\n        else if (typeof raw === \"string\") listJson = raw;\n        if (listJson) {\n          let list = [];\n          try { const parsed = JSON.parse(listJson); if (Array.isArray(parsed)) list = parsed; } catch {}\n          const collision = list.some(u =>\n            u &&\n            u.firebaseUid !== firebaseUid &&\n            String(u.email || \"\").trim().toLowerCase() === newEmailLower\n          );\n          if (collision) {\n            res.status(409).json({ error: \"כתובת האימייל כבר קיימת במערכת\" }); return;\n          }\n        }\n      }\n    } catch (e) {\n      // Read failure on the collision check is not fatal — fall through to\n      //   auth.updateUser, which still has its own auth/email-already-exists\n      //   guard. We log so the silent-failure mode is debuggable.\n      console.warn(\"[update-user] app/users collision pre-check skipped:\", e.message);\n    }\n\n    try {\n      await auth.updateUser(firebaseUid, { email: newEmail });\n    } catch (e) {\n      if (e.code === \"auth/email-already-exists\") {\n        res.status(409).json({ error: \"כתובת האימייל כבר קיימת במערכת\" }); return;\n      }\n      if (e.code === \"auth/invalid-email\") {\n        res.status(400).json({ error: \"כתובת אימייל לא תקינה\" }); return;\n      }\n      if (e.code === \"auth/user-not-found\") {\n        res.status(404).json({ error: \"משתמש לא נמצא ב-Auth — ייתכן שנמחק. פנה לתמיכה.\" }); return;\n      }\n      console.error(\"[update-user] auth.updateUser failed:\", e.message, e.code);\n      res.status(500).json({ error: \"שגיאה בעדכון Firebase Auth\" }); return;\n    }\n  }\n\n  // Phase 5 — RTDB atomic update\n",
+    "to": "  // Phase 3b — I6 (independent I5 review I5-R-04 / I5-R-01): prepare the WHOLE RTDB update before any side effect. Every\n  //   read it needs (role-path heal, app/users merge, the target's actual biz_access grants, the business registry) and every\n  //   refusal (implicit-role downgrade without scope, scope registration) happens HERE, before the Auth e-mail change, so a\n  //   refused or failed read can never leave Auth changed while the stored records are not. Nothing below writes until\n  //   Phase 4 (Auth) and Phase 5 (one atomic RTDB update).\n"
+   },
+   {
+    "from": "    // Best-effort revert auth email and bail\n    if (emailChanged && oldEmail) {\n      try { await auth.updateUser(firebaseUid, { email: oldEmail }); }\n      catch (revErr) { console.error(\"[update-user] Auth revert failed:\", revErr.message); }\n    }\n",
+    "to": "    // I6: prepared before Phase 4 — the Auth e-mail has not been changed, so there is nothing to revert.\n"
+   },
+   {
+    "from": "          const nextBiz = normalizeAllowedBizIds(allowedBizIdsResolved);\n",
+    "to": "          const nextBiz = normalizeAllowedBizIds(allowedBizIdsResolved);\n          // I6 (I5-R-01): every requested business must be authoritatively registered (exact id) before any grant is written.\n          await requireRegisteredGrantTargets(db, tenantId, nextBiz);\n"
+   },
+   {
+    "from": "    } catch (be) {\n",
+    "to": "    } catch (be) {\n      // I6: prepared before Phase 4 — a refusal or a failed read here leaves Auth and every record unchanged.\n"
+   },
+   {
+    "from": "    }\n  }\n\n  try {\n    await db.ref().update(updates);\n",
+    "to": "    }\n  }\n\n  // Phase 4 — Firebase Auth update (only if email changed)\n  const oldEmail = currentUser.email;\n  if (emailChanged) {\n    // Pre-flight collision check against tenants/{tid}/app/users.\n    //   Firebase Auth alone is not sufficient: legacy users (e.g. those with\n    //   `mustCompleteProfile:true`) may have a public email recorded in\n    //   app/users that was never written to Firebase Auth, or whose Auth\n    //   email is a temp/`@temp.marjin.app` alias. In those cases\n    //   `auth.updateUser` succeeds and we silently steal the public email.\n    //   This check looks ONLY at the aggregated app/users list for the same\n    //   tenant — same scope as the data we'd corrupt. It must run BEFORE\n    //   auth.updateUser, and on collision we return without touching Auth\n    //   or RTDB. Self-collisions (same firebaseUid) are not blocked here:\n    //   when `emailChanged` is true the email is already different from\n    //   currentUser.email, but the duplicate-firebaseUid guard is kept for\n    //   safety in case future refactors loosen that invariant.\n    try {\n      const newEmailLower = String(newEmail).trim().toLowerCase();\n      const appUsersCollisionSnap = await db.ref(`tenants/${tenantId}/app/users`).once(\"value\");\n      if (appUsersCollisionSnap.exists()) {\n        const raw = appUsersCollisionSnap.val();\n        let listJson = null;\n        if (raw && typeof raw === \"object\" && typeof raw._v === \"string\") listJson = raw._v;\n        else if (typeof raw === \"string\") listJson = raw;\n        if (listJson) {\n          let list = [];\n          try { const parsed = JSON.parse(listJson); if (Array.isArray(parsed)) list = parsed; } catch {}\n          const collision = list.some(u =>\n            u &&\n            u.firebaseUid !== firebaseUid &&\n            String(u.email || \"\").trim().toLowerCase() === newEmailLower\n          );\n          if (collision) {\n            res.status(409).json({ error: \"כתובת האימייל כבר קיימת במערכת\" }); return;\n          }\n        }\n      }\n    } catch (e) {\n      // Read failure on the collision check is not fatal — fall through to\n      //   auth.updateUser, which still has its own auth/email-already-exists\n      //   guard. We log so the silent-failure mode is debuggable.\n      console.warn(\"[update-user] app/users collision pre-check skipped:\", e.message);\n    }\n\n    try {\n      await auth.updateUser(firebaseUid, { email: newEmail });\n    } catch (e) {\n      if (e.code === \"auth/email-already-exists\") {\n        res.status(409).json({ error: \"כתובת האימייל כבר קיימת במערכת\" }); return;\n      }\n      if (e.code === \"auth/invalid-email\") {\n        res.status(400).json({ error: \"כתובת אימייל לא תקינה\" }); return;\n      }\n      if (e.code === \"auth/user-not-found\") {\n        res.status(404).json({ error: \"משתמש לא נמצא ב-Auth — ייתכן שנמחק. פנה לתמיכה.\" }); return;\n      }\n      console.error(\"[update-user] auth.updateUser failed:\", e.message, e.code);\n      res.status(500).json({ error: \"שגיאה בעדכון Firebase Auth\" }); return;\n    }\n  }\n\n  // Phase 5 — RTDB atomic update. I6: the complete update (records, indexes, app/users, biz_access) was prepared and every\n  //   required read and validation ran in Phase 3b, BEFORE the Auth e-mail change; this single atomic write is the only step\n  //   left after Phase 4. Auth and RTDB are NOT one transaction: if this write fails after an Auth e-mail change, the Auth\n  //   e-mail is reverted best-effort (a failed revert is logged for manual repair; an identical retry re-converges).\n  try {\n    await db.ref().update(updates);\n"
+   },
+   {
+    "from": "      if (nextBiz.length < 1) { res.status(400).json({ error: \"יש להגדיר לפחות עסק אחד בעת הורדת תפקיד\" }); return; }\n",
+    "to": "      if (nextBiz.length < 1) { res.status(400).json({ error: \"יש להגדיר לפחות עסק אחד בעת הורדת תפקיד\" }); return; }\n      await requireRegisteredGrantTargets(db, tenantId, nextBiz); // I6 (I5-R-01): authoritative registration, before the guard / any write\n"
+   },
+   {
+    "from": "      const nextBiz = normalizeAllowedBizIds(body.allowedBizIds);\n",
+    "to": "      const nextBiz = normalizeAllowedBizIds(body.allowedBizIds);\n      await requireRegisteredGrantTargets(db, tenantId, nextBiz); // I6 (I5-R-01): authoritative registration, before any write\n"
+   }
+  ],
+  "api/agent/ask.ts": [
+   {
+    "from": "import { requireBizContext } from \"../../lib/securityContext.js\";\n",
+    "to": "// I6 (independent I5 review I5-R-01): requireBizContext + the authoritative registration of the business — a stale or\n// ambiguous biz_access grant never reaches the agent's data path.\nimport { requireRegisteredBizContext } from \"../../lib/securityContext.js\";\n"
+   },
+   {
+    "from": "  const out = await handleAgentAsk(req, { requireBizContext, routeQuestion, rateLimit, logError });\n",
+    "to": "  const out = await handleAgentAsk(req, { requireBizContext: requireRegisteredBizContext, routeQuestion, rateLimit, logError });\n"
+   }
+  ],
+  "api/alerts/run.ts": [
+   {
+    "from": "import { requireCron, requireBizContext } from \"../../lib/securityContext.js\";\n",
+    "to": "// I6 (independent I5 review I5-R-01): the user branches are authorized by requireBizContext + the authoritative registration of\n// the business (requireRegisteredBizContext) — a stale or ambiguous biz_access grant never reaches alerts data or writes.\nimport { requireCron, requireRegisteredBizContext } from \"../../lib/securityContext.js\";\n"
+   },
+   {
+    "from": "  const out = await handleAlerts(req, { requireCron, requireBizContext, repos, logError });\n",
+    "to": "  const out = await handleAlerts(req, { requireCron, requireBizContext: requireRegisteredBizContext, repos, logError });\n"
+   }
+  ],
+  "api/proactive/run.ts": [
+   {
+    "from": "import { requireBizContext, requireCron } from \"../../lib/securityContext.js\";\n",
+    "to": "// I6 (independent I5 review I5-R-01): the read actions and the manual single-business scan are authorized by\n// requireBizContext + the authoritative registration of the business (requireRegisteredBizContext).\nimport { requireRegisteredBizContext, requireCron } from \"../../lib/securityContext.js\";\n"
+   },
+   {
+    "from": "    requireBizContext,\n",
+    "to": "    requireBizContext: requireRegisteredBizContext,\n"
+   },
+   {
+    "from": "    ctx = await requireBizContext(req, {\n",
+    "to": "    ctx = await requireRegisteredBizContext(req, {\n"
+   }
+  ],
+  "lib/securityContext.d.ts": [
+   {
+    "from": "): Promise<BizContext>;\n",
+    "to": "): Promise<BizContext>;\n// I6: requireBizContext + the authoritative registration of the requested business (lib/businessRegistry.js readRegistryTarget).\nexport function requireRegisteredBizContext(\n  req: SecurityContextRequestLike,\n  opts: BizContextOptions,\n  deps?: BizContextDeps\n): Promise<BizContext>;\n"
+   }
+  ],
+  "lib/securityContext.js": [
+   {
+    "from": "import { isImplicitAllRole, RTDB_FORBIDDEN } from \"./bizAccess.js\";\n",
+    "to": "import { isImplicitAllRole, RTDB_FORBIDDEN } from \"./bizAccess.js\";\n// I6 (independent I5 review I5-R-01 / I5-R-02): the approved shared business predicate and the authoritative target-scoped\n// registry reader (pure, firebase-free — lib/bizAccess.js already imports the same module).\nimport { isRegistryBizId, readRegistryTarget } from \"./businessRegistry.js\";\n"
+   },
+   {
+    "from": "  if (!isValidId(bizId))    throw { status: 400, msg: \"invalid bizId\" };\n",
+    "to": "  //    I6 (I5-R-02; M1 identity owner transition T-I6-SHARED-GATE): the business slot is judged by the approved BUSINESS\n  //    predicate (isRegistryBizId — the tenant rule plus no \":\"), exactly as sent; the tenant slot keeps isValidId (\":\" valid).\n  if (!isRegistryBizId(bizId)) throw { status: 400, msg: \"invalid bizId\" };\n"
+   },
+   {
+    "from": "  return { uid: user.uid, email: user.email ?? null, tenantId, bizId, role, db };\n}\n",
+    "to": "  return { uid: user.uid, email: user.email ?? null, tenantId, bizId, role, db };\n}\n\n/**\n * requireRegisteredBizContext — requireBizContext, then the AUTHORITATIVE registration of the requested business\n * (I6; independent I5 review I5-R-01). A biz_access grant (or an owner's implicit all-business scope) never substitutes for\n * registration: the business must be classified `registered` by the approved M1 shared target-scoped rule\n * (lib/businessRegistry.js readRegistryTarget — exact identity; a plain/padded twin, a duplicate or a coerced record is\n * ambiguous) in ONE read of tenants/{t}/app/business, after every check of requireBizContext and before the caller touches\n * business data. Responses are the existing approved registry mapping (api/admin.js scRequireRegisteredBusiness):\n *   not_registered → 403 business_not_in_tenant; ambiguous → 503 business_registry_ambiguous; unavailable → 503\n *   business_registry_unavailable; unreadable → 503 business_registry_unreadable; invalid_request → 400 invalid bizId.\n * Consumers that already apply the same registry rule themselves after the gate (Core cost history: requireBusinessInTenant;\n * the Daily manual send: the delivery receipt's registry classification) keep requireBizContext, so no registry read is\n * duplicated or answered differently.\n * @param {{headers:unknown}} req\n * @param {{tenantId:string,bizId:string,mode:\"read\"|\"write\"}} opts\n * @param {{requireAuth?:Function,requireTenantAccess?:Function,getDb?:Function}} [deps] test seam\n * @returns {Promise<{uid:string,email:string|null,tenantId:string,bizId:string,role:string,db:unknown}>}\n * @throws {{status:number,msg:string}}\n */\nexport async function requireRegisteredBizContext(req, opts, deps = {}) {\n  const ctx = await requireBizContext(req, opts, deps);\n  const t = await readRegistryTarget(ctx.db, ctx.tenantId, ctx.bizId);\n  if (t.state === \"registered\") return ctx;\n  if (t.state === \"not_registered\") throw { status: 403, msg: \"business_not_in_tenant\" };\n  if (t.state === \"ambiguous\") throw { status: 503, msg: \"business_registry_ambiguous\" };\n  if (t.state === \"unavailable\") throw { status: 503, msg: \"business_registry_unavailable\" };\n  if (t.state === \"invalid_request\") throw { status: 400, msg: \"invalid bizId\" };\n  throw { status: 503, msg: \"business_registry_unreadable\" };\n}\n"
+   }
+  ]
+ }
+}

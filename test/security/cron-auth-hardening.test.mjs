@@ -77,7 +77,10 @@ function mkRes() {
 function mkDb(state) {
   return {
     ref: (path) => ({
-      get: async () => ({ val: () => state.bizAccessVal }),
+      // I6 test-contract transition (T-I6-TEST-P0; P0 / proactive owners): the proactive manual scan is now authorized by
+      // requireRegisteredBizContext, which reads the runtime registry node through get() — the stub answers the registry for
+      // app/business (as `once` already did) and the biz_access value for every other path (unchanged)
+      get: async () => ({ val: () => (String(path).endsWith("/app/business") ? state.business : state.bizAccessVal) }),
       once: async () => ({ val: () => {
         const p = String(path);
         if (p.endsWith("/app/business")) return state.business;
