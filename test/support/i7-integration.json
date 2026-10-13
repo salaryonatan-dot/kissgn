@@ -1,0 +1,41 @@
+{
+ "parent": "224a00a655f0f2af9a0e55abac96db3265355cfb",
+ "decision": "M1 registry contract + approved identity predicates + the existing update-user compensation (no new policy)",
+ "review": "agent-daily-integration-i6-independent-review I6-R-01..04 / NEXT_WORK.md",
+ "pins": {
+  "api/admin.js": "c28d7d9c6bf293817bcca7807ddad163e68f3d9c"
+ },
+ "newFiles": [],
+ "edits": {
+  "api/admin.js": [
+   {
+    "from": "// ─────────────────────────────────────────────────────────────────────────────\nasync function handleUpdateUser(req, res) {\n",
+    "to": "// ─────────────────────────────────────────────────────────────────────────────\n// I7 (independent I6 review I6-R-04; T-I7-AUTH-ALIGN; user-access / admin-API owners): the Auth-side compensation of update-user.\n//   Auth and RTDB are two systems and are NOT made atomic here. These helpers only ESTABLISH the Auth outcome when an Auth call\n//   answered an error, and undo an applied e-mail change with the existing compensation (one revert), so that a failure answer\n//   stands for an unchanged Auth. Results: \"aligned\" (Auth holds the e-mail the unchanged records hold — or never changed),\n//   \"unconfirmed:<why>\" (the Auth outcome could not be established or undone). No retry loop, no new record, no new response.\nconst normEmail = (v) => String(v ?? \"\").trim().toLowerCase();\nasync function readAuthEmail(auth, uid) {\n  try { const u = await auth.getUser(uid); return { ok: true, email: normEmail(u && u.email) }; }\n  catch { return { ok: false }; }\n}\n/** Phase 5 failed after an applied Auth e-mail change: put the previous e-mail back; if the revert answers an error, read Auth. */\nasync function revertAuthEmail(auth, uid, newEmail, oldEmail) {\n  if (!oldEmail) return \"unconfirmed:no_previous_email\";\n  try { await auth.updateUser(uid, { email: oldEmail }); return \"aligned\"; }\n  catch (revErr) { console.error(\"[update-user] Auth revert answered an error:\", revErr?.message); }\n  const now = await readAuthEmail(auth, uid);\n  if (!now.ok) return \"unconfirmed:auth_unreadable\";\n  return now.email === normEmail(oldEmail) ? \"aligned\" : \"unconfirmed:revert_not_applied\";\n}\n/** Phase 4's auth.updateUser answered an unclassified error: did it apply? If so, undo it exactly as Phase 5 would. */\nasync function settleAuthEmailAfterError(auth, uid, newEmail, oldEmail) {\n  const now = await readAuthEmail(auth, uid);\n  if (!now.ok) return \"unconfirmed:auth_unreadable\";\n  if (now.email === normEmail(newEmail)) return revertAuthEmail(auth, uid, newEmail, oldEmail);   // it applied: compensate\n  if (oldEmail && now.email === normEmail(oldEmail)) return \"aligned\";                             // it did not apply: Auth = records\n  return \"unconfirmed:auth_diverged\";   // Auth holds neither e-mail (pre-existing divergence): not moved by this request, not claimed aligned\n}\n\nasync function handleUpdateUser(req, res) {\n"
+   },
+   {
+    "from": "      console.error(\"[update-user] auth.updateUser failed:\", e.message, e.code);\n",
+    "to": "      console.error(\"[update-user] auth.updateUser failed:\", e.message, e.code);\n      // I7 (independent I6 review I6-R-04 / I5 NEXT_WORK \"Auth and RTDB must remain aligned\"; T-I7-AUTH-ALIGN): the error does not say\n      //   whether Auth applied the change. Establish it (the Auth record itself) and, if it did, undo it with the same compensation\n      //   Phase 5 uses — so this failure answer stands for an unchanged Auth AND unchanged records. Only an outcome that cannot be\n      //   established is left unconfirmed (logged; its handling is the owner decision D-I7-01 — no recovery policy is invented here).\n      const outcome = await settleAuthEmailAfterError(auth, firebaseUid, newEmail, oldEmail);\n      if (outcome !== \"aligned\") console.error(`[update-user] Auth/RTDB alignment UNCONFIRMED after an Auth error (${outcome}) — tenant ${tenantId} uid ${firebaseUid}`);\n"
+   },
+   {
+    "from": "    if (emailChanged && oldEmail) {\n      try { await auth.updateUser(firebaseUid, { email: oldEmail }); }\n      catch (revErr) { console.error(\"[update-user] Auth revert FAILED — manual repair required:\", revErr.message); }\n",
+    "to": "    if (emailChanged) {\n      // I7 (I6-R-04; T-I7-AUTH-ALIGN): revert the Auth e-mail; when the revert itself reports an error, establish what Auth holds\n      //   instead of assuming it failed (a revert can apply and still answer an error). Unconfirmed alignment is logged for the\n      //   owner decision D-I7-01.\n      const outcome = await revertAuthEmail(auth, firebaseUid, newEmail, oldEmail);\n      if (outcome !== \"aligned\") console.error(`[update-user] Auth revert UNCONFIRMED (${outcome}) — manual repair required — tenant ${tenantId} uid ${firebaseUid}`);\n"
+   },
+   {
+    "from": "  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || \"business_access_denied\" }); return; }\n",
+    "to": "  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || \"business_access_denied\" }); return; }\n  // I7 (independent I6 review I6-R-02 / R6-5): the business must be authoritatively registered (exact id, ONE registry read)\n  // before any entry-exception read — the approved M1 registry rule and the P1 response mapping (scRequireRegisteredBusiness).\n  try { await scRequireRegisteredBusiness(db, tenantId, bizId); }\n  catch (e) { res.status(e?.status || 503).json({ error: e?.msg || \"business_registry_unreadable\" }); return; }\n"
+   },
+   {
+    "from": "  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || \"business_access_denied\" }); return null; }\n  // VERSION FENCE (P0-DATA-01): the Admin SDK bypasses Rules, so the business's server-\n",
+    "to": "  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || \"business_access_denied\" }); return null; }\n  // I7 (I6-R-02 / R6-5): authoritative registration of the exact business (ONE registry read) before the policy read and any\n  // ledger transaction — set and clear share this authorization.\n  try { await scRequireRegisteredBusiness(db, tenantId, bizId); }\n  catch (e) { res.status(e?.status || 503).json({ error: e?.msg || \"business_registry_unreadable\" }); return null; }\n  // VERSION FENCE (P0-DATA-01): the Admin SDK bypasses Rules, so the business's server-\n"
+   },
+   {
+    "from": "  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || \"business_access_denied\" }); return null; }\n  return { claims, role, db };\n",
+    "to": "  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || \"business_access_denied\" }); return null; }\n  // I7 (I6-R-02 / R6-5): authoritative registration of the exact business (ONE registry read) before any checklist / analytics /\n  // insights read.\n  try { await scRequireRegisteredBusiness(db, tenantId, bizId); }\n  catch (e) { res.status(e?.status || 503).json({ error: e?.msg || \"business_registry_unreadable\" }); return null; }\n  return { claims, role, db };\n"
+   },
+   {
+    "from": "  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || \"business_access_denied\" }); return null; }\n  return { claims, role, db, body, tenantId, bizId };\n",
+    "to": "  catch (e) { res.status(e?.status || 403).json({ error: e?.msg || \"business_access_denied\" }); return null; }\n  // I7 (I6-R-02 / R6-5): authoritative registration of the exact business (ONE registry read) before any checklist write.\n  try { await scRequireRegisteredBusiness(db, tenantId, bizId); }\n  catch (e) { res.status(e?.status || 503).json({ error: e?.msg || \"business_registry_unreadable\" }); return null; }\n  return { claims, role, db, body, tenantId, bizId };\n"
+   }
+  ]
+ }
+}

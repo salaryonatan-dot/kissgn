@@ -10,7 +10,7 @@
 
 import { makeRedactor } from "./redact.mjs";
 // I5 (exact identity; T-I5-AUDIT-MODEL): scope entries are judged by the SAME approved business predicate the server uses.
-import { isRegistryBizId, classifyRegistryTarget } from "../../../lib/businessRegistry.js";
+import { isRegistryBizId, classifyRegistryTarget, decodeRegistryNode } from "../../../lib/businessRegistry.js";
 
 export const RTDB_FORBIDDEN = /[.#$\[\]\/]/;
 export const VALID_ROLES = new Set(["owner", "super_owner", "manager", "shift_manager", "viewer"]);
@@ -45,9 +45,15 @@ export function parseAppUsers(raw) { return parseCanonicalArray(raw); }
 // (isRegistryBizId: 1..128, no RTDB-forbidden / control character, no ":") accepts it exactly as stored; every other id counts
 // as missing/invalid. `duplicates` = an exact id stored more than once; `collisions` = an id that collides with ANOTHER element
 // only after trimming (" b " and "b") — both are ambiguous identities for the runtime classifier.
+// I7 (independent I6 review I6-R-01; T-I7-AUDIT-PARITY): the parse keeps the ORIGINAL raw node (`raw`) and whether the RUNTIME can
+// read it at all (`runtimeReadable` / `runtimeReason`, from lib/businessRegistry.js decodeRegistryNode — the runtime accepts only
+// the `{ _v: "<JSON array>" }` node). The tolerated legacy shapes (bare array, bare JSON string, absent) stay parseable for
+// diagnostics, but they register NOTHING: every registration decision is made on `raw` (registryVerdict below).
 export function parseAppBusiness(raw) {
+  const decoded = decodeRegistryNode(raw);
+  const runtime = { raw, runtimeReadable: decoded.ok, runtimeReason: decoded.ok ? null : decoded.reason };
   const p = parseCanonicalArray(raw);
-  if (!p.ok) return { ok: false, malformed: true, reason: p.reason, businesses: new Set(), duplicates: new Set(), collisions: new Set(), missingIdCount: 0, list: [] };
+  if (!p.ok) return { ok: false, malformed: true, reason: p.reason, businesses: new Set(), duplicates: new Set(), collisions: new Set(), missingIdCount: 0, list: [], ...runtime };
   const businesses = new Set();
   const duplicates = new Set();
   const collisions = new Set();
@@ -64,16 +70,17 @@ export function parseAppBusiness(raw) {
     byTrim.get(k).add(id);
   });
   for (const ids of byTrim.values()) if (ids.size > 1) for (const id of ids) collisions.add(id);
-  return { ok: true, businesses, duplicates, collisions, missingIdCount, malformed: false, list: p.list };
+  return { ok: true, businesses, duplicates, collisions, missingIdCount, malformed: false, list: p.list, ...runtime };
 }
 
 // I6 (T-I6-AUDIT-MODEL): whether ONE business is registered is decided by the runtime classifier itself
-// (classifyRegistryTarget — exact identity; duplicate / trim-collision / coerced-record twin ⇒ ambiguous), applied to the
-// element list the audit parsed (the audit's tolerated input shapes are wrapped as the runtime `{ _v }` node). An
-// uninterpretable registry registers nothing.
+// (classifyRegistryTarget — exact identity; duplicate / trim-collision / coerced-record twin ⇒ ambiguous).
+// I7 (independent I6 review I6-R-01; T-I7-AUDIT-PARITY): applied to the ORIGINAL raw node, never to an envelope rebuilt from the
+// parsed list — a bare array, a bare JSON string or an absent node is `unreadable` for the runtime and therefore here; it can never
+// be READY and never yields a proposed grant.
 export function registryVerdict(biz, bizId) {
-  if (!biz.ok) return "unreadable";
-  return classifyRegistryTarget({ _v: JSON.stringify(biz.list) }, bizId).state;
+  if (!biz || !Object.prototype.hasOwnProperty.call(biz, "raw")) return "unreadable";   // not a parseAppBusiness result: fail closed
+  return classifyRegistryTarget(biz.raw, bizId).state;
 }
 
 export function normalizeAllowedBizIds(allowed) {
@@ -111,6 +118,9 @@ export function classifyBizAccess(input) {
   for (const d of biz.duplicates) add("AMBIGUOUS_MAPPING", { subject: "app/business", businessRef: redact("biz", d), note: "duplicate business id in registry" });
   for (const c of biz.collisions) add("AMBIGUOUS_MAPPING", { subject: "app/business", businessRef: redact("biz", c), note: "business id collides with another registry id after trimming (ambiguous identity)" });
   if (biz.missingIdCount > 0) add("AMBIGUOUS_MAPPING", { subject: "app/business", note: biz.missingIdCount + " business record(s) with missing/invalid id (array index is NOT an id)" });
+  // I7 (T-I7-AUDIT-PARITY): a registry the runtime cannot read (absent node, bare array, bare JSON string) is reported, and — through
+  // registryVerdict — registers no business: the same `unreadable` refusal the runtime grant writers and data paths apply.
+  if (biz.ok && !biz.runtimeReadable) add("AMBIGUOUS_MAPPING", { subject: "app/business", note: "business registry is not the runtime { _v } node (" + biz.runtimeReason + "): the runtime classifies every business unreadable — no grant can be proposed", malformed: true });
 
   const usersParsed = parseAppUsers(appUsersRaw);
   const appUsersMalformed = !usersParsed.ok;
@@ -158,6 +168,7 @@ export function classifyBizAccess(input) {
       const businessRef = redact("biz", b);
       const v = verdict(b);
       if (v === "ambiguous") { add("AMBIGUOUS_MAPPING", { userRef, businessRef, appUsersIndex: idx, role, note: "allowedBizId identity is ambiguous in the business registry (no grant proposed)" }); continue; }
+      if (v === "unreadable") { add("UNKNOWN_BUSINESS", { userRef, businessRef, appUsersIndex: idx, role, note: "business registry unreadable by the runtime (no grant proposed)" }); continue; }
       if (v !== "registered") { add("UNKNOWN_BUSINESS", { userRef, businessRef, appUsersIndex: idx, role, note: "allowedBizId not in business registry" }); continue; }
       const hasGrant = bizAccess[b]?.[uid] === true;
       if (hasGrant) add("READY", { userRef, businessRef, appUsersIndex: idx, role });
@@ -192,7 +203,7 @@ export function classifyBizAccess(input) {
     categories: cats,
     findings,
     proposedGrants,
-    malformed: !!(appUsersMalformed || !biz.ok),
+    malformed: !!(appUsersMalformed || !biz.ok || !biz.runtimeReadable),
     needsAttention: attention > 0,
   };
 }

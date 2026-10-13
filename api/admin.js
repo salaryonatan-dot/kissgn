@@ -1223,6 +1223,34 @@ async function handleDeleteUser(req, res) {
 //   NOT allowed via this endpoint: username, password, owner/super_owner
 //   role assignment, or changing one's own role.
 // ─────────────────────────────────────────────────────────────────────────────
+// I7 (independent I6 review I6-R-04; T-I7-AUTH-ALIGN; user-access / admin-API owners): the Auth-side compensation of update-user.
+//   Auth and RTDB are two systems and are NOT made atomic here. These helpers only ESTABLISH the Auth outcome when an Auth call
+//   answered an error, and undo an applied e-mail change with the existing compensation (one revert), so that a failure answer
+//   stands for an unchanged Auth. Results: "aligned" (Auth holds the e-mail the unchanged records hold — or never changed),
+//   "unconfirmed:<why>" (the Auth outcome could not be established or undone). No retry loop, no new record, no new response.
+const normEmail = (v) => String(v ?? "").trim().toLowerCase();
+async function readAuthEmail(auth, uid) {
+  try { const u = await auth.getUser(uid); return { ok: true, email: normEmail(u && u.email) }; }
+  catch { return { ok: false }; }
+}
+/** Phase 5 failed after an applied Auth e-mail change: put the previous e-mail back; if the revert answers an error, read Auth. */
+async function revertAuthEmail(auth, uid, newEmail, oldEmail) {
+  if (!oldEmail) return "unconfirmed:no_previous_email";
+  try { await auth.updateUser(uid, { email: oldEmail }); return "aligned"; }
+  catch (revErr) { console.error("[update-user] Auth revert answered an error:", revErr?.message); }
+  const now = await readAuthEmail(auth, uid);
+  if (!now.ok) return "unconfirmed:auth_unreadable";
+  return now.email === normEmail(oldEmail) ? "aligned" : "unconfirmed:revert_not_applied";
+}
+/** Phase 4's auth.updateUser answered an unclassified error: did it apply? If so, undo it exactly as Phase 5 would. */
+async function settleAuthEmailAfterError(auth, uid, newEmail, oldEmail) {
+  const now = await readAuthEmail(auth, uid);
+  if (!now.ok) return "unconfirmed:auth_unreadable";
+  if (now.email === normEmail(newEmail)) return revertAuthEmail(auth, uid, newEmail, oldEmail);   // it applied: compensate
+  if (oldEmail && now.email === normEmail(oldEmail)) return "aligned";                             // it did not apply: Auth = records
+  return "unconfirmed:auth_diverged";   // Auth holds neither e-mail (pre-existing divergence): not moved by this request, not claimed aligned
+}
+
 async function handleUpdateUser(req, res) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" }); return;
@@ -1674,6 +1702,12 @@ async function handleUpdateUser(req, res) {
         res.status(404).json({ error: "משתמש לא נמצא ב-Auth — ייתכן שנמחק. פנה לתמיכה." }); return;
       }
       console.error("[update-user] auth.updateUser failed:", e.message, e.code);
+      // I7 (independent I6 review I6-R-04 / I5 NEXT_WORK "Auth and RTDB must remain aligned"; T-I7-AUTH-ALIGN): the error does not say
+      //   whether Auth applied the change. Establish it (the Auth record itself) and, if it did, undo it with the same compensation
+      //   Phase 5 uses — so this failure answer stands for an unchanged Auth AND unchanged records. Only an outcome that cannot be
+      //   established is left unconfirmed (logged; its handling is the owner decision D-I7-01 — no recovery policy is invented here).
+      const outcome = await settleAuthEmailAfterError(auth, firebaseUid, newEmail, oldEmail);
+      if (outcome !== "aligned") console.error(`[update-user] Auth/RTDB alignment UNCONFIRMED after an Auth error (${outcome}) — tenant ${tenantId} uid ${firebaseUid}`);
       res.status(500).json({ error: "שגיאה בעדכון Firebase Auth" }); return;
     }
   }
@@ -1686,9 +1720,12 @@ async function handleUpdateUser(req, res) {
     await db.ref().update(updates);
   } catch (e) {
     console.error("[update-user] RTDB write failed:", e.message);
-    if (emailChanged && oldEmail) {
-      try { await auth.updateUser(firebaseUid, { email: oldEmail }); }
-      catch (revErr) { console.error("[update-user] Auth revert FAILED — manual repair required:", revErr.message); }
+    if (emailChanged) {
+      // I7 (I6-R-04; T-I7-AUTH-ALIGN): revert the Auth e-mail; when the revert itself reports an error, establish what Auth holds
+      //   instead of assuming it failed (a revert can apply and still answer an error). Unconfirmed alignment is logged for the
+      //   owner decision D-I7-01.
+      const outcome = await revertAuthEmail(auth, firebaseUid, newEmail, oldEmail);
+      if (outcome !== "aligned") console.error(`[update-user] Auth revert UNCONFIRMED (${outcome}) — manual repair required — tenant ${tenantId} uid ${firebaseUid}`);
     }
     res.status(500).json({ error: "שגיאה בשמירת המשתמש — פנה לתמיכה" }); return;
   }
@@ -2026,6 +2063,10 @@ async function handleListEntryExceptions(req, res) {
   const db = getAdminDb();
   try { await requireBizAccess(db, tenantId, bizId, claims.uid, role); }
   catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "business_access_denied" }); return; }
+  // I7 (independent I6 review I6-R-02 / R6-5): the business must be authoritatively registered (exact id, ONE registry read)
+  // before any entry-exception read — the approved M1 registry rule and the P1 response mapping (scRequireRegisteredBusiness).
+  try { await scRequireRegisteredBusiness(db, tenantId, bizId); }
+  catch (e) { res.status(e?.status || 503).json({ error: e?.msg || "business_registry_unreadable" }); return; }
   try {
     const exceptions = await listEntryExceptions({ tenantId, bizId, fromDate, toDate });
     res.status(200).json({ ok: true, tenantId, bizId, fromDate, toDate, exceptions });
@@ -2067,6 +2108,10 @@ async function eeAuthorizeWrite(req, res) {
   const db = getAdminDb();
   try { await requireBizAccess(db, tenantId, bizId, claims.uid, role); }
   catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "business_access_denied" }); return null; }
+  // I7 (I6-R-02 / R6-5): authoritative registration of the exact business (ONE registry read) before the policy read and any
+  // ledger transaction — set and clear share this authorization.
+  try { await scRequireRegisteredBusiness(db, tenantId, bizId); }
+  catch (e) { res.status(e?.status || 503).json({ error: e?.msg || "business_registry_unreadable" }); return null; }
   // VERSION FENCE (P0-DATA-01): the Admin SDK bypasses Rules, so the business's server-
   // owned storage policy is checked HERE before any ledger mutation. A quiesced or
   // recovery-held business (or a malformed / unreadable record) refuses admission with
@@ -2423,6 +2468,10 @@ async function bizDataAuthRead(req, res, tenantId, bizId) {
   const db = getAdminDb();
   try { await requireBizAccess(db, tenantId, bizId, claims.uid, role); }
   catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "business_access_denied" }); return null; }
+  // I7 (I6-R-02 / R6-5): authoritative registration of the exact business (ONE registry read) before any checklist / analytics /
+  // insights read.
+  try { await scRequireRegisteredBusiness(db, tenantId, bizId); }
+  catch (e) { res.status(e?.status || 503).json({ error: e?.msg || "business_registry_unreadable" }); return null; }
   return { claims, role, db };
 }
 // Shared write auth (POST): minRole ("manager" | "shift_manager") within an authorized business.
@@ -2439,6 +2488,9 @@ async function bizDataAuthWrite(req, res, minRole) {
   const db = getAdminDb();
   try { await requireBizAccess(db, tenantId, bizId, claims.uid, role); }
   catch (e) { res.status(e?.status || 403).json({ error: e?.msg || "business_access_denied" }); return null; }
+  // I7 (I6-R-02 / R6-5): authoritative registration of the exact business (ONE registry read) before any checklist write.
+  try { await scRequireRegisteredBusiness(db, tenantId, bizId); }
+  catch (e) { res.status(e?.status || 503).json({ error: e?.msg || "business_registry_unreadable" }); return null; }
   return { claims, role, db, body, tenantId, bizId };
 }
 function validVersionToken(t) { return typeof t === "string" && /^[a-f0-9]{64}$/.test(t); }

@@ -38,6 +38,15 @@ import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { adminHarness, observe, seed, closeSdk, clone, env, ROOT } from "../support/i4-boundary-harness.mjs";
 import { I6_PARENT } from "../support/i6-integration.mjs";
+// I7 layering (T-I7-TEST-LAYER; M1 integration + user-access / admin-API owners — the EX-06-on-I6 pattern): on a tree that carries the
+// I7 successor, RB-03 (update-user fault table) and RB-10 (parity with I5) exercise the I6 commit's OWN bytes (git objects) — exactly
+// the I6 layer property, unchanged. I7 corrects both classes on purpose (I6-R-04 Auth alignment; I6-R-02 Admin-local registration):
+// its behaviour is held by test/finance/i7-update-user-alignment.test.mjs, i7-admin-local-registry.test.mjs and i7-parity.test.mjs.
+import { isI7Tree, I7_PARENT } from "../support/i7-integration.mjs";
+const LAYERED = isI7Tree(ROOT);
+let I6OBJ = null;
+const i6obj = async () => (I6OBJ ??= await adminHarness({ source: I7_PARENT }));   // the I6 commit's bytes
+const i6 = async () => (LAYERED ? i6obj() : head());
 import * as SC from "../../lib/securityContext.js";
 // On the parent (I5, parent-red runs) the registered variant does not exist and the consumer routes inject the plain gate — the
 // fallback reproduces exactly that production wiring, so each row reports the parent's real behaviour.
@@ -193,7 +202,7 @@ function aligned(h, model, label) {
   assert.equal(s.users, s.appUsers, label + ": users/{uid} = app/users");
 }
 test("RB-03 update-user: every read and refusal precedes the Auth e-mail change; Auth and RTDB stay aligned on every failure but the documented final-write case, which a retry re-converges", async () => {
-  const h = await head();
+  const h = await i6();   // I7 layering: the I6 commit's bytes on an I7 tree
   const readFaults = [
     ["biz_access tree read failure", "tenants/tenantA/biz_access", {}, [500, "שגיאה בעדכון הרשאות עסק"]],
     ["biz_access tree read timeout", "tenants/tenantA/biz_access", { delayMs: 25 }, [500, "שגיאה בעדכון הרשאות עסק"]],
@@ -473,7 +482,7 @@ async function frozen(fn) {
  *  read earlier (before the Auth mutation); as multisets the references must otherwise be identical. */
 async function parity(action, body, actor, method = "POST", { st = seed(), registryRead = false } = {}) {
   const one = async (h) => { h.reset(clone(st)); const res = await frozen(() => h.call(action, clone(body), actor, method)); return scrub(observe(h, res)); };
-  const [a, b] = [await one(await head()), await one(await i5())];
+  const [a, b] = [await one(await i6()), await one(await i5())];
   const sorted = (x) => [...x].sort();
   const aRefs = [...a.refs];
   if (registryRead) { const t = body && typeof body === "object" ? body.tenantId : null; const k = aRefs.indexOf(`tenants/${t}/app/business`); if (k >= 0 && aRefs.filter((p) => p === `tenants/${t}/app/business`).length === b.refs.filter((p) => p === `tenants/${t}/app/business`).length + 1) aRefs.splice(k, 1); }
@@ -538,7 +547,7 @@ test("RB-10 parity with I5 outside the corrected classes (the EX-06 corpora: eve
     ["create-user", { tenantId: "tenantA", email: "n@example.test", username: "nn", role: "viewer", allowedBizIds }],
     ["roles", { tenantId: "tenantA", targetUid: "sub1", role: "viewer", allowedBizIds }],
     ["update-user", { tenantId: "tenantA", firebaseUid: "sub1", email: "x@example.test", allowedBizIds }]]) {
-    const h6 = await head(), h5 = await i5();
+    const h6 = await i6(), h5 = await i5();
     h6.reset(seed()); const a = observe(h6, await h6.call(action, clone(body), "own"));
     h5.reset(seed()); const b = observe(h5, await h5.call(action, clone(body), "own"));
     assert.equal(b.status, 200, `I5 granted ${show(allowedBizIds)} (${action})`);

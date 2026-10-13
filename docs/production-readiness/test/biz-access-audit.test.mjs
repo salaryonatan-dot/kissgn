@@ -296,3 +296,73 @@ test("PR-003: CLI invalid --out reports failure with no supplied/resolved path l
   assert.ok(!out.includes(repoRoot), "resolved repository path must be absent");
   assert.ok(!existsSync(SYNTH_OUT), "no output file may be created");
 });
+
+// ─── I7 (T-I7-AUDIT-PARITY; production-readiness audit + user-access + M1 registry owners — independent I6 review I6-R-01) ───
+// The audit classifies the ORIGINAL raw app/business node exactly as the runtime does (lib/businessRegistry.js classifyRegistryTarget):
+// the runtime reads only `{ _v: "<JSON array>" }`; a bare array, a bare JSON string or an absent node is `unreadable` there, so the
+// audit may still LIST them for diagnostics but must never call a business registered, READY, or propose a grant from them.
+import { decodeRegistryNode } from "../../../lib/businessRegistry.js";
+const scopedOne = (id, reg, grants = []) => run({ appBusinessRaw: reg, members: { uV: true }, roles: { uV: "viewer" }, bizAccess: Object.fromEntries(grants.map((b) => [b, { uV: true }])),
+  appUsersRaw: users([{ firebaseUid: "uV", role: "viewer", allowedBizIds: [id] }]) });
+
+test("I7-A1 canonical envelope vs bare array / bare JSON string / absent node: runtime ≡ model; only the canonical node yields a proposed grant", () => {
+  const records = [{ id: "bizA" }];
+  const rows = [["canonical", biz(records), "registered", 1], ["bare array", records, "unreadable", 0], ["bare JSON string", JSON.stringify(records), "unreadable", 0], ["absent", null, "unreadable", 0], ["undefined", undefined, "unreadable", 0]];
+  for (const [label, raw, state, grants] of rows) {
+    assert.equal(classifyRegistryTarget(raw, "bizA").state, state, label + ": runtime");
+    assert.equal(registryVerdict(parseAppBusiness(raw), "bizA"), state, label + ": model ≡ runtime");
+    const r = scopedOne("bizA", raw);
+    assert.equal(r.proposedGrants.length, grants, label + ": proposed grants");
+    assert.equal(r.categories.NEEDS_BACKFILL, grants, label + ": NEEDS_BACKFILL");
+    assert.equal(r.categories.READY, 0, label);
+    const withGrant = scopedOne("bizA", raw, ["bizA"]);
+    assert.equal(withGrant.categories.READY, grants, label + ": an existing grant is READY only over a runtime-readable registry");
+    if (state === "unreadable") {
+      assert.ok(r.findings.some((f) => f.subject === "app/business" && f.malformed === true && /not the runtime \{ _v \} node/.test(f.note)), label + ": reported");
+      assert.equal(r.malformed, true, label + ": the tenant is malformed for the runtime");
+      assert.ok(r.findings.some((f) => f.category === "UNKNOWN_BUSINESS" && /unreadable by the runtime/.test(f.note)), label + ": the business is unknown, not missing a grant");
+      assert.ok(withGrant.findings.some((f) => f.category === "UNKNOWN_BUSINESS" && f.businessRef), label + ": an existing grant over an unreadable registry is flagged");
+    }
+  }
+  // diagnostics are kept: the tolerated shapes are still parsed and listed
+  assert.deepEqual([...parseAppBusiness(records).businesses], ["bizA"]);
+  assert.equal(parseAppBusiness(records).runtimeReadable, false); assert.equal(parseAppBusiness(biz(records)).runtimeReadable, true);
+});
+
+test("I7-A2 exhaustive parity: for every registry shape × requested id the model's verdict IS the runtime's, and a grant is proposed exactly when the runtime would register the id", () => {
+  const shapes = [
+    biz([{ id: "bizA" }, { id: "bizB" }]), biz([]), biz([{ id: "bizA" }, { id: "bizA" }]), biz([{ id: "bizA" }, { id: " bizA " }]), biz([{ id: " bizA " }, { id: "bizA" }]),
+    biz([{ id: "bizA" }, "bizA"]), biz([{ id: "bizA" }, 7]), biz([{ id: "7" }, 7]), biz([{ id: "bizA" }, null]), biz([{ id: "null" }, null]), biz([{ id: "null" }, { id: null }]),
+    biz([{ id: "bizA" }, { name: "no id" }, { id: "bad.id" }, [1, 2]]), biz([{ id: " bizA " }]), biz([{ id: "ביז" }, { id: "biz\u0080" }]), biz([{ id: "biz:A" }]),
+    { _v: "{bad" }, { _v: JSON.stringify({ id: "bizA" }) }, { _v: 5 }, { v: JSON.stringify([{ id: "bizA" }]) }, [{ id: "bizA" }], JSON.stringify([{ id: "bizA" }]), "not json",
+    null, undefined, 0, true, [],
+  ];
+  const ids = ["bizA", " bizA ", "bizA ", "bizB", "7", "null", "ביז", "biz\u0080", "bizC", "biz:A", "", "bad.id"];
+  let checked = 0, proposed = 0;
+  for (const raw of shapes) {
+    const parsed = parseAppBusiness(raw);
+    assert.equal(parsed.runtimeReadable, decodeRegistryNode(raw).ok, "runtime readability: " + JSON.stringify(raw));
+    for (const id of ids) {
+      const runtime = classifyRegistryTarget(raw, id).state;
+      assert.equal(registryVerdict(parsed, id), runtime, "model ≡ runtime: " + JSON.stringify([raw, id]));
+      if (!isRegistryBizIdForTest(id)) continue;                       // the scope list refuses it before any registry question
+      const r = scopedOne(id, raw);
+      const want = runtime === "registered" ? 1 : 0;
+      assert.equal(r.proposedGrants.length, want, "proposed grant ⇔ runtime registered: " + JSON.stringify([raw, id, runtime]));
+      assert.equal(scopedOne(id, raw, [id]).categories.READY, want, "READY ⇔ runtime registered: " + JSON.stringify([raw, id, runtime]));
+      checked++; proposed += want;
+    }
+  }
+  assert.ok(checked > 200 && proposed > 5 && proposed < checked, "non-vacuous: " + checked + " checked, " + proposed + " proposed");
+});
+const isRegistryBizIdForTest = (id) => normalizeAllowedBizIds([id]).ok && normalizeAllowedBizIds([id]).ids.length === 1;
+
+test("I7-A3 authorization parity: implicit-scope roles, non-members and invalid roles never receive a proposed grant, whatever the registry", () => {
+  for (const raw of [biz([{ id: "bizA" }]), [{ id: "bizA" }], null]) {
+    for (const [role, member] of [["owner", true], ["super_owner", true], ["manager", false], ["admin", true], [undefined, true]]) {
+      const r = run({ appBusinessRaw: raw, members: member ? { u: true } : {}, roles: role === undefined ? {} : { u: role }, bizAccess: {},
+        appUsersRaw: users([{ firebaseUid: "u", role: role ?? "viewer", allowedBizIds: ["bizA"] }]) });
+      assert.equal(r.proposedGrants.length, 0, JSON.stringify([raw, role, member]));
+    }
+  }
+});

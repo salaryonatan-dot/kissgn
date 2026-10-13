@@ -29,6 +29,10 @@ function seed(policy) {
   db.seed(`tenants/${T}/members/${UID}`, true);
   db.seed(`tenants/${T}/roles/${UID}`, "owner");
   db.seed(`tenants/${T}/biz_access/${B}/${UID}`, true);
+  // I7 test-contract transition (T-I7-TEST-ADMINLOCAL; P0/admin-API + M1 identity owners — independent I6 review I6-R-02): the
+  // entry-exception writes now require the exact business to be authoritatively registered, so the fixture carries the runtime
+  // registry node registering B. Every admission / refusal assertion below is unchanged.
+  db.seed(`tenants/${T}/app/business`, { _v: JSON.stringify([{ id: B, name: "B" }]) });
   if (policy !== null && policy !== undefined) db.seed(`storage_v2_control/${T}/${B}`, policy);
   globalThis.__CLAIMS = { uid: UID, email: "o@example.invalid" };
   return db;

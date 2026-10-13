@@ -55,6 +55,10 @@ const fixtures = (policies) => ({
   tenants: { [T]: {
     members: { u_a: true, u_b: true, [SUPER]: true }, roles: { u_a: "owner", u_b: "manager", [SUPER]: "super_owner" }, biz_access: { bizA: { u_b: true }, bizB: { u_b: true } },
     lookup: { alice: { email: "a@x", firebaseUid: "u_a" } },
+    // I7 test-contract transition (T-I7-TEST-ADMINLOCAL; P0 / admin-API + M1 identity owners — independent I6 review I6-R-02): the
+    // entry-exception writes (AM-H) now require the exact business to be authoritatively registered, so the tenant carries the runtime
+    // registry node registering bizA and bizB. Every admission / refusal / byte-identity assertion is unchanged.
+    app: { business: { _v: JSON.stringify([{ id: "bizA", name: "A" }, { id: "bizB", name: "B" }]) } },
     "biz:bizA:entries": { _v: JSON.stringify([{ id: "00000001-aaaa-4bbb-8ccc-dddddddddddd", date: "2026-08-01", sales: 1 }]) },
     "biz:bizB:entries": { schemaVersion: 2, generation: 1, rows: { "00000002-aaaa-4bbb-8ccc-dddddddddddd": { id: "00000002-aaaa-4bbb-8ccc-dddddddddddd", _gen: 1, date: "2026-08-02", sales: 2 } } },
   }, other: { roles: { [SUPER]: "super_owner" } } },
