@@ -18,7 +18,7 @@
 // Run: bash test/support/p1-r7-emu-run.sh <checkout> <abs-log-dir> i1=test/emulator/i1-integration-emulator.mjs
 import admin from "firebase-admin";
 import assert from "node:assert/strict";
-import { buildSandbox, installSmtp, SMTP, mkRes, runCron, T, B, B2, T2, B3 } from "../support/daily-email-harness.mjs";
+import { buildSandbox, installSmtp, SMTP, mkRes, runCron, T, B, B2, T2, B3, HOLD_PATH, releasedHoldRecord } from "../support/daily-email-harness.mjs";
 import { deliveryNoticePath, MISSING_NAME_NOTICE_HE } from "../../lib/emailDelivery.js";
 
 const PROJECT = "demo-marjin-rules";
@@ -70,6 +70,8 @@ const day = (date, n) => ({ id: `de000000-0000-4000-8000-${String(n).padStart(12
 async function world({ nameB2 = "מסעדה ב", registryA } = {}) {
   fault.path = null;
   await dbA.ref("/").set(null);
+  // HR1 (T-HR1-TEST-EMU): the bootstrapped RELEASED Daily hold record (absent = held, fail closed); every assertion unchanged
+  await dbA.ref(HOLD_PATH).set(releasedHoldRecord());
   for (const [t, b, name] of [[T, B, "מסעדה א"], [T, B2, nameB2 ?? "x"], [T2, B3, "מסעדה ג"]]) {
     await dbA.ref(`tenants/${t}/biz:${b}:entries`).set(env(days.map((d, i) => day(d, i + 1))));
     await dbA.ref(`tenants/${t}/biz:${b}:config`).set(env({ businessName: name }));

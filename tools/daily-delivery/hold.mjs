@@ -1,0 +1,165 @@
+// HR1 — the Daily-only delivery hold: OPERATOR TOOL (server credentials; no HTTP surface; nothing here is reachable by a client).
+//
+//   status    read-only: the hold record as the gates see it, its log, the held business dates
+//   evidence  read-only: the drain evidence report (operational r2 DRAIN_CRITERIA C1–C7). It reports evidence for an OWNER
+//             judgement. It never prints "quiescent", "drained" or "nothing sent": stopping new hand-offs does not prove that
+//             earlier hand-offs have finished, and only provider evidence can settle an `unknown` (P7).
+//   init      create the record HELD (only when it is absent or malformed; a malformed record is digested, then replaced)
+//   hold      held   (requires the current version: --expect-version=N, from `status`)
+//   release   released (likewise). A release does NOT send any held business date: the held-date markers stay, and a
+//             scheduled run for a held date is still refused (owner decision: no automatic sending of held-day summaries).
+//
+// Writes are ONE transaction on delivery_control/daily_snapshot (lib/emailDelivery.js changeDeliveryHold): state, version and
+// the audit-log entry together, or nothing. Every command verifies the ACTUAL project of the credentials against --project
+// before any read; writes additionally require --actor, --reason and --confirm=<action>@<project>.
+//
+//   node tools/daily-delivery/hold.mjs status   --project=<id>
+//   node tools/daily-delivery/hold.mjs evidence --project=<id> [--max-duration-ms=<observed>] [--inventory-attested] [--logs-attested] [--provider-attested]
+//   node tools/daily-delivery/hold.mjs init     --project=<id> --actor=<id> --reason="…" --confirm=init@<id>
+//   node tools/daily-delivery/hold.mjs hold     --project=<id> --actor=<id> --reason="…" --expect-version=<n> --confirm=hold@<id>
+//   node tools/daily-delivery/hold.mjs release  --project=<id> --actor=<id> --reason="…" --expect-version=<n> --confirm=release@<id>
+import { fileURLToPath } from "node:url";
+import { DELIVERY_HOLD_PATH, HELD_DATES_ROOT, MANUAL_ATTEMPT_ROOT, RECEIPT_ROOT, DAILY_SNAPSHOT_KIND, CLAIM_LEASE_MS, classifyHoldRecord,
+  changeDeliveryHold } from "../../lib/emailDelivery.js";
+
+export const SEND_DEADLINE_MS = 60000;      // lib/sendEmail.js SEND_DEADLINE_MS (asserted equal by the HR1 tests)
+export const DRAIN_MARGIN_MS = 60000;
+export const EXIT = Object.freeze({ OK: 0, USAGE: 2, REFUSED: 3, PROJECT: 4, ABORT_D: 5 });
+export const COMMANDS = Object.freeze(["status", "evidence", "init", "hold", "release"]);
+
+export function parseArgs(argv) {
+  const out = { _: [] };
+  for (const a of argv) {
+    const m = /^--([a-z-]+)(?:=(.*))?$/.exec(a);
+    if (!m) { out._.push(a); continue; }
+    out[m[1]] = m[2] === undefined ? true : m[2];
+  }
+  return out;
+}
+
+/** The project the credentials actually belong to (never trusted from an argument). */
+export function actualProjectId(app) {
+  const o = (app && app.options) || {};
+  return o.projectId || (o.credential && o.credential.projectId) || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || null;
+}
+
+const isPlain = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
+const read = async (db, path) => (await db.ref(path).once("value")).val();
+
+/** The log of a record, in version order (empty when the record is not a plain object). */
+export function holdLog(raw) {
+  if (!isPlain(raw) || !isPlain(raw.log)) return [];
+  return Object.keys(raw.log).sort().map((k) => ({ key: k, ...(isPlain(raw.log[k]) ? raw.log[k] : { malformed: true }) }));
+}
+
+/** The status view. Pure. */
+export function statusView(raw, heldDates) {
+  const c = classifyHoldRecord(raw);
+  return {
+    gates: c.state, code: c.code, version: c.version,
+    recordPresent: raw !== null && raw !== undefined,
+    log: holdLog(raw).slice(-10),
+    heldDates: isPlain(heldDates) ? Object.keys(heldDates).sort() : [],
+  };
+}
+
+/**
+ * The drain evidence report (DRAIN_CRITERIA C1–C7). Pure: every input is a value read once by the caller.
+ * Each criterion is "met" | "not_met" | "not_evaluable" | "attested" (an operator attestation the tool cannot verify).
+ * verdict: "EVIDENCE_COMPLETE_FOR_OWNER_REVIEW" only when C1–C4 are met and C2b, C5–C7 are attested; otherwise "ABORT_D".
+ */
+export function drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurationMs = null, inventoryAttested = false, logsAttested = false, providerAttested = false }) {
+  const c = classifyHoldRecord(holdRaw);
+  const log = holdLog(holdRaw);
+  const last = log.length ? log[log.length - 1] : null;
+  const tHold = c.code === "delivery_held" && last && (last.action === "hold" || last.action === "init") && last.version === c.version && Number.isFinite(last.at) ? last.at : null;
+  const receipts = { active: [], sendingExpired: [], unknown: [], heldBeforeSend: [], claimedExpired: [], unreadable: [] };
+  if (isPlain(receiptsRaw)) for (const [t, bs] of Object.entries(receiptsRaw)) if (isPlain(bs)) for (const [b, ds] of Object.entries(bs)) if (isPlain(ds)) for (const [d, x] of Object.entries(ds)) {
+    const id = `${t}/${b}/${d}`;
+    if (!isPlain(x) || typeof x.state !== "string") { receipts.unreadable.push(id); continue; }
+    const live = Number(x.leaseUntil) > nowMs;
+    if ((x.state === "claimed" || x.state === "sending") && live) receipts.active.push({ id, state: x.state, attempt: x.attempt ?? null });
+    else if (x.state === "sending") receipts.sendingExpired.push({ id, attempt: x.attempt ?? null });
+    else if (x.state === "unknown") receipts.unknown.push({ id, code: x.outcome?.code ?? x.code ?? null, messageIdHeader: x.messageIdHeader ?? null });
+    else if (x.state === "claimed") {
+      const h = Array.isArray(x.history) ? x.history[x.history.length - 1] : null;
+      (h && h.state === "held_before_send" ? receipts.heldBeforeSend : receipts.claimedExpired).push({ id, attempt: x.attempt ?? null });
+    }
+  }
+  const manual = { handingOff: [], unknown: [], unreadable: [] };
+  if (isPlain(manualRaw)) for (const [t, bs] of Object.entries(manualRaw)) if (isPlain(bs)) for (const [b, as] of Object.entries(bs)) if (isPlain(as)) for (const [a, x] of Object.entries(as)) {
+    const id = `${t}/${b}/${a}`;
+    if (!isPlain(x) || typeof x.state !== "string") { manual.unreadable.push(id); continue; }
+    if (x.state === "handing_off") manual.handingOff.push({ id, startedAt: x.startedAt ?? null, deploymentId: x.deploymentId ?? null, messageIdHeader: x.messageIdHeader ?? null });
+    else if (x.state === "unknown") manual.unknown.push({ id, code: x.code ?? null, messageIdHeader: x.messageIdHeader ?? null });
+  }
+  const bound = tHold !== null && Number.isInteger(maxDurationMs) && maxDurationMs > 0 ? tHold + maxDurationMs + SEND_DEADLINE_MS + CLAIM_LEASE_MS + DRAIN_MARGIN_MS : null;
+  const criteria = {
+    C1_hold_continuously_held: tHold !== null ? "met" : "not_met",
+    C2_no_live_scheduled_claim: receipts.unreadable.length ? "not_met" : receipts.active.length === 0 ? "met" : "not_met",
+    C2b_invocations_explained_by_receipts: logsAttested ? "attested" : "not_evaluable",
+    C3_no_manual_attempt_handing_off: manual.unreadable.length ? "not_met" : manual.handingOff.length === 0 ? "met" : "not_met",
+    C4_time_bound_passed: bound === null ? "not_evaluable" : nowMs >= bound ? "met" : "not_met",
+    C5_every_reachable_deployment_gated: inventoryAttested ? "attested" : "not_evaluable",
+    C6_hosted_logs_complete: logsAttested ? "attested" : "not_evaluable",
+    C7_provider_evidence_for_unresolved_manual: providerAttested ? "attested" : "not_evaluable",
+  };
+  const strict = ["C1_hold_continuously_held", "C2_no_live_scheduled_claim", "C3_no_manual_attempt_handing_off", "C4_time_bound_passed"];
+  const attest = ["C2b_invocations_explained_by_receipts", "C5_every_reachable_deployment_gated", "C6_hosted_logs_complete", "C7_provider_evidence_for_unresolved_manual"];
+  const complete = strict.every((k) => criteria[k] === "met") && attest.every((k) => criteria[k] === "attested");
+  return {
+    verdict: complete ? "EVIDENCE_COMPLETE_FOR_OWNER_REVIEW" : "ABORT_D",
+    hold: { gates: c.state, code: c.code, version: c.version, tHold },
+    timeBound: { maxDurationMs: Number.isInteger(maxDurationMs) ? maxDurationMs : null, earliestMs: bound, sendDeadlineMs: SEND_DEADLINE_MS, claimLeaseMs: CLAIM_LEASE_MS, marginMs: DRAIN_MARGIN_MS },
+    criteria,
+    // the P7 population: everything whose provider outcome automation cannot establish (never re-sent automatically)
+    p7Population: { scheduledUnknown: receipts.unknown, scheduledSendingExpired: receipts.sendingExpired, manualUnknown: manual.unknown, manualHandingOff: manual.handingOff },
+    notHandedOver: { scheduledHeldBeforeSend: receipts.heldBeforeSend, scheduledClaimedExpired: receipts.claimedExpired },
+    unreadable: { receipts: receipts.unreadable, manual: manual.unreadable },
+    limits: [
+      "This report is evidence for an owner judgement. It does not prove that no message is in flight or was sent.",
+      "A hand-off that started before the hold cannot be recalled; an `unknown` outcome is settled only by provider evidence (P7).",
+      "Deployments without HR1 (any earlier lineage, an Instant Rollback target) ignore the hold and may send.",
+    ],
+  };
+}
+
+/**
+ * Run one command against `db`. Returns { exitCode, result }. `args` are parsed flags; `project` is the VERIFIED project.
+ */
+export async function runCommand(db, command, args, { project, nowMs = Date.now() } = {}) {
+  if (!COMMANDS.includes(command)) return { exitCode: EXIT.USAGE, result: { error: "unknown_command", commands: COMMANDS } };
+  if (command === "status") return { exitCode: EXIT.OK, result: statusView(await read(db, DELIVERY_HOLD_PATH), await read(db, HELD_DATES_ROOT)) };
+  if (command === "evidence") {
+    const maxDurationMs = args["max-duration-ms"] === undefined ? null : Number(args["max-duration-ms"]);
+    const report = drainEvidence({ holdRaw: await read(db, DELIVERY_HOLD_PATH), receiptsRaw: await read(db, `${RECEIPT_ROOT}/${DAILY_SNAPSHOT_KIND}`),
+      manualRaw: await read(db, MANUAL_ATTEMPT_ROOT), nowMs, maxDurationMs: Number.isInteger(maxDurationMs) ? maxDurationMs : null,
+      inventoryAttested: args["inventory-attested"] === true, logsAttested: args["logs-attested"] === true, providerAttested: args["provider-attested"] === true });
+    return { exitCode: report.verdict === "ABORT_D" ? EXIT.ABORT_D : EXIT.OK, result: report };
+  }
+  // writes
+  if (args.confirm !== `${command}@${project}`) return { exitCode: EXIT.REFUSED, result: { error: "confirmation_required", expected: `--confirm=${command}@${project}` } };
+  const expectVersion = args["expect-version"] === undefined ? undefined : Number(args["expect-version"]);
+  const r = await changeDeliveryHold(db, { action: command, actor: typeof args.actor === "string" ? args.actor : "", reason: typeof args.reason === "string" ? args.reason : "", expectVersion, nowMs });
+  return { exitCode: r.ok ? EXIT.OK : EXIT.REFUSED, result: r };
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const command = args._[0];
+  if (!COMMANDS.includes(command)) { console.error(`usage: hold.mjs <${COMMANDS.join("|")}> --project=<id> …`); process.exit(EXIT.USAGE); }
+  if (typeof args.project !== "string" || !args.project) { console.error("ERROR: --project=<projectId> is required (identity is verified, not trusted)"); process.exit(EXIT.USAGE); }
+  const adminMod = await import("firebase-admin");
+  const admin = adminMod.default || adminMod;
+  if (!admin.apps || admin.apps.length === 0) admin.initializeApp();
+  const app = admin.app();
+  const actual = actualProjectId(app);
+  if (!actual || actual !== args.project) { console.error(`ABORT (project verification): credentials project ${actual ?? "unknown"} ≠ --project ${args.project}`); process.exit(EXIT.PROJECT); }
+  const { exitCode, result } = await runCommand(admin.database(), command, args, { project: actual });
+  console.log(JSON.stringify(result, null, 2));
+  if (command === "evidence") console.log(`VERDICT ${result.verdict}`);
+  await app.delete().catch(() => {});
+  process.exit(exitCode);
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main();

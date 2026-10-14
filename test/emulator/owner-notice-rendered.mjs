@@ -110,6 +110,10 @@ const USERS = [
 const bizNodes = (b, name) => ({ [`biz:${b}:entries`]: env(ROWS), [`biz:${b}:config`]: env(CONFIG(name)), [`biz:${b}:fixed`]: env(FIXED), [`biz:${b}:suppliers`]: env([]) });
 // nameA: a string = the registry name; null = the record has NO name key at all
 const fixtures = ({ nameA = "סניף א", nameB = "סניף ב", activeUid = OWNER.uid, activeBiz = B } = {}) => ({
+  // HR1 (T-HR1-TEST-EMU): the bootstrapped RELEASED Daily hold record (absent = held, fail closed); every assertion unchanged
+  delivery_control: { daily_snapshot: { schema: 1, state: "released", version: 2, log: {
+    v000000001: { action: "init", state: "held", version: 1, prevVersion: 0, actor: "fixture", reason: "fixture bootstrap", at: 0 },
+    v000000002: { action: "release", state: "released", version: 2, prevVersion: 1, actor: "fixture", reason: "fixture release", at: 0 } } } },
   tenants: {
     [T]: {
       members: { [OWNER.uid]: true, [VIEWER.uid]: true, [MANAGER.uid]: true }, roles: { [OWNER.uid]: "owner", [VIEWER.uid]: "viewer", [MANAGER.uid]: "manager" },

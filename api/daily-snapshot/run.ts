@@ -3,8 +3,9 @@ import { getDb } from "../../src/firebase/admin.js";
 import { buildSnapshotForBiz, buildSnapshotRun } from "../../src/snapshot/snapshotBuilder.js";
 import { sendSnapshotEmail } from "../../src/snapshot/snapshotEmail.js";
 import { requireCron, requireBizContext } from "../../lib/securityContext.js";
-import { deliverWithReceipt, deliverWithoutReceipt, boundedCode, DAILY_SNAPSHOT_KIND,
-  readDeliveryTarget, recordMissingNameNotice, clearDeliveryNotice, readDeliveryNoticeState } from "../../lib/emailDelivery.js";
+import { deliverWithReceipt, deliverManualDaily, boundedCode, DAILY_SNAPSHOT_KIND,
+  readDeliveryTarget, recordMissingNameNotice, clearDeliveryNotice, readDeliveryNoticeState,
+  makeDailyDeliveryGate, readManualDeliveryGate } from "../../lib/emailDelivery.js";
 import type { DeliveryTarget, DeliveryTargetCode, DeliveryNotice, DeliveryNoticeState } from "../../lib/emailDelivery.js";
 
 function setCorsHeaders(req: VercelRequest, res: VercelResponse): void {
@@ -107,13 +108,16 @@ async function resolveOwnerRecipient(tenantId: string): Promise<RecipientResult>
 //   pending     an unresolved active claim held by another invocation (in_progress): not delivered, not failed — yet
 //   unknown     the provider may have accepted it (unknown / unknown_requires_reconciliation): never re-sent automatically
 //   unrecorded  the provider accepted it but the receipt could not be finalized
+//   held        HR1: the Daily-only hold refused the message before the provider (G0 / G3): not sent, not failed, no attempt
+//               consumed; the business date is marked held and is NOT sent automatically after release (owner decision)
 //   failed      confirmed not delivered, an unreadable / unconfirmed receipt, or ANY outcome not listed above (fail closed)
 // The run is "completed" (HTTP 200) ONLY when every row is delivered or no_send. Any failed / unknown / unrecorded row (or a
-// receipt write problem) ⇒ "completed_with_failures" (500); otherwise any pending row ⇒ "incomplete" (503). An unresolved
-// claim is never re-claimed early and never re-sent: a later invocation observes its outcome (accepted ⇒ already_accepted;
-// an invocation that died while sending ⇒ unknown after the lease).
-type Settlement = "delivered" | "no_send" | "pending" | "unknown" | "unrecorded" | "failed";
+// receipt write problem) ⇒ "completed_with_failures" (500); otherwise any pending or held row ⇒ 503 — "held" when every row
+// that is not delivered is held, else "incomplete". An unresolved claim is never re-claimed early and never re-sent: a later
+// invocation observes its outcome (accepted ⇒ already_accepted; an invocation that died while sending ⇒ unknown after the lease).
+type Settlement = "delivered" | "no_send" | "pending" | "unknown" | "unrecorded" | "held" | "failed";
 function settle(outcome: string, code: string | null, receipt?: string): Settlement {
+  if (outcome === "held") return "held";
   if (outcome === "accepted") return receipt === "recorded" ? "delivered" : "unrecorded";
   if (outcome === "skipped" && code === "already_accepted") return "delivered";
   if (outcome === "skipped" && code === "in_progress") return "pending";
@@ -262,6 +266,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // any delivery: the outer catch answers 500 with a fixed body and logs the class only (G7 — never an empty success).
       const run = await buildSnapshotRun({ nowMs: Date.now() });
       const db = getDb();
+      // G1 (HR1): the Daily-only hold, read for the run's OWN business date (the builder's one clock read) BEFORE any message is
+      // claimed, any notice is written or any recipient is resolved (the build itself only reads). A held run — or a business
+      // date held earlier: no automatic sending of a held day after release — claims nothing, consumes no attempt, writes no
+      // notice and sends nothing; it marks the date held and answers 503 "held" (deliberate, not a failure). Absent, malformed,
+      // unreadable or timed-out hold state is held (fail closed).
+      const g1 = await makeDailyDeliveryGate(db, run.businessDate)("g1");
+      if (!g1.open) {
+        console.warn("[daily-snapshot] scheduled run held", { code: g1.code, businessDate: run.businessDate, heldDate: g1.heldDate ?? null });
+        return res.status(503).json({ status: "held", code: g1.code, businessDate: run.businessDate, holdVersion: g1.version, heldDate: g1.heldDate ?? null,
+          expectedBusinesses: run.expectedBusinesses.length, successCount: 0, failureCount: 0, unknownCount: 0, heldCount: run.expectedBusinesses.length, results: [] });
+      }
 
       // Daily e-mail reliability: every business ends in exactly one recorded outcome. A message is sent at most once per
       // (business, business date) by automation: a receipt (lib/emailDelivery.js) is claimed before the provider is
@@ -270,6 +285,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         attempt?: number; receipt?: string; phase?: string; recipientSelection?: RecipientSelection; notice?: "recorded" | "not_recorded" };
       const results: Row[] = [];
       const registryCache = new Map<string, unknown>();   // one registry read per tenant per run
+      // HR1: once a message of this run is held, every later message of the run is held too (one held day, never a partial
+      // release inside a run); other invocations see the held-date marker.
+      let runHeld: string | null = null;
+      const gatesByDate = new Map<string, ReturnType<typeof makeDailyDeliveryGate>>();
 
       // Every EXPECTED business becomes exactly one row (G1 / G3), in discovery order within each class: its snapshot is
       // delivered below, or its failed build is a FAILED row with the builder's bounded code and the run's business date — no
@@ -313,6 +332,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           continue;
         }
 
+        if (runHeld !== null) { results.push({ ...base, outcome: "held", code: runHeld, settlement: "held", receipt: "not_written" }); continue; }
+        let gate = gatesByDate.get(snapshot.date);
+        if (!gate) { gate = makeDailyDeliveryGate(db, snapshot.date); gatesByDate.set(snapshot.date, gate); }
         const r = await deliverWithReceipt({
           db,
           kind: DAILY_SNAPSHOT_KIND,
@@ -321,11 +343,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           businessDate: snapshot.date,
           recipient: recipient.email,
           send: () => sendSnapshotEmail(recipient.email, snapshot),
+          gate,
         });
+        if (r.outcome === "held") runHeld = boundedCode(r.code) ?? "delivery_held";
         const code = boundedCode(r.code);
         const settlement = settle(r.outcome, code, r.receipt);
         const attemptNo = Number.isInteger(r.attempt) ? r.attempt : undefined;
-        if (settlement === "pending") {
+        if (settlement === "held") {
+          console.warn(`[daily-snapshot] delivery held for ${snapshot.tenantId}:${snapshot.bizId}:${snapshot.date} code=${code}`);
+        } else if (settlement === "pending") {
           console.warn(`[daily-snapshot] delivery pending for ${snapshot.tenantId}:${snapshot.bizId}:${snapshot.date}: another invocation holds the claim (${r.phase === "sending" ? "sending" : "claimed"})`);
         } else if (settlement !== "delivered") {
           console.error(`[daily-snapshot] delivery ${settlement} for ${snapshot.tenantId}:${snapshot.bizId}:${snapshot.date} code=${code} attempt=${attemptNo ?? "-"} receipt=${r.receipt}`);
@@ -343,16 +369,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const unrecordedCount = count((x) => x.settlement === "unrecorded");
       const skippedCount = count((x) => x.settlement === "no_send");
       const deliveredCount = count((x) => x.settlement === "delivered");
+      const heldCount = count((x) => x.settlement === "held");
       const receiptWriteFailures = count((x) => x.receipt === "write_failed" || x.receipt === "unavailable");
       // G2: a failed discovery breaks the run even with zero known businesses; G1: the builder's own status must be complete
       const discoveryFailed = run.discovery.status !== "complete";
       const broken = failureCount > 0 || unknownCount > 0 || unrecordedCount > 0 || receiptWriteFailures > 0 || discoveryFailed;
-      const complete = !broken && run.status === "complete" && inProgressCount === 0 && deliveredCount + skippedCount === results.length;
+      const complete = !broken && run.status === "complete" && inProgressCount === 0 && heldCount === 0 && deliveredCount + skippedCount === results.length;
+      const heldOnly = !broken && !complete && heldCount > 0 && inProgressCount === 0 && deliveredCount + skippedCount + heldCount === results.length;
 
       // A run with any undelivered, ambiguous, unrecorded OR still-unresolved message is NOT reported as success to the
       // scheduler: only a run whose every message is durably recorded as accepted (or a contract no-send) is "completed".
       return res.status(complete ? 200 : broken ? 500 : 503).json({
-        status: complete ? "completed" : broken ? "completed_with_failures" : "incomplete",
+        status: complete ? "completed" : broken ? "completed_with_failures" : heldOnly ? "held" : "incomplete",
         businessDate: run.businessDate,
         expectedBusinesses: run.expectedBusinesses.length,
         totalSnapshots: run.snapshots.length,
@@ -369,6 +397,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         unknownCount,
         unrecordedCount,
         skippedCount,
+        heldCount,
         receiptWriteFailures,
         results,
       });
@@ -385,6 +414,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       };
       const action = (req.body as { action?: unknown } | undefined)?.action;
       if (action !== undefined && action !== "notice") return res.status(400).json({ error: "invalid_action" });
+      const heldReply = (code: string | null) => {
+        console.warn("[daily-snapshot] manual send held", { tenantId, bizId, code });
+        return res.status(503).json({ error: "Daily delivery is held; email not sent", code: boundedCode(code) ?? "delivery_held", tenantId, bizId });
+      };
+      // G2 (HR1): a manual send requested while the Daily is held is refused before the build (the notice read is unaffected)
+      if (action === undefined) {
+        const g2 = await readManualDeliveryGate(db);
+        if (!g2.open) return heldReply(g2.code);
+      }
 
       // the pre-send identity gate (G4 / G10 / control characters): resolved before any business-scoped path is built
       const target = await readDeliveryTarget(db, tenantId, bizId);
@@ -436,7 +474,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const ownerEmail = recipient.email;
 
-      const r = await deliverWithoutReceipt({ recipient: ownerEmail, send: () => sendSnapshotEmail(ownerEmail, snapshot) });
+      // HR1: the final boundary (G3) and the durable manual-attempt record, written BEFORE the hand-off
+      const r = await deliverManualDaily({ db, tenantId, bizId, businessDate: snapshot.date ?? null, recipient: ownerEmail,
+        recipientSelection: recipient.selection, actorRole: snapshotCtx.role, send: () => sendSnapshotEmail(ownerEmail, snapshot) });
+      if (r.record === "write_failed") console.error(`[daily-snapshot] manual attempt record not finalized (${boundedCode(r.code) ?? "accepted"}) for ${tenantId}:${bizId}`);
+      if (r.outcome === "held") return heldReply(r.code);
+      if (r.outcome === "failed" && r.code === "manual_record_unavailable") return res.status(503).json({ error: "Delivery record unavailable; email not sent", code: r.code, tenantId, bizId });
       if (r.outcome === "failed") return res.status(502).json({ error: "email_not_sent", code: boundedCode(r.code) });
       if (r.outcome !== "accepted") return res.status(504).json({ error: "email_outcome_unknown", code: boundedCode(r.code) });
 

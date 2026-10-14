@@ -8,7 +8,7 @@ export const IN_RUN_ATTEMPTS: number;
 export const CLAIM_LEASE_MS: number;
 export const HISTORY_KEEP: number;
 
-export type DeliveryOutcome = "accepted" | "failed" | "unknown" | "skipped";
+export type DeliveryOutcome = "accepted" | "failed" | "unknown" | "skipped" | "held";
 export type ReceiptWrite = "recorded" | "write_failed" | "unavailable" | "not_written";
 export type ProviderIdEcho = "match" | "different" | "absent" | "invalid";
 
@@ -97,9 +97,51 @@ export function deliverWithReceipt(args: {
   backoffMs?: number;
   sleep?: (ms: number) => Promise<void>;
   newClaimId?: () => string;
+  /** HR1: the scheduled Daily gate (makeDailyDeliveryGate); consulted before every claim (G0) and in beforeTransport (G3). */
+  gate?: DeliveryGateFn | null;
 }): Promise<DeliveryResult>;
 export function deliverWithoutReceipt(args: {
   recipient: string;
   send: () => Promise<unknown>;
   newClaimId?: () => string;
 }): Promise<{ outcome: "accepted" | "failed" | "unknown"; code: string | null; messageId?: string }>;
+
+// ── HR1: the Daily-only delivery hold ─────────────────────────────────────────────────────────────────────────────────────
+export const DELIVERY_HOLD_PATH: "delivery_control/daily_snapshot";
+export const HELD_DATES_ROOT: "delivery_control/daily_snapshot_held_dates";
+export const MANUAL_ATTEMPT_ROOT: "email_delivery_manual";
+export const MANUAL_ATTEMPT_VERSION: "MARJIN_MANUAL_ATTEMPT/1";
+export const HOLD_SCHEMA: 1;
+export const HOLD_READ_TIMEOUT_MS: number;
+export const HOLD_ACTIONS: Readonly<{ init: "held"; hold: "held"; release: "released" }>;
+export type HoldCode = "delivery_held" | "delivery_hold_unreadable" | "delivery_hold_unavailable";
+export type GateCode = HoldCode | "held_day" | "held_day_unverifiable";
+export interface HoldState { state: "released" | "held"; code: HoldCode | null; version: number | null }
+export interface DeliveryGate { open: boolean; code: GateCode | null; version: number | null; heldDate?: "recorded" | "exists" | "not_recorded" }
+export type DeliveryGateFn = (stage?: string) => Promise<DeliveryGate>;
+export function holdLogKey(version: number): string;
+export function classifyHoldRecord(raw: unknown): HoldState;
+export function readDeliveryHold(db: unknown, opts?: { timeoutMs?: number }): Promise<HoldState>;
+export function heldDatePath(businessDate: unknown): string | null;
+export function readDailyDeliveryGate(db: unknown, businessDate: string | null, opts?: { timeoutMs?: number }): Promise<DeliveryGate>;
+export function recordHeldDate(db: unknown, businessDate: string | null, opts?: { code?: string | null; version?: number | null; stage?: string; nowMs?: number }): Promise<"recorded" | "exists" | "not_recorded">;
+export function makeDailyDeliveryGate(db: unknown, businessDate: string | null, opts?: { timeoutMs?: number; clock?: () => number }): DeliveryGateFn;
+export function readManualDeliveryGate(db: unknown, opts?: { timeoutMs?: number }): Promise<DeliveryGate>;
+export type HoldChangeCode = "applied" | "invalid_request" | "exists" | "not_initialized" | "unreadable_record" | "version_conflict" | "no_change" | "transaction_failed";
+export function changeDeliveryHold(db: unknown, args: { action: "init" | "hold" | "release"; actor: string; reason: string; expectVersion?: number; nowMs?: number }):
+  Promise<{ ok: boolean; code: HoldChangeCode; state?: "held" | "released"; version?: number }>;
+export function manualAttemptPath(tenantId: string, bizId: string, attemptId: string): string | null;
+export function deliverManualDaily(args: {
+  db: unknown;
+  tenantId: string;
+  bizId: string;
+  businessDate: string | null;
+  recipient: string;
+  recipientSelection?: string | null;
+  actorRole?: "owner" | "super_owner" | string | null;
+  send: () => Promise<unknown>;
+  gate?: DeliveryGateFn;
+  clock?: () => number;
+  newClaimId?: () => string;
+  deploymentId?: string;
+}): Promise<{ outcome: "accepted" | "failed" | "unknown" | "held"; code: string | null; attemptId: string | null; record: "recorded" | "write_failed" | "not_written"; messageId?: string }>;

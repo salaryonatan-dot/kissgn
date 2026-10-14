@@ -133,8 +133,18 @@ export const T = "tenantA", B = "bizA", B2 = "bizB", T2 = "tenantB", B3 = "bizC"
 const env = (v) => ({ _v: JSON.stringify(v) });
 /** a completed day with revenue, purchases and payroll (VAT-net strings) */
 const day = (date, n) => ({ id: `de000000-0000-4000-8000-${String(n).padStart(12, "0")}`, date, sales: "1000", supplier_payments: { s1: "300" }, payroll: "200" });
-export function seedWorld({ withSecondBiz = true, withSecondTenant = true, ownerEmail = "owner-a@example.test", tenantBOwner = "owner-b@example.test", users } = {}) {
+// HR1 (Daily-only delivery hold; T-HR1-TEST-SEED): the gates hold every Daily unless a well-formed, logged "released" record
+// exists (absent = held, fail closed), exactly as a deployment must be bootstrapped (init → release) before it carries HR1.
+// The world is seeded with that released record so every pre-HR1 scenario keeps its meaning; `hold: "absent"` leaves it out.
+export const HOLD_PATH = "delivery_control/daily_snapshot";
+export function releasedHoldRecord(at = 0) {
+  return { schema: 1, state: "released", version: 2, log: {
+    v000000001: { action: "init", state: "held", version: 1, prevVersion: 0, actor: "fixture", reason: "fixture bootstrap", at },
+    v000000002: { action: "release", state: "released", version: 2, prevVersion: 1, actor: "fixture", reason: "fixture release", at } } };
+}
+export function seedWorld({ withSecondBiz = true, withSecondTenant = true, ownerEmail = "owner-a@example.test", tenantBOwner = "owner-b@example.test", users, hold = "released" } = {}) {
   const db = makeDb();
+  if (hold === "released") db.seed(HOLD_PATH, releasedHoldRecord());
   const days = ["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-05", "2026-09-06", "2026-09-07"];
   const seedBiz = (t, b, name) => {
     db.seed(`tenants/${t}/biz:${b}:entries`, env(days.map((d, i) => day(d, i + 1))));

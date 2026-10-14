@@ -33,13 +33,20 @@ import { I4_PINS, I4_SCOPE } from "../support/i4-integration.mjs";
 import { I5_PINS, I5_SCOPE } from "../support/i5-integration.mjs";
 import { I6_PINS, I6_SCOPE } from "../support/i6-integration.mjs";
 import { I7_PARENT, I7_PINS, I7_NEW_FILES, I7_EDITS, I7_SCOPE, I7_UNPROTECTED, isI7Tree, deriveI7 } from "../support/i7-integration.mjs";
+// HR1 layering (Daily-only delivery hold HR1, T-HR1-LAYER; PROPOSED for the M1 integration owner — the I6G-on-I7 pattern): on a tree
+// that carries HR1 on top of the I7 candidate, I7G-01..05 verify the I7 commit ITSELF (5bae812c) from git objects — sole parent I6,
+// protected change set api/admin.js, pins the I7 pins, the I7 source rules — and the HEAD / index / checkout identity of the later
+// tree is held by its own guard (HR1G-01). Nothing is skipped.
+import { isHR1Tree, HR1_PARENT } from "../support/hr1-daily-hold.mjs";
 
 const SKIP = !isI7Tree(REPO) && "not an I7 tree";
+const LAYERED = isHR1Tree(REPO);
+const I7_TREE = LAYERED ? HR1_PARENT : "HEAD";          // the I7 commit itself when the HR1 layer is checked out
 const PROTECTED = /^(src\/|fincore\/|api\/|lib\/|database\.rules\.json$|test\/support\/rules-authorized-delta\.mjs$|test\/emulator\/database\.rules\.json$|index\.html$|vercel\.json$|package(-lock)?\.json$)/;
 const AD = "api/admin.js", PG = "index.html";
 const blobId = (spec) => { const r = gitIn(REPO, ["rev-parse", "--verify", "-q", spec]); return r.status === 0 ? r.stdout.trim() : null; };
 const lines = (r) => r.stdout.split("\n").map((x) => x.trim()).filter(Boolean);
-const read = (f) => readFileSync(join(REPO, f), "utf8");
+const read = (f) => (LAYERED ? gitIn(REPO, ["cat-file", "blob", `${I7_TREE}:${f}`]).stdout : readFileSync(join(REPO, f), "utf8"));
 const parentText = (f) => gitIn(REPO, ["cat-file", "blob", `${I7_PARENT}:${f}`]).stdout;
 // every I6 line that does NOT survive into I7 (multiset, trimmed): only update-user's single unverified revert, replaced by revertAuthEmail
 const REMOVED = {
@@ -58,24 +65,31 @@ const removedLines = (before, after) => {
 
 test("I7G-01 identity: sole parent the I6 candidate; I7 changes exactly api/admin.js among the protected files; every effective pin holds", { skip: SKIP }, () => {
   assert.equal(I7_PARENT, "224a00a655f0f2af9a0e55abac96db3265355cfb", "built on the rejected I6 candidate");
-  assert.equal(gitIn(REPO, ["rev-parse", "HEAD^"]).stdout.trim(), I7_PARENT, "the I6 candidate is the SOLE parent");
-  assert.equal(lines(gitIn(REPO, ["rev-list", "--parents", "-n1", "HEAD"]))[0].split(" ").length, 2, "exactly one parent");
+  if (LAYERED) assert.equal(I7_TREE, "5bae812c9fde9f58bd9d1bc359dd3855c4658cf1", "the I7 candidate commit itself is verified");
+  assert.equal(gitIn(REPO, ["rev-parse", I7_TREE + "^"]).stdout.trim(), I7_PARENT, "the I6 candidate is the SOLE parent");
+  assert.equal(lines(gitIn(REPO, ["rev-list", "--parents", "-n1", I7_TREE]))[0].split(" ").length, 2, "exactly one parent");
   for (const [f, pin] of Object.entries(I7_PINS)) assert.match(pin, /^[0-9a-f]{40}$/, f + ": literal blob id");
   assert.deepEqual(Object.keys(I7_PINS).sort(), [...I7_SCOPE].sort());
-  const committed = lines(gitIn(REPO, ["diff", "--name-only", I7_PARENT, "HEAD", "--"])).filter((f) => PROTECTED.test(f));
-  const staged = lines(gitIn(REPO, ["diff", "--name-only", "--cached", I7_PARENT, "--"])).filter((f) => PROTECTED.test(f));
-  const working = [...lines(gitIn(REPO, ["diff", "--name-only", I7_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => PROTECTED.test(f));
-  for (const [label, set] of [["committed", committed], ["staged", staged], ["working tree", working]])
+  const committed = lines(gitIn(REPO, ["diff", "--name-only", I7_PARENT, I7_TREE, "--"])).filter((f) => PROTECTED.test(f));
+  const sets = [["committed", committed]];
+  if (!LAYERED) {
+    sets.push(["staged", lines(gitIn(REPO, ["diff", "--name-only", "--cached", I7_PARENT, "--"])).filter((f) => PROTECTED.test(f))]);
+    sets.push(["working tree", [...lines(gitIn(REPO, ["diff", "--name-only", I7_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => PROTECTED.test(f))]);
+  }
+  for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), [...I7_SCOPE].sort(), label + ": protected changes vs I6 = the I7 scope");
-  const eff = { ...m1EffectivePins(REPO), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS };
+  // the I7 commit's own pin table when layered: the effective tables without the HR1 overlay (the HR1 files are held by HR1G-01)
+  const eff = { ...m1EffectivePins(REPO, { withHR1: false }), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS };
   for (const f of I7_SCOPE) assert.equal(eff[f], I7_PINS[f], f + " is held to its I7 pin by the effective tables");
   for (const [f, pin] of Object.entries(eff)) {
-    assert.equal(blobId("HEAD:" + f), pin, f + " committed");
+    assert.equal(blobId(I7_TREE + ":" + f), pin, f + " committed" + (LAYERED ? " (at the I7 commit)" : ""));
+    if (LAYERED) continue;
     assert.equal(blobId(":" + f), pin, f + " staged");
     assert.equal(gitBlobId(readFileSync(join(REPO, f))), pin, f + " checked out");
   }
-  assert.equal(blobId("HEAD:" + PG), I3_PINS[PG], "the page is the I3 page");
-  assert.deepEqual(m1EffectivePageVerdict(REPO, readFileSync(join(REPO, PG))), { ok: true }, "the page is the recorded M1 derivation ⊕ I1 ⊕ I2 ⊕ I3");
+  assert.equal(blobId(I7_TREE + ":" + PG), I3_PINS[PG], "the page is the I3 page");
+  const page = LAYERED ? gitIn(REPO, ["cat-file", "blob", `${I7_TREE}:${PG}`], { encoding: "buffer" }).stdout : readFileSync(join(REPO, PG));
+  assert.deepEqual(m1EffectivePageVerdict(REPO, page), { ok: true }, "the page is the recorded M1 derivation ⊕ I1 ⊕ I2 ⊕ I3");
 });
 
 test("I7G-02 provenance: the I6 bytes + exactly the recorded edits; the I6 lines that disappear are exactly the enumerated ones; non-vacuity", { skip: SKIP }, () => {
@@ -149,7 +163,7 @@ test("I7G-03 the rule in the source: Admin-local authorizations call the approve
 });
 
 test("I7G-04 scope: outside api/admin.js only tests and the audit model + its test change (both protected-path rules); no registry, security context, route, repository, delivery, Builder, date helper, backfill script, page, Rules or configuration byte moves", { skip: SKIP }, () => {
-  const all = lines(gitIn(REPO, ["diff", "--name-only", I7_PARENT, "HEAD", "--"]));
+  const all = lines(gitIn(REPO, ["diff", "--name-only", I7_PARENT, I7_TREE, "--"]));
   const prot = (f) => PROTECTED.test(f) || isProtectedPath(f);   // this guard's roots ∪ the S0 server-reader / VAT roots (stored-data scripts included)
   assert.deepEqual(all.filter((f) => prot(f) && !I7_SCOPE.includes(f)), [], "no other protected file (either rule)");
   assert.deepEqual(all.filter((f) => !prot(f) && !/^test\//.test(f) && !I7_UNPROTECTED.includes(f)), [], "outside the scope only tests and the audit model + its test");
@@ -159,15 +173,15 @@ test("I7G-04 scope: outside api/admin.js only tests and the audit model + its te
     "api/daily-snapshot/run.ts", "api/cost-history.js", "api/analytics/daily-builder.ts", "api/alerts/run.ts", "api/agent/ask.ts", "api/proactive/run.ts", "lib/alertsCore.js", "lib/agentAskCore.js", "lib/proactiveCore.js",
     "lib/finance/costHistoryWriter.js", "src/snapshot/snapshotBuilder.ts", "src/analytics/dailyBuilder.ts", "src/utils/dates.ts", "src/finance/businessDate.ts",
     "docs/production-readiness/lib/analytics-model.mjs", "docs/production-readiness/biz-access-audit.mjs", "scripts/backfill-biz-access.mjs", "database.rules.json", "test/emulator/database.rules.json", "vercel.json", "package.json", "package-lock.json", "fincore/v1/MANIFEST.json", "test/support/m1-run-gates.sh"])
-    assert.equal(blobId("HEAD:" + f), blobId(`${I7_PARENT}:${f}`), f + " unchanged");
-  assert.equal(blobId("HEAD:database.rules.json"), "27887d72da5431bd0b6ee69f53e0dfd10cc44caf", "Rules unchanged (the combined, unpublished candidate)");
+    assert.equal(blobId(I7_TREE + ":" + f), blobId(`${I7_PARENT}:${f}`), f + " unchanged");
+  assert.equal(blobId(I7_TREE + ":database.rules.json"), "27887d72da5431bd0b6ee69f53e0dfd10cc44caf", "Rules unchanged (the combined, unpublished candidate)");
 });
 
 test("I7G-05 the later layer on the approved M1 R5 entry base is exactly ADB-06 ∪ DE1 ∪ I1 ∪ I3 ∪ I4 ∪ I5 ∪ I6 ∪ I7, each at its literal pin", { skip: SKIP }, () => {
-  const changed = lines(gitIn(REPO, ["diff", "--name-only", I1_ENTRY, "HEAD", "--"])).filter((f) => PROTECTED.test(f));
+  const changed = lines(gitIn(REPO, ["diff", "--name-only", I1_ENTRY, I7_TREE, "--"])).filter((f) => PROTECTED.test(f));
   const expected = [...new Set([...ADB06_FILES, ...DE1_SCOPE, ...I1_SCOPE, ...I3_SCOPE, ...I4_SCOPE, ...I5_SCOPE, ...I6_SCOPE, ...I7_SCOPE])].sort();
   assert.deepEqual([...new Set(changed)].sort(), expected, "protected changes on top of the entry base = the recorded layers");
   const pins = { ...ADB06_PINS, ...de1EffectivePins(REPO), ...I1_PINS, ...I2_PINS, ...I3_PINS, ...I4_PINS, ...I5_PINS, ...I6_PINS, ...I7_PINS };
-  for (const f of expected) assert.equal(blobId("HEAD:" + f), pins[f], f + ": the literal layer pin");
-  for (const [f, pin] of Object.entries(m1R5Pins())) if (!expected.includes(f)) assert.equal(blobId("HEAD:" + f), pin, f + " is the approved M1 R5 pin");
+  for (const f of expected) assert.equal(blobId(I7_TREE + ":" + f), pins[f], f + ": the literal layer pin");
+  for (const [f, pin] of Object.entries(m1R5Pins())) if (!expected.includes(f)) assert.equal(blobId(I7_TREE + ":" + f), pin, f + " is the approved M1 R5 pin");
 });

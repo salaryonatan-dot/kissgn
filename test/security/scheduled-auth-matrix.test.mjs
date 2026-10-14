@@ -127,6 +127,7 @@ function mkRes() {
   return x;
 }
 
+const RELEASED_HOLD = { schema: 1, state: "released", version: 2, log: { v000000001: { action: "init", state: "held", version: 1, prevVersion: 0, actor: "fixture", reason: "fixture bootstrap", at: 0 }, v000000002: { action: "release", state: "released", version: 2, prevVersion: 1, actor: "fixture", reason: "fixture release", at: 0 } } };
 // User identity stub: a VALID owner Firebase token (to prove user auth never opens machine paths).
 function setH(o = {}) {
   const H = {
@@ -134,7 +135,9 @@ function setH(o = {}) {
     requireAuth: async () => ({ uid: "u1", email: "owner@example.test" }),
     requireTenantAccess: async () => "owner",
     // M1 R2: the operator backfill now establishes the target in the registry (runtime node shape) before building
-    db: () => ({ ref: (p) => ({ get: async () => ({ val: () => true }), once: async () => (String(p).endsWith("/app/business") ? { val: () => ({ _v: JSON.stringify([{ id: "b1", name: "Biz" }]) }), exists: () => true } : { val: () => null, exists: () => false }) }) }),
+    // HR1 (T-HR1-TEST-P0): the Daily route reads the Daily-only hold record before any job (absent = held, fail closed): the
+    // stub answers the bootstrapped RELEASED record for delivery_control/daily_snapshot (every assertion unchanged)
+    db: () => ({ ref: (p) => ({ get: async () => ({ val: () => true }), once: async () => (String(p) === "delivery_control/daily_snapshot" ? { val: () => (RELEASED_HOLD), exists: () => true } : String(p).endsWith("/app/business") ? { val: () => ({ _v: JSON.stringify([{ id: "b1", name: "Biz" }]) }), exists: () => true } : { val: () => null, exists: () => false }) }) }),
   };
   globalThis.__H = H;
   return H;
