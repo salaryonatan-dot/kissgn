@@ -60,15 +60,15 @@ await check("HRE-01 hold changes over the real transport (cold instances): one r
 
 await check("HRE-02 the scheduled gate over the real transport: G0, G3 between claim and hand-off, held-date marker, no backfill after release", async () => {
   await seedDb.ref("/").set(null);
-  await E.changeDeliveryHold(cold(), { action: "init", ...op });
-  await E.changeDeliveryHold(cold(), { action: "release", ...op, expectVersion: 1 });
+  await E.changeDeliveryHold(cold(), { action: "init", ...op, nowMs: Date.parse("2026-09-07T04:05:00Z") });
+  await E.changeDeliveryHold(cold(), { action: "release", ...op, expectVersion: 1, nowMs: Date.parse("2026-09-07T04:05:00Z") });
   const db = cold();
   let calls = 0;
   const base = { db, tenantId: "tA", bizId: "bA", businessDate: D, recipient: TO, inRunAttempts: 1, backoffMs: 0, sleep: async () => {} };
   // a hold set by ANOTHER instance after the claim, before the hand-off
   const send = (flip) => async () => {
     const a = E.currentDeliveryAttempt();
-    if (flip) await E.changeDeliveryHold(cold(), { action: "hold", ...op, expectVersion: 2 });
+    if (flip) await E.changeDeliveryHold(cold(), { action: "hold", ...op, expectVersion: 2, nowMs: Date.parse("2026-09-08T04:05:00Z") });
     await a.beforeTransport();
     calls++; a.info = { accepted: [TO], rejected: [], response: "250 OK" };
   };
@@ -82,7 +82,7 @@ await check("HRE-02 the scheduled gate over the real transport: G0, G3 between c
   assert.deepEqual([r2.outcome, calls], ["held", 0]);
   assert.equal(await read(E.receiptPath("daily_snapshot", "tA", "bB", D)), null);
   // release: the held day is not sent automatically; another day is
-  await E.changeDeliveryHold(cold(), { action: "release", ...op, expectVersion: 3 });
+  await E.changeDeliveryHold(cold(), { action: "release", ...op, expectVersion: 3, nowMs: Date.parse("2026-09-08T04:05:00Z") });
   const r3 = await E.deliverWithReceipt({ ...base, send: send(false), gate: E.makeDailyDeliveryGate(db, D) });
   assert.deepEqual([r3.outcome, r3.code, calls], ["held", "held_day", 0]);
   const r4 = await E.deliverWithReceipt({ ...base, businessDate: "2026-09-09", send: send(false), gate: E.makeDailyDeliveryGate(db, "2026-09-09") });
@@ -131,11 +131,19 @@ await check("HRE-04 client access under the unchanged Rules: every principal den
 await check("HRE-05 the operator tool end to end: status, refused write, project mismatch, init, release", async () => {
   await seedDb.ref(E.DELIVERY_HOLD_PATH).remove();
   const env = { ...process.env, FIREBASE_CONFIG: JSON.stringify({ projectId: PROJECT, databaseURL: DB_URL }) };
-  const tool = (...args) => spawnSync(process.execPath, [join(ROOT, "tools/daily-delivery/hold.mjs"), ...args], { env, encoding: "utf8", timeout: 60000 });
+  const tool = (...args) => spawnSync(process.execPath, [join(ROOT, "tools/daily-delivery/hold.mjs"), ...args, `--database-url=${DB_URL}`], { env, encoding: "utf8", timeout: 60000 });
   let r = tool("status", `--project=${PROJECT}`);
   assert.equal(r.status, 0, r.stderr); assert.equal(JSON.parse(r.stdout).code, "delivery_hold_unreadable");
   r = tool("status", "--project=someone-else");
   assert.equal(r.status, 4, "project verification refuses a mismatch");
+  r = spawnSync(process.execPath, [join(ROOT, "tools/daily-delivery/hold.mjs"), "init", `--project=${PROJECT}`,
+    "--actor=op.cli", "--reason=missing target", `--confirm=init@${PROJECT}`], { env, encoding: "utf8", timeout: 60000 });
+  assert.equal(r.status, 2, "missing database URL is refused before mutation");
+  const wrongUrl = `http://127.0.0.1:9000?ns=demo-other-default-rtdb`;
+  r = spawnSync(process.execPath, [join(ROOT, "tools/daily-delivery/hold.mjs"), "init", `--project=${PROJECT}`,
+    `--database-url=${wrongUrl}`, "--actor=op.cli", "--reason=wrong target", `--confirm=init@${PROJECT}`],
+    { env: { ...env, FIREBASE_CONFIG: JSON.stringify({ projectId: PROJECT, databaseURL: wrongUrl }) }, encoding: "utf8", timeout: 60000 });
+  assert.equal(r.status, 4, "other namespace is refused before mutation");
   r = tool("init", `--project=${PROJECT}`, "--actor=op.cli", "--reason=bootstrap via tool");
   assert.equal(r.status, 3, "a write without --confirm is refused");
   assert.equal(await read(E.DELIVERY_HOLD_PATH), null);

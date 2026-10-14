@@ -79,6 +79,7 @@ import { isI7Tree, I7_SCOPE } from "../support/i7-integration.mjs";
 // HR1 (Daily-only delivery hold on I7, T-HR1-LAYER): its recorded protected scope (api/daily-snapshot/run.ts, lib/emailDelivery.js
 // + .d.ts; test/support/hr1-daily-hold.mjs).
 import { isHR1Tree, HR1_SCOPE, HR1_PINS } from "../support/hr1-daily-hold.mjs";
+import { isHR2Tree, HR2_SCOPE, HR2_PINS } from "../support/hr2-daily-hold.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
 const read = (rel) => readFileSync(join(REPO, rel), "utf8");
@@ -246,20 +247,22 @@ function assertB2Scope(root) {
     // I1 (the integration layer): the route is held to its literal I1 pin (the R8 bytes + the recorded buildSnapshotRun edits)
     const i1 = de1 && isI1Tree(root);
     // HR1 (T-HR1-LAYER): on an HR1 tree the Daily route (and the receipt module) are held to their literal HR1 pins
-    const DE1_EFF = de1 ? { ...de1EffectivePins(root), ...(i1 ? I1_PINS : {}), ...(i1 && isHR1Tree(root) ? HR1_PINS : {}) } : {};
+    const DE1_EFF = de1 ? { ...de1EffectivePins(root), ...(i1 ? I1_PINS : {}), ...(i1 && isHR1Tree(root) ? HR1_PINS : {}),
+      ...(i1 && isHR2Tree(root) ? HR2_PINS : {}) } : {};
     const I3_ADDED = i1 && isI3Tree(root) ? I3_SCOPE.filter((f) => f !== "index.html") : [];
     const I4_ADDED = i1 && isI4Tree(root) ? [...I4_SCOPE] : [];
     const I5_ADDED = i1 && isI5Tree(root) ? [...I5_SCOPE] : [];
     const I6_ADDED = i1 && isI6Tree(root) ? [...I6_SCOPE] : [];
     const I7_ADDED = i1 && isI7Tree(root) ? [...I7_SCOPE] : [];
     const HR1_ADDED = i1 && isHR1Tree(root) ? [...HR1_SCOPE] : [];
+    const HR2_ADDED = i1 && isHR2Tree(root) ? [...HR2_SCOPE] : [];
     // I6 (T-I6-LAYER): the one P0-approved route the I6 layer changes (api/proactive/run.ts — the registered gate) is held to its
     // literal I6 pin, exactly as the DE1 / I1 / M1 R2 / R4 layers hold the P0 routes they changed
     const I6_P0 = i1 && isI6Tree(root) ? I6_PINS : {};
-    const DE1_LABEL = i1 && isHR1Tree(root) ? "HR1 / I1 integration fixed blob " : i1 ? "I1 integration fixed blob " : de1 && isDE1R8Tree(root) ? "DE1 R8 successor fixed blob " : de1 && isDE1R7Tree(root) ? "DE1 R7 successor fixed blob " : de1 && isDE1R6Tree(root) ? "DE1 R6 successor fixed blob " : de1 && isDE1R5Tree(root) ? "DE1 R5 successor fixed blob " : de1 && isDE1R4Tree(root) ? "DE1 R4 successor fixed blob " : de1 && isDE1R3Tree(root) ? "DE1 R3 successor fixed blob " : de1 && isDE1R2Tree(root) ? "DE1 R2 successor fixed blob " : de1 && isDE1R1Tree(root) ? "DE1 R1 successor fixed blob " : "DE1 checkpoint fixed blob ";
+    const DE1_LABEL = i1 && isHR2Tree(root) ? "HR2 / I1 integration fixed blob " : i1 && isHR1Tree(root) ? "HR1 / I1 integration fixed blob " : i1 ? "I1 integration fixed blob " : de1 && isDE1R8Tree(root) ? "DE1 R8 successor fixed blob " : de1 && isDE1R7Tree(root) ? "DE1 R7 successor fixed blob " : de1 && isDE1R6Tree(root) ? "DE1 R6 successor fixed blob " : de1 && isDE1R5Tree(root) ? "DE1 R5 successor fixed blob " : de1 && isDE1R4Tree(root) ? "DE1 R4 successor fixed blob " : de1 && isDE1R3Tree(root) ? "DE1 R3 successor fixed blob " : de1 && isDE1R2Tree(root) ? "DE1 R2 successor fixed blob " : de1 && isDE1R1Tree(root) ? "DE1 R1 successor fixed blob " : "DE1 checkpoint fixed blob ";
     const vd50Runtime = ["src/metrics/report.ts", "fincore/v1/metrics/report.js", "fincore/v1/MANIFEST.json"];
     const f1Runtime = ["database.rules.json", "fincore/v1/MANIFEST.json", "fincore/v1/browser/marjinFinanceGlobal.js", "fincore/v1/finance/costHistory.js", "fincore/v1/metrics/report.js", "fincore/v1/policy/productFinance.js", "lib/finance/costHistoryWriter.js", "src/browser/marjinFinanceGlobal.ts", "src/finance-server/canonicalInputs.ts", "src/finance/costHistory.ts", "src/finance/labor.ts", "src/finance/types.ts", "src/metrics/costTimeline.ts", "src/metrics/report.ts", "src/policy/productFinance.ts", "test/support/rules-authorized-delta.mjs"];
-    const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES, ...M1_R1_ADDED, ...M1_R2_ADDED, ...DE1_ADDED, ...I3_ADDED, ...I4_ADDED, ...I5_ADDED, ...I6_ADDED, ...I7_ADDED, ...HR1_ADDED])] : CDM2_APPROVED;
+    const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES, ...M1_R1_ADDED, ...M1_R2_ADDED, ...DE1_ADDED, ...I3_ADDED, ...I4_ADDED, ...I5_ADDED, ...I6_ADDED, ...I7_ADDED, ...HR1_ADDED, ...HR2_ADDED])] : CDM2_APPROVED;
     const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f));
     assert.deepEqual([...new Set(whole)].sort(), [...allowed].sort(), assembled
       ? "assembled tree: protected changes are exactly CD-M2 R1's approved runtime files + P0 Scheduled Auth's three API routes" + (c2 ? " + the C2-03 retirement of " + C2_RETIRED.join(", ") : "") + (m1 ? " + the pinned P1 Supplier Credits files (M1 integration)" : "")

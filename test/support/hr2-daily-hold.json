@@ -1,0 +1,64 @@
+{
+ "parent": "a0a9e82dffb65dc4063874ffc1d4d1fb8cb3562a",
+ "decision": "Owner 2026-10-14: held days are excluded from automatic delivery after release; technical HR2 successor pending Claude independent review",
+ "review": "daily-delivery-hold-hr1-independent-review FINDINGS HR1-R-01..05",
+ "pins": {
+  "api/daily-snapshot/run.ts": "3186f8981ae2dfe0c14d2e555b3831d5d24a3853",
+  "lib/emailDelivery.js": "097846b0373fba6d318a94cc0b00a26338519ac9"
+ },
+ "newFiles": [],
+ "edits": {
+  "api/daily-snapshot/run.ts": [
+   {
+    "from": "      // notice and sends nothing; it marks the date held and answers 503 \"held\" (deliberate, not a failure). Absent, malformed,\n      // unreadable or timed-out hold state is held (fail closed).\n",
+    "to": "      // notice and sends nothing; it marks the date held. A known build/discovery failure still answers 500 with its structured\n      // accounting; a held-only run answers 503. Absent, malformed, unreadable or timed-out hold state is held (fail closed).\n"
+   },
+   {
+    "from": "        return res.status(503).json({ status: \"held\", code: g1.code, businessDate: run.businessDate, holdVersion: g1.version, heldDate: g1.heldDate ?? null,\n          expectedBusinesses: run.expectedBusinesses.length, successCount: 0, failureCount: 0, unknownCount: 0, heldCount: run.expectedBusinesses.length, results: [] });\n",
+    "to": "        const failures = new Map(run.failedBuilds.map((f) => [JSON.stringify([f.tenantId, f.bizId]), f] as const));\n        const results = run.expectedBusinesses.map((x) => {\n          const failure = failures.get(JSON.stringify([x.tenantId, x.bizId]));\n          return failure\n            ? { tenantId: x.tenantId, bizId: x.bizId, businessDate: x.businessDate, outcome: \"failed\", code: boundedCode(failure.code) ?? \"snapshot_build_failed\", settlement: \"failed\", receipt: \"not_written\" }\n            : { tenantId: x.tenantId, bizId: x.bizId, businessDate: x.businessDate, outcome: \"held\", code: g1.code, settlement: \"held\", receipt: \"not_written\" };\n        });\n        const failureCount = run.failedBuilds.length;\n        const discoveryFailed = run.discovery.status !== \"complete\";\n        const broken = failureCount > 0 || discoveryFailed || run.status !== \"complete\";\n        return res.status(broken ? 500 : 503).json({ status: broken ? \"completed_with_failures\" : \"held\", code: g1.code, businessDate: run.businessDate,\n          holdVersion: g1.version, heldDate: g1.heldDate ?? null, expectedBusinesses: run.expectedBusinesses.length,\n          totalSnapshots: run.snapshots.length, failedBuildCount: failureCount,\n          discovery: { status: run.discovery.status, failures: run.discovery.failures.map((f) => ({ source: f.source, code: f.code })) },\n          exclusionCount: run.exclusions.length, exclusions: run.exclusions.map((x) => ({ tenantId: x.tenantId, bizId: x.bizId, businessDate: x.businessDate, reason: x.reason })),\n          successCount: 0, failureCount, unknownCount: 0, heldCount: results.length - failureCount, results });\n"
+   }
+  ],
+  "lib/emailDelivery.js": [
+   {
+    "from": " *   `delivery_control/daily_snapshot_held_dates/{date}`; a later automatic run for that date is held too (no automatic\n *   sending of a held day after release — owner decision). The manual send writes a durable attempt record under\n",
+    "to": " *   `delivery_control/daily_snapshot_held_dates/{date}`. A release also seals every Israel business date through its\n *   own date in the same state/audit transaction; a lost or interrupted marker write cannot permit automatic catch-up.\n *   The manual send writes a durable attempt record under\n"
+   },
+   {
+    "from": "// Record (one node, one transaction per change — OP-R1):\n",
+    "to": "// Record (one node, one transaction per change — OP-R1). A release adds `excludedThrough` atomically:\n"
+   },
+   {
+    "from": "// The gates count the Daily as RELEASED only when the record is schema 1, its state is \"released\" and the log entry of its\n// current version names that same version and state through an action that leads to it (`release`). Everything else is HELD.\n",
+    "to": "// The gates count the Daily as RELEASED only when the complete canonical audit progression is valid and ends in release.\n// Everything else is HELD. The scheduled gate also enforces the retained date exclusion.\n"
+   },
+   {
+    "from": "const isVersion = (v) => Number.isInteger(v) && v >= 1 && v <= 1e9;\n",
+    "to": "const isVersion = (v) => Number.isInteger(v) && v >= 1 && v <= 1e9;\nconst ISRAEL_DATE = new Intl.DateTimeFormat(\"en-US\", { timeZone: \"Asia/Jerusalem\", year: \"numeric\", month: \"2-digit\", day: \"2-digit\" });\nfunction israelDate(nowMs) {\n  if (!Number.isSafeInteger(nowMs) || nowMs < 0) return null;\n  const date = new Date(nowMs);\n  if (!Number.isFinite(date.getTime())) return null;\n  const parts = Object.fromEntries(ISRAEL_DATE.formatToParts(date).map((p) => [p.type, p.value]));\n  return `${parts.year}-${parts.month}-${parts.day}`;\n}\nconst validDate = (s) => typeof s === \"string\" && BUSINESS_DATE.test(s) &&\n  !Number.isNaN(Date.parse(`${s}T00:00:00Z`)) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s;\n"
+   },
+   {
+    "from": "  const entry = raw.log[holdLogKey(raw.version)];\n  if (!isPlain(entry) || entry.version !== raw.version || entry.state !== raw.state || HOLD_ACTIONS[entry.action] !== raw.state) return unreadable;\n",
+    "to": "  if (raw.excludedThrough !== undefined && !validDate(raw.excludedThrough)) return unreadable;\n  if (Object.keys(raw.log).length !== raw.version) return unreadable;\n  let previousState = null;\n  for (let version = 1; version <= raw.version; version++) {\n    const entry = raw.log[holdLogKey(version)];\n    if (!isPlain(entry) || entry.version !== version || entry.prevVersion !== version - 1 ||\n        typeof entry.actor !== \"string\" || !ACTOR.test(entry.actor) || !validReason(entry.reason) || !Number.isSafeInteger(entry.at) || entry.at < 0) return unreadable;\n    if (version === 1 ? entry.action !== \"init\" || entry.state !== \"held\" :\n      entry.action !== (previousState === \"held\" ? \"release\" : \"hold\") || entry.state !== HOLD_ACTIONS[entry.action]) return unreadable;\n    if (version > 1 && entry.replaced !== undefined) return unreadable;\n    if (entry.replaced !== undefined && (!isPlain(entry.replaced) || !/^[a-f0-9]{64}$/.test(entry.replaced.sha256))) return unreadable;\n    previousState = entry.state;\n  }\n  if (previousState !== raw.state) return unreadable;\n"
+   },
+   {
+    "from": "  const [hold, marker] = await Promise.all([readDeliveryHold(db, { timeoutMs }),\n",
+    "to": "  const [holdRead, marker] = await Promise.all([readBounded(db, DELIVERY_HOLD_PATH, timeoutMs),\n"
+   },
+   {
+    "from": "    markerPath === null ? Promise.resolve({ ok: false }) : readBounded(db, markerPath, timeoutMs)]);\n",
+    "to": "    markerPath === null ? Promise.resolve({ ok: false }) : readBounded(db, markerPath, timeoutMs)]);\n  const hold = holdRead.ok ? classifyHoldRecord(holdRead.value) : { state: \"held\", code: \"delivery_hold_unavailable\", version: null };\n"
+   },
+   {
+    "from": "  if (hold.state !== \"released\") return { open: false, code: hold.code, version: hold.version };\n",
+    "to": "  if (hold.state !== \"released\") return { open: false, code: hold.code, version: hold.version };\n  // A release atomically seals every Israel business date through the release date. This is the durable fallback when a\n  // refused gate's separate marker write failed, acknowledged late, or was interrupted before commit.\n  if (validDate(businessDate) && validDate(holdRead.value.excludedThrough) && businessDate <= holdRead.value.excludedThrough)\n    return { open: false, code: \"held_day\", version: hold.version };\n"
+   },
+   {
+    "from": "  if (!Object.prototype.hasOwnProperty.call(HOLD_ACTIONS, action) || typeof actor !== \"string\" || !ACTOR.test(actor) || !validReason(reason)) return { ok: false, code: \"invalid_request\" };\n",
+    "to": "  if (!Object.prototype.hasOwnProperty.call(HOLD_ACTIONS, action) || typeof actor !== \"string\" || !ACTOR.test(actor) ||\n      !validReason(reason) || israelDate(nowMs) === null) return { ok: false, code: \"invalid_request\" };\n"
+   },
+   {
+    "from": "      return { next: { ...cur, state: target, version, log: { ...cur.log, [holdLogKey(version)]: entry } }, result: { code: \"applied\", state: target, version } };\n",
+    "to": "      const lastAt = cur.log[holdLogKey(cur.version)].at;\n      const through = action === \"release\" ? [israelDate(nowMs), israelDate(lastAt), cur.excludedThrough].filter(Boolean).sort().at(-1) : null;\n      if (action === \"release\" && through === null) return { next: undefined, result: { code: \"invalid_request\" } };\n      return { next: { ...cur, state: target, version, ...(through ? { excludedThrough: cur.excludedThrough > through ? cur.excludedThrough : through } : {}),\n        log: { ...cur.log, [holdLogKey(version)]: entry } }, result: { code: \"applied\", state: target, version } };\n"
+   }
+  ]
+ }
+}

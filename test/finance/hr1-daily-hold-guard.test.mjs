@@ -34,11 +34,15 @@ import { I7_PINS, I7_SCOPE } from "../support/i7-integration.mjs";
 import { HR1_PARENT, HR1_PINS, HR1_NEW_FILES, HR1_EDITS, HR1_SCOPE, HR1_UNPROTECTED, isHR1Tree, deriveHR1 } from "../support/hr1-daily-hold.mjs";
 
 const SKIP = !isHR1Tree(REPO) && "not an HR1 tree";
+const HR1_TREE = "a0a9e82dffb65dc4063874ffc1d4d1fb8cb3562a";
+const LAYERED = gitIn(REPO, ["merge-base", "--is-ancestor", HR1_TREE, "HEAD"]).status === 0 &&
+  gitIn(REPO, ["rev-parse", "HEAD"]).stdout.trim() !== HR1_TREE;
+const SOURCE = LAYERED ? HR1_TREE : "HEAD";
 const PROTECTED = /^(src\/|fincore\/|api\/|lib\/|database\.rules\.json$|test\/support\/rules-authorized-delta\.mjs$|test\/emulator\/database\.rules\.json$|index\.html$|vercel\.json$|package(-lock)?\.json$)/;
 const RT = "api/daily-snapshot/run.ts", ED = "lib/emailDelivery.js", EDT = "lib/emailDelivery.d.ts", AD = "api/admin.js", PG = "index.html";
 const blobId = (spec) => { const r = gitIn(REPO, ["rev-parse", "--verify", "-q", spec]); return r.status === 0 ? r.stdout.trim() : null; };
 const lines = (r) => r.stdout.split("\n").map((x) => x.trim()).filter(Boolean);
-const read = (f) => readFileSync(join(REPO, f), "utf8");
+const read = (f) => LAYERED ? gitIn(REPO, ["cat-file", "blob", `${HR1_TREE}:${f}`]).stdout : readFileSync(join(REPO, f), "utf8");
 const parentText = (f) => gitIn(REPO, ["cat-file", "blob", `${HR1_PARENT}:${f}`]).stdout;
 // every I7 line that does NOT survive into HR1 (multiset, trimmed)
 const REMOVED = /*BEGIN-REMOVED*/{
@@ -72,26 +76,31 @@ const removedLines = (before, after) => {
 
 test("HR1G-01 identity: sole parent the I7 candidate; HR1 changes exactly run.ts and lib/emailDelivery.js (+ .d.ts) among the protected files; every pin holds", { skip: SKIP }, () => {
   assert.equal(HR1_PARENT, "5bae812c9fde9f58bd9d1bc359dd3855c4658cf1", "built on the I7 candidate");
-  assert.equal(gitIn(REPO, ["rev-parse", "HEAD^"]).stdout.trim(), HR1_PARENT, "the I7 candidate is the SOLE parent");
-  assert.equal(lines(gitIn(REPO, ["rev-list", "--parents", "-n1", "HEAD"]))[0].split(" ").length, 2, "exactly one parent");
+  assert.equal(gitIn(REPO, ["rev-parse", SOURCE + "^"]).stdout.trim(), HR1_PARENT, "the I7 candidate is the SOLE parent");
+  assert.equal(lines(gitIn(REPO, ["rev-list", "--parents", "-n1", SOURCE]))[0].split(" ").length, 2, "exactly one parent");
   for (const [f, pin] of Object.entries(HR1_PINS)) assert.match(pin, /^[0-9a-f]{40}$/, f + ": literal blob id");
   assert.deepEqual(Object.keys(HR1_PINS).sort(), [...HR1_SCOPE].sort());
-  const committed = lines(gitIn(REPO, ["diff", "--name-only", HR1_PARENT, "HEAD", "--"])).filter((f) => PROTECTED.test(f));
-  const staged = lines(gitIn(REPO, ["diff", "--name-only", "--cached", HR1_PARENT, "--"])).filter((f) => PROTECTED.test(f));
-  const working = [...lines(gitIn(REPO, ["diff", "--name-only", HR1_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => PROTECTED.test(f));
-  for (const [label, set] of [["committed", committed], ["staged", staged], ["working tree", working]])
+  const committed = lines(gitIn(REPO, ["diff", "--name-only", HR1_PARENT, SOURCE, "--"])).filter((f) => PROTECTED.test(f));
+  const sets = [["committed", committed]];
+  if (!LAYERED) {
+    sets.push(["staged", lines(gitIn(REPO, ["diff", "--name-only", "--cached", HR1_PARENT, "--"])).filter((f) => PROTECTED.test(f))]);
+    sets.push(["working tree", [...lines(gitIn(REPO, ["diff", "--name-only", HR1_PARENT, "--"])), ...lines(gitIn(REPO, ["ls-files", "--others", "--exclude-standard"]))].filter((f) => PROTECTED.test(f))]);
+  }
+  for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), [...HR1_SCOPE].sort(), label + ": protected changes vs I7 = the HR1 scope");
-  const eff = { ...m1EffectivePins(REPO), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS };
+  const eff = { ...m1EffectivePins(REPO, { withHR2: false }), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS };
   for (const f of HR1_SCOPE) assert.equal(eff[f], HR1_PINS[f], f + " is held to its HR1 pin by the effective tables");
   for (const [f, pin] of Object.entries(eff)) {
-    assert.equal(blobId("HEAD:" + f), pin, f + " committed");
+    assert.equal(blobId(SOURCE + ":" + f), pin, f + " committed");
+    if (LAYERED) continue;
     assert.equal(blobId(":" + f), pin, f + " staged");
     assert.equal(gitBlobId(readFileSync(join(REPO, f))), pin, f + " checked out");
   }
-  assert.equal(blobId("HEAD:" + AD), I7_PINS[AD], "api/admin.js is the I7 pin");
-  assert.equal(blobId("HEAD:lib/sendEmail.js"), de1EffectivePins(REPO)["lib/sendEmail.js"], "lib/sendEmail.js keeps its DE1 pin");
-  assert.equal(blobId("HEAD:" + PG), I3_PINS[PG], "the page is the I3 page");
-  assert.deepEqual(m1EffectivePageVerdict(REPO, readFileSync(join(REPO, PG))), { ok: true }, "the page is the recorded M1 derivation ⊕ I1 ⊕ I2 ⊕ I3");
+  assert.equal(blobId(SOURCE + ":" + AD), I7_PINS[AD], "api/admin.js is the I7 pin");
+  assert.equal(blobId(SOURCE + ":lib/sendEmail.js"), de1EffectivePins(REPO)["lib/sendEmail.js"], "lib/sendEmail.js keeps its DE1 pin");
+  assert.equal(blobId(SOURCE + ":" + PG), I3_PINS[PG], "the page is the I3 page");
+  assert.deepEqual(m1EffectivePageVerdict(REPO, LAYERED ? gitIn(REPO, ["cat-file", "blob", `${SOURCE}:${PG}`], { encoding: "buffer" }).stdout : readFileSync(join(REPO, PG))),
+    { ok: true }, "the page is the recorded M1 derivation ⊕ I1 ⊕ I2 ⊕ I3");
 });
 
 test("HR1G-02 provenance: the I7 bytes + exactly the recorded edits; the I7 lines that disappear are exactly the enumerated ones; non-vacuity", { skip: SKIP }, () => {
@@ -158,7 +167,7 @@ test("HR1G-03 the rule in the source: gates G0–G3 at their positions, one hold
 });
 
 test("HR1G-04 scope: outside the three protected files only the operator tool and tests change (both protected-path rules); nothing else moves", { skip: SKIP }, () => {
-  const all = lines(gitIn(REPO, ["diff", "--name-only", HR1_PARENT, "HEAD", "--"]));
+  const all = lines(gitIn(REPO, ["diff", "--name-only", HR1_PARENT, SOURCE, "--"]));
   const prot = (f) => PROTECTED.test(f) || isProtectedPath(f);
   assert.deepEqual(all.filter((f) => prot(f) && !HR1_SCOPE.includes(f)), [], "no other protected file (either rule)");
   assert.deepEqual(all.filter((f) => !prot(f) && !/^test\//.test(f) && !HR1_UNPROTECTED.includes(f)), [], "outside the scope only tests and the operator tool");
@@ -166,16 +175,16 @@ test("HR1G-04 scope: outside the three protected files only the operator tool an
     "lib/bizAccess.js", "lib/helpers.js", "lib/verifyToken.js", "lib/adminSdk.js", "api/admin.js", "api/alerts/run.ts", "lib/alertsCore.js", "api/proactive/run.ts", "api/analytics/daily-builder.ts", "api/cost-history.js",
     "lib/repositories/bizDataRepo.js", "lib/checklistVersion.js", "src/utils/dates.ts", "src/analytics/dailyBuilder.ts", "src/finance/businessDate.ts", "index.html", "scripts/backfill-biz-access.mjs",
     "database.rules.json", "test/emulator/database.rules.json", "vercel.json", "package.json", "package-lock.json", "fincore/v1/MANIFEST.json", "test/support/m1-run-gates.sh"])
-    assert.equal(blobId("HEAD:" + f), blobId(`${HR1_PARENT}:${f}`), f + " unchanged");
-  assert.equal(blobId("HEAD:database.rules.json"), "27887d72da5431bd0b6ee69f53e0dfd10cc44caf", "Rules unchanged (the combined, unpublished candidate)");
+    assert.equal(blobId(SOURCE + ":" + f), blobId(`${HR1_PARENT}:${f}`), f + " unchanged");
+  assert.equal(blobId(SOURCE + ":database.rules.json"), "27887d72da5431bd0b6ee69f53e0dfd10cc44caf", "Rules unchanged (the combined, unpublished candidate)");
   assert.ok(!isProtectedPath(HR1_UNPROTECTED[0]) && !PROTECTED.test(HR1_UNPROTECTED[0]), "the operator tool sits outside both protected-path rules (the tools/ precedent of tools/storage-v2/canary.mjs)");
 });
 
 test("HR1G-05 the later layer on the approved M1 R5 entry base is exactly ADB-06 ∪ DE1 ∪ I1 ∪ I3 ∪ I4 ∪ I5 ∪ I6 ∪ I7 ∪ HR1, each at its literal pin", { skip: SKIP }, () => {
-  const changed = lines(gitIn(REPO, ["diff", "--name-only", I1_ENTRY, "HEAD", "--"])).filter((f) => PROTECTED.test(f));
+  const changed = lines(gitIn(REPO, ["diff", "--name-only", I1_ENTRY, SOURCE, "--"])).filter((f) => PROTECTED.test(f));
   const expected = [...new Set([...ADB06_FILES, ...DE1_SCOPE, ...I1_SCOPE, ...I3_SCOPE, ...I4_SCOPE, ...I5_SCOPE, ...I6_SCOPE, ...I7_SCOPE, ...HR1_SCOPE])].sort();
   assert.deepEqual([...new Set(changed)].sort(), expected, "protected changes on top of the entry base = the recorded layers");
   const pins = { ...ADB06_PINS, ...de1EffectivePins(REPO), ...I1_PINS, ...I2_PINS, ...I3_PINS, ...I4_PINS, ...I5_PINS, ...I6_PINS, ...I7_PINS, ...HR1_PINS };
-  for (const f of expected) assert.equal(blobId("HEAD:" + f), pins[f], f + ": the literal layer pin");
-  for (const [f, pin] of Object.entries(m1R5Pins())) if (!expected.includes(f)) assert.equal(blobId("HEAD:" + f), pin, f + " is the approved M1 R5 pin");
+  for (const f of expected) assert.equal(blobId(SOURCE + ":" + f), pins[f], f + ": the literal layer pin");
+  for (const [f, pin] of Object.entries(m1R5Pins())) if (!expected.includes(f)) assert.equal(blobId(SOURCE + ":" + f), pin, f + " is the approved M1 R5 pin");
 });

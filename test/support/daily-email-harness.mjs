@@ -134,7 +134,7 @@ const env = (v) => ({ _v: JSON.stringify(v) });
 /** a completed day with revenue, purchases and payroll (VAT-net strings) */
 const day = (date, n) => ({ id: `de000000-0000-4000-8000-${String(n).padStart(12, "0")}`, date, sales: "1000", supplier_payments: { s1: "300" }, payroll: "200" });
 // HR1 (Daily-only delivery hold; T-HR1-TEST-SEED): the gates hold every Daily unless a well-formed, logged "released" record
-// exists (absent = held, fail closed), exactly as a deployment must be bootstrapped (init → release) before it carries HR1.
+// exists (absent = held, fail closed). This is only a test fixture; it does not authorize a bootstrap release.
 // The world is seeded with that released record so every pre-HR1 scenario keeps its meaning; `hold: "absent"` leaves it out.
 export const HOLD_PATH = "delivery_control/daily_snapshot";
 export function releasedHoldRecord(at = 0) {

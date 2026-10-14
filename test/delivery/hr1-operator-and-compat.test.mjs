@@ -49,15 +49,19 @@ test("OT-01 the operator tool: status / init / hold / release with confirmation,
 
 test("OT-02 the drain evidence report: C1–C7, the P7 population and the time bound; evidence for an owner, never a proof", async () => {
   const heldRec = { ...releasedHoldRecord(), state: "held", version: 3, log: { ...releasedHoldRecord().log, v000000003: { action: "hold", state: "held", version: 3, prevVersion: 2, actor: "op", reason: "incident", at: NOW - 3_600_000 } } };
-  const rc = (state, extra = {}) => ({ v: E.RECEIPT_VERSION, state, attempt: 1, ...extra });
+  const rc = (state, businessDate, extra = {}) => ({ v: E.RECEIPT_VERSION, kind: E.DAILY_SNAPSHOT_KIND,
+    tenantId: "t1", bizId: "b1", businessDate, claimId: "claim-1", recipientHash: "a".repeat(64), history: [], state, attempt: 1, ...extra });
   const receipts = { t1: { b1: {
-    "2026-09-08": rc("accepted"),
-    "2026-09-07": rc("unknown", { outcome: { code: "provider_connection_lost" }, messageIdHeader: "<m1>" }),
-    "2026-09-06": rc("sending", { leaseUntil: NOW - 1 }),
-    "2026-09-05": rc("claimed", { leaseUntil: NOW - 1, history: [{ state: "held_before_send" }] }),
+    "2026-09-08": rc("accepted", "2026-09-08"),
+    "2026-09-07": rc("unknown", "2026-09-07", { outcome: { code: "provider_connection_lost" }, messageIdHeader: "<m1>" }),
+    "2026-09-06": rc("sending", "2026-09-06", { leaseUntil: NOW - 1 }),
+    "2026-09-05": rc("claimed", "2026-09-05", { leaseUntil: NOW - 1, history: [{ state: "held_before_send" }] }),
   } } };
-  const manual = { t1: { b1: { a1: { state: "accepted" }, a2: { state: "unknown", code: "provider_connection_lost", messageIdHeader: "<m2>" } } } };
-  const full = { holdRaw: heldRec, receiptsRaw: receipts, manualRaw: manual, nowMs: NOW, maxDurationMs: 300_000, inventoryAttested: true, logsAttested: true, providerAttested: true };
+  const mr = (state, attemptId, extra = {}) => ({ v: E.MANUAL_ATTEMPT_VERSION, kind: E.DAILY_SNAPSHOT_KIND,
+    tenantId: "t1", bizId: "b1", attemptId, state, startedAt: NOW - 1, settledAt: NOW, messageIdHeader: "<m2>", ...extra });
+  const manual = { t1: { b1: { a1: mr("accepted", "a1"), a2: mr("unknown", "a2", { code: "provider_connection_lost" }) } } };
+  const full = { holdRaw: heldRec, receiptsRaw: receipts, manualRaw: manual, nowMs: NOW, maxDurationMs: 300_000,
+    inventoryAttested: true, logsAttested: true, invocationReceiptAttested: true, providerAttested: true };
   let r = Tool.drainEvidence(full);
   assert.equal(r.verdict, "EVIDENCE_COMPLETE_FOR_OWNER_REVIEW");
   assert.equal(r.hold.tHold, NOW - 3_600_000);
@@ -75,9 +79,9 @@ test("OT-02 the drain evidence report: C1–C7, the P7 population and the time b
     [{ providerAttested: false }, "C7_provider_evidence_for_unresolved_manual", "not_evaluable"],
     [{ holdRaw: releasedHoldRecord() }, "C1_hold_continuously_held", "not_met"],
     [{ holdRaw: { ...heldRec, version: 4 } }, "C1_hold_continuously_held", "not_met"],
-    [{ receiptsRaw: { t1: { b1: { "2026-09-08": rc("sending", { leaseUntil: NOW + 1000 }) } } } }, "C2_no_live_scheduled_claim", "not_met"],
+    [{ receiptsRaw: { t1: { b1: { "2026-09-08": rc("sending", "2026-09-08", { leaseUntil: NOW + 1000 }) } } } }, "C2_no_live_scheduled_claim", "not_met"],
     [{ receiptsRaw: { t1: { b1: { "2026-09-08": "garbage" } } } }, "C2_no_live_scheduled_claim", "not_met"],
-    [{ manualRaw: { t1: { b1: { a3: { state: "handing_off", startedAt: 1 } } } } }, "C3_no_manual_attempt_handing_off", "not_met"],
+    [{ manualRaw: { t1: { b1: { a3: mr("handing_off", "a3", { startedAt: 1 }) } } } }, "C3_no_manual_attempt_handing_off", "not_met"],
   ];
   for (const [over, criterion, value] of cases) {
     r = Tool.drainEvidence({ ...full, ...over });
@@ -90,7 +94,8 @@ test("OT-02 the drain evidence report: C1–C7, the P7 population and the time b
   const db = freshDb(); db.seed(E.DELIVERY_HOLD_PATH, heldRec); db.seed("email_delivery/daily_snapshot", receipts); db.seed(E.MANUAL_ATTEMPT_ROOT, manual);
   const run = await Tool.runCommand(db, "evidence", { "max-duration-ms": "300000" }, { project: P, nowMs: NOW });
   assert.deepEqual([run.exitCode, run.result.verdict], [Tool.EXIT.ABORT_D, "ABORT_D"]);
-  const ok = await Tool.runCommand(db, "evidence", { "max-duration-ms": "300000", "inventory-attested": true, "logs-attested": true, "provider-attested": true }, { project: P, nowMs: NOW });
+  const ok = await Tool.runCommand(db, "evidence", { "max-duration-ms": "300000", "inventory-attested": true, "logs-attested": true,
+    "invocation-receipt-attested": true, "provider-attested": true }, { project: P, nowMs: NOW });
   assert.deepEqual([ok.exitCode, ok.result.verdict], [0, "EVIDENCE_COMPLETE_FOR_OWNER_REVIEW"]);
 });
 

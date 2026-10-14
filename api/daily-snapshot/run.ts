@@ -269,13 +269,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // G1 (HR1): the Daily-only hold, read for the run's OWN business date (the builder's one clock read) BEFORE any message is
       // claimed, any notice is written or any recipient is resolved (the build itself only reads). A held run — or a business
       // date held earlier: no automatic sending of a held day after release — claims nothing, consumes no attempt, writes no
-      // notice and sends nothing; it marks the date held and answers 503 "held" (deliberate, not a failure). Absent, malformed,
-      // unreadable or timed-out hold state is held (fail closed).
+      // notice and sends nothing; it marks the date held. A known build/discovery failure still answers 500 with its structured
+      // accounting; a held-only run answers 503. Absent, malformed, unreadable or timed-out hold state is held (fail closed).
       const g1 = await makeDailyDeliveryGate(db, run.businessDate)("g1");
       if (!g1.open) {
         console.warn("[daily-snapshot] scheduled run held", { code: g1.code, businessDate: run.businessDate, heldDate: g1.heldDate ?? null });
-        return res.status(503).json({ status: "held", code: g1.code, businessDate: run.businessDate, holdVersion: g1.version, heldDate: g1.heldDate ?? null,
-          expectedBusinesses: run.expectedBusinesses.length, successCount: 0, failureCount: 0, unknownCount: 0, heldCount: run.expectedBusinesses.length, results: [] });
+        const failures = new Map(run.failedBuilds.map((f) => [JSON.stringify([f.tenantId, f.bizId]), f] as const));
+        const results = run.expectedBusinesses.map((x) => {
+          const failure = failures.get(JSON.stringify([x.tenantId, x.bizId]));
+          return failure
+            ? { tenantId: x.tenantId, bizId: x.bizId, businessDate: x.businessDate, outcome: "failed", code: boundedCode(failure.code) ?? "snapshot_build_failed", settlement: "failed", receipt: "not_written" }
+            : { tenantId: x.tenantId, bizId: x.bizId, businessDate: x.businessDate, outcome: "held", code: g1.code, settlement: "held", receipt: "not_written" };
+        });
+        const failureCount = run.failedBuilds.length;
+        const discoveryFailed = run.discovery.status !== "complete";
+        const broken = failureCount > 0 || discoveryFailed || run.status !== "complete";
+        return res.status(broken ? 500 : 503).json({ status: broken ? "completed_with_failures" : "held", code: g1.code, businessDate: run.businessDate,
+          holdVersion: g1.version, heldDate: g1.heldDate ?? null, expectedBusinesses: run.expectedBusinesses.length,
+          totalSnapshots: run.snapshots.length, failedBuildCount: failureCount,
+          discovery: { status: run.discovery.status, failures: run.discovery.failures.map((f) => ({ source: f.source, code: f.code })) },
+          exclusionCount: run.exclusions.length, exclusions: run.exclusions.map((x) => ({ tenantId: x.tenantId, bizId: x.bizId, businessDate: x.businessDate, reason: x.reason })),
+          successCount: 0, failureCount, unknownCount: 0, heldCount: results.length - failureCount, results });
       }
 
       // Daily e-mail reliability: every business ends in exactly one recorded outcome. A message is sent at most once per

@@ -14,6 +14,7 @@ import { isDE1Tree, de1EffectivePins } from "../support/de1-daily-email.mjs";
 import { isI1Tree, I1_PINS } from "../support/i1-integration.mjs";
 // HR1 (Daily-only delivery hold, T-HR1-LAYER): its literal run.ts pin on an HR1 tree
 import { isHR1Tree, HR1_PINS } from "../support/hr1-daily-hold.mjs";
+import { isHR2Tree, HR2_PINS } from "../support/hr2-daily-hold.mjs";
 
 offlineFetch();
 const srv = compileServer();
@@ -256,7 +257,7 @@ test("B2-T14 run.ts compatibility: the endpoint file is byte-identical (pre-B2, 
     // HR1 (Daily-only delivery hold, T-HR1-LAYER): on an HR1 tree the file is held to its literal HR1 pin (HR1G-02 re-derives it from
     // the I7 bytes by recorded exact edits; the authorization section stays the P0 bytes — HR1G-03 / DE1G-03).
     const i1 = isI1Tree(REPO);
-    const want = isHR1Tree(REPO) ? HR1_PINS[RUN] : i1 ? I1_PINS[RUN] : isDE1Tree(REPO) ? de1EffectivePins(REPO)[RUN] : gitIn(REPO, ["rev-parse", `${P0}:${RUN}`]).stdout.trim();
+    const want = isHR2Tree(REPO) ? HR2_PINS[RUN] : isHR1Tree(REPO) ? HR1_PINS[RUN] : i1 ? I1_PINS[RUN] : isDE1Tree(REPO) ? de1EffectivePins(REPO)[RUN] : gitIn(REPO, ["rev-parse", `${P0}:${RUN}`]).stdout.trim();
     assert.equal(gitIn(REPO, ["rev-parse", `HEAD:${RUN}`]).stdout.trim(), want, "committed run.ts = approved P0 blob (or the DE1 pin)");
     assert.equal(gitIn(REPO, ["hash-object", RUN]).stdout.trim(), want, "checked-out run.ts = approved P0 blob (or the DE1 pin)");
     const src = readFileSync(join(REPO, RUN), "utf8");

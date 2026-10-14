@@ -11,8 +11,8 @@
 //   HR-05  G3: a hold set after the claim, before the hand-off — no provider call; the claim expires at the SAME attempt with a
 //          held_before_send entry; no terminal state
 //   HR-06  a hold never consumes the provider-failure budget (MAX_AUTOMATIC_ATTEMPTS); provider failures keep their semantics
-//   HR-07  release sends no held day automatically (held_day); the next day is delivered; a manual send after release is the
-//          owner's explicit catch-up
+//   HR-07  release sends no held day automatically (held_day); the next day is delivered; the manual route remains available
+//          under its existing owner authorization. This test is not blanket permission for operational catch-up.
 //   HR-08  manual send: G2 / G3 held ⇒ 503, no provider call, no record; the durable attempt record before the hand-off
 //          (refused when it cannot be written), finalized to accepted / failed / unknown, left handing_off when finalization
 //          fails; the notice read is unaffected
@@ -137,7 +137,8 @@ test("HR-03 G1: held / absent / unreadable / timed-out hold refuses the schedule
     const db = world(); setup(db); const smtp = installSmtp([SMTP.accept()]);
     const res = await cron();
     assert.equal(res.statusCode, 503, label);
-    assert.deepEqual([res.body.status, res.body.code, res.body.businessDate, res.body.heldDate, res.body.results], ["held", code, D, "recorded", []], label);
+    assert.deepEqual([res.body.status, res.body.code, res.body.businessDate, res.body.heldDate, res.body.results.length], ["held", code, D, "recorded", 3], label);
+    assert.ok(res.body.results.every((row) => row.settlement === "held" && row.receipt === "not_written"), label);
     assert.equal(smtp.calls.length, 0, label + ": no provider call");
     assert.deepEqual(receipts(db), {}, label + ": no receipt, no claim");
     assert.equal(db.read(E.heldDatePath(D)).code, code, label + ": the date is marked held");
@@ -339,7 +340,8 @@ test("HR-10 interrupted and unknown attempts stay held for reconciliation across
   assert.equal((await E.changeDeliveryHold(db, { action: "release", actor: "op", reason: "resume", expectVersion: 3 })).code, "applied");
   const smtp = installSmtp([SMTP.accept()]);
   const again = await cron();
-  assert.equal(again.body.results[0].code, "unknown_requires_reconciliation");
+  assert.equal(again.body.results[0].code, "held_day");
+  assert.equal(receiptOf(db, T, B, D).state, "unknown", "the existing unknown receipt is not changed by the date fence");
   assert.equal(smtp.calls.length, 0);
   // an invocation lost while sending: the hold leaves it `sending`; after the lease a run converts it to unknown, never re-sends
   const db2 = world({ withSecondBiz: false, withSecondTenant: false });
