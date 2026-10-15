@@ -9,6 +9,8 @@
 //   release   released (likewise). A release does NOT send any held business date: the held-date markers stay, and a
 //             scheduled run for a held date is still refused (owner decision: no automatic sending of held-day summaries).
 //
+// HR3: inventory/confirm-inventory record review of exact generation/digest; review is not a completeness proof.
+// Release is blocked with inventory_coverage_unverified even after review (no authoritative ingress ledger is available).
 // Writes are ONE transaction on delivery_control/daily_snapshot (lib/emailDelivery.js changeDeliveryHold): state, version and
 // the audit-log entry together, or nothing. Every command verifies the ACTUAL project of the credentials against --project
 // and the ACTUAL default database instance against --database-url before any database reference. Named instances are refused
@@ -21,12 +23,12 @@
 //       --reason="…" [--expect-version=<n>] --confirm=<action>@<id>
 import { fileURLToPath } from "node:url";
 import { DELIVERY_HOLD_PATH, HELD_DATES_ROOT, MANUAL_ATTEMPT_ROOT, RECEIPT_ROOT, DAILY_SNAPSHOT_KIND, CLAIM_LEASE_MS, classifyHoldRecord,
-  changeDeliveryHold } from "../../lib/emailDelivery.js";
+  changeDeliveryHold, deliveryInventoryView, confirmDeliveryInventory, HOLD_READ_TIMEOUT_MS } from "../../lib/emailDelivery.js";
 
 export const SEND_DEADLINE_MS = 60000;      // lib/sendEmail.js SEND_DEADLINE_MS (asserted equal by the HR1 tests)
 export const DRAIN_MARGIN_MS = 60000;
 export const EXIT = Object.freeze({ OK: 0, USAGE: 2, REFUSED: 3, PROJECT: 4, ABORT_D: 5 });
-export const COMMANDS = Object.freeze(["status", "evidence", "init", "hold", "release"]);
+export const COMMANDS = Object.freeze(["status", "inventory", "confirm-inventory", "evidence", "init", "hold", "release"]);
 
 export function parseArgs(argv) {
   const out = { _: [] };
@@ -57,12 +59,14 @@ export function verifyTarget(app, { project, databaseUrl, emulatorHost = process
   if (parsed.username || parsed.password || parsed.pathname !== "/" || parsed.hash)
     return { ok: false, code: "invalid_database_url" };
   const local = /^((127\.0\.0\.1|localhost)(:\d+)?)$/.test(emulatorHost || "");
-  if (local && parsed.protocol === "http:") {
+  if (emulatorHost) {
+    if (parsed.protocol === "https:") return { ok: false, code: "emulator_env_with_hosted_url" };
+    if (!local || parsed.protocol !== "http:") return { ok: false, code: "invalid_emulator_target" };
     if (parsed.host !== emulatorHost || parsed.searchParams.size !== 1 ||
         ![project, `${project}-default-rtdb`].includes(parsed.searchParams.get("ns")))
       return { ok: false, code: "unverified_database_instance" };
   } else {
-    if (parsed.protocol !== "https:" || parsed.search) return { ok: false, code: "invalid_database_url" };
+    if (parsed.protocol !== "https:" || parsed.search || parsed.port) return { ok: false, code: "invalid_database_url" };
     // A named instance needs a separately verified mapping. This tool has none, so it refuses it rather than guessing.
     const defaults = [`${project}.firebaseio.com`, `${project}-default-rtdb.firebaseio.com`];
     if (!defaults.includes(parsed.hostname) && !new RegExp(`^${project.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-default-rtdb\\.[a-z0-9-]+\\.firebasedatabase\\.app$`).test(parsed.hostname))
@@ -70,11 +74,21 @@ export function verifyTarget(app, { project, databaseUrl, emulatorHost = process
   }
   if (!app.options.credential?.projectId && !local)
     return { ok: false, code: "credential_project_unverified" };
-  return { ok: true, project, databaseUrl: configured };
+  return { ok: true, project, databaseUrl: configured,
+    resolvedInstance: { mode: local ? "emulator" : "hosted", host: parsed.host,
+      namespace: local ? parsed.searchParams.get("ns") : parsed.hostname.split(".")[0] } };
 }
 
 const isPlain = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
-const read = async (db, path) => (await db.ref(path).once("value")).val();
+const read = async (db, path, timeoutMs) => {
+  let timer;
+  try {
+    return await Promise.race([
+      (async () => (await db.ref(path).once("value")).val())(),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("read_unavailable")), timeoutMs); }),
+    ]);
+  } finally { clearTimeout(timer); }
+};
 
 /** The log of a record, in version order (empty when the record is not a plain object). */
 export function holdLog(raw) {
@@ -178,15 +192,22 @@ export function drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurat
 /**
  * Run one command against `db`. Returns { exitCode, result }. `args` are parsed flags; `project` is the VERIFIED project.
  */
-export async function runCommand(db, command, args, { project, nowMs = Date.now() } = {}) {
+export async function runCommand(db, command, args, { project, nowMs = Date.now(), readTimeoutMs = HOLD_READ_TIMEOUT_MS } = {}) {
+  const timeout = Number.isInteger(readTimeoutMs) && readTimeoutMs > 0 ? Math.min(readTimeoutMs, HOLD_READ_TIMEOUT_MS) : HOLD_READ_TIMEOUT_MS;
   if (!COMMANDS.includes(command)) return { exitCode: EXIT.USAGE, result: { error: "unknown_command", commands: COMMANDS } };
-  if (command === "status") return { exitCode: EXIT.OK, result: statusView(await read(db, DELIVERY_HOLD_PATH), await read(db, HELD_DATES_ROOT)) };
+  if (command === "status" || command === "inventory") {
+    try {
+      const [holdRaw, heldDates] = await Promise.all([read(db, DELIVERY_HOLD_PATH, timeout), read(db, HELD_DATES_ROOT, timeout)]);
+      return { exitCode: EXIT.OK, result: command === "inventory" ? deliveryInventoryView(holdRaw) : { ...statusView(holdRaw, heldDates), inventory: deliveryInventoryView(holdRaw) } };
+    } catch { return { exitCode: EXIT.ABORT_D, result: { verdict: "ABORT_D", error: "status_read_unavailable" } }; }
+  }
   if (command === "evidence") {
     const maxDurationMs = args["max-duration-ms"] === undefined ? null : Number(args["max-duration-ms"]);
     let report;
     try {
-      report = drainEvidence({ holdRaw: await read(db, DELIVERY_HOLD_PATH), receiptsRaw: await read(db, `${RECEIPT_ROOT}/${DAILY_SNAPSHOT_KIND}`),
-        manualRaw: await read(db, MANUAL_ATTEMPT_ROOT), nowMs, maxDurationMs: Number.isInteger(maxDurationMs) ? maxDurationMs : null,
+      const [holdRaw, receiptsRaw, manualRaw] = await Promise.all([read(db, DELIVERY_HOLD_PATH, timeout),
+        read(db, `${RECEIPT_ROOT}/${DAILY_SNAPSHOT_KIND}`, timeout), read(db, MANUAL_ATTEMPT_ROOT, timeout)]);
+      report = drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurationMs: Number.isInteger(maxDurationMs) ? maxDurationMs : null,
         inventoryAttested: args["inventory-attested"] === true, logsAttested: args["logs-attested"] === true,
         invocationReceiptAttested: args["invocation-receipt-attested"] === true, providerAttested: args["provider-attested"] === true });
     } catch { return { exitCode: EXIT.ABORT_D, result: { verdict: "ABORT_D", error: "evidence_read_unavailable" } }; }
@@ -194,6 +215,10 @@ export async function runCommand(db, command, args, { project, nowMs = Date.now(
   }
   // writes
   if (args.confirm !== `${command}@${project}`) return { exitCode: EXIT.REFUSED, result: { error: "confirmation_required", expected: `--confirm=${command}@${project}` } };
+  if (command === "confirm-inventory") {
+    const r = await confirmDeliveryInventory(db, { generation: args.generation, digest: args["inventory-digest"], actor: args.actor, reason: args.reason, nowMs, timeoutMs: timeout });
+    return { exitCode: r.ok ? EXIT.OK : EXIT.REFUSED, result: r };
+  }
   const expectVersion = args["expect-version"] === undefined ? undefined : Number(args["expect-version"]);
   const r = await changeDeliveryHold(db, { action: command, actor: typeof args.actor === "string" ? args.actor : "", reason: typeof args.reason === "string" ? args.reason : "", expectVersion, nowMs });
   return { exitCode: r.ok ? EXIT.OK : EXIT.REFUSED, result: r };
@@ -210,9 +235,9 @@ async function main() {
   if (!admin.apps || admin.apps.length === 0) admin.initializeApp();
   const app = admin.app();
   const target = verifyTarget(app, { project: args.project, databaseUrl: args["database-url"] });
-  if (!target.ok) { console.error(`ABORT (target verification): ${target.code}`); process.exit(EXIT.PROJECT); }
+  if (!target.ok) { console.error(`ABORT (target verification): ${target.code}`); console.log(JSON.stringify({ error: target.code, resolvedInstance: null })); process.exit(EXIT.PROJECT); }
   const { exitCode, result } = await runCommand(admin.database(), command, args, { project: target.project });
-  console.log(JSON.stringify(result, null, 2));
+  console.log(JSON.stringify({ ...result, project: target.project, resolvedInstance: target.resolvedInstance }, null, 2));
   if (command === "evidence") console.log(`VERDICT ${result.verdict}`);
   await app.delete().catch(() => {});
   process.exit(exitCode);

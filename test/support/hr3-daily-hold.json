@@ -1,0 +1,133 @@
+{
+ "parent": "6aac2683b614d367b5963670d44fa79f31b709c8",
+ "decision": "HR3 technical transition pending independent Claude review",
+ "pins": {
+  "lib/emailDelivery.js": "60b9059fa358158ddac0ed5d81ba4d679ed9d1ae",
+  "lib/emailDelivery.d.ts": "db59ea511d23b2cf1d628cc54d968251e1f717d8",
+  "tools/daily-delivery/hold.mjs": "06859d024e947d1c98655c9c39e3dc0cae4ac19a"
+ },
+ "edits": {
+  "lib/emailDelivery.js": [
+   {
+    "to": " *   `delivery_control/daily_snapshot_held_dates/{date}` and an exact refusal inventory; no release-date range is sealed.\n *   HR3 release remains blocked while complete coverage cannot be verified (see the HR3 handoff).\n",
+    "from": " *   `delivery_control/daily_snapshot_held_dates/{date}`. A release also seals every Israel business date through its\n *   own date in the same state/audit transaction; a lost or interrupted marker write cannot permit automatic catch-up.\n"
+   },
+   {
+    "to": "// Record (one node, one transaction per change — OP-R1). HR3 records exact dates and uncertain intents:\n",
+    "from": "// Record (one node, one transaction per change — OP-R1). A release adds `excludedThrough` atomically:\n"
+   },
+   {
+    "to": "  if (raw.excludedThrough !== undefined && !validDate(raw.excludedThrough)) return unreadable;\n  if (raw.refusedDates !== undefined && (!isPlain(raw.refusedDates) || Object.entries(raw.refusedDates).some(([date, x]) =>\n      !validDate(date) || !isPlain(x) || typeof x.generation !== \"string\" || typeof x.intent !== \"string\"))) return unreadable;\n  if (raw.inventory !== undefined) {\n    const i = raw.inventory;\n    if (!isPlain(i) || i.schema !== 1 || !/^[a-f0-9-]{36}$/.test(i.generation) || !isVersion(i.holdVersion) || i.holdVersion > raw.version ||\n        !Number.isSafeInteger(i.revision) || i.revision < 0 || i.coverage !== \"unverified\" || (i.legacyUncertainThrough !== undefined && !validDate(i.legacyUncertainThrough)) ||\n        (i.entries !== undefined && (!isPlain(i.entries) || Object.entries(i.entries).some(([id, x]) => !/^[a-f0-9-]{36}$/.test(id) ||\n          !isPlain(x) || !validDate(x.businessDate) || !isVersion(x.observedVersion) || !/^[a-f0-9-]{36}$/.test(x.generation) || ![\"pending\", \"refused\", \"allowed\"].includes(x.state))))) return unreadable;\n    if (i.confirmation != null && (!isPlain(i.confirmation) || i.confirmation.generation !== i.generation ||\n        !/^[a-f0-9]{64}$/.test(i.confirmation.digest) || !ACTOR.test(i.confirmation.actor) || !validReason(i.confirmation.reason) ||\n        !Number.isSafeInteger(i.confirmation.at) || i.confirmation.at < 0)) return unreadable;\n  }\n  if (raw.refusedDates && Object.entries(raw.refusedDates).some(([date, proof]) => {\n    const entry = raw.inventory?.entries?.[proof.intent];\n    return !entry || entry.state !== \"refused\" || entry.businessDate !== date || entry.generation !== proof.generation;\n  })) return unreadable;\n",
+    "from": "  if (raw.excludedThrough !== undefined && !validDate(raw.excludedThrough)) return unreadable;\n"
+   },
+   {
+    "to": "export async function readDailyDeliveryGate(db, businessDate, { timeoutMs = HOLD_READ_TIMEOUT_MS, ignoredIntent = null } = {}) {\n",
+    "from": "export async function readDailyDeliveryGate(db, businessDate, { timeoutMs = HOLD_READ_TIMEOUT_MS } = {}) {\n"
+   },
+   {
+    "to": "  // Exact refusal evidence only. Legacy excludedThrough is validated but never interpreted as a date range.\n  if (validDate(businessDate) && holdRead.value.refusedDates?.[businessDate])\n",
+    "from": "  // A release atomically seals every Israel business date through the release date. This is the durable fallback when a\n  // refused gate's separate marker write failed, acknowledged late, or was interrupted before commit.\n  if (validDate(businessDate) && validDate(holdRead.value.excludedThrough) && businessDate <= holdRead.value.excludedThrough)\n"
+   },
+   {
+    "to": "    return { open: false, code: \"held_day\", version: hold.version };\n  if (Object.entries(holdRead.value.inventory?.entries ?? {}).some(([id, x]) => id !== ignoredIntent && x.businessDate === businessDate && x.state === \"pending\" && x.observedVersion !== hold.version))\n    return { open: false, code: \"held_day_unverifiable\", version: hold.version };\n  // An old HR2 range cannot reveal which dates were actually refused. Preserve uncertainty, never call it proof.\n  const legacyUncertainThrough = holdRead.value.inventory?.legacyUncertainThrough ??\n    (holdRead.value.inventory === undefined ? holdRead.value.excludedThrough : undefined);\n  if (validDate(businessDate) && validDate(legacyUncertainThrough) && businessDate <= legacyUncertainThrough)\n    return { open: false, code: \"held_day_unverifiable\", version: hold.version };\n",
+    "from": "    return { open: false, code: \"held_day\", version: hold.version };\n"
+   },
+   {
+    "to": "  if (!marker.ok) return { open: false, code: \"held_day_unverifiable\", version: hold.version };\n  if (marker.value?.uncertain === true || marker.value?.code === \"held_day_unverifiable\") return { open: false, code: \"held_day_unverifiable\", version: hold.version };\n",
+    "from": "  if (!marker.ok) return { open: false, code: \"held_day_unverifiable\", version: hold.version };\n"
+   },
+   {
+    "to": "export async function recordHeldDate(db, businessDate, { code, version = null, stage, nowMs = Date.now(), uncertain = false } = {}) {\n",
+    "from": "export async function recordHeldDate(db, businessDate, { code, version = null, stage, nowMs = Date.now() } = {}) {\n"
+   },
+   {
+    "to": "      : { next: { businessDate, ...(uncertain ? { uncertain: true } : {}), firstHeldAt: nowMs, code: boundedCode(code) ?? \"delivery_held\", holdVersion: isVersion(version) ? version : null, stage: boundedCode(stage) ?? \"unknown\" }, result: \"recorded\" }));\n",
+    "from": "      : { next: { businessDate, firstHeldAt: nowMs, code: boundedCode(code) ?? \"delivery_held\", holdVersion: isVersion(version) ? version : null, stage: boundedCode(stage) ?? \"unknown\" }, result: \"recorded\" }));\n"
+   },
+   {
+    "to": "    const id = randomUUID(), generation = randomUUID();\n    // Write ahead of the hold read. An acknowledged intent is never inferred from a local callback.\n    const admitted = await inventoryTransaction(db, (cur) => {\n      if (classifyHoldRecord(cur).code === \"delivery_hold_unreadable\" || !validDate(businessDate))\n        return { next: undefined, result: { ok: false } };\n      const inv = cur.inventory ?? { ...newInventory(generation, cur.version), ...(cur.excludedThrough ? { legacyUncertainThrough: cur.excludedThrough } : {}) };\n      return { next: { ...cur, inventory: { ...inv, revision: inv.revision + 1, confirmation: null,\n        entries: { ...inv.entries, [id]: { businessDate, observedVersion: cur.version, generation: inv.generation, stage: boundedCode(stage) ?? \"unknown\", state: \"pending\" } } } },\n        result: { ok: true, generation: inv.generation } };\n    }, timeoutMs);\n    if (!admitted?.result?.ok || !admitted.committed) {\n      // No claim of a proven refused date when the write-ahead acknowledgement is uncertain.\n      const read = await readDailyDeliveryGate(db, businessDate, { timeoutMs });\n      const code = read.open ? \"held_day_unverifiable\" : read.code;\n      const marker = await recordHeldDate(db, businessDate, { code, version: read.version, stage, nowMs: clock(), uncertain: true });\n      return { open: false, code, version: read.version, heldDate: marker };\n    }\n    const g = await readDailyDeliveryGate(db, businessDate, { timeoutMs, ignoredIntent: id });\n    const finalized = await inventoryTransaction(db, (cur) => {\n      const inv = cur?.inventory, entry = inv?.entries?.[id];\n      if (!entry || inv.generation !== admitted.result.generation) return { next: undefined, result: { ok: false } };\n      // The pending entry of THIS invocation must not turn its own open read into uncertainty.\n      const state = g.open ? \"allowed\" : [\"delivery_held\", \"held_day\"].includes(g.code) ? \"refused\" : \"pending\";\n      // A valid unchanged RELEASED audit/version proves there was no hold transition since these intents were admitted.\n      // Resolve only those intents; an intent from an earlier version/generation remains uncertain. This is not coverage proof.\n      const entries = Object.fromEntries(Object.entries(inv.entries ?? {}).map(([key, value]) => [key,\n        cur.state === \"released\" && value.state === \"pending\" && value.observedVersion === cur.version\n          ? { ...value, state: \"allowed\", code: null, basis: \"unchanged_released_audit\" } : value]));\n      const refusedDates = state === \"refused\" ? { ...cur.refusedDates, [businessDate]: { generation: inv.generation, intent: id } } : cur.refusedDates;\n      return { next: { ...cur, ...(refusedDates ? { refusedDates } : {}), inventory: { ...inv, revision: inv.revision + 1, confirmation: null,\n        entries: { ...entries, [id]: { ...entry, state, code: g.code } } } }, result: { ok: state !== \"pending\" } };\n    }, timeoutMs);\n    if (g.open && !finalized?.result?.ok) return { open: false, code: \"held_day_unverifiable\", version: g.version };\n",
+    "from": "    const g = await readDailyDeliveryGate(db, businessDate, { timeoutMs });\n"
+   },
+   {
+    "to": "  };\n}\n\n// This is deliberately NOT a completeness proof: unregistered invocations may exist after first-write failure.\n// A confirmation records only operator review of these exact bytes. No declaration can enable release.\nconst newInventory = (generation, holdVersion) => ({ schema: 1, generation, holdVersion, revision: 0,\n  coverage: \"unverified\", entries: {} });\nconst canonical = (v) => v === null || typeof v !== \"object\" ? JSON.stringify(v) : Array.isArray(v)\n  ? `[${v.map(canonical).join(\",\")}]` : `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonical(v[k])}`).join(\",\")}}`;\nexport function deliveryInventoryView(raw) {\n  const inv = raw?.inventory;\n  if (classifyHoldRecord(raw).code === \"delivery_hold_unreadable\" || !inv) return { ok: false, code: \"inventory_missing_or_unreadable\" };\n  const content = { generation: inv.generation, holdVersion: inv.holdVersion, revision: inv.revision,\n    legacyUncertainThrough: inv.legacyUncertainThrough ?? null, entries: inv.entries ?? {}, refusedDates: raw.refusedDates ?? {}, log: raw.log, state: raw.state, version: raw.version };\n  return { ok: true, ...content, digest: createHash(\"sha256\").update(canonical(content)).digest(\"hex\"),\n    coverage: \"unverified\", complete: false, pending: Object.keys(inv.entries ?? {}).filter((k) => inv.entries[k].state === \"pending\") };\n}\nasync function inventoryTransaction(db, decide, timeoutMs = HOLD_READ_TIMEOUT_MS) {\n  let timer;\n  try { return await Promise.race([transact(db, DELIVERY_HOLD_PATH, decide),\n    new Promise((resolve) => { timer = setTimeout(() => resolve(null), Math.min(timeoutMs, HOLD_READ_TIMEOUT_MS)); })]); }\n  catch { return null; } finally { clearTimeout(timer); }\n}\nexport async function confirmDeliveryInventory(db, { generation, digest, actor, reason, nowMs = Date.now(), timeoutMs = HOLD_READ_TIMEOUT_MS } = {}) {\n  if (typeof generation !== \"string\" || !/^[a-f0-9-]{36}$/.test(generation) || typeof digest !== \"string\" || !/^[a-f0-9]{64}$/.test(digest) ||\n      typeof actor !== \"string\" || !ACTOR.test(actor) || !validReason(reason) || !Number.isSafeInteger(nowMs) || nowMs < 0)\n    return { ok: false, code: \"invalid_request\" };\n  const r = await inventoryTransaction(db, (cur) => {\n    const view = deliveryInventoryView(cur);\n    if (!view.ok || cur.state !== \"held\") return { next: undefined, result: { ok: false, code: \"inventory_missing_or_unreadable\" } };\n    if (view.generation !== generation || view.digest !== digest) return { next: undefined, result: { ok: false, code: \"inventory_confirmation_mismatch\" } };\n    if (view.pending.length) return { next: undefined, result: { ok: false, code: \"inventory_incomplete\" } };\n    return { next: { ...cur, inventory: { ...cur.inventory, confirmation: { generation, digest, actor, reason, at: nowMs } } },\n      result: { ok: true, code: \"inventory_review_recorded\", releaseBlocked: true, coverage: \"unverified\" } };\n  }, timeoutMs);\n  return r?.committed ? r.result : { ok: false, code: \"inventory_read_or_write_unavailable\" };\n}\n",
+    "from": "  };\n}\n"
+   },
+   {
+    "to": "  if (action !== \"init\" && !isVersion(expectVersion)) return { ok: false, code: \"invalid_request\" };\n  if (action === \"release\") {\n    const read = await readBounded(db, DELIVERY_HOLD_PATH, HOLD_READ_TIMEOUT_MS);\n    if (!read.ok) return { ok: false, code: \"inventory_read_unavailable\" };\n    const c = classifyHoldRecord(read.value);\n    if (c.code === \"delivery_hold_unreadable\") return { ok: false, code: read.value === null ? \"not_initialized\" : \"unreadable_record\" };\n    if (read.value.version !== expectVersion) return { ok: false, code: \"version_conflict\", version: read.value.version };\n    if (read.value.state === \"released\") return { ok: false, code: \"no_change\", version: read.value.version };\n    const view = deliveryInventoryView(read.value);\n    if (!view.ok) return { ok: false, code: view.code };\n    if (view.pending.length) return { ok: false, code: \"inventory_incomplete\" };\n    if (!read.value.inventory.confirmation || read.value.inventory.confirmation.digest !== view.digest)\n      return { ok: false, code: \"inventory_confirmation_required\" };\n    // There is no authoritative durable ingress inventory in this component. A complete-looking local set and an\n    // operator declaration do not prove completeness after first-write loss. Leave the hold and audit unchanged.\n    return { ok: false, code: \"inventory_coverage_unverified\" };\n  }\n",
+    "from": "  if (action !== \"init\" && !isVersion(expectVersion)) return { ok: false, code: \"invalid_request\" };\n"
+   },
+   {
+    "to": "        return { next: { schema: HOLD_SCHEMA, state: target, version: 1, inventory: newInventory(randomUUID(), 1), log: { [holdLogKey(1)]: entry } }, result: { code: \"applied\", state: target, version: 1 } };\n",
+    "from": "        return { next: { schema: HOLD_SCHEMA, state: target, version: 1, log: { [holdLogKey(1)]: entry } }, result: { code: \"applied\", state: target, version: 1 } };\n"
+   },
+   {
+    "to": "      return { next: { ...cur, state: target, version, inventory: { ...newInventory(randomUUID(), version), ...((cur.inventory?.legacyUncertainThrough ?? (cur.inventory === undefined ? cur.excludedThrough : undefined)) ? { legacyUncertainThrough: cur.inventory?.legacyUncertainThrough ?? cur.excludedThrough } : {}), entries: cur.inventory?.entries ?? {}, revision: (cur.inventory?.revision ?? 0) + 1 },\n",
+    "from": "      const lastAt = cur.log[holdLogKey(cur.version)].at;\n      const through = action === \"release\" ? [israelDate(nowMs), israelDate(lastAt), cur.excludedThrough].filter(Boolean).sort().at(-1) : null;\n      if (action === \"release\" && through === null) return { next: undefined, result: { code: \"invalid_request\" } };\n      return { next: { ...cur, state: target, version, ...(through ? { excludedThrough: cur.excludedThrough > through ? cur.excludedThrough : through } : {}),\n"
+   }
+  ],
+  "lib/emailDelivery.d.ts": [
+   {
+    "to": "export type HoldChangeCode = \"applied\" | \"invalid_request\" | \"exists\" | \"not_initialized\" | \"unreadable_record\" | \"version_conflict\" | \"no_change\" | \"transaction_failed\" | \"inventory_read_unavailable\" | \"inventory_missing_or_unreadable\" | \"inventory_incomplete\" | \"inventory_confirmation_required\" | \"inventory_coverage_unverified\";\n",
+    "from": "export type HoldChangeCode = \"applied\" | \"invalid_request\" | \"exists\" | \"not_initialized\" | \"unreadable_record\" | \"version_conflict\" | \"no_change\" | \"transaction_failed\";\n"
+   },
+   {
+    "to": "}): Promise<{ outcome: \"accepted\" | \"failed\" | \"unknown\" | \"held\"; code: string | null; attemptId: string | null; record: \"recorded\" | \"write_failed\" | \"not_written\"; messageId?: string }>;\n\n/** HR3 inventory is explicitly incomplete: local entries do not prove coverage of first-write failures. */\nexport function deliveryInventoryView(raw: unknown): { ok: boolean; code?: string; generation?: string; digest?: string; complete?: false; pending?: string[] };\nexport function confirmDeliveryInventory(db: unknown, args: { generation: string; digest: string; actor: string; reason: string; nowMs?: number; timeoutMs?: number }): Promise<{ ok: boolean; code: string; releaseBlocked?: boolean; coverage?: string }>;\n",
+    "from": "}): Promise<{ outcome: \"accepted\" | \"failed\" | \"unknown\" | \"held\"; code: string | null; attemptId: string | null; record: \"recorded\" | \"write_failed\" | \"not_written\"; messageId?: string }>;\n"
+   }
+  ],
+  "tools/daily-delivery/hold.mjs": [
+   {
+    "to": "//\n// HR3: inventory/confirm-inventory record review of exact generation/digest; review is not a completeness proof.\n// Release is blocked with inventory_coverage_unverified even after review (no authoritative ingress ledger is available).\n// Writes are ONE transaction on delivery_control/daily_snapshot (lib/emailDelivery.js changeDeliveryHold): state, version and\n",
+    "from": "//\n// Writes are ONE transaction on delivery_control/daily_snapshot (lib/emailDelivery.js changeDeliveryHold): state, version and\n"
+   },
+   {
+    "to": "  changeDeliveryHold, deliveryInventoryView, confirmDeliveryInventory, HOLD_READ_TIMEOUT_MS } from \"../../lib/emailDelivery.js\";\n",
+    "from": "  changeDeliveryHold } from \"../../lib/emailDelivery.js\";\n"
+   },
+   {
+    "to": "export const COMMANDS = Object.freeze([\"status\", \"inventory\", \"confirm-inventory\", \"evidence\", \"init\", \"hold\", \"release\"]);\n",
+    "from": "export const COMMANDS = Object.freeze([\"status\", \"evidence\", \"init\", \"hold\", \"release\"]);\n"
+   },
+   {
+    "to": "  if (emulatorHost) {\n    if (parsed.protocol === \"https:\") return { ok: false, code: \"emulator_env_with_hosted_url\" };\n    if (!local || parsed.protocol !== \"http:\") return { ok: false, code: \"invalid_emulator_target\" };\n",
+    "from": "  if (local && parsed.protocol === \"http:\") {\n"
+   },
+   {
+    "to": "    if (parsed.protocol !== \"https:\" || parsed.search || parsed.port) return { ok: false, code: \"invalid_database_url\" };\n",
+    "from": "    if (parsed.protocol !== \"https:\" || parsed.search) return { ok: false, code: \"invalid_database_url\" };\n"
+   },
+   {
+    "to": "  return { ok: true, project, databaseUrl: configured,\n    resolvedInstance: { mode: local ? \"emulator\" : \"hosted\", host: parsed.host,\n      namespace: local ? parsed.searchParams.get(\"ns\") : parsed.hostname.split(\".\")[0] } };\n",
+    "from": "  return { ok: true, project, databaseUrl: configured };\n"
+   },
+   {
+    "to": "const read = async (db, path, timeoutMs) => {\n  let timer;\n  try {\n    return await Promise.race([\n      (async () => (await db.ref(path).once(\"value\")).val())(),\n      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(\"read_unavailable\")), timeoutMs); }),\n    ]);\n  } finally { clearTimeout(timer); }\n};\n",
+    "from": "const read = async (db, path) => (await db.ref(path).once(\"value\")).val();\n"
+   },
+   {
+    "to": "export async function runCommand(db, command, args, { project, nowMs = Date.now(), readTimeoutMs = HOLD_READ_TIMEOUT_MS } = {}) {\n  const timeout = Number.isInteger(readTimeoutMs) && readTimeoutMs > 0 ? Math.min(readTimeoutMs, HOLD_READ_TIMEOUT_MS) : HOLD_READ_TIMEOUT_MS;\n",
+    "from": "export async function runCommand(db, command, args, { project, nowMs = Date.now() } = {}) {\n"
+   },
+   {
+    "to": "  if (command === \"status\" || command === \"inventory\") {\n    try {\n      const [holdRaw, heldDates] = await Promise.all([read(db, DELIVERY_HOLD_PATH, timeout), read(db, HELD_DATES_ROOT, timeout)]);\n      return { exitCode: EXIT.OK, result: command === \"inventory\" ? deliveryInventoryView(holdRaw) : { ...statusView(holdRaw, heldDates), inventory: deliveryInventoryView(holdRaw) } };\n    } catch { return { exitCode: EXIT.ABORT_D, result: { verdict: \"ABORT_D\", error: \"status_read_unavailable\" } }; }\n  }\n",
+    "from": "  if (command === \"status\") return { exitCode: EXIT.OK, result: statusView(await read(db, DELIVERY_HOLD_PATH), await read(db, HELD_DATES_ROOT)) };\n"
+   },
+   {
+    "to": "      const [holdRaw, receiptsRaw, manualRaw] = await Promise.all([read(db, DELIVERY_HOLD_PATH, timeout),\n        read(db, `${RECEIPT_ROOT}/${DAILY_SNAPSHOT_KIND}`, timeout), read(db, MANUAL_ATTEMPT_ROOT, timeout)]);\n      report = drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurationMs: Number.isInteger(maxDurationMs) ? maxDurationMs : null,\n",
+    "from": "      report = drainEvidence({ holdRaw: await read(db, DELIVERY_HOLD_PATH), receiptsRaw: await read(db, `${RECEIPT_ROOT}/${DAILY_SNAPSHOT_KIND}`),\n        manualRaw: await read(db, MANUAL_ATTEMPT_ROOT), nowMs, maxDurationMs: Number.isInteger(maxDurationMs) ? maxDurationMs : null,\n"
+   },
+   {
+    "to": "  if (args.confirm !== `${command}@${project}`) return { exitCode: EXIT.REFUSED, result: { error: \"confirmation_required\", expected: `--confirm=${command}@${project}` } };\n  if (command === \"confirm-inventory\") {\n    const r = await confirmDeliveryInventory(db, { generation: args.generation, digest: args[\"inventory-digest\"], actor: args.actor, reason: args.reason, nowMs, timeoutMs: timeout });\n    return { exitCode: r.ok ? EXIT.OK : EXIT.REFUSED, result: r };\n  }\n",
+    "from": "  if (args.confirm !== `${command}@${project}`) return { exitCode: EXIT.REFUSED, result: { error: \"confirmation_required\", expected: `--confirm=${command}@${project}` } };\n"
+   },
+   {
+    "to": "  if (!target.ok) { console.error(`ABORT (target verification): ${target.code}`); console.log(JSON.stringify({ error: target.code, resolvedInstance: null })); process.exit(EXIT.PROJECT); }\n",
+    "from": "  if (!target.ok) { console.error(`ABORT (target verification): ${target.code}`); process.exit(EXIT.PROJECT); }\n"
+   },
+   {
+    "to": "  console.log(JSON.stringify({ ...result, project: target.project, resolvedInstance: target.resolvedInstance }, null, 2));\n",
+    "from": "  console.log(JSON.stringify(result, null, 2));\n"
+   }
+  ]
+ }
+}

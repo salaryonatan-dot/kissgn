@@ -6,7 +6,7 @@ const RECORD = JSON.parse(readFileSync(new URL("./hr2-daily-hold.json", import.m
 export const HR2_PARENT = RECORD.parent;
 export const HR2_PINS = Object.freeze({ ...RECORD.pins });
 export const HR2_EDITS = Object.freeze(RECORD.edits);
-export const HR2_SCOPE = Object.freeze(["api/daily-snapshot/run.ts", "lib/emailDelivery.js"]);
+export const HR2_SCOPE = Object.freeze(["api/daily-snapshot/run.ts", "lib/emailDelivery.js", "tools/daily-delivery/hold.mjs"]);
 
 const git = (repo, args, opts = {}) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", ...opts });
 export function isHR2Tree(repo) {

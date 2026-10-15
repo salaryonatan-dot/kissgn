@@ -124,7 +124,7 @@ test("HR1-R-05: target validation rejects missing, conflicting and named databas
   const project = "demo-marjin-rules", url = `https://${project}.firebaseio.com/`;
   const app = { options: { projectId: project, databaseURL: url } };
   const args = { project, databaseUrl: url, emulatorHost: "127.0.0.1:9000" };
-  assert.equal(Tool.verifyTarget(app, args).ok, true);
+  assert.deepEqual(Tool.verifyTarget(app, args), { ok: false, code: "emulator_env_with_hosted_url" }, "HR2-R-02: the SDK redirects this URL, so the hosted-shaped target must refuse");
   for (const [candidate, options] of [
     [{ options: { projectId: project } }, args],
     [app, { ...args, databaseUrl: null }],

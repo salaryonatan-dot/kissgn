@@ -4,7 +4,8 @@
  "review": "daily-delivery-hold-hr1-independent-review FINDINGS HR1-R-01..05",
  "pins": {
   "api/daily-snapshot/run.ts": "3186f8981ae2dfe0c14d2e555b3831d5d24a3853",
-  "lib/emailDelivery.js": "097846b0373fba6d318a94cc0b00a26338519ac9"
+  "lib/emailDelivery.js": "097846b0373fba6d318a94cc0b00a26338519ac9",
+  "tools/daily-delivery/hold.mjs": "3add2da948ce9f8c44ebaae401420f4dfff3da88"
  },
  "newFiles": [],
  "edits": {
@@ -58,6 +59,64 @@
    {
     "from": "      return { next: { ...cur, state: target, version, log: { ...cur.log, [holdLogKey(version)]: entry } }, result: { code: \"applied\", state: target, version } };\n",
     "to": "      const lastAt = cur.log[holdLogKey(cur.version)].at;\n      const through = action === \"release\" ? [israelDate(nowMs), israelDate(lastAt), cur.excludedThrough].filter(Boolean).sort().at(-1) : null;\n      if (action === \"release\" && through === null) return { next: undefined, result: { code: \"invalid_request\" } };\n      return { next: { ...cur, state: target, version, ...(through ? { excludedThrough: cur.excludedThrough > through ? cur.excludedThrough : through } : {}),\n        log: { ...cur.log, [holdLogKey(version)]: entry } }, result: { code: \"applied\", state: target, version } };\n"
+   }
+  ],
+  "tools/daily-delivery/hold.mjs": [
+   {
+    "to": "// and the ACTUAL default database instance against --database-url before any database reference. Named instances are refused\n// until operations supplies a separately verified mapping. Writes additionally require --actor, --reason and --confirm.\n",
+    "from": "// before any read; writes additionally require --actor, --reason and --confirm=<action>@<project>.\n"
+   },
+   {
+    "to": "//   node tools/daily-delivery/hold.mjs status   --project=<id> --database-url=<exact-url>\n//   node tools/daily-delivery/hold.mjs evidence --project=<id> --database-url=<exact-url> [--max-duration-ms=<observed>]\n//       [--inventory-attested] [--logs-attested] [--invocation-receipt-attested] [--provider-attested]\n//   node tools/daily-delivery/hold.mjs init|hold|release --project=<id> --database-url=<exact-url> --actor=<id>\n//       --reason=\"…\" [--expect-version=<n>] --confirm=<action>@<id>\n",
+    "from": "//   node tools/daily-delivery/hold.mjs status   --project=<id>\n//   node tools/daily-delivery/hold.mjs evidence --project=<id> [--max-duration-ms=<observed>] [--inventory-attested] [--logs-attested] [--provider-attested]\n//   node tools/daily-delivery/hold.mjs init     --project=<id> --actor=<id> --reason=\"…\" --confirm=init@<id>\n//   node tools/daily-delivery/hold.mjs hold     --project=<id> --actor=<id> --reason=\"…\" --expect-version=<n> --confirm=hold@<id>\n//   node tools/daily-delivery/hold.mjs release  --project=<id> --actor=<id> --reason=\"…\" --expect-version=<n> --confirm=release@<id>\n"
+   },
+   {
+    "to": "    if (!m) { out._.push(a); continue; }\n    if ((m[1] === \"project\" || m[1] === \"database-url\") && Object.hasOwn(out, m[1])) out.ambiguousTarget = true;\n",
+    "from": "    if (!m) { out._.push(a); continue; }\n"
+   },
+   {
+    "to": "  const ids = [o.projectId, o.credential?.projectId, process.env.GOOGLE_CLOUD_PROJECT, process.env.GCLOUD_PROJECT].filter(Boolean);\n  return ids.length && ids.every((id) => id === ids[0]) ? ids[0] : null;\n}\n\n/** Verify the configured default RTDB namespace and its independent project identity before constructing a database ref. */\nexport function verifyTarget(app, { project, databaseUrl, emulatorHost = process.env.FIREBASE_DATABASE_EMULATOR_HOST } = {}) {\n  const configured = app?.options?.databaseURL;\n  const actual = actualProjectId(app);\n  if (!project || !actual || actual !== project || !databaseUrl || !configured || configured !== databaseUrl)\n    return { ok: false, code: \"target_identity_missing_or_mismatched\" };\n  let parsed;\n  try { parsed = new URL(configured); } catch { return { ok: false, code: \"invalid_database_url\" }; }\n  if (parsed.username || parsed.password || parsed.pathname !== \"/\" || parsed.hash)\n    return { ok: false, code: \"invalid_database_url\" };\n  const local = /^((127\\.0\\.0\\.1|localhost)(:\\d+)?)$/.test(emulatorHost || \"\");\n  if (local && parsed.protocol === \"http:\") {\n    if (parsed.host !== emulatorHost || parsed.searchParams.size !== 1 ||\n        ![project, `${project}-default-rtdb`].includes(parsed.searchParams.get(\"ns\")))\n      return { ok: false, code: \"unverified_database_instance\" };\n  } else {\n    if (parsed.protocol !== \"https:\" || parsed.search) return { ok: false, code: \"invalid_database_url\" };\n    // A named instance needs a separately verified mapping. This tool has none, so it refuses it rather than guessing.\n    const defaults = [`${project}.firebaseio.com`, `${project}-default-rtdb.firebaseio.com`];\n    if (!defaults.includes(parsed.hostname) && !new RegExp(`^${project.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\$&\")}-default-rtdb\\\\.[a-z0-9-]+\\\\.firebasedatabase\\\\.app$`).test(parsed.hostname))\n      return { ok: false, code: \"unverified_database_instance\" };\n  }\n  if (!app.options.credential?.projectId && !local)\n    return { ok: false, code: \"credential_project_unverified\" };\n  return { ok: true, project, databaseUrl: configured };\n",
+    "from": "  return o.projectId || (o.credential && o.credential.projectId) || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || null;\n"
+   },
+   {
+    "to": "export function drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurationMs = null, inventoryAttested = false, logsAttested = false,\n  invocationReceiptAttested = false, providerAttested = false }) {\n",
+    "from": "export function drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurationMs = null, inventoryAttested = false, logsAttested = false, providerAttested = false }) {\n"
+   },
+   {
+    "to": "  const walk = (root, unreadable, visit) => {\n    if (root === null || root === undefined) return;\n    if (!isPlain(root)) { unreadable.push(\"<root>\"); return; }\n    for (const [t, bs] of Object.entries(root)) {\n      if (!isPlain(bs)) { unreadable.push(t); continue; }\n      for (const [b, leaves] of Object.entries(bs)) {\n        if (!isPlain(leaves)) { unreadable.push(`${t}/${b}`); continue; }\n        for (const [key, value] of Object.entries(leaves)) visit(`${t}/${b}/${key}`, value);\n      }\n    }\n  };\n  walk(receiptsRaw, receipts.unreadable, (id, x) => {\n    const [tenantId, bizId, businessDate] = id.split(\"/\");\n    if (!isPlain(x) || x.v !== \"MARJIN_EMAIL_RECEIPT/1\" || !Number.isInteger(x.attempt) || x.attempt < 1 ||\n        x.kind !== DAILY_SNAPSHOT_KIND || x.tenantId !== tenantId || x.bizId !== bizId || x.businessDate !== businessDate ||\n        typeof x.claimId !== \"string\" || !/^[a-f0-9]{64}$/.test(x.recipientHash) || !Array.isArray(x.history) ||\n        ![\"claimed\", \"sending\", \"accepted\", \"failed\", \"unknown\"].includes(x.state) ||\n        ([\"claimed\", \"sending\"].includes(x.state) && !Number.isFinite(x.leaseUntil))) { receipts.unreadable.push(id); return; }\n",
+    "from": "  if (isPlain(receiptsRaw)) for (const [t, bs] of Object.entries(receiptsRaw)) if (isPlain(bs)) for (const [b, ds] of Object.entries(bs)) if (isPlain(ds)) for (const [d, x] of Object.entries(ds)) {\n    const id = `${t}/${b}/${d}`;\n    if (!isPlain(x) || typeof x.state !== \"string\") { receipts.unreadable.push(id); continue; }\n"
+   },
+   {
+    "to": "    }\n  });\n",
+    "from": "    }\n  }\n"
+   },
+   {
+    "to": "  walk(manualRaw, manual.unreadable, (id, x) => {\n    const [tenantId, bizId, attemptId] = id.split(\"/\");\n    if (!isPlain(x) || x.v !== \"MARJIN_MANUAL_ATTEMPT/1\" || x.kind !== \"daily_snapshot\" ||\n        x.tenantId !== tenantId || x.bizId !== bizId || x.attemptId !== attemptId ||\n        ![\"handing_off\", \"accepted\", \"failed\", \"unknown\"].includes(x.state) ||\n        !Number.isFinite(x.startedAt) || typeof x.messageIdHeader !== \"string\" ||\n        (x.state !== \"handing_off\" && !Number.isFinite(x.settledAt))) { manual.unreadable.push(id); return; }\n",
+    "from": "  if (isPlain(manualRaw)) for (const [t, bs] of Object.entries(manualRaw)) if (isPlain(bs)) for (const [b, as] of Object.entries(bs)) if (isPlain(as)) for (const [a, x] of Object.entries(as)) {\n    const id = `${t}/${b}/${a}`;\n    if (!isPlain(x) || typeof x.state !== \"string\") { manual.unreadable.push(id); continue; }\n"
+   },
+   {
+    "to": "    else if (x.state === \"unknown\") manual.unknown.push({ id, code: x.code ?? null, messageIdHeader: x.messageIdHeader ?? null });\n  });\n",
+    "from": "    else if (x.state === \"unknown\") manual.unknown.push({ id, code: x.code ?? null, messageIdHeader: x.messageIdHeader ?? null });\n  }\n"
+   },
+   {
+    "to": "    C2b_invocations_explained_by_receipts: invocationReceiptAttested ? \"attested\" : \"not_evaluable\",\n",
+    "from": "    C2b_invocations_explained_by_receipts: logsAttested ? \"attested\" : \"not_evaluable\",\n"
+   },
+   {
+    "to": "      \"This report is evidence for an owner judgement. Empty trees and complete logs do not prove that no message is in flight or was sent.\",\n      \"C2b requires an explicit cross-check of every reachable scheduled invocation against its receipt, including invocations with no receipt.\",\n",
+    "from": "      \"This report is evidence for an owner judgement. It does not prove that no message is in flight or was sent.\",\n"
+   },
+   {
+    "to": "    let report;\n    try {\n      report = drainEvidence({ holdRaw: await read(db, DELIVERY_HOLD_PATH), receiptsRaw: await read(db, `${RECEIPT_ROOT}/${DAILY_SNAPSHOT_KIND}`),\n        manualRaw: await read(db, MANUAL_ATTEMPT_ROOT), nowMs, maxDurationMs: Number.isInteger(maxDurationMs) ? maxDurationMs : null,\n        inventoryAttested: args[\"inventory-attested\"] === true, logsAttested: args[\"logs-attested\"] === true,\n        invocationReceiptAttested: args[\"invocation-receipt-attested\"] === true, providerAttested: args[\"provider-attested\"] === true });\n    } catch { return { exitCode: EXIT.ABORT_D, result: { verdict: \"ABORT_D\", error: \"evidence_read_unavailable\" } }; }\n",
+    "from": "    const report = drainEvidence({ holdRaw: await read(db, DELIVERY_HOLD_PATH), receiptsRaw: await read(db, `${RECEIPT_ROOT}/${DAILY_SNAPSHOT_KIND}`),\n      manualRaw: await read(db, MANUAL_ATTEMPT_ROOT), nowMs, maxDurationMs: Number.isInteger(maxDurationMs) ? maxDurationMs : null,\n      inventoryAttested: args[\"inventory-attested\"] === true, logsAttested: args[\"logs-attested\"] === true, providerAttested: args[\"provider-attested\"] === true });\n"
+   },
+   {
+    "to": "  if (args.ambiguousTarget || typeof args.project !== \"string\" || !args.project || typeof args[\"database-url\"] !== \"string\" || !args[\"database-url\"]) {\n    console.error(\"ERROR: --project=<projectId> and --database-url=<exact default RTDB URL> are required\"); process.exit(EXIT.USAGE); }\n",
+    "from": "  if (typeof args.project !== \"string\" || !args.project) { console.error(\"ERROR: --project=<projectId> is required (identity is verified, not trusted)\"); process.exit(EXIT.USAGE); }\n"
+   },
+   {
+    "to": "  const target = verifyTarget(app, { project: args.project, databaseUrl: args[\"database-url\"] });\n  if (!target.ok) { console.error(`ABORT (target verification): ${target.code}`); process.exit(EXIT.PROJECT); }\n  const { exitCode, result } = await runCommand(admin.database(), command, args, { project: target.project });\n",
+    "from": "  const actual = actualProjectId(app);\n  if (!actual || actual !== args.project) { console.error(`ABORT (project verification): credentials project ${actual ?? \"unknown\"} ≠ --project ${args.project}`); process.exit(EXIT.PROJECT); }\n  const { exitCode, result } = await runCommand(admin.database(), command, args, { project: actual });\n"
    }
   ]
  }

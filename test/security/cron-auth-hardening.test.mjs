@@ -78,18 +78,19 @@ function mkRes() {
 // closed) and writes a durable manual-attempt record by transaction before a manual hand-off. The stub answers the bootstrapped
 // RELEASED record for delivery_control/daily_snapshot and keeps transactional writes in a per-path map (every assertion unchanged).
 const RELEASED_HOLD = { schema: 1, state: "released", version: 2, log: { v000000001: { action: "init", state: "held", version: 1, prevVersion: 0, actor: "fixture", reason: "fixture bootstrap", at: 0 }, v000000002: { action: "release", state: "released", version: 2, prevVersion: 1, actor: "fixture", reason: "fixture release", at: 0 } } };
+// HR3 test-contract transition (pending review): the hold read and transaction share the same seeded map.
+// Every prior auth assertion remains; protected hold writes are observable in the call trace.
 function mkDb(state) {
-  const tx = (state.tx ||= new Map());
+  const tx = (state.tx ||= new Map([["delivery_control/daily_snapshot", structuredClone(RELEASED_HOLD)]]));
   return {
     ref: (path) => ({
-      transaction: async (fn) => { const next = fn(tx.has(String(path)) ? tx.get(String(path)) : null); if (next === undefined) return { committed: false }; tx.set(String(path), next); return { committed: true, snapshot: { val: () => next } }; },
+      transaction: async (fn) => { if (String(path).startsWith("delivery_control/")) globalThis.__H.calls.push("deliveryControlWrite"); const next = fn(tx.has(String(path)) ? tx.get(String(path)) : null); if (next === undefined) return { committed: false }; tx.set(String(path), next); return { committed: true, snapshot: { val: () => next } }; },
       // I6 test-contract transition (T-I6-TEST-P0; P0 / proactive owners): the proactive manual scan is now authorized by
       // requireRegisteredBizContext, which reads the runtime registry node through get() — the stub answers the registry for
       // app/business (as `once` already did) and the biz_access value for every other path (unchanged)
       get: async () => ({ val: () => (String(path).endsWith("/app/business") ? state.business : state.bizAccessVal) }),
       once: async () => ({ val: () => {
         const p = String(path);
-        if (p === "delivery_control/daily_snapshot") return RELEASED_HOLD;
         if (tx.has(p)) return tx.get(p);
         if (p.endsWith("/app/business")) return state.business;
         if (p.endsWith("/app/users")) return state.users;

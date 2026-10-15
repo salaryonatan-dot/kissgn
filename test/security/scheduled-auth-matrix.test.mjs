@@ -114,7 +114,7 @@ const HANDLERS = {};
 for (const [name, route] of Object.entries(ROUTES)) HANDLERS[name] = (await import(pathToFileURL(build(route)).href)).default;
 
 // Every side effect any route can reach (reads of user data included for the machine-only matrix).
-const SIDE_EFFECTS = ["buildAnalyticsForAll", "buildAnalyticsForBiz", "saveAnalyticsDoc", "buildAndSaveInsights", "fetchBeecommDaily",
+const SIDE_EFFECTS = ["deliveryControlWrite", "buildAnalyticsForAll", "buildAnalyticsForBiz", "saveAnalyticsDoc", "buildAndSaveInsights", "fetchBeecommDaily",
   "buildSnapshotForAll", "buildSnapshotForBiz", "sendSnapshotEmail", "runProactiveJob", "runForBiz", "handleProactiveRead",
   "runAlertsForAll", "runAlertsForBiz", "getActiveAlerts", "dismissAlert", "getThresholds", "saveThresholds"];
 
@@ -130,6 +130,9 @@ function mkRes() {
 const RELEASED_HOLD = { schema: 1, state: "released", version: 2, log: { v000000001: { action: "init", state: "held", version: 1, prevVersion: 0, actor: "fixture", reason: "fixture bootstrap", at: 0 }, v000000002: { action: "release", state: "released", version: 2, prevVersion: 1, actor: "fixture", reason: "fixture release", at: 0 } } };
 // User identity stub: a VALID owner Firebase token (to prove user auth never opens machine paths).
 function setH(o = {}) {
+  // HR3 test-contract transition (pending review): one seeded state for reads AND inventory transactions.
+  // Original authorization assertions remain; the existing zero-side-effect oracle now also covers hold writes.
+  const tx = new Map([["delivery_control/daily_snapshot", structuredClone(RELEASED_HOLD)]]);
   const H = {
     calls: [], throwIn: o.throwIn,
     requireAuth: async () => ({ uid: "u1", email: "owner@example.test" }),
@@ -137,7 +140,17 @@ function setH(o = {}) {
     // M1 R2: the operator backfill now establishes the target in the registry (runtime node shape) before building
     // HR1 (T-HR1-TEST-P0): the Daily route reads the Daily-only hold record before any job (absent = held, fail closed): the
     // stub answers the bootstrapped RELEASED record for delivery_control/daily_snapshot (every assertion unchanged)
-    db: () => ({ ref: (p) => ({ get: async () => ({ val: () => true }), once: async () => (String(p) === "delivery_control/daily_snapshot" ? { val: () => (RELEASED_HOLD), exists: () => true } : String(p).endsWith("/app/business") ? { val: () => ({ _v: JSON.stringify([{ id: "b1", name: "Biz" }]) }), exists: () => true } : { val: () => null, exists: () => false }) }) }),
+    db: () => ({ ref: (p) => ({
+      get: async () => ({ val: () => true }),
+      transaction: async (fn) => {
+        if (String(p).startsWith("delivery_control/")) globalThis.__H.calls.push("deliveryControlWrite");
+        const next = fn(tx.has(String(p)) ? tx.get(String(p)) : null);
+        if (next === undefined) return { committed: false };
+        tx.set(String(p), next);return { committed: true, snapshot: { val: () => next } };
+      },
+      once: async () => tx.has(String(p)) ? { val: () => tx.get(String(p)), exists: () => true } :
+        String(p).endsWith("/app/business") ? { val: () => ({ _v: JSON.stringify([{ id: "b1", name: "Biz" }]) }), exists: () => true } : { val: () => null, exists: () => false },
+    }) }),
   };
   globalThis.__H = H;
   return H;

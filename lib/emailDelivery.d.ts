@@ -127,7 +127,7 @@ export function readDailyDeliveryGate(db: unknown, businessDate: string | null, 
 export function recordHeldDate(db: unknown, businessDate: string | null, opts?: { code?: string | null; version?: number | null; stage?: string; nowMs?: number }): Promise<"recorded" | "exists" | "not_recorded">;
 export function makeDailyDeliveryGate(db: unknown, businessDate: string | null, opts?: { timeoutMs?: number; clock?: () => number }): DeliveryGateFn;
 export function readManualDeliveryGate(db: unknown, opts?: { timeoutMs?: number }): Promise<DeliveryGate>;
-export type HoldChangeCode = "applied" | "invalid_request" | "exists" | "not_initialized" | "unreadable_record" | "version_conflict" | "no_change" | "transaction_failed";
+export type HoldChangeCode = "applied" | "invalid_request" | "exists" | "not_initialized" | "unreadable_record" | "version_conflict" | "no_change" | "transaction_failed" | "inventory_read_unavailable" | "inventory_missing_or_unreadable" | "inventory_incomplete" | "inventory_confirmation_required" | "inventory_coverage_unverified";
 export function changeDeliveryHold(db: unknown, args: { action: "init" | "hold" | "release"; actor: string; reason: string; expectVersion?: number; nowMs?: number }):
   Promise<{ ok: boolean; code: HoldChangeCode; state?: "held" | "released"; version?: number }>;
 export function manualAttemptPath(tenantId: string, bizId: string, attemptId: string): string | null;
@@ -145,3 +145,7 @@ export function deliverManualDaily(args: {
   newClaimId?: () => string;
   deploymentId?: string;
 }): Promise<{ outcome: "accepted" | "failed" | "unknown" | "held"; code: string | null; attemptId: string | null; record: "recorded" | "write_failed" | "not_written"; messageId?: string }>;
+
+/** HR3 inventory is explicitly incomplete: local entries do not prove coverage of first-write failures. */
+export function deliveryInventoryView(raw: unknown): { ok: boolean; code?: string; generation?: string; digest?: string; complete?: false; pending?: string[] };
+export function confirmDeliveryInventory(db: unknown, args: { generation: string; digest: string; actor: string; reason: string; nowMs?: number; timeoutMs?: number }): Promise<{ ok: boolean; code: string; releaseBlocked?: boolean; coverage?: string }>;
