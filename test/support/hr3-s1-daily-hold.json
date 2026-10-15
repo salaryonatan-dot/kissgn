@@ -1,0 +1,19 @@
+{
+ "parent": "fd52603403eb0415d352e12d20842e4f894dea6b",
+ "decision": "HR3 S1 incomplete; independent Claude review required",
+ "pins": {
+  "lib/emailDelivery.js": "494ef58435b6a8bf36417b9e12f3f3d31b3e747c"
+ },
+ "edits": {
+  "lib/emailDelivery.js": [
+   {
+    "to": "      // The logical read is evidence about one valid audit/version, not permission to commit against changed evidence.\n      const current = classifyHoldRecord(cur);\n      if (current.code === \"delivery_hold_unreadable\" || !entry || inv.generation !== admitted.result.generation ||\n          entry.generation !== admitted.result.generation || entry.businessDate !== businessDate ||\n          (g.open && (current.state !== \"released\" || current.version !== g.version || entry.observedVersion !== g.version)))\n        return { next: undefined, result: { ok: false } };\n",
+    "from": "      if (!entry || inv.generation !== admitted.result.generation) return { next: undefined, result: { ok: false } };\n"
+   },
+   {
+    "to": "    if (g.open && (!finalized?.committed || !finalized.result?.ok)) return { open: false, code: \"held_day_unverifiable\", version: g.version };\n",
+    "from": "    if (g.open && !finalized?.result?.ok) return { open: false, code: \"held_day_unverifiable\", version: g.version };\n"
+   }
+  ]
+ }
+}
