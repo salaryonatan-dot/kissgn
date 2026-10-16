@@ -1,0 +1,72 @@
+{
+  "decision": "HR3 OT1 proposed local operational-tools successor of accepted S3; independent Codex review pending",
+  "parent": "7fa1b6e130dd0cdd24e02657d69a073e93a3f767",
+  "scope": [
+    "test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs",
+    "test/finance/hr3-ot1-daily-hold-guard.test.mjs",
+    "test/finance/hr3-s3-daily-hold-guard.test.mjs",
+    "test/support/hr3-ot1-daily-hold.mjs",
+    "test/support/m1-r1-remediation.mjs",
+    "tools/daily-delivery/hold.mjs"
+  ],
+  "edits": {
+    "tools/daily-delivery/hold.mjs": [
+      {
+        "from": "// HR3 S2: confirmation binds the exact generation/digest. Completeness also requires an audited generation origin,\n// atomic refusal proofs and no unresolved predecessor state; attestation flags do not authorize release.\n",
+        "to": "// HR3 S2: confirmation binds the exact generation/digest. Completeness also requires an audited generation origin,\n// atomic refusal proofs and no unresolved predecessor state; attestation flags do not authorize release.\n// HR3 OT1 (operational rehearsal OR-F1): on the real RTDB a first-attempt receipt carries NO `history` key (the store drops\n// the empty array lib/emailDelivery.js writes), so an absent history is read as empty; only a present non-array is\n// unreadable. The report also names the live claims (`liveClaims`) that make C2 not_met. No other reading changes.\n"
+      },
+      {
+        "from": "        typeof x.claimId !== \"string\" || !/^[a-f0-9]{64}$/.test(x.recipientHash) || !Array.isArray(x.history) ||\n",
+        "to": "        typeof x.claimId !== \"string\" || !/^[a-f0-9]{64}$/.test(x.recipientHash) || (x.history !== undefined && !Array.isArray(x.history)) ||\n"
+      },
+      {
+        "from": "    p7Population: { scheduledUnknown: receipts.unknown, scheduledSendingExpired: receipts.sendingExpired, manualUnknown: manual.unknown, manualHandingOff: manual.handingOff },\n",
+        "to": "    p7Population: { scheduledUnknown: receipts.unknown, scheduledSendingExpired: receipts.sendingExpired, manualUnknown: manual.unknown, manualHandingOff: manual.handingOff },\n    liveClaims: receipts.active,\n"
+      }
+    ],
+    "test/finance/hr3-s3-daily-hold-guard.test.mjs": [
+      {
+        "from": "const SKIP=!isHR3S3Tree(REPO)&&'not an HR3 S3 successor';\n",
+        "to": "const SKIP=!isHR3S3Tree(REPO)&&'not an HR3 S3 successor';\n// HR3 OT1 (T-OT1-LAYERING): on a successor of S3 this guard judges the literal, immutable S3 object; HEAD / index / checkout\n// move to the successor's own guard (the S2-on-S3 pattern one layer up).\nconst S3='7fa1b6e130dd0cdd24e02657d69a073e93a3f767';\nconst LAYERED=gitIn(REPO,['merge-base','--is-ancestor',S3,'HEAD']).status===0 && gitIn(REPO,['rev-parse','HEAD']).stdout.trim()!==S3;\nconst SOURCE=LAYERED?S3:'HEAD';\n"
+      },
+      {
+        "from": " assert.deepEqual(git(['rev-list','--parents','-n1','HEAD']).split(' ').slice(1),[HR3S3_PARENT]);\n assert.deepEqual(names(['diff','--name-only',HR3S3_PARENT,'HEAD','--']).sort(),[...HR3S3_SCOPE,'test/support/hr3-s3-daily-hold.json'].sort());\n assert.deepEqual(Object.keys(HR3S3_PINS).sort(),[...HR3S3_SCOPE].sort());\n for(const args of [['diff','--cached','--name-only','HEAD','--'],['diff','--name-only','HEAD','--'],['ls-files','--others','--',':(exclude)node_modules',':(exclude)test/historical/.deps']])assert.deepEqual(names(args),[]);\n for(const f of HR3S3_SCOPE){assert.equal(git(['rev-parse',`HEAD:${f}`]),HR3S3_PINS[f],f+' HEAD');assert.equal(git(['rev-parse',`:${f}`]),HR3S3_PINS[f],f+' index');assert.equal(gitBlobId(readFileSync(join(REPO,f))),HR3S3_PINS[f],f+' checkout');assert.equal(m1EffectivePins(REPO)[f],HR3S3_PINS[f],f+' overlay');}\n",
+        "to": " assert.deepEqual(git(['rev-list','--parents','-n1',SOURCE]).split(' ').slice(1),[HR3S3_PARENT]);\n assert.deepEqual(names(['diff','--name-only',HR3S3_PARENT,SOURCE,'--']).sort(),[...HR3S3_SCOPE,'test/support/hr3-s3-daily-hold.json'].sort());\n assert.deepEqual(Object.keys(HR3S3_PINS).sort(),[...HR3S3_SCOPE].sort());\n if(!LAYERED){for(const args of [['diff','--cached','--name-only','HEAD','--'],['diff','--name-only','HEAD','--'],['ls-files','--others','--',':(exclude)node_modules',':(exclude)test/historical/.deps']])assert.deepEqual(names(args),[]);}\n for(const f of HR3S3_SCOPE){assert.equal(git(['rev-parse',`${SOURCE}:${f}`]),HR3S3_PINS[f],f+' HEAD');\n  if(!LAYERED){assert.equal(git(['rev-parse',`:${f}`]),HR3S3_PINS[f],f+' index');assert.equal(gitBlobId(readFileSync(join(REPO,f))),HR3S3_PINS[f],f+' checkout');assert.equal(m1EffectivePins(REPO)[f],HR3S3_PINS[f],f+' overlay');}\n  else assert.equal(m1EffectivePins(REPO,{withHR3OT1:false})[f],HR3S3_PINS[f],f+' overlay without the successor layer');}\n"
+      },
+      {
+        "from": " for(const f of ['lib/sendEmail.js','database.rules.json','test/emulator/database.rules.json','test/support/rules-authorized-delta.mjs','lib/emailDelivery.d.ts','tools/daily-delivery/hold.mjs','api/admin.js','vercel.json','package.json','package-lock.json','index.html'])assert.equal(git(['rev-parse',`HEAD:${f}`]),git(['rev-parse',`${HR3S3_PARENT}:${f}`]),f);\n",
+        "to": " for(const f of ['lib/sendEmail.js','database.rules.json','test/emulator/database.rules.json','test/support/rules-authorized-delta.mjs','lib/emailDelivery.d.ts','tools/daily-delivery/hold.mjs','api/admin.js','vercel.json','package.json','package-lock.json','index.html'])assert.equal(git(['rev-parse',`${SOURCE}:${f}`]),git(['rev-parse',`${HR3S3_PARENT}:${f}`]),f);\n"
+      },
+      {
+        "from": " assert.equal(strip(readFileSync(join(REPO,'api/daily-snapshot/run.ts'),'utf8')),strip(before('api/daily-snapshot/run.ts')));\n",
+        "to": " assert.equal(strip(gitIn(REPO,['cat-file','blob',`${SOURCE}:api/daily-snapshot/run.ts`]).stdout),strip(before('api/daily-snapshot/run.ts')));\n"
+      },
+      {
+        "from": " assert.deepEqual(split(readFileSync(join(REPO,'lib/emailDelivery.js'),'utf8')),split(before('lib/emailDelivery.js')));\n assert.deepEqual(names(['diff','--name-only',HR3S3_PARENT,'HEAD','--','src','fincore']),[]);\n",
+        "to": " assert.deepEqual(split(gitIn(REPO,['cat-file','blob',`${SOURCE}:lib/emailDelivery.js`]).stdout),split(before('lib/emailDelivery.js')));\n assert.deepEqual(names(['diff','--name-only',HR3S3_PARENT,SOURCE,'--','src','fincore']),[]);\n"
+      }
+    ],
+    "test/support/m1-r1-remediation.mjs": [
+      {
+        "from": "import { isHR3S3Tree, HR3S3_PINS } from \"./hr3-s3-daily-hold.mjs\";\n",
+        "to": "import { isHR3S3Tree, HR3S3_PINS } from \"./hr3-s3-daily-hold.mjs\";\nimport { isHR3OT1Tree, HR3OT1_PINS } from \"./hr3-ot1-daily-hold.mjs\";\n"
+      },
+      {
+        "from": "withHR3S2 = withHR3S1, withHR3S3 = withHR3S2 } = {}) {",
+        "to": "withHR3S2 = withHR3S1, withHR3S3 = withHR3S2, withHR3OT1 = withHR3S3 } = {}) {"
+      },
+      {
+        "from": "    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && isHR3S3Tree(repo) ? HR3S3_PINS : {}) } : {};   // each successor overlays only its own protected files\n",
+        "to": "    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && isHR3S3Tree(repo) ? HR3S3_PINS : {}),\n    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && isHR3OT1Tree(repo) ? HR3OT1_PINS : {}) } : {};   // each successor overlays only its own protected files\n"
+      }
+    ]
+  },
+  "pins": {
+    "test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs": "0ea9a5d7f9dbd1584f08604e6547b35db3db1aeb",
+    "test/finance/hr3-ot1-daily-hold-guard.test.mjs": "68cb807bf2a211781f328ccabc63a7d406cd2c29",
+    "test/finance/hr3-s3-daily-hold-guard.test.mjs": "988d9403ae95f8118bac5ec52fb3ba4f36d4c3f3",
+    "test/support/hr3-ot1-daily-hold.mjs": "aea5b7579b5647b088fc2c7ce1816b9bd24fe5d7",
+    "test/support/m1-r1-remediation.mjs": "c9e447024d6b0d87a23f2d44dfa06d2302f46501",
+    "tools/daily-delivery/hold.mjs": "47ca8bc182219774de57493ceb7308bc238ac0c3"
+  }
+}

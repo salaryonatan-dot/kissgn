@@ -59,6 +59,7 @@ import { isHR2Tree, HR2_PINS } from "./hr2-daily-hold.mjs";
 import { isHR3Tree, HR3_PINS } from "./hr3-daily-hold.mjs";
 import { isHR3S1Tree, HR3S1_PINS } from "./hr3-s1-daily-hold.mjs";
 import { isHR3S3Tree, HR3S3_PINS } from "./hr3-s3-daily-hold.mjs";
+import { isHR3OT1Tree, HR3OT1_PINS } from "./hr3-ot1-daily-hold.mjs";
 import { isHR3S2Tree, HR3S2_PINS } from "./hr3-s2-daily-hold.mjs";
 
 const RECORD = JSON.parse(readFileSync(new URL("./m1-r1-remediation.json", import.meta.url), "utf8"));
@@ -86,7 +87,7 @@ export function isM1R1Tree(repo) {
  *  I6 registry-binding overlay (the I5 commit's own table, I6 layering); `withI7: false` = WITHOUT the I7 overlay (the I6 commit's
  *  own table, I7 layering); `withHR1: false` = WITHOUT the HR1 overlay (the I7 commit's own table, HR1 layering). */
 export function m1EffectivePins(repo, { withI3 = true, withI4 = withI3, withI5 = withI4, withI6 = withI5, withI7 = withI6,
-  withHR1 = withI7, withHR2 = withHR1, withHR3 = withHR2, withHR3S1 = withHR3, withHR3S2 = withHR3S1, withHR3S3 = withHR3S2 } = {}) {
+  withHR1 = withI7, withHR2 = withHR1, withHR3 = withHR2, withHR3S1 = withHR3, withHR3S2 = withHR3S1, withHR3S3 = withHR3S2, withHR3OT1 = withHR3S3 } = {}) {
   if (!isM1R1Tree(repo)) return { ...M1_PINS.blobs };
   const de1 = isDE1Tree(repo) ? de1EffectivePins(repo) : {};
   const i1 = isI1Tree(repo) ? { ...I1_PINS, ...(isI2Tree(repo) ? I2_PINS : {}), ...(withI3 && isI3Tree(repo) ? I3_PINS : {}), ...(withI3 && withI4 && isI4Tree(repo) ? I4_PINS : {}), ...(withI3 && withI4 && withI5 && isI5Tree(repo) ? I5_PINS : {}), ...(withI3 && withI4 && withI5 && withI6 && isI6Tree(repo) ? I6_PINS : {}), ...(withI3 && withI4 && withI5 && withI6 && withI7 && isI7Tree(repo) ? I7_PINS : {}), ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && isHR1Tree(repo) ? HR1_PINS : {}),
@@ -94,7 +95,8 @@ export function m1EffectivePins(repo, { withI3 = true, withI4 = withI3, withI5 =
     ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && isHR3Tree(repo) ? HR3_PINS : {}),
     ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && isHR3S1Tree(repo) ? HR3S1_PINS : {}),
     ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && isHR3S2Tree(repo) ? HR3S2_PINS : {}),
-    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && isHR3S3Tree(repo) ? HR3S3_PINS : {}) } : {};   // each successor overlays only its own protected files
+    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && isHR3S3Tree(repo) ? HR3S3_PINS : {}),
+    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && isHR3OT1Tree(repo) ? HR3OT1_PINS : {}) } : {};   // each successor overlays only its own protected files
   if (!isM1R2Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...de1, ...i1 };
   if (!isM1R3Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...de1, ...i1 };
   if (isM1R5Tree(repo)) return { ...M1_PINS.blobs, ...M1_R1_PINS, ...M1_R2_PINS, ...M1_R3_PINS, ...M1_R4_PINS, ...M1_R5_PINS, ...de1, ...i1 };

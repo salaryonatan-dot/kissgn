@@ -11,6 +11,9 @@
 //
 // HR3 S2: confirmation binds the exact generation/digest. Completeness also requires an audited generation origin,
 // atomic refusal proofs and no unresolved predecessor state; attestation flags do not authorize release.
+// HR3 OT1 (operational rehearsal OR-F1): on the real RTDB a first-attempt receipt carries NO `history` key (the store drops
+// the empty array lib/emailDelivery.js writes), so an absent history is read as empty; only a present non-array is
+// unreadable. The report also names the live claims (`liveClaims`) that make C2 not_met. No other reading changes.
 // Writes are ONE transaction on delivery_control/daily_snapshot (lib/emailDelivery.js changeDeliveryHold): state, version and
 // the audit-log entry together, or nothing. Every command verifies the ACTUAL project of the credentials against --project
 // and the ACTUAL default database instance against --database-url before any database reference. Named instances are refused
@@ -136,7 +139,7 @@ export function drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurat
     const [tenantId, bizId, businessDate] = id.split("/");
     if (!isPlain(x) || x.v !== "MARJIN_EMAIL_RECEIPT/1" || !Number.isInteger(x.attempt) || x.attempt < 1 ||
         x.kind !== DAILY_SNAPSHOT_KIND || x.tenantId !== tenantId || x.bizId !== bizId || x.businessDate !== businessDate ||
-        typeof x.claimId !== "string" || !/^[a-f0-9]{64}$/.test(x.recipientHash) || !Array.isArray(x.history) ||
+        typeof x.claimId !== "string" || !/^[a-f0-9]{64}$/.test(x.recipientHash) || (x.history !== undefined && !Array.isArray(x.history)) ||
         !["claimed", "sending", "accepted", "failed", "unknown"].includes(x.state) ||
         (["claimed", "sending"].includes(x.state) && !Number.isFinite(x.leaseUntil))) { receipts.unreadable.push(id); return; }
     const live = Number(x.leaseUntil) > nowMs;
@@ -180,6 +183,7 @@ export function drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurat
     criteria,
     // the P7 population: everything whose provider outcome automation cannot establish (never re-sent automatically)
     p7Population: { scheduledUnknown: receipts.unknown, scheduledSendingExpired: receipts.sendingExpired, manualUnknown: manual.unknown, manualHandingOff: manual.handingOff },
+    liveClaims: receipts.active,
     notHandedOver: { scheduledHeldBeforeSend: receipts.heldBeforeSend, scheduledClaimedExpired: receipts.claimedExpired },
     unreadable: { receipts: receipts.unreadable, manual: manual.unreadable },
     limits: [
