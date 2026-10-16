@@ -130,7 +130,7 @@ test('S2-12 a gate calculated before release retries on the released server valu
      try{assert.equal((await release(db)).ok,true);}finally{db.ref=saved;}}
    return ref(p,q).transaction(fn);}}:ref(p,q);
  const g=await E.makeDailyDeliveryGate(db,D)('g1');assert.equal(g.open,true);
- assert.equal(db.read(HOLD_PATH).refusedDates,undefined);assert.deepEqual(db.read(HOLD_PATH).log.v000000004.seal.refusedDates,[]);
+ assert.equal(db.read(HOLD_PATH).refusedDates,undefined);assert.equal(db.read(HOLD_PATH).log.v000000004.seal.refusedDates,undefined);
 });
 
 test('S2-13 release retries after a concurrent refusal and refuses the now-stale confirmation',async()=>{

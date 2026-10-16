@@ -82,6 +82,7 @@ import { isHR1Tree, HR1_SCOPE, HR1_PINS } from "../support/hr1-daily-hold.mjs";
 import { isHR2Tree, HR2_SCOPE, HR2_PINS } from "../support/hr2-daily-hold.mjs";
 import { isHR3Tree, HR3_SCOPE, HR3_PINS } from "../support/hr3-daily-hold.mjs";
 import { isHR3S1Tree, HR3S1_PINS } from "../support/hr3-s1-daily-hold.mjs";
+import { isHR3S3Tree, HR3S3_PINS } from "../support/hr3-s3-daily-hold.mjs";
 import { isHR3S2Tree, HR3S2_PINS } from "../support/hr3-s2-daily-hold.mjs";
 
 const SB = "src/snapshot/snapshotBuilder.ts", SE = "src/snapshot/snapshotEmail.ts";
@@ -252,7 +253,7 @@ function assertB2Scope(root) {
     // HR1 (T-HR1-LAYER): on an HR1 tree the Daily route (and the receipt module) are held to their literal HR1 pins
     const DE1_EFF = de1 ? { ...de1EffectivePins(root), ...(i1 ? I1_PINS : {}), ...(i1 && isHR1Tree(root) ? HR1_PINS : {}),
       ...(i1 && isHR2Tree(root) ? HR2_PINS : {}), ...(i1 && isHR3Tree(root) ? HR3_PINS : {}), ...(i1 && isHR3S1Tree(root) ? HR3S1_PINS : {}),
-      ...(i1 && isHR3S2Tree(root) ? HR3S2_PINS : {}) } : {};
+      ...(i1 && isHR3S2Tree(root) ? HR3S2_PINS : {}), ...(i1 && isHR3S3Tree(root) ? HR3S3_PINS : {}) } : {};
     const I3_ADDED = i1 && isI3Tree(root) ? I3_SCOPE.filter((f) => f !== "index.html") : [];
     const I4_ADDED = i1 && isI4Tree(root) ? [...I4_SCOPE] : [];
     const I5_ADDED = i1 && isI5Tree(root) ? [...I5_SCOPE] : [];

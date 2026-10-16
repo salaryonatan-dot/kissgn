@@ -266,11 +266,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // any delivery: the outer catch answers 500 with a fixed body and logs the class only (G7 — never an empty success).
       const run = await buildSnapshotRun({ nowMs: Date.now() });
       const db = getDb();
-      // G1 (HR1): the Daily-only hold, read for the run's OWN business date (the builder's one clock read) BEFORE any message is
-      // claimed, any notice is written or any recipient is resolved (the build itself only reads). A held run — or a business
-      // date held earlier: no automatic sending of a held day after release — claims nothing, consumes no attempt, writes no
-      // notice and sends nothing; it marks the date held. A known build/discovery failure still answers 500 with its structured
-      // accounting; a held-only run answers 503. Absent, malformed, unreadable or timed-out hold state is held (fail closed).
+      // G1: evaluate the Daily-only hold for the run's own business date before claims, notices or recipient resolution.
+      // Only an atomically committed refusal records that date as held. Missing, malformed or unavailable state closes
+      // this invocation without creating refusal evidence. The build itself only reads; held rows keep failure accounting,
+      // and a held-only run answers 503.
       const g1 = await makeDailyDeliveryGate(db, run.businessDate)("g1");
       if (!g1.open) {
         console.warn("[daily-snapshot] scheduled run held", { code: g1.code, businessDate: run.businessDate, heldDate: g1.heldDate ?? null });

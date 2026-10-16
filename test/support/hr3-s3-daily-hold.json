@@ -1,0 +1,62 @@
+{
+  "decision": "HR3 S3 proposed local successor; independent real RTDB closure pending",
+  "edits": {
+    "api/daily-snapshot/run.ts": [
+      {
+        "from": "      const run = await buildSnapshotRun({ nowMs: Date.now() });\n      const db = getDb();\n      // G1 (HR1): the Daily-only hold, read for the run's OWN business date (the builder's one clock read) BEFORE any message is\n      // claimed, any notice is written or any recipient is resolved (the build itself only reads). A held run \u2014 or a business\n      // date held earlier: no automatic sending of a held day after release \u2014 claims nothing, consumes no attempt, writes no\n      // notice and sends nothing; it marks the date held. A known build/discovery failure still answers 500 with its structured\n      // accounting; a held-only run answers 503. Absent, malformed, unreadable or timed-out hold state is held (fail closed).\n      const g1 = await makeDailyDeliveryGate(db, run.businessDate)(\"g1\");\n      if (!g1.open) {\n",
+        "to": "      const run = await buildSnapshotRun({ nowMs: Date.now() });\n      const db = getDb();\n      // G1: evaluate the Daily-only hold for the run's own business date before claims, notices or recipient resolution.\n      // Only an atomically committed refusal records that date as held. Missing, malformed or unavailable state closes\n      // this invocation without creating refusal evidence. The build itself only reads; held rows keep failure accounting,\n      // and a held-only run answers 503.\n      const g1 = await makeDailyDeliveryGate(db, run.businessDate)(\"g1\");\n      if (!g1.open) {\n"
+      }
+    ],
+    "lib/emailDelivery.js": [
+      {
+        "from": "    if (entry.seal !== undefined && (entry.action !== \"release\" || !isPlain(entry.seal) ||\n        !/^[a-f0-9-]{36}$/.test(entry.seal.generation) || !/^[a-f0-9]{64}$/.test(entry.seal.digest) ||\n        !Array.isArray(entry.seal.refusedDates) || entry.seal.refusedDates.some((d) => !validDate(d)) ||\n        !isPlain(entry.seal.confirmation) || entry.seal.confirmation.generation !== entry.seal.generation ||\n        entry.seal.confirmation.digest !== entry.seal.digest || !ACTOR.test(entry.seal.confirmation.actor) ||\n",
+        "to": "    if (entry.seal !== undefined && (entry.action !== \"release\" || !isPlain(entry.seal) ||\n        !/^[a-f0-9-]{36}$/.test(entry.seal.generation) || !/^[a-f0-9]{64}$/.test(entry.seal.digest) ||\n        !validSealDates(raw, entry.seal, version) ||\n        !isPlain(entry.seal.confirmation) || entry.seal.confirmation.generation !== entry.seal.generation ||\n        entry.seal.confirmation.digest !== entry.seal.digest || !ACTOR.test(entry.seal.confirmation.actor) ||\n"
+      },
+      {
+        "from": "  if (raw.state === \"held\") return { state: \"held\", code: \"delivery_held\", version: raw.version };\n  return { state: \"released\", code: null, version: raw.version };\n}\n\n",
+        "to": "  if (raw.state === \"held\") return { state: \"held\", code: \"delivery_held\", version: raw.version };\n  return { state: \"released\", code: null, version: raw.version };\n}\n\n// Seals contain cumulative refusal dates as of their release. Derive the expected set from retained atomic proofs,\n// including their held audit version, rather than treating every missing list as empty. Explicit malformed values stay closed.\nfunction validSealDates(raw, seal, releaseVersion) {\n  // A retained refused entry without its corresponding proof contradicts a complete sealed inventory.\n  if (Object.entries(raw.inventory?.entries ?? {}).some(([intent, entry]) =>\n      entry.state === \"refused\" && raw.refusedDates?.[entry.businessDate]?.intent !== intent)) return false;\n  const expected = Object.entries(raw.refusedDates ?? {}).filter(([, proof]) =>\n    raw.inventory?.entries?.[proof.intent]?.observedVersion < releaseVersion).map(([date]) => date).sort();\n  const dates = seal.refusedDates === undefined ? [] : seal.refusedDates;\n  return Array.isArray(dates) && dates.length === expected.length &&\n    expected.every((d, i) => validDate(d) && dates[i] === d);\n}\n\n"
+      },
+      {
+        "from": "  if (validMarkerProof(marker?.committedRefusal)) return { open: false, code: \"held_day\", version: hold.version };\n  if (marker?.committedRefusal !== undefined) return { open: false, code: \"held_day_unverifiable\", version: hold.version };\n  if (proof || Object.values(raw.inventory?.entries ?? {}).some((x) => x.businessDate === businessDate && x.state === \"pending\"))\n    return { open: false, code: \"legacy_evidence_unresolved\", version: hold.version };\n  const legacyThrough = raw.inventory?.legacyUncertainThrough ?? raw.excludedThrough;\n",
+        "to": "  if (validMarkerProof(marker?.committedRefusal)) return { open: false, code: \"held_day\", version: hold.version };\n  if (marker?.committedRefusal !== undefined) return { open: false, code: \"held_day_unverifiable\", version: hold.version };\n  if (proof || Object.values(raw.inventory?.entries ?? {}).some((x) => x.businessDate === businessDate && x.state === \"pending\" &&\n      // An unchanged released audit proves no held decision followed this observation. Retain the entry as evidence.\n      !(x.observedVersion === raw.version && raw.log[holdLogKey(x.observedVersion)]?.state === \"released\")))\n    return { open: false, code: \"legacy_evidence_unresolved\", version: hold.version };\n  const legacyThrough = raw.inventory?.legacyUncertainThrough ?? raw.excludedThrough;\n"
+      },
+      {
+        "from": "  if (marker && typeof marker === \"object\" && !marker.uncertain && (marker.code === undefined || [\"delivery_held\", \"held_day\"].includes(marker.code)))\n    return { open: false, code: \"legacy_evidence_unresolved\", version: hold.version };\n  // Error markers and unrecorded runs are not refusals. Legacy refusal markers require migration evidence.\n  return { open: true, code: null, version: hold.version };\n}\n",
+        "to": "  if (marker && typeof marker === \"object\" && !marker.uncertain && (marker.code === undefined || [\"delivery_held\", \"held_day\"].includes(marker.code)))\n    return { open: false, code: \"legacy_evidence_unresolved\", version: hold.version };\n  // Error markers and unrecorded runs are not refusals. Legacy refusal markers require separately resolved evidence.\n  return { open: true, code: null, version: hold.version };\n}\n"
+      },
+      {
+        "from": "        if (!cur.inventory.confirmation) return { next: undefined, result: { code: \"inventory_confirmation_required\" } };\n        if (!view.complete) return { next: undefined, result: { code: \"inventory_confirmation_mismatch\" } };\n        seal = { generation: view.generation, digest: view.digest, refusedDates: Object.keys(cur.refusedDates ?? {}).sort(),\n          confirmation: cur.inventory.confirmation };\n      }\n",
+        "to": "        if (!cur.inventory.confirmation) return { next: undefined, result: { code: \"inventory_confirmation_required\" } };\n        if (!view.complete) return { next: undefined, result: { code: \"inventory_confirmation_mismatch\" } };\n        const refusedDates = Object.keys(cur.refusedDates ?? {}).sort();\n        // RTDB removes empty containers. Omission represents only the evidenced empty set.\n        seal = { generation: view.generation, digest: view.digest, ...(refusedDates.length ? { refusedDates } : {}),\n          confirmation: cur.inventory.confirmation };\n      }\n"
+      }
+    ]
+  },
+  "parent": "f4fa07619d8389f0b45c196d2f76a5f6cbe97f6d",
+  "pins": {
+    "api/daily-snapshot/run.ts": "44e835cf6450b048b8ea7e1251446edf86a47ef8",
+    "lib/emailDelivery.js": "331f28f188ee46d8803b803bed143bf5382e169f",
+    "test/delivery/hr3-s2-protocol.test.mjs": "6993e88c60ef01e80de2daed60f5336115682735",
+    "test/delivery/hr3-s3-review-closure.test.mjs": "5b542e6f53e08235c5385fdca0edc9fdd1cf4883",
+    "test/emulator/hr3-s3-roundtrip-emulator.mjs": "5024febf4c934e2ed335266fae878114109cbf58",
+    "test/finance/b2-guard-mutations.test.mjs": "786bfecda6b923eb3e594b91a0c2ea98ea356884",
+    "test/finance/b2-snapshot.test.mjs": "02103ec09b0ce44e87f827b31656a00325067a20",
+    "test/finance/hr3-s2-daily-hold-guard.test.mjs": "61d5bebbd8f4cd399dc3e3d86c2e2f10efbb96ea",
+    "test/finance/hr3-s3-daily-hold-guard.test.mjs": "0d9160c7cbfeba6251d0417f68ffc9584d58a830",
+    "test/support/hr3-rtdb-hold-model.mjs": "98326fdec485c373f61d1fe632e315d1e8c8f1a6",
+    "test/support/hr3-s3-daily-hold.mjs": "5fd8671e098fa6aaaa6d9c041b6001f1eb28334f",
+    "test/support/m1-r1-remediation.mjs": "d3a9175040034d8d3e1f603670be8b2cf6388863"
+  },
+  "scope": [
+    "api/daily-snapshot/run.ts",
+    "lib/emailDelivery.js",
+    "test/delivery/hr3-s2-protocol.test.mjs",
+    "test/delivery/hr3-s3-review-closure.test.mjs",
+    "test/emulator/hr3-s3-roundtrip-emulator.mjs",
+    "test/finance/b2-guard-mutations.test.mjs",
+    "test/finance/b2-snapshot.test.mjs",
+    "test/finance/hr3-s2-daily-hold-guard.test.mjs",
+    "test/finance/hr3-s3-daily-hold-guard.test.mjs",
+    "test/support/hr3-rtdb-hold-model.mjs",
+    "test/support/hr3-s3-daily-hold.mjs",
+    "test/support/m1-r1-remediation.mjs"
+  ]
+}

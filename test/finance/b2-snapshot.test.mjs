@@ -15,6 +15,8 @@ import { isI1Tree, I1_PINS } from "../support/i1-integration.mjs";
 // HR1 (Daily-only delivery hold, T-HR1-LAYER): its literal run.ts pin on an HR1 tree
 import { isHR1Tree, HR1_PINS } from "../support/hr1-daily-hold.mjs";
 import { isHR2Tree, HR2_PINS } from "../support/hr2-daily-hold.mjs";
+import { HR3S3_PARENT, HR3S3_PINS, isHR3S3Tree, deriveHR3S3 } from "../support/hr3-s3-daily-hold.mjs";
+import { gitBlobId } from "../support/m1-r1-remediation.mjs";
 
 offlineFetch();
 const srv = compileServer();
@@ -257,10 +259,20 @@ test("B2-T14 run.ts compatibility: the endpoint file is byte-identical (pre-B2, 
     // HR1 (Daily-only delivery hold, T-HR1-LAYER): on an HR1 tree the file is held to its literal HR1 pin (HR1G-02 re-derives it from
     // the I7 bytes by recorded exact edits; the authorization section stays the P0 bytes — HR1G-03 / DE1G-03).
     const i1 = isI1Tree(REPO);
-    const want = isHR2Tree(REPO) ? HR2_PINS[RUN] : isHR1Tree(REPO) ? HR1_PINS[RUN] : i1 ? I1_PINS[RUN] : isDE1Tree(REPO) ? de1EffectivePins(REPO)[RUN] : gitIn(REPO, ["rev-parse", `${P0}:${RUN}`]).stdout.trim();
+    const s3 = isHR3S3Tree(REPO);
+    const want = s3 ? HR3S3_PINS[RUN] : isHR2Tree(REPO) ? HR2_PINS[RUN] : isHR1Tree(REPO) ? HR1_PINS[RUN] : i1 ? I1_PINS[RUN] : isDE1Tree(REPO) ? de1EffectivePins(REPO)[RUN] : gitIn(REPO, ["rev-parse", `${P0}:${RUN}`]).stdout.trim();
     assert.equal(gitIn(REPO, ["rev-parse", `HEAD:${RUN}`]).stdout.trim(), want, "committed run.ts = approved P0 blob (or the DE1 pin)");
     assert.equal(gitIn(REPO, ["hash-object", RUN]).stdout.trim(), want, "checked-out run.ts = approved P0 blob (or the DE1 pin)");
     const src = readFileSync(join(REPO, RUN), "utf8");
+    if (s3) {
+      // T-S3-B2-T14: only the recorded G1 policy comment changes; executable route/auth/builder bytes stay S2.
+      const derived = deriveHR3S3(REPO, RUN); assert.ok(derived.ok, derived.reason);
+      assert.equal(gitBlobId(derived.bytes), want, "S3 route re-derived from literal S2");
+      assert.equal(gitIn(REPO, ["rev-parse", `:${RUN}`]).stdout.trim(), want, "index route = exact S3 pin");
+      const parent = gitIn(REPO, ["cat-file", "blob", `${HR3S3_PARENT}:${RUN}`]); assert.equal(parent.status, 0);
+      const executable = text => text.split("\n").filter(line => !line.trimStart().startsWith("//")).join("\n");
+      assert.equal(executable(src), executable(parent.stdout), "S3 changes comment-only lines, never route code");
+    }
     if (i1) {
       assert.match(src, /import \{ buildSnapshotForBiz, buildSnapshotRun \} from "\.\.\/\.\.\/src\/snapshot\/snapshotBuilder\.js";/);
       assert.match(src, /await buildSnapshotRun\(\{ nowMs: Date\.now\(\) \}\)/); assert.doesNotMatch(src, /buildSnapshotForAll/, "the lossy array adapter is no longer consumed (G1)");
