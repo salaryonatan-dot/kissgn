@@ -36,7 +36,14 @@ test("OT-01 the operator tool: status / init / hold / release with confirmation,
   r = await Tool.runCommand(db, "release", { actor: "op1", reason: "enable", confirm: `release@${P}` }, { project: P, nowMs: 2 });
   assert.deepEqual([r.exitCode, r.result.code], [Tool.EXIT.REFUSED, "invalid_request"], "a change needs --expect-version");
   r = await Tool.runCommand(db, "release", { actor: "op1", reason: "enable", "expect-version": "1", confirm: `release@${P}` }, { project: P, nowMs: 2 });
+  assert.equal(r.result.code, 'inventory_confirmation_required');
+  const inv = (await Tool.runCommand(db, 'inventory', {}, { project: P })).result;
+  const reviewed = await Tool.runCommand(db, 'confirm-inventory', { actor:'op1', reason:'review exact inventory', generation:inv.generation,
+    'inventory-digest':inv.digest, confirm:`confirm-inventory@${P}` }, { project:P, nowMs:2 });
+  assert.equal(reviewed.result.code,'inventory_review_recorded');
+  r = await Tool.runCommand(db, "release", { actor: "op1", reason: "enable", "expect-version": "1", confirm: `release@${P}` }, { project: P, nowMs: 2 });
   assert.deepEqual([r.exitCode, r.result.state, r.result.version], [0, "released", 2]);
+  assert.equal(r.result.seal.digest,inv.digest);
   r = await Tool.runCommand(db, "hold", { actor: "op2", reason: "incident", "expect-version": "1", confirm: `hold@${P}` }, { project: P, nowMs: 3 });
   assert.deepEqual([r.exitCode, r.result.code], [Tool.EXIT.REFUSED, "version_conflict"]);
   db.seed(E.heldDatePath("2026-09-08"), { businessDate: "2026-09-08" });

@@ -10,8 +10,12 @@ let sb, restore;
 before(async () => { sb = await buildSandbox(); restore = freezeClock(DAY); });
 after(() => restore?.());
 const world = () => { const db = seedWorld(); sdkTransactions(db, "delivery_control"); sdkTransactions(db, E.MANUAL_ATTEMPT_ROOT); return db; };
-const held = () => ({ ...releasedHoldRecord(), state: "held", version: 3, log: { ...releasedHoldRecord().log,
+const held = () => ({ ...releasedHoldRecord(), state: "held", version: 3,
+  inventory: { schema:1,generation:'00000000-0000-4000-8000-000000000003',holdVersion:3,revision:0,
+    coverage:'unverified',decisionProtocol:'atomic_hold_refusal/1',openedBy:{version:3,action:'hold'},entries:{} }, log: { ...releasedHoldRecord().log,
   v000000003: { action: "hold", state: "held", version: 3, prevVersion: 2, actor: "review", reason: "local incident", at: DAY - 1000 } } });
+const confirmCurrent = async (db) => { const v=E.deliveryInventoryView(db.read(HOLD_PATH));return E.confirmDeliveryInventory(db,
+  {generation:v.generation,digest:v.digest,actor:'review',reason:'review exact inventory',nowMs:DAY}); };
 const cron = () => captureConsole(() => runCron(sb.route)).then((x) => x.value);
 
 test("HR1-R-01: failed marker and abandoned acknowledgement cannot allow same-day automatic catch-up", async () => {
@@ -33,11 +37,12 @@ test("HR1-R-01: failed marker and abandoned acknowledgement cannot allow same-da
     }
     assert.equal(db.read(E.heldDatePath(D)), null);
     db.ref = ref;
+    assert.equal((await confirmCurrent(db)).ok,true);
     assert.equal((await E.changeDeliveryHold(db, { action: "release", actor: "review", reason: "resume after incident", expectVersion: 3,
       nowMs: DAY + 1 })).ok, true);
     const again = await cron();
     assert.deepEqual([again.statusCode, again.body.code, smtp.calls.length], [503, "held_day", 0]);
-    assert.equal(db.read(HOLD_PATH).excludedThrough, D);
+    assert.equal(db.read(HOLD_PATH).refusedDates[D].decision,'committed_hold_refusal');
   }
 });
 
@@ -50,19 +55,21 @@ test("HR1-R-01: release fence is Israel-calendar based and survives G0/G3 refusa
     ? { ...ref(path, query), transaction: async () => { throw new Error("marker down"); } } : ref(path, query);
   for (const stage of ["g1", "g0", "g3"]) assert.equal((await E.makeDailyDeliveryGate(db, "2026-12-31") (stage)).open, false);
   db.ref = ref;
+  assert.equal((await confirmCurrent(db)).ok,true);
   assert.equal((await E.changeDeliveryHold(db, { action: "release", actor: "review", reason: "calendar release", expectVersion: 3,
     nowMs: beforeMidnight })).ok, true);
   assert.equal((await E.readDailyDeliveryGate(db, "2026-12-31")).code, "held_day");
   assert.equal((await E.readDailyDeliveryGate(db, "2027-01-01")).open, true);
   assert.equal((await E.changeDeliveryHold(db, { action: "hold", actor: "review", reason: "new hold", expectVersion: 4, nowMs: afterMidnight })).ok, true);
+  assert.equal((await confirmCurrent(db)).ok,true);
   assert.equal((await E.changeDeliveryHold(db, { action: "release", actor: "review", reason: "new release", expectVersion: 5, nowMs: afterMidnight })).ok, true);
-  assert.equal(db.read(HOLD_PATH).excludedThrough, "2027-01-01");
-  assert.equal((await E.readDailyDeliveryGate(db, "2027-01-01")).code, "held_day");
+  assert.equal(db.read(HOLD_PATH).excludedThrough,undefined);
+  assert.equal((await E.readDailyDeliveryGate(db, "2027-01-01")).open,true);
   assert.equal((await E.readDailyDeliveryGate(db, "2027-01-02")).open, true);
 });
 
-test("HR1-R-01: an applied release whose acknowledgement is lost still carries the exclusion", async () => {
-  const db = world(); db.seed(HOLD_PATH, held()); const ref = db.ref;
+test("HR1-R-01: an applied release whose acknowledgement is lost still carries committed refusals", async () => {
+  const db = world(); db.seed(HOLD_PATH, held());await E.makeDailyDeliveryGate(db,D)('g1');assert.equal((await confirmCurrent(db)).ok,true);const ref = db.ref;
   db.ref = (path, query) => path === HOLD_PATH ? { ...ref(path, query), transaction: async (update) => {
     await ref(path, query).transaction(update);
     throw new Error("acknowledgement lost");
@@ -70,7 +77,7 @@ test("HR1-R-01: an applied release whose acknowledgement is lost still carries t
   const result = await E.changeDeliveryHold(db, { action: "release", actor: "review", reason: "release with lost acknowledgement", expectVersion: 3, nowMs: DAY });
   assert.equal(result.code, "transaction_failed");
   db.ref = ref;
-  assert.equal(db.read(HOLD_PATH).excludedThrough, D);
+  assert.equal(db.read(HOLD_PATH).refusedDates[D].decision,'committed_hold_refusal');
   assert.equal((await E.readDailyDeliveryGate(db, D)).code, "held_day");
 });
 
@@ -132,6 +139,14 @@ test("HR1-R-05: target validation rejects missing, conflicting and named databas
     [{ options: { ...app.options, credential: { projectId: "other-project" } } }, args],
     [{ options: { ...app.options, databaseURL: `https://${project}-named.firebaseio.com/` } }, { ...args, databaseUrl: `https://${project}-named.firebaseio.com/` }],
   ]) assert.equal(Tool.verifyTarget(candidate, options).ok, false);
+  const namedEmulatorUrl=`http://127.0.0.1:9000/?ns=${project}-named`;
+  assert.equal(Tool.verifyTarget({options:{projectId:project,databaseURL:namedEmulatorUrl}},
+    {project,databaseUrl:namedEmulatorUrl,emulatorHost:'127.0.0.1:9000'}).code,
+    'unverified_database_instance','a named emulator namespace has no verified mapping');
+  const namedHostedUrl=`https://${project}-named.firebaseio.com/`;
+  assert.equal(Tool.verifyTarget({options:{projectId:project,credential:{projectId:project},databaseURL:namedHostedUrl}},
+    {project,databaseUrl:namedHostedUrl,emulatorHost:null}).code,
+    'unverified_database_instance','a verified credential identity does not establish a mapping for a named hosted-shaped URL');
   assert.equal(Tool.verifyTarget(app, { ...args, emulatorHost: null }).ok, false, "hosted mode needs verified credential identity");
   assert.equal(Tool.parseArgs(["--project=demo-one", "--project=demo-two"]).ambiguousTarget, true);
   assert.equal(Tool.parseArgs([`--database-url=${url}`, `--database-url=${url}`]).ambiguousTarget, true);

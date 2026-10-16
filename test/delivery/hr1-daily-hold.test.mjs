@@ -33,8 +33,12 @@ after(() => restoreClock && restoreClock());
 const setNow = (ms) => { Date.now = () => ms; };
 
 const clone = (x) => (x === null || x === undefined ? null : JSON.parse(JSON.stringify(x)));
-const held = (version = 3) => ({ ...releasedHoldRecord(), state: "held", version, log: { ...releasedHoldRecord().log,
+const held = (version = 3) => ({ ...releasedHoldRecord(), state: "held", version,
+  inventory: { schema: 1, generation: '00000000-0000-4000-8000-000000000003', holdVersion: version, revision: 0,
+    coverage: 'unverified', decisionProtocol: 'atomic_hold_refusal/1', openedBy: { version, action: 'hold' }, entries: {} }, log: { ...releasedHoldRecord().log,
   ["v" + String(version).padStart(9, "0")]: { action: "hold", state: "held", version, prevVersion: version - 1, actor: "op", reason: "incident", at: 1 } } });
+const confirmCurrent = async (db) => { const v = E.deliveryInventoryView(db.read(HOLD_PATH));
+  return E.confirmDeliveryInventory(db, { generation: v.generation, digest: v.digest, actor: 'op', reason: 'review exact inventory', nowMs: DAY }); };
 const receipts = (db) => clone(db.read(RECEIPTS)) || {};
 const receiptOf = (db, t, b, d) => clone(db.read(`${RECEIPTS}/${t}/${b}/${d}`));
 const manualRecords = (db) => { const out = []; const r = clone(db.read(E.MANUAL_ATTEMPT_ROOT)) || {}; for (const bs of Object.values(r)) for (const as of Object.values(bs)) for (const x of Object.values(as)) out.push(x); return out; };
@@ -83,7 +87,7 @@ test("HR-01 the hold record: only a well-formed, logged released record releases
   const db4 = world();
   assert.deepEqual(await E.readDailyDeliveryGate(db4, D), { open: true, code: null, version: 2 });
   db4.seed(E.heldDatePath(D), { businessDate: D });
-  assert.equal((await E.readDailyDeliveryGate(db4, D)).code, "held_day");
+  assert.equal((await E.readDailyDeliveryGate(db4, D)).code, "legacy_evidence_unresolved");
   assert.equal((await E.readDailyDeliveryGate(db4, "not-a-date")).code, "held_day_unverifiable");
   assert.equal((await E.readManualDeliveryGate(db4)).open, true, "a held-date marker does not block an explicit manual send");
 });
@@ -94,13 +98,18 @@ test("HR-02 hold changes: one transaction per change (state + version + log or n
   assert.equal((await E.changeDeliveryHold(db, { action: "hold", ...op, expectVersion: 1 })).code, "not_initialized");
   let r = await E.changeDeliveryHold(db, { action: "init", ...op, nowMs: 10 });
   assert.deepEqual(r, { ok: true, code: "applied", state: "held", version: 1 });
-  assert.deepEqual(db.read(HOLD_PATH), { schema: 1, state: "held", version: 1, log: { v000000001: { action: "init", state: "held", version: 1, prevVersion: 0, actor: "op.one", reason: "pilot bootstrap", at: 10 } } });
+  assert.deepEqual(db.read(HOLD_PATH), { schema: 1, state: "held", version: 1,
+    inventory: { schema: 1, generation: db.read(HOLD_PATH).inventory.generation, holdVersion: 1, revision: 0,
+      coverage: 'unverified', decisionProtocol: 'atomic_hold_refusal/1', openedBy: { version: 1, action: 'init' }, entries: {} },
+    log: { v000000001: { action: "init", state: "held", version: 1, prevVersion: 0, actor: "op.one", reason: "pilot bootstrap", at: 10 } } });
   assert.equal((await E.changeDeliveryHold(db, { action: "init", ...op })).code, "exists", "init never overwrites a well-formed record");
   assert.equal((await E.changeDeliveryHold(db, { action: "release", ...op, expectVersion: 7 })).code, "version_conflict");
   assert.equal((await E.changeDeliveryHold(db, { action: "hold", ...op, expectVersion: 1 })).code, "no_change");
   assert.equal(Object.keys(db.read(HOLD_PATH).log).length, 1, "a refused change writes no log entry");
+  assert.equal((await E.changeDeliveryHold(db, { action: "release", ...op, expectVersion: 1, nowMs: 20 })).code, 'inventory_confirmation_required');
+  assert.equal((await confirmCurrent(db)).ok, true);
   r = await E.changeDeliveryHold(db, { action: "release", ...op, expectVersion: 1, nowMs: 20 });
-  assert.deepEqual(r, { ok: true, code: "applied", state: "released", version: 2 });
+  assert.deepEqual([r.ok,r.code,r.state,r.version,r.seal.generation], [true,'applied','released',2,db.read(HOLD_PATH).log.v000000002.seal.generation]);
   r = await E.changeDeliveryHold(db, { action: "hold", actor: "op.two", reason: "wrong totals in report", expectVersion: 2, nowMs: 30 });
   assert.deepEqual([r.code, r.version], ["applied", 3]);
   const rec = db.read(HOLD_PATH);
@@ -126,22 +135,23 @@ test("HR-02 hold changes: one transaction per change (state + version + log or n
   assert.equal((await E.readDeliveryHold(db)).state, "held");
 });
 
-test("HR-03 G1: held / absent / unreadable / timed-out hold refuses the scheduled run before any claim; the date is marked held", async () => {
+test("HR-03 G1: held / absent / malformed / unavailable decisions refuse before any claim; only a committed refusal marks the date", async () => {
   for (const [label, setup, code] of [
     ["held", (db) => db.seed(HOLD_PATH, held()), "delivery_held"],
     ["absent", (db) => db.seed(HOLD_PATH, null), "delivery_hold_unreadable"],
     ["malformed", (db) => db.seed(HOLD_PATH, { schema: 1, state: "released" }), "delivery_hold_unreadable"],
-    ["unreadable", (db) => scriptHold(db, () => "throw"), "delivery_hold_unavailable"],
-    ["timed out (HOLD_READ_TIMEOUT_MS)", (db) => scriptHold(db, () => "hang"), "delivery_hold_unavailable"],
+    ["unavailable", (db) => { const ref=db.ref; db.ref=(p,q)=>p===HOLD_PATH?{...ref(p,q),transaction:async()=>{throw Error('down');}}:ref(p,q); }, "delivery_hold_unavailable"],
+    ["timed out decision", (db) => { const ref=db.ref; db.ref=(p,q)=>p===HOLD_PATH?{...ref(p,q),transaction:()=>new Promise(()=>{})}:ref(p,q); }, "delivery_hold_unavailable"],
   ]) {
     const db = world(); setup(db); const smtp = installSmtp([SMTP.accept()]);
     const res = await cron();
     assert.equal(res.statusCode, 503, label);
-    assert.deepEqual([res.body.status, res.body.code, res.body.businessDate, res.body.heldDate, res.body.results.length], ["held", code, D, "recorded", 3], label);
+    assert.deepEqual([res.body.status, res.body.code, res.body.businessDate, res.body.results.length], ["held", code, D, 3], label);
     assert.ok(res.body.results.every((row) => row.settlement === "held" && row.receipt === "not_written"), label);
     assert.equal(smtp.calls.length, 0, label + ": no provider call");
     assert.deepEqual(receipts(db), {}, label + ": no receipt, no claim");
-    assert.equal(db.read(E.heldDatePath(D)).code, code, label + ": the date is marked held");
+    assert.equal(db.read('email_delivery/daily_snapshot_notices'),null,label+': no owner notice');
+    assert.equal(db.read(E.heldDatePath(D))?.code ?? null, label === 'held' ? 'delivery_held' : null, label + ': only a committed refusal gets a marker');
   }
   // a held run writes no owner notice either (control: the same world, released, records one for the nameless business)
   const env = (v) => ({ _v: JSON.stringify(v) });
@@ -172,21 +182,35 @@ test("HR-04 G0: a hold set during the run — earlier messages delivered, later 
   }
   assert.equal(receiptOf(db, deliveredRow.tenantId, deliveredRow.bizId, D).state, "accepted");
   assert.equal(db.read(E.heldDatePath(D)).stage, "g0");
-  // the in-run hold is sticky even when the held-date marker cannot be written and the hold flips back to released mid-run:
-  // reads 1 (G1), 2 (G0) and 3 (G3) see released, read 4 (the second message's G0) sees held, read 5 would see released again
-  const db2 = world(); const ref = db2.ref;
-  db2.ref = (p, q) => (String(p).startsWith(E.HELD_DATES_ROOT) ? { ...ref(p, q), transaction: async () => { throw new Error("marker store down"); } } : ref(p, q));
-  scriptHold(db2, (n) => (n === 4 ? { value: held() } : undefined));
+  // A real hold transition at the second message's decision boundary is durable even if marker storage fails.
+  const db2 = world(); const ref = db2.ref; let decisions = 0;
+  db2.ref = (p, q) => { const r=ref(p,q);
+    if (String(p).startsWith(E.HELD_DATES_ROOT)) return { ...r, transaction: async () => { throw Error('marker down'); } };
+    if (p !== HOLD_PATH) return r;
+    return { ...r, transaction: async (fn) => {
+      if (++decisions === 4) { const saved=db2.ref; db2.ref=ref;
+        try { assert.equal((await E.changeDeliveryHold(db2,{ action:'hold',actor:'op',reason:'hold during run',expectVersion:2 })).ok,true); }
+        finally { db2.ref=saved; } }
+      return r.transaction(fn);
+    } };
+  };
   const smtp2 = installSmtp([SMTP.accept()]);
   const res2 = await cron();
   assert.equal(smtp2.calls.length, 1, "after one held message no later message of the run reaches the provider");
   assert.deepEqual(res2.body.results.map((x) => x.settlement), ["delivered", "held", "held"]);
-  assert.equal(db2.read(E.heldDatePath(D)), null, "the marker could not be written (the sticky run hold is what holds the third message)");
+  assert.equal(db2.read(E.heldDatePath(D)), null, "the marker could not be written");
+  assert.equal(db2.read(HOLD_PATH).refusedDates[D].decision,'committed_hold_refusal');
 });
 
 test("HR-05 G3: a hold after the claim and before the hand-off — no provider call; the claim expires at the same attempt", async () => {
   const db = world({ withSecondBiz: false, withSecondTenant: false });
-  scriptHold(db, (n) => (n >= 3 ? { value: held() } : undefined));   // G1 (1) and G0 (2) see released; G3 (3) sees held
+  const ref=db.ref;let switched=false;
+  db.ref=(p,q)=>{const r=ref(p,q);if(!String(p).startsWith(RECEIPTS))return r;
+    return {...r,transaction:async(fn)=>{const out=await r.transaction(fn);
+      if(!switched && out?.snapshot?.val()?.state==='claimed') { switched=true; const saved=db.ref;db.ref=ref;
+        try { assert.equal((await E.changeDeliveryHold(db,{action:'hold',actor:'op',reason:'hold before handoff',expectVersion:2})).ok,true); }
+        finally {db.ref=saved;} }
+      return out;}};};
   const smtp = installSmtp([SMTP.accept()]);
   const res = await cron();
   assert.equal(res.statusCode, 503); assert.equal(res.body.status, "held");
@@ -239,6 +263,7 @@ test("HR-07 release sends no held day automatically; the next day is delivered; 
   const db = world(); db.seed(HOLD_PATH, held(3));
   const smtp = installSmtp([SMTP.accept()]);
   assert.equal((await cron()).body.code, "delivery_held");
+  assert.equal((await confirmCurrent(db)).ok, true);
   assert.equal((await E.changeDeliveryHold(db, { action: "release", actor: "op", reason: "fixed", expectVersion: 3 })).code, "applied");
   // a later automatic run for the SAME business date (e.g. a duplicate cron invocation) is held: the day is not backfilled
   const again = await cron();
@@ -337,11 +362,12 @@ test("HR-10 interrupted and unknown attempts stay held for reconciliation across
   assert.equal(receiptOf(db, T, B, D).state, "unknown");
   // a hold and a release do not touch the receipt; a later run (no run happened during the hold) still never re-sends it
   assert.equal((await E.changeDeliveryHold(db, { action: "hold", actor: "op", reason: "check unknown", expectVersion: 2 })).code, "applied");
+  assert.equal((await confirmCurrent(db)).ok, true);
   assert.equal((await E.changeDeliveryHold(db, { action: "release", actor: "op", reason: "resume", expectVersion: 3 })).code, "applied");
   const smtp = installSmtp([SMTP.accept()]);
   const again = await cron();
-  assert.equal(again.body.results[0].code, "held_day");
-  assert.equal(receiptOf(db, T, B, D).state, "unknown", "the existing unknown receipt is not changed by the date fence");
+  assert.equal(again.body.results[0].code, "unknown_requires_reconciliation");
+  assert.equal(receiptOf(db, T, B, D).state, "unknown", "the existing unknown receipt is not changed by release");
   assert.equal(smtp.calls.length, 0);
   // an invocation lost while sending: the hold leaves it `sending`; after the lease a run converts it to unknown, never re-sends
   const db2 = world({ withSecondBiz: false, withSecondTenant: false });

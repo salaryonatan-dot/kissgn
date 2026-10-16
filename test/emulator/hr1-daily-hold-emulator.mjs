@@ -37,6 +37,8 @@ const cold = () => { const a = admin.initializeApp({ databaseURL: DB_URL }, "hr1
 const seedDb = cold();
 const read = async (p) => (await cold().ref(p).once("value")).val();
 const op = { actor: "op.emu", reason: "emulator check" };
+const confirmInventory = async () => { const v=E.deliveryInventoryView(await read(E.DELIVERY_HOLD_PATH));
+  assert.equal((await E.confirmDeliveryInventory(cold(),{...op,generation:v.generation,digest:v.digest})).ok,true);return v; };
 const D = "2026-09-08";
 const TO = "owner-a@example.test";
 
@@ -47,6 +49,8 @@ await check("HRE-01 hold changes over the real transport (cold instances): one r
   assert.deepEqual(inits.filter((r) => r.code === "applied").length, 1, "exactly one init applied: " + JSON.stringify(inits.map((r) => r.code)));
   assert.ok(inits.every((r) => r.code === "applied" || r.code === "exists"));
   assert.deepEqual(E.classifyHoldRecord(await read(E.DELIVERY_HOLD_PATH)), { state: "held", code: "delivery_held", version: 1 });
+  assert.equal((await E.changeDeliveryHold(cold(), { action: "release", ...op, expectVersion: 1 })).code, "inventory_confirmation_required");
+  await confirmInventory();
   assert.equal((await E.changeDeliveryHold(cold(), { action: "release", ...op, expectVersion: 1 })).code, "applied");
   assert.deepEqual(await E.readDeliveryHold(cold()), { state: "released", code: null, version: 2 });
   const race = await Promise.all([E.changeDeliveryHold(cold(), { action: "hold", ...op, expectVersion: 2 }), E.changeDeliveryHold(cold(), { action: "hold", actor: "op.two", reason: "second operator", expectVersion: 2 })]);
@@ -61,6 +65,7 @@ await check("HRE-01 hold changes over the real transport (cold instances): one r
 await check("HRE-02 the scheduled gate over the real transport: G0, G3 between claim and hand-off, held-date marker, no backfill after release", async () => {
   await seedDb.ref("/").set(null);
   await E.changeDeliveryHold(cold(), { action: "init", ...op, nowMs: Date.parse("2026-09-07T04:05:00Z") });
+  await confirmInventory();
   await E.changeDeliveryHold(cold(), { action: "release", ...op, expectVersion: 1, nowMs: Date.parse("2026-09-07T04:05:00Z") });
   const db = cold();
   let calls = 0;
@@ -82,6 +87,7 @@ await check("HRE-02 the scheduled gate over the real transport: G0, G3 between c
   assert.deepEqual([r2.outcome, calls], ["held", 0]);
   assert.equal(await read(E.receiptPath("daily_snapshot", "tA", "bB", D)), null);
   // release: the held day is not sent automatically; another day is
+  await confirmInventory();
   await E.changeDeliveryHold(cold(), { action: "release", ...op, expectVersion: 3, nowMs: Date.parse("2026-09-08T04:05:00Z") });
   const r3 = await E.deliverWithReceipt({ ...base, send: send(false), gate: E.makeDailyDeliveryGate(db, D) });
   assert.deepEqual([r3.outcome, r3.code, calls], ["held", "held_day", 0]);
@@ -149,6 +155,10 @@ await check("HRE-05 the operator tool end to end: status, refused write, project
   assert.equal(await read(E.DELIVERY_HOLD_PATH), null);
   r = tool("init", `--project=${PROJECT}`, "--actor=op.cli", "--reason=bootstrap via tool", `--confirm=init@${PROJECT}`);
   assert.equal(r.status, 0, r.stdout + r.stderr);
+  r = tool("inventory", `--project=${PROJECT}`);assert.equal(r.status,0,r.stdout+r.stderr);const inventory=JSON.parse(r.stdout);
+  r = tool("confirm-inventory", `--project=${PROJECT}`, "--actor=op.cli", "--reason=review exact inventory",
+    `--generation=${inventory.generation}`,`--inventory-digest=${inventory.digest}`,`--confirm=confirm-inventory@${PROJECT}`);
+  assert.equal(r.status,0,r.stdout+r.stderr);
   r = tool("release", `--project=${PROJECT}`, "--actor=op.cli", "--reason=enable the daily", "--expect-version=1", `--confirm=release@${PROJECT}`);
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.deepEqual(await E.readDeliveryHold(cold()), { state: "released", code: null, version: 2 });
@@ -156,7 +166,21 @@ await check("HRE-05 the operator tool end to end: status, refused write, project
   assert.equal(r.status, 5, "the evidence report on a released record is ABORT_D"); assert.match(r.stdout, /VERDICT ABORT_D/);
 });
 
+await check("HRE-06 cold-client gate/release and two-release contention preserve the committed decision boundary",async()=>{
+  await seedDb.ref('/').set(null);assert.equal((await E.changeDeliveryHold(cold(),{...op,action:'init'})).ok,true);
+  await confirmInventory();assert.equal((await E.changeDeliveryHold(cold(),{...op,action:'release',expectVersion:1})).ok,true);
+  assert.equal((await E.changeDeliveryHold(cold(),{...op,action:'hold',expectVersion:2})).ok,true);await confirmInventory();
+  const [gate,release]=await Promise.all([E.makeDailyDeliveryGate(cold(),D)('g1'),E.changeDeliveryHold(cold(),{...op,action:'release',expectVersion:3})]);
+  if(release.ok){const raw=await read(E.DELIVERY_HOLD_PATH);
+    assert.ok(gate.open || raw.log.v000000004.seal.refusedDates.includes(D));
+  }else{assert.equal(release.code,'inventory_confirmation_required');await confirmInventory();
+    assert.equal((await E.changeDeliveryHold(cold(),{...op,action:'release',expectVersion:3})).ok,true);}
+  assert.equal((await E.changeDeliveryHold(cold(),{...op,action:'hold',expectVersion:4})).ok,true);await confirmInventory();
+  const results=await Promise.all([0,1].map(()=>E.changeDeliveryHold(cold(),{...op,action:'release',expectVersion:5})));
+  assert.deepEqual(results.map(r=>r.code).sort(),['applied','version_conflict'].sort());
+});
+
 for (const a of apps) await a.delete().catch(() => {});
 const failed = results.filter((r) => !r.ok);
 console.log(`HR1_EMULATOR total=${results.length} pass=${results.length - failed.length} fail=${failed.length}`);
-process.exit(failed.length || results.length !== 5 ? 1 : 0);
+process.exit(failed.length || results.length !== 6 ? 1 : 0);

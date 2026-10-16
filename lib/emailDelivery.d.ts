@@ -115,7 +115,7 @@ export const HOLD_SCHEMA: 1;
 export const HOLD_READ_TIMEOUT_MS: number;
 export const HOLD_ACTIONS: Readonly<{ init: "held"; hold: "held"; release: "released" }>;
 export type HoldCode = "delivery_held" | "delivery_hold_unreadable" | "delivery_hold_unavailable";
-export type GateCode = HoldCode | "held_day" | "held_day_unverifiable";
+export type GateCode = HoldCode | "held_day" | "held_day_unverifiable" | "legacy_evidence_unresolved";
 export interface HoldState { state: "released" | "held"; code: HoldCode | null; version: number | null }
 export interface DeliveryGate { open: boolean; code: GateCode | null; version: number | null; heldDate?: "recorded" | "exists" | "not_recorded" }
 export type DeliveryGateFn = (stage?: string) => Promise<DeliveryGate>;
@@ -124,11 +124,11 @@ export function classifyHoldRecord(raw: unknown): HoldState;
 export function readDeliveryHold(db: unknown, opts?: { timeoutMs?: number }): Promise<HoldState>;
 export function heldDatePath(businessDate: unknown): string | null;
 export function readDailyDeliveryGate(db: unknown, businessDate: string | null, opts?: { timeoutMs?: number }): Promise<DeliveryGate>;
-export function recordHeldDate(db: unknown, businessDate: string | null, opts?: { code?: string | null; version?: number | null; stage?: string; nowMs?: number }): Promise<"recorded" | "exists" | "not_recorded">;
+export function recordHeldDate(db: unknown, businessDate: string | null, opts?: { code?: string | null; version?: number | null; stage?: string; nowMs?: number; timeoutMs?: number; proof?: { decision: "committed_hold_refusal"; generation: string; intent: string; holdVersion: number } }): Promise<"recorded" | "exists" | "not_recorded">;
 export function makeDailyDeliveryGate(db: unknown, businessDate: string | null, opts?: { timeoutMs?: number; clock?: () => number }): DeliveryGateFn;
 export function readManualDeliveryGate(db: unknown, opts?: { timeoutMs?: number }): Promise<DeliveryGate>;
-export type HoldChangeCode = "applied" | "invalid_request" | "exists" | "not_initialized" | "unreadable_record" | "version_conflict" | "no_change" | "transaction_failed" | "inventory_read_unavailable" | "inventory_missing_or_unreadable" | "inventory_incomplete" | "inventory_confirmation_required" | "inventory_coverage_unverified";
-export function changeDeliveryHold(db: unknown, args: { action: "init" | "hold" | "release"; actor: string; reason: string; expectVersion?: number; nowMs?: number }):
+export type HoldChangeCode = "applied" | "invalid_request" | "exists" | "not_initialized" | "unreadable_record" | "version_conflict" | "no_change" | "transaction_failed" | "inventory_missing_or_unreadable" | "inventory_incomplete" | "inventory_confirmation_required" | "inventory_confirmation_mismatch" | "inventory_coverage_unverified";
+export function changeDeliveryHold(db: unknown, args: { action: "init" | "hold" | "release"; actor: string; reason: string; expectVersion?: number; nowMs?: number; timeoutMs?: number }):
   Promise<{ ok: boolean; code: HoldChangeCode; state?: "held" | "released"; version?: number }>;
 export function manualAttemptPath(tenantId: string, bizId: string, attemptId: string): string | null;
 export function deliverManualDaily(args: {
@@ -146,6 +146,5 @@ export function deliverManualDaily(args: {
   deploymentId?: string;
 }): Promise<{ outcome: "accepted" | "failed" | "unknown" | "held"; code: string | null; attemptId: string | null; record: "recorded" | "write_failed" | "not_written"; messageId?: string }>;
 
-/** HR3 inventory is explicitly incomplete: local entries do not prove coverage of first-write failures. */
-export function deliveryInventoryView(raw: unknown): { ok: boolean; code?: string; generation?: string; digest?: string; complete?: false; pending?: string[] };
-export function confirmDeliveryInventory(db: unknown, args: { generation: string; digest: string; actor: string; reason: string; nowMs?: number; timeoutMs?: number }): Promise<{ ok: boolean; code: string; releaseBlocked?: boolean; coverage?: string }>;
+export function deliveryInventoryView(raw: unknown): { ok: boolean; code?: string; generation?: string; digest?: string; eligible?: boolean; complete?: boolean; pending?: string[]; unresolvedLegacy?: boolean };
+export function confirmDeliveryInventory(db: unknown, args: { generation: string; digest: string; actor: string; reason: string; nowMs?: number; timeoutMs?: number }): Promise<{ ok: boolean; code: string; generation?: string; digest?: string }>;

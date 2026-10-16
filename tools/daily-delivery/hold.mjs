@@ -9,8 +9,8 @@
 //   release   released (likewise). A release does NOT send any held business date: the held-date markers stay, and a
 //             scheduled run for a held date is still refused (owner decision: no automatic sending of held-day summaries).
 //
-// HR3: inventory/confirm-inventory record review of exact generation/digest; review is not a completeness proof.
-// Release is blocked with inventory_coverage_unverified even after review (no authoritative ingress ledger is available).
+// HR3 S2: confirmation binds the exact generation/digest. Completeness also requires an audited generation origin,
+// atomic refusal proofs and no unresolved predecessor state; attestation flags do not authorize release.
 // Writes are ONE transaction on delivery_control/daily_snapshot (lib/emailDelivery.js changeDeliveryHold): state, version and
 // the audit-log entry together, or nothing. Every command verifies the ACTUAL project of the credentials against --project
 // and the ACTUAL default database instance against --database-url before any database reference. Named instances are refused
@@ -99,10 +99,12 @@ export function holdLog(raw) {
 /** The status view. Pure. */
 export function statusView(raw, heldDates) {
   const c = classifyHoldRecord(raw);
+  const releases = holdLog(raw).filter((x) => x.action === "release" && x.seal);
   return {
     gates: c.state, code: c.code, version: c.version,
     recordPresent: raw !== null && raw !== undefined,
     log: holdLog(raw).slice(-10),
+    latestSeal: releases.length ? releases[releases.length - 1].seal : null,
     heldDates: isPlain(heldDates) ? Object.keys(heldDates).sort() : [],
   };
 }
