@@ -20,7 +20,8 @@ import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { gitBlobId, m1R5Pins } from "../support/m1-r1-remediation.mjs";
 import { collectServerReaderScopeInputs, serverReaderScopeVerdict } from "../support/server-reader-authorized-delta.mjs";
-import { bf1Projection } from "../support/bf1-backfill-layer.mjs";
+// Keep the Agent controls intact; validate the separately pinned carried script through the reader projection.
+import { readerBackfillProjection as bf1Projection } from "../support/server-reader-authorized-delta.mjs";
 import { ADB06_ENTRY, ADB06_SOURCE, ADB06_CHAIN, ADB06_PINS, ADB06_ENTRY_BLOBS, ADB06_FILES, ADB06_AGENT_FILES, isADB06Tree, adb06RecordVerdict, adb06Projection } from "../support/adb06-builder-layer.mjs";
 
 const SKIP = !isADB06Tree(REPO) && "not an ADB-06 layer tree";

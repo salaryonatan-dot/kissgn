@@ -11,6 +11,8 @@ import { untrackedPaths, bf2RecordVerdict, BF2_PIN, BF2_FILE } from './bf2-backf
 
 export const A1_PARENT = 'f34eec92aed4851c2da8a8dfd8f1f353b1d582d7';
 export const A1_SOURCES = Object.freeze({ c07t:'7062046c0227a3647fbd034e83c9bcff937e79f6', cc2:'838b63659596cd995331bbf8c681e6ad12cf1ec1', bf3:'3a3b6ff21632d76563eae95c6a8717e1cc263f76', dt:'7b1d3061c1a42b2d05d7702fbe376f98916e2ce6' });
+export const A2_PARENT = 'a5f9f1b471e9d7004aba3dec923f717dbfe36c3e';
+export const A2_SCOPE = Object.freeze(["test/finance/adb06-builder-layer-guard.test.mjs", "test/finance/bf1-backfill-layer-guard.test.mjs", "test/finance/cc1-checklist-cold-cache-guard.test.mjs", "test/finance/hr1-daily-hold-guard.test.mjs", "test/finance/m1-a1-inspection-guard.test.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs"]);
 export const A1_RECORD = 'test/support/m1-a1-inspection.json';
 const MODULE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const git = (root,args) => spawnSync('git',['-C',root,...args],{encoding:'utf8',timeout:30000,maxBuffer:64*1024*1024});
@@ -25,7 +27,13 @@ export function isA1Tree(root) {
 export function verifyA1Head(root=MODULE_ROOT) {
   assert.ok(isA1Tree(root),'explicit A1 record and fixed source references required');
   const r=load(root), head=text(root,['rev-parse','HEAD']);
-  assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,A1_PARENT],'A1 is a sole child of exact OT4');
+  // This bounded successor changes only the four authorized consumers and the existing joint-holder support.
+  const expectedParent=r.carriage ? A2_PARENT : A1_PARENT;
+  if(r.carriage) {
+    assert.deepEqual(r.carriage,{parent:A2_PARENT,scope:[...A2_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'},'fixed A2 carriage, never arbitrary later ancestry');
+    assert.deepEqual(text(root,['diff','--name-only',A2_PARENT,'HEAD','--']).split('\n').filter(Boolean).sort(),[...A2_SCOPE],'exact authorized successor delta');
+  }
+  assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,expectedParent],'exact sole inspection parent');
   for(const sha of Object.values(A1_SOURCES)) assert.equal(text(root,['cat-file','-t',sha]),'commit','source object required');
   const names=args=>text(root,args).split('\n').filter(Boolean).sort();
   assert.deepEqual(names(['diff','--name-only',A1_PARENT,'HEAD','--']),r.scope,'fixed committed assembly scope');
@@ -48,6 +56,11 @@ export function verifyA1Head(root=MODULE_ROOT) {
     let s=spawnSync('git',['-C',root,'show',A1_PARENT+':'+file],{encoding:'utf8',timeout:30000,maxBuffer:32*1024*1024}).stdout;
     for(const e of edits) { assert.ok(e.from && s.split(e.from).length===2,file+' unique edit anchor'); s=s.replace(e.from,()=>e.to); }
     assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' recorded parent derivation');
+  }
+  if(r.carriage) for(const [file,edits] of Object.entries(r.legacyEdits)) {
+    let s=spawnSync('git',['-C',root,'show',A2_PARENT+':'+file],{encoding:'utf8',timeout:30000,maxBuffer:32*1024*1024}).stdout;
+    for(const e of edits){assert.ok(e.from && s.split(e.from).length===2,file+' unique legacy edit');s=s.replace(e.from,()=>e.to);}
+    assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' exact authorized legacy derivation');
   }
   return {ok:true,head,files:Object.keys(tree).length};
 }

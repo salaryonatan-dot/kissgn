@@ -7,12 +7,14 @@ import { tmpdir } from "node:os";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { gitBlobId, m1EffectivePins } from "../support/m1-r1-remediation.mjs";
-import { isProtectedPath, collectServerReaderScopeInputs, serverReaderScopeVerdict } from "../support/server-reader-authorized-delta.mjs";
-import { BF1_FILE, BF1_PIN, BF1_PARENT, BF1_PARENT_BLOB, bf1RecordVerdict, bf1Projection } from "../support/bf1-backfill-layer.mjs";
+import { isProtectedPath, collectServerReaderScopeInputs, serverReaderScopeVerdict, readerBackfillProjection as bf1Projection } from "../support/server-reader-authorized-delta.mjs";
+import { BF1_FILE, BF1_PIN, BF1_PARENT, BF1_PARENT_BLOB, bf1RecordVerdict } from "../support/bf1-backfill-layer.mjs";
 // BF2 layering (corrected T-BF1-LAYER, independent BF1 review BF1-R-03): on a BF2 tree BF1G-01 judges the IMMUTABLE BF1 commit from git
 // objects; HEAD / index / working tree (every path not in the index, ignored or not) are held by BF2G-01.
 import { isBF2Tree, BF2_PARENT } from "../support/bf2-backfill-layer.mjs";
-const LAYERED = isBF2Tree(REPO);
+// A1/A2 is a content carry: literal BF1 identity remains historical; the joint holder protects the current tree.
+import { isA1Tree } from "../support/m1-a1-inspection.mjs";
+const LAYERED = isA1Tree(REPO) || isBF2Tree(REPO);
 const BF1_TREE = LAYERED ? BF2_PARENT : "HEAD";
 const rev = (s) => gitIn(REPO, ["rev-parse", s]).stdout.trim();
 const lines = (r) => r.stdout.split("\n").filter(Boolean);
@@ -27,7 +29,7 @@ test("BF1G-01 sole-parent I7 child; exactly one protected runtime delta and ever
   for (const paths of [committed, staged, working]) assert.deepEqual([...new Set(paths)].sort(), [BF1_FILE]);
   assert.equal(rev(`${BF1_TREE}:${BF1_FILE}`), BF1_PIN);
   if (!LAYERED) { assert.equal(rev(`:${BF1_FILE}`), BF1_PIN); assert.equal(gitBlobId(readFileSync(join(REPO, BF1_FILE))), BF1_PIN); }
-  for (const [f, pin] of Object.entries(m1EffectivePins(REPO))) {
+  for (const [f, pin] of Object.entries(m1EffectivePins(REPO, LAYERED ? { withHR1: false, withDTO1: false } : {}))) {
     assert.equal(rev(`${BF1_TREE}:${f}`), pin, f);
     if (LAYERED) continue;
     assert.equal(rev(`:${f}`), pin, f);

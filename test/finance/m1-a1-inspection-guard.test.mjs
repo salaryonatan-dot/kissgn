@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { REPO } from '../support/fincore-load.mjs';
-import { verifyA1Head, A1_PARENT, A1_SOURCES, a1Blob } from '../support/m1-a1-inspection.mjs';
+import { verifyA1Head, A1_PARENT, A1_SOURCES, A2_PARENT, A2_SCOPE, a1Blob } from '../support/m1-a1-inspection.mjs';
 const r=JSON.parse(readFileSync(join(REPO,'test/support/m1-a1-inspection.json'),'utf8'));
 const git=(...args)=>{const p=spawnSync('git',['-C',REPO,...args],{encoding:'utf8',timeout:30000});assert.equal(p.status,0,p.stderr);return p.stdout.trim();};
 test('A1G-01 exact sole parent, complete HEAD/index/worktree scope and source objects',()=>{assert.equal(r.parent,A1_PARENT);assert.deepEqual(r.sources,A1_SOURCES);assert.deepEqual(verifyA1Head(REPO).ok,true);});
@@ -31,5 +31,20 @@ test('A1G-04 historical adapters retain every original assertion body without so
   const current=readFileSync(join(REPO,file),'utf8');
   const normalized=current.replace(/import \{ historicalTest \} from "\.\.\/support\/m1-a1-inspection\.mjs";\nconst test = historicalTest\([^\n]+\);/,match[0]);
   assert.equal(normalized,original.stdout,file+' every original body retained verbatim');
+ }
+});
+
+test('A2G-01 exact M1-A1 successor, bounded legacy delta, unchanged product and original assertions',()=>{
+ assert.equal(A2_PARENT,'a5f9f1b471e9d7004aba3dec923f717dbfe36c3e');
+ assert.deepEqual(r.carriage,{parent:A2_PARENT,scope:[...A2_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'});
+ assert.equal(git('rev-parse','HEAD^'),A2_PARENT);
+ assert.deepEqual(git('diff','--name-only',A2_PARENT,'HEAD','--').split('\n').filter(Boolean).sort(),[...A2_SCOPE]);
+ assert.deepEqual(git('diff','--name-only',A2_PARENT,'HEAD','--','src','lib','api','scripts','tools','fincore','database.rules.json','test/emulator/database.rules.json','index.html','package.json','package-lock.json'),'');
+ const expected=['test/finance/adb06-builder-layer-guard.test.mjs','test/finance/bf1-backfill-layer-guard.test.mjs','test/finance/cc1-checklist-cold-cache-guard.test.mjs','test/finance/hr1-daily-hold-guard.test.mjs'];
+ assert.deepEqual(Object.keys(r.legacyEdits).sort(),expected);
+ for(const file of expected){
+  const before=spawnSync('git',['-C',REPO,'show',A2_PARENT+':'+file],{encoding:'utf8',timeout:30000});assert.equal(before.status,0);
+  const titles=s=>[...s.matchAll(/test\("([^"\n]+)"/g)].map(m=>m[1]);
+  assert.deepEqual(titles(readFileSync(join(REPO,file),'utf8')),titles(before.stdout),file+' every original test row retained');
  }
 });

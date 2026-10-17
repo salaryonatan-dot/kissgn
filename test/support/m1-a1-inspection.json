@@ -28,6 +28,7 @@
     "test/finance/cc1-checklist-cold-cache-guard.test.mjs",
     "test/finance/cc2-checklist-concurrency-guard.test.mjs",
     "test/finance/dt-o1-runtime-guard.test.mjs",
+    "test/finance/hr1-daily-hold-guard.test.mjs",
     "test/finance/hr3-ot4-daily-hold-guard.test.mjs",
     "test/finance/i1-integration-guard.test.mjs",
     "test/finance/i2-integration-guard.test.mjs",
@@ -97,6 +98,7 @@
     "test/finance/cc1-checklist-cold-cache-guard.test.mjs",
     "test/finance/cc2-checklist-concurrency-guard.test.mjs",
     "test/finance/dt-o1-runtime-guard.test.mjs",
+    "test/finance/hr1-daily-hold-guard.test.mjs",
     "test/finance/hr3-ot4-daily-hold-guard.test.mjs",
     "test/finance/i1-integration-guard.test.mjs",
     "test/finance/i2-integration-guard.test.mjs",
@@ -860,7 +862,7 @@
     "test/emulator/storage-v2-matrix.mjs": "c55dc7bf87d5ef6841841405b9be3b29ae7e94d3",
     "test/emulator/storage-v2-rules-guard-mutations.mjs": "887650ca12e655e0e72281d975686fd5d39c367b",
     "test/emulator/storage-v2-version-fence.mjs": "4bf01e05b70ad11e44a7627d8007f4b2eda93c01",
-    "test/finance/adb06-builder-layer-guard.test.mjs": "ee0c8b98043add25cb1cc9b2dc74533c6966617b",
+    "test/finance/adb06-builder-layer-guard.test.mjs": "558d73bdd49f8ccee82fb4c0360daa0738cfc182",
     "test/finance/b1-canonical-server-api.test.mjs": "b962853d24be74d3410a0b17c453dba0921f924f",
     "test/finance/b1-daily-builder.test.mjs": "b5b115e64c7d66e88d51134fa7e649d987c15a21",
     "test/finance/b1-downstream-compat.test.mjs": "4fb0ab1475ff8986337af4cc7965dd4e94fa4be4",
@@ -874,7 +876,7 @@
     "test/finance/b2-snapshot.test.mjs": "02103ec09b0ce44e87f827b31656a00325067a20",
     "test/finance/b2-successor.test.mjs": "2bc6cbae6226c0c3bd2ffab5b1e2497c3ce2cb82",
     "test/finance/backfill-registry-gate.test.mjs": "3ff2836ab74d3be609ce4118f456ca2cee51fd86",
-    "test/finance/bf1-backfill-layer-guard.test.mjs": "b46fd93ae7728a74e563f25c24426fdcca5c0b8a",
+    "test/finance/bf1-backfill-layer-guard.test.mjs": "59b7e091f6a1ab24287c606c3dad5c22fcbd3146",
     "test/finance/bf2-backfill-layer-guard.test.mjs": "e747355fce406717eedc33721152c0abb1098678",
     "test/finance/c07-compat-fixture-guard.test.mjs": "aff200999cf9bf625e4e306132e2e185afd4bbf1",
     "test/finance/c07-temporal-guard.test.mjs": "ebb0a31f146167cf9d61f492980fceb8c7e60d40",
@@ -884,7 +886,7 @@
     "test/finance/c1-r2-timeout.test.mjs": "18bc944203c771f2f2ee16ddc67a2d1325b180e2",
     "test/finance/c2-fingerprint.test.mjs": "8b0b1aef1736b1038d7026e451a7319b9c0c5a83",
     "test/finance/c2-guard-mutations.test.mjs": "29247aac44cce6c97ea5bb0aa009019d33ed92e1",
-    "test/finance/cc1-checklist-cold-cache-guard.test.mjs": "b20ddb80e11aced1bb1b1e764f7ac96a85e22331",
+    "test/finance/cc1-checklist-cold-cache-guard.test.mjs": "4dbc3fcc43b9cc7162db5b7aec75244650858b0e",
     "test/finance/cc2-checklist-concurrency-guard.test.mjs": "6f4b9b1d8c63e3b1274200ee6b55a36c9aaaf6b2",
     "test/finance/cd-m1-closed-days.test.mjs": "507a0dfdff8d0405cd888a5c576a5d410bfb341b",
     "test/finance/cd-m1-r1-remediation.test.mjs": "a0cfef1e3565df0988e6df43100447fb5a1ed8fc",
@@ -965,7 +967,7 @@
     "test/finance/goldens/fz-p1-r4-03.json": "ceab44d56fb068d14deccd2499aeae5b365eb7df",
     "test/finance/goldens/fz-p1-r4-04.json": "2fd7ac5beb378ccf65e5be64bf547a573d7ff4c2",
     "test/finance/goldens/fz-p1-r4-05.json": "99695bbaa56d13a2c2f15c2362d20ee57b152a93",
-    "test/finance/hr1-daily-hold-guard.test.mjs": "614f7a1f25e67146ab4f8377737d61011e5d11d4",
+    "test/finance/hr1-daily-hold-guard.test.mjs": "148e2d078a9a3f4a1400596c385f3c80d249555a",
     "test/finance/hr2-daily-hold-guard.test.mjs": "c17cdc05721a2e22a23fcd79db8df0117d4b0c5a",
     "test/finance/hr3-daily-hold-guard.test.mjs": "01722342b4b20cc9113688620e9518ba840c8f85",
     "test/finance/hr3-ot1-daily-hold-guard.test.mjs": "3927bda38d3e2e4a3d4a72903d620678476b29ff",
@@ -990,7 +992,7 @@
     "test/finance/i7-parity.test.mjs": "512889fddf674f5aebb1dcb1f2be96e62288a831",
     "test/finance/i7-update-user-alignment.test.mjs": "7214b1e21389bfa2b57ed850e3a302c990870a03",
     "test/finance/m1-a1-carriage-regressions.test.mjs": "75f67439ee6be0a2d211360849d0197196b1189b",
-    "test/finance/m1-a1-inspection-guard.test.mjs": "e9b80b89e667086c47e3230f4a5f7aa23695ff7b",
+    "test/finance/m1-a1-inspection-guard.test.mjs": "a63a0bce8ce6f0b299143df0d1acf34654fc7758",
     "test/finance/m1-integration-contracts.test.mjs": "ab6e613c1a9fc38a9d10eb3135b268b3e9620bc7",
     "test/finance/m1-integration-guard.test.mjs": "2692fdb56aa0e8b05eb8fa4cb2b0c387060dd10d",
     "test/finance/m1-r1-guard.test.mjs": "8243932dda304c0d2a2611991da46d0adec9a7b6",
@@ -1181,7 +1183,7 @@
     "test/support/i6-integration.mjs": "570683092a17411ce337ca2ff7e9ec7f121ed23a",
     "test/support/i7-integration.json": "3d069d769b5e407515c20cad053674a977152dd3",
     "test/support/i7-integration.mjs": "a52695329d06627d41d49e467f8090cd282453fc",
-    "test/support/m1-a1-inspection.mjs": "b4c758485f32a632e0362208bb8dccba233674b9",
+    "test/support/m1-a1-inspection.mjs": "879c6b9e86a49ab581f07db579015dca0108d732",
     "test/support/m1-derivation.mjs": "5ee45583bf800bd4d9551cd76ec5662827e6c01b",
     "test/support/m1-index-scope.mjs": "7f82aa1b534598cd4d87ae3b75394281598d2ac2",
     "test/support/m1-integration-pin.mjs": "b98d35b0fd76ca482ff2a2c888ef2e69ed90c6c3",
@@ -1284,7 +1286,6 @@
     "test/support/rules-owner-acceptance.mjs": "7062046c0227a3647fbd034e83c9bcff937e79f6",
     "lib/repositories/bizDataRepo.js": "838b63659596cd995331bbf8c681e6ad12cf1ec1",
     "test/emulator/checklist-cold-cache-emulator.mjs": "838b63659596cd995331bbf8c681e6ad12cf1ec1",
-    "test/finance/cc1-checklist-cold-cache-guard.test.mjs": "838b63659596cd995331bbf8c681e6ad12cf1ec1",
     "test/security/checklist-cold-cache.test.mjs": "838b63659596cd995331bbf8c681e6ad12cf1ec1",
     "test/security/checklist-concurrency.test.mjs": "838b63659596cd995331bbf8c681e6ad12cf1ec1",
     "test/support/cc1-checklist-cold-cache.json": "838b63659596cd995331bbf8c681e6ad12cf1ec1",
@@ -1292,9 +1293,7 @@
     "scripts/backfill-biz-access.mjs": "3a3b6ff21632d76563eae95c6a8717e1cc263f76",
     "test/emulator/backfill-registry-cli-emulator.mjs": "3a3b6ff21632d76563eae95c6a8717e1cc263f76",
     "test/emulator/backfill-registry-gate-emulator.mjs": "3a3b6ff21632d76563eae95c6a8717e1cc263f76",
-    "test/finance/adb06-builder-layer-guard.test.mjs": "3a3b6ff21632d76563eae95c6a8717e1cc263f76",
     "test/finance/backfill-registry-gate.test.mjs": "3a3b6ff21632d76563eae95c6a8717e1cc263f76",
-    "test/finance/bf1-backfill-layer-guard.test.mjs": "3a3b6ff21632d76563eae95c6a8717e1cc263f76",
     "test/security/biz-access.test.mjs": "3a3b6ff21632d76563eae95c6a8717e1cc263f76",
     "test/support/bf1-backfill-layer.json": "3a3b6ff21632d76563eae95c6a8717e1cc263f76",
     "test/support/bf1-backfill-layer.mjs": "3a3b6ff21632d76563eae95c6a8717e1cc263f76",
@@ -1344,5 +1343,70 @@
     "policy": "Claude owns P7/P4/E4; no exact independently accepted implementation yet"
   },
   "acceptance": "INSPECTION ONLY; I7/UC2 and independent emulator acceptance withheld; no policy implementation",
-  "schema": 1
+  "schema": 1,
+  "carriage": {
+    "parent": "a5f9f1b471e9d7004aba3dec923f717dbfe36c3e",
+    "scope": [
+      "test/finance/adb06-builder-layer-guard.test.mjs",
+      "test/finance/bf1-backfill-layer-guard.test.mjs",
+      "test/finance/cc1-checklist-cold-cache-guard.test.mjs",
+      "test/finance/hr1-daily-hold-guard.test.mjs",
+      "test/finance/m1-a1-inspection-guard.test.mjs",
+      "test/support/m1-a1-inspection.json",
+      "test/support/m1-a1-inspection.mjs"
+    ],
+    "status": "PROPOSED_FOR_INDEPENDENT_REVIEW"
+  },
+  "legacyEdits": {
+    "test/finance/adb06-builder-layer-guard.test.mjs": [
+      {
+        "from": "import { bf1Projection } from \"../support/bf1-backfill-layer.mjs\";",
+        "to": "// Keep the Agent controls intact; validate the separately pinned carried script through the reader projection.\nimport { readerBackfillProjection as bf1Projection } from \"../support/server-reader-authorized-delta.mjs\";"
+      }
+    ],
+    "test/finance/bf1-backfill-layer-guard.test.mjs": [
+      {
+        "from": "collectServerReaderScopeInputs, serverReaderScopeVerdict }",
+        "to": "collectServerReaderScopeInputs, serverReaderScopeVerdict, readerBackfillProjection as bf1Projection }"
+      },
+      {
+        "from": "bf1RecordVerdict, bf1Projection }",
+        "to": "bf1RecordVerdict }"
+      },
+      {
+        "from": "const LAYERED = isBF2Tree(REPO);",
+        "to": "// A1/A2 is a content carry: literal BF1 identity remains historical; the joint holder protects the current tree.\nimport { isA1Tree } from \"../support/m1-a1-inspection.mjs\";\nconst LAYERED = isA1Tree(REPO) || isBF2Tree(REPO);"
+      },
+      {
+        "from": "Object.entries(m1EffectivePins(REPO))",
+        "to": "Object.entries(m1EffectivePins(REPO, LAYERED ? { withHR1: false, withDTO1: false } : {}))"
+      }
+    ],
+    "test/finance/cc1-checklist-cold-cache-guard.test.mjs": [
+      {
+        "from": "{ SERVER_READER_EFFECTIVE_BLOBS, isProtectedPath }",
+        "to": "{ serverReaderEffectiveBlobs, isProtectedPath }"
+      },
+      {
+        "from": "  const eff = { ...m1EffectivePins(REPO), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS, ...CC1_PINS };\n  for (const f of CC1_SCOPE) assert.ok(!(f in m1EffectivePins(REPO)) && !(f in SERVER_READER_EFFECTIVE_BLOBS) && !(f in ADB06_PINS),",
+        "to": "  // CC1's literal tree predates hold and DT overlays; current CC2/DT bytes remain pinned by the joint holder.\n  const historicalM1 = m1EffectivePins(REPO, LAYERED ? { withHR1: false, withDTO1: false } : {});\n  const historicalReader = serverReaderEffectiveBlobs(REPO, { withDTO1: !LAYERED });\n  const eff = { ...historicalM1, ...historicalReader, ...ADB06_PINS, ...CC1_PINS };\n  for (const f of CC1_SCOPE) assert.ok(!(f in historicalM1) && !(f in historicalReader) && !(f in ADB06_PINS),"
+      }
+    ],
+    "test/finance/hr1-daily-hold-guard.test.mjs": [
+      {
+        "from": "{ SERVER_READER_EFFECTIVE_BLOBS, isProtectedPath }",
+        "to": "{ serverReaderEffectiveBlobs, isProtectedPath }"
+      },
+      {
+        "from": "const eff = { ...m1EffectivePins(REPO, { withHR2: false }), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS };",
+        "to": "// SOURCE is literal HR1 when layered; opt both pin providers out of the later DT correction.\n  const eff = { ...m1EffectivePins(REPO, { withHR2: false, withDTO1: !LAYERED }), ...serverReaderEffectiveBlobs(REPO, { withDTO1: !LAYERED }), ...ADB06_PINS };"
+      }
+    ]
+  },
+  "adaptedLegacySources": {
+    "test/finance/bf1-backfill-layer-guard.test.mjs": "3a3b6ff21632d76563eae95c6a8717e1cc263f76",
+    "test/finance/cc1-checklist-cold-cache-guard.test.mjs": "838b63659596cd995331bbf8c681e6ad12cf1ec1",
+    "test/finance/adb06-builder-layer-guard.test.mjs": "3a3b6ff21632d76563eae95c6a8717e1cc263f76",
+    "test/finance/hr1-daily-hold-guard.test.mjs": "a5f9f1b471e9d7004aba3dec923f717dbfe36c3e"
+  }
 }

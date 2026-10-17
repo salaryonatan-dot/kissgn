@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { gitBlobId, m1EffectivePins, m1R5Pins, m1EffectivePageVerdict } from "../support/m1-r1-remediation.mjs";
-import { SERVER_READER_EFFECTIVE_BLOBS, isProtectedPath } from "../support/server-reader-authorized-delta.mjs";
+import { serverReaderEffectiveBlobs, isProtectedPath } from "../support/server-reader-authorized-delta.mjs";
 import { de1EffectivePins, DE1_SCOPE } from "../support/de1-daily-email.mjs";
 import { ADB06_PINS, ADB06_FILES } from "../support/adb06-builder-layer.mjs";
 import { I1_ENTRY, I1_PINS, I1_SCOPE } from "../support/i1-integration.mjs";
@@ -75,8 +75,11 @@ test("CC1G-01 identity: sole parent the I7 candidate; CC1 changes exactly lib/re
   }
   for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), [...CC1_SCOPE].sort(), label + ": protected changes vs I7 = the CC1 scope");
-  const eff = { ...m1EffectivePins(REPO), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS, ...CC1_PINS };
-  for (const f of CC1_SCOPE) assert.ok(!(f in m1EffectivePins(REPO)) && !(f in SERVER_READER_EFFECTIVE_BLOBS) && !(f in ADB06_PINS), f + ": in no earlier pin table (CC1 is its only pin)");
+  // CC1's literal tree predates hold and DT overlays; current CC2/DT bytes remain pinned by the joint holder.
+  const historicalM1 = m1EffectivePins(REPO, LAYERED ? { withHR1: false, withDTO1: false } : {});
+  const historicalReader = serverReaderEffectiveBlobs(REPO, { withDTO1: !LAYERED });
+  const eff = { ...historicalM1, ...historicalReader, ...ADB06_PINS, ...CC1_PINS };
+  for (const f of CC1_SCOPE) assert.ok(!(f in historicalM1) && !(f in historicalReader) && !(f in ADB06_PINS), f + ": in no earlier pin table (CC1 is its only pin)");
   for (const [f, pin] of Object.entries(eff)) {
     assert.equal(blobId(CC1_TREE + ":" + f), pin, f + " committed" + (LAYERED ? " (at the CC1 commit)" : ""));
     if (LAYERED) continue;                                  // CC2G-01 holds HEAD / index / checkout of the later tree

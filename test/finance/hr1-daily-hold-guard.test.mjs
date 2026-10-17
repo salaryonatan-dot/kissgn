@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { gitBlobId, m1EffectivePins, m1R5Pins, m1EffectivePageVerdict } from "../support/m1-r1-remediation.mjs";
-import { SERVER_READER_EFFECTIVE_BLOBS, isProtectedPath } from "../support/server-reader-authorized-delta.mjs";
+import { serverReaderEffectiveBlobs, isProtectedPath } from "../support/server-reader-authorized-delta.mjs";
 import { de1EffectivePins, DE1_SCOPE } from "../support/de1-daily-email.mjs";
 import { ADB06_PINS, ADB06_FILES } from "../support/adb06-builder-layer.mjs";
 import { I1_ENTRY, I1_PINS, I1_SCOPE } from "../support/i1-integration.mjs";
@@ -88,7 +88,8 @@ test("HR1G-01 identity: sole parent the I7 candidate; HR1 changes exactly run.ts
   }
   for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), [...HR1_SCOPE].sort(), label + ": protected changes vs I7 = the HR1 scope");
-  const eff = { ...m1EffectivePins(REPO, { withHR2: false }), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS };
+  // SOURCE is literal HR1 when layered; opt both pin providers out of the later DT correction.
+  const eff = { ...m1EffectivePins(REPO, { withHR2: false, withDTO1: !LAYERED }), ...serverReaderEffectiveBlobs(REPO, { withDTO1: !LAYERED }), ...ADB06_PINS };
   for (const f of HR1_SCOPE) assert.equal(eff[f], HR1_PINS[f], f + " is held to its HR1 pin by the effective tables");
   for (const [f, pin] of Object.entries(eff)) {
     assert.equal(blobId(SOURCE + ":" + f), pin, f + " committed");
