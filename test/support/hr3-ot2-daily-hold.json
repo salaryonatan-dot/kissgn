@@ -1,0 +1,84 @@
+{
+  "decision": "HR3 OT2 proposed local successor of OT1 (C4 duration input, OT2-F1); independent Codex review pending",
+  "parent": "0576cfdad6cf8b6404f134a697219c6b0f9647cf",
+  "scope": [
+    "test/delivery/hr3-ot2-duration-input.test.mjs",
+    "test/finance/hr3-ot1-daily-hold-guard.test.mjs",
+    "test/finance/hr3-ot2-daily-hold-guard.test.mjs",
+    "test/support/hr3-ot2-daily-hold.mjs",
+    "test/support/m1-r1-remediation.mjs",
+    "tools/daily-delivery/hold.mjs"
+  ],
+  "edits": {
+    "tools/daily-delivery/hold.mjs": [
+      {
+        "from": "//   node tools/daily-delivery/hold.mjs evidence --project=<id> --database-url=<exact-url> [--max-duration-ms=<observed>]\n",
+        "to": "//   node tools/daily-delivery/hold.mjs evidence --project=<id> --database-url=<exact-url> [--max-duration-ms=<effective-max-ms>]\n//       <effective-max-ms>: the effective maximum invocation duration, in whole milliseconds, verified in the settings of EVERY\n//       reachable Daily deployment (the largest, if they differ); never a longest observed run. ONE `=`-joined positive decimal\n//       integer only (HR3 OT2): any other form, a repeated flag or none at all leaves C4 not_evaluable (ABORT_D).\n"
+      },
+      {
+        "from": "    if ((m[1] === \"project\" || m[1] === \"database-url\") && Object.hasOwn(out, m[1])) out.ambiguousTarget = true;\n    out[m[1]] = m[2] === undefined ? true : m[2];\n",
+        "to": "    if ((m[1] === \"project\" || m[1] === \"database-url\") && Object.hasOwn(out, m[1])) out.ambiguousTarget = true;\n    if (m[1] === \"max-duration-ms\" && Object.hasOwn(out, m[1])) out.ambiguousDuration = true;\n    out[m[1]] = m[2] === undefined ? true : m[2];\n"
+      },
+      {
+        "from": "/**\n * Run one command against `db`. Returns { exitCode, result }. `args` are parsed flags; `project` is the VERIFIED project.\n",
+        "to": "/**\n * HR3 OT2 (OT2-F1): the C4 duration input. Accepted only as ONE `--max-duration-ms=<positive decimal integer>`. A bare or\n * space-separated flag (parsed as `true`, which Number() turned into 1 ms), a repeated flag, a sign, a decimal point, an\n * exponent, hex or padding yields null, so C4 stays not_evaluable instead of shortening the bound.\n */\nexport function maxDurationInput(args) {\n  const v = args[\"max-duration-ms\"];\n  if (args.ambiguousDuration || typeof v !== \"string\" || !/^[1-9][0-9]*$/.test(v)) return null;\n  const n = Number(v);\n  return Number.isSafeInteger(n) ? n : null;\n}\n\n/**\n * Run one command against `db`. Returns { exitCode, result }. `args` are parsed flags; `project` is the VERIFIED project.\n"
+      },
+      {
+        "from": "    const maxDurationMs = args[\"max-duration-ms\"] === undefined ? null : Number(args[\"max-duration-ms\"]);\n",
+        "to": "    const maxDurationMs = maxDurationInput(args);\n"
+      }
+    ],
+    "test/finance/hr3-ot1-daily-hold-guard.test.mjs": [
+      {
+        "from": "const SKIP = !isHR3OT1Tree(REPO) && 'not an HR3 OT1 successor';\nconst RECORD = 'test/support/hr3-ot1-daily-hold.json';\n",
+        "to": "const SKIP = !isHR3OT1Tree(REPO) && 'not an HR3 OT1 successor';\n// HR3 OT2 (T-OT2-LAYERING): on a successor of OT1 this guard judges the literal, immutable OT1 object; HEAD / index / checkout\n// move to the successor's own guard (the S3-on-OT1 pattern one layer up).\nconst OT1 = '0576cfdad6cf8b6404f134a697219c6b0f9647cf';\nconst LAYERED = gitIn(REPO, ['merge-base', '--is-ancestor', OT1, 'HEAD']).status === 0 && gitIn(REPO, ['rev-parse', 'HEAD']).stdout.trim() !== OT1;\nconst SOURCE = LAYERED ? OT1 : 'HEAD';\nconst RECORD = 'test/support/hr3-ot1-daily-hold.json';\n"
+      },
+      {
+        "from": "  assert.deepEqual(git(['rev-list', '--parents', '-n1', 'HEAD']).split(' ').slice(1), [HR3OT1_PARENT]);\n  assert.deepEqual(names(['diff', '--name-only', HR3OT1_PARENT, 'HEAD', '--']).sort(), [...HR3OT1_SCOPE, RECORD].sort());\n",
+        "to": "  assert.deepEqual(git(['rev-list', '--parents', '-n1', SOURCE]).split(' ').slice(1), [HR3OT1_PARENT]);\n  assert.deepEqual(names(['diff', '--name-only', HR3OT1_PARENT, SOURCE, '--']).sort(), [...HR3OT1_SCOPE, RECORD].sort());\n"
+      },
+      {
+        "from": "  for (const args of [['diff', '--cached', '--name-only', 'HEAD', '--'], ['diff', '--name-only', 'HEAD', '--'],\n",
+        "to": "  if (!LAYERED) for (const args of [['diff', '--cached', '--name-only', 'HEAD', '--'], ['diff', '--name-only', 'HEAD', '--'],\n"
+      },
+      {
+        "from": "    assert.equal(git(['rev-parse', `HEAD:${f}`]), HR3OT1_PINS[f], f + ' HEAD');\n",
+        "to": "    assert.equal(git(['rev-parse', `${SOURCE}:${f}`]), HR3OT1_PINS[f], f + ' HEAD');\n    if (LAYERED) assert.equal(m1EffectivePins(REPO, { withHR3OT2: false })[f], HR3OT1_PINS[f], f + ' overlay without the successor layer');\n    else {\n"
+      },
+      {
+        "from": "    assert.equal(m1EffectivePins(REPO)[f], HR3OT1_PINS[f], f + ' overlay');\n    if (HR3S3_PINS[f]) assert.equal(m1EffectivePins(REPO, { withHR3OT1: false })[f], HR3S3_PINS[f], f + ' overlay without this layer is S3');\n",
+        "to": "    assert.equal(m1EffectivePins(REPO)[f], HR3OT1_PINS[f], f + ' overlay');\n    }\n    if (HR3S3_PINS[f]) assert.equal(m1EffectivePins(REPO, { withHR3OT1: false })[f], HR3S3_PINS[f], f + ' overlay without this layer is S3');\n"
+      },
+      {
+        "from": "    assert.equal(git(['rev-parse', `HEAD:${f}`]), git(['rev-parse', `${HR3OT1_PARENT}:${f}`]), f);\n  assert.deepEqual(names(['diff', '--name-only', HR3OT1_PARENT, 'HEAD', '--', 'src', 'fincore', 'lib', 'api', 'scripts', 'migrations']), []);\n",
+        "to": "    assert.equal(git(['rev-parse', `${SOURCE}:${f}`]), git(['rev-parse', `${HR3OT1_PARENT}:${f}`]), f);\n  assert.deepEqual(names(['diff', '--name-only', HR3OT1_PARENT, SOURCE, '--', 'src', 'fincore', 'lib', 'api', 'scripts', 'migrations']), []);\n"
+      },
+      {
+        "from": "  const before = new Set(code(parentBlob('tools/daily-delivery/hold.mjs'))), after = new Set(code(readFileSync(join(REPO, 'tools/daily-delivery/hold.mjs'), 'utf8')));\n",
+        "to": "  const before = new Set(code(parentBlob('tools/daily-delivery/hold.mjs'))), after = new Set(code(LAYERED ? gitIn(REPO, ['cat-file', 'blob', `${SOURCE}:tools/daily-delivery/hold.mjs`]).stdout : readFileSync(join(REPO, 'tools/daily-delivery/hold.mjs'), 'utf8')));\n"
+      }
+    ],
+    "test/support/m1-r1-remediation.mjs": [
+      {
+        "from": "import { isHR3OT1Tree, HR3OT1_PINS } from \"./hr3-ot1-daily-hold.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"./hr3-s2-daily-hold.mjs\";\n",
+        "to": "import { isHR3OT1Tree, HR3OT1_PINS } from \"./hr3-ot1-daily-hold.mjs\";\nimport { isHR3OT2Tree, HR3OT2_PINS } from \"./hr3-ot2-daily-hold.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"./hr3-s2-daily-hold.mjs\";\n"
+      },
+      {
+        "from": "  withHR1 = withI7, withHR2 = withHR1, withHR3 = withHR2, withHR3S1 = withHR3, withHR3S2 = withHR3S1, withHR3S3 = withHR3S2, withHR3OT1 = withHR3S3 } = {}) {\n",
+        "to": "  withHR1 = withI7, withHR2 = withHR1, withHR3 = withHR2, withHR3S1 = withHR3, withHR3S2 = withHR3S1, withHR3S3 = withHR3S2, withHR3OT1 = withHR3S3, withHR3OT2 = withHR3OT1 } = {}) {\n"
+      },
+      {
+        "from": "    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && isHR3OT1Tree(repo) ? HR3OT1_PINS : {}) } : {};   // each successor overlays only its own protected files\n",
+        "to": "    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && isHR3OT1Tree(repo) ? HR3OT1_PINS : {}),\n    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && isHR3OT2Tree(repo) ? HR3OT2_PINS : {}) } : {};   // each successor overlays only its own protected files\n"
+      }
+    ]
+  },
+  "pins": {
+    "test/delivery/hr3-ot2-duration-input.test.mjs": "725739fd8fd5745cc6b1c18c057e448f974e168f",
+    "test/finance/hr3-ot1-daily-hold-guard.test.mjs": "3927bda38d3e2e4a3d4a72903d620678476b29ff",
+    "test/finance/hr3-ot2-daily-hold-guard.test.mjs": "99ed6a07f7f107d37caa7554511cee527feb845f",
+    "test/support/hr3-ot2-daily-hold.mjs": "f169c313b081c67094a778d338af33fc29022569",
+    "test/support/m1-r1-remediation.mjs": "842b6a645266b0e73232a9c64dacd80b4d7ed10e",
+    "tools/daily-delivery/hold.mjs": "cc2fa83ef0c0b1392f5fc2951995c7b50b87af9d"
+  }
+}

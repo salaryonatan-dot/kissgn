@@ -20,7 +20,10 @@
 // until operations supplies a separately verified mapping. Writes additionally require --actor, --reason and --confirm.
 //
 //   node tools/daily-delivery/hold.mjs status   --project=<id> --database-url=<exact-url>
-//   node tools/daily-delivery/hold.mjs evidence --project=<id> --database-url=<exact-url> [--max-duration-ms=<observed>]
+//   node tools/daily-delivery/hold.mjs evidence --project=<id> --database-url=<exact-url> [--max-duration-ms=<effective-max-ms>]
+//       <effective-max-ms>: the effective maximum invocation duration, in whole milliseconds, verified in the settings of EVERY
+//       reachable Daily deployment (the largest, if they differ); never a longest observed run. ONE `=`-joined positive decimal
+//       integer only (HR3 OT2): any other form, a repeated flag or none at all leaves C4 not_evaluable (ABORT_D).
 //       [--inventory-attested] [--logs-attested] [--invocation-receipt-attested] [--provider-attested]
 //   node tools/daily-delivery/hold.mjs init|hold|release --project=<id> --database-url=<exact-url> --actor=<id>
 //       --reason="…" [--expect-version=<n>] --confirm=<action>@<id>
@@ -39,6 +42,7 @@ export function parseArgs(argv) {
     const m = /^--([a-z-]+)(?:=(.*))?$/.exec(a);
     if (!m) { out._.push(a); continue; }
     if ((m[1] === "project" || m[1] === "database-url") && Object.hasOwn(out, m[1])) out.ambiguousTarget = true;
+    if (m[1] === "max-duration-ms" && Object.hasOwn(out, m[1])) out.ambiguousDuration = true;
     out[m[1]] = m[2] === undefined ? true : m[2];
   }
   return out;
@@ -196,6 +200,18 @@ export function drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurat
 }
 
 /**
+ * HR3 OT2 (OT2-F1): the C4 duration input. Accepted only as ONE `--max-duration-ms=<positive decimal integer>`. A bare or
+ * space-separated flag (parsed as `true`, which Number() turned into 1 ms), a repeated flag, a sign, a decimal point, an
+ * exponent, hex or padding yields null, so C4 stays not_evaluable instead of shortening the bound.
+ */
+export function maxDurationInput(args) {
+  const v = args["max-duration-ms"];
+  if (args.ambiguousDuration || typeof v !== "string" || !/^[1-9][0-9]*$/.test(v)) return null;
+  const n = Number(v);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+/**
  * Run one command against `db`. Returns { exitCode, result }. `args` are parsed flags; `project` is the VERIFIED project.
  */
 export async function runCommand(db, command, args, { project, nowMs = Date.now(), readTimeoutMs = HOLD_READ_TIMEOUT_MS } = {}) {
@@ -208,7 +224,7 @@ export async function runCommand(db, command, args, { project, nowMs = Date.now(
     } catch { return { exitCode: EXIT.ABORT_D, result: { verdict: "ABORT_D", error: "status_read_unavailable" } }; }
   }
   if (command === "evidence") {
-    const maxDurationMs = args["max-duration-ms"] === undefined ? null : Number(args["max-duration-ms"]);
+    const maxDurationMs = maxDurationInput(args);
     let report;
     try {
       const [holdRaw, receiptsRaw, manualRaw] = await Promise.all([read(db, DELIVERY_HOLD_PATH, timeout),

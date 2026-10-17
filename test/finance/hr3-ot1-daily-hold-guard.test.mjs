@@ -17,6 +17,11 @@ import { gitBlobId, m1EffectivePins } from '../support/m1-r1-remediation.mjs';
 import { HR3OT1_PARENT, HR3OT1_SCOPE, HR3OT1_PINS, isHR3OT1Tree, deriveHR3OT1 } from '../support/hr3-ot1-daily-hold.mjs';
 import { HR3S3_PINS } from '../support/hr3-s3-daily-hold.mjs';
 const SKIP = !isHR3OT1Tree(REPO) && 'not an HR3 OT1 successor';
+// HR3 OT2 (T-OT2-LAYERING): on a successor of OT1 this guard judges the literal, immutable OT1 object; HEAD / index / checkout
+// move to the successor's own guard (the S3-on-OT1 pattern one layer up).
+const OT1 = '0576cfdad6cf8b6404f134a697219c6b0f9647cf';
+const LAYERED = gitIn(REPO, ['merge-base', '--is-ancestor', OT1, 'HEAD']).status === 0 && gitIn(REPO, ['rev-parse', 'HEAD']).stdout.trim() !== OT1;
+const SOURCE = LAYERED ? OT1 : 'HEAD';
 const RECORD = 'test/support/hr3-ot1-daily-hold.json';
 const EDITED = ['tools/daily-delivery/hold.mjs', 'test/finance/hr3-s3-daily-hold-guard.test.mjs', 'test/support/m1-r1-remediation.mjs'];
 const git = (args) => { const r = gitIn(REPO, args); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
@@ -24,17 +29,20 @@ const names = (args) => { const r = gitIn(REPO, [args[0], '-z', ...args.slice(1)
 const parentBlob = (f) => { const r = gitIn(REPO, ['cat-file', 'blob', `${HR3OT1_PARENT}:${f}`]); assert.equal(r.status, 0, f); return r.stdout; };
 
 test('HR3OT1G-01 S3 sole parent, fixed scope, HEAD / index / checkout / overlay pins, clean tree', { skip: SKIP }, () => {
-  assert.deepEqual(git(['rev-list', '--parents', '-n1', 'HEAD']).split(' ').slice(1), [HR3OT1_PARENT]);
-  assert.deepEqual(names(['diff', '--name-only', HR3OT1_PARENT, 'HEAD', '--']).sort(), [...HR3OT1_SCOPE, RECORD].sort());
+  assert.deepEqual(git(['rev-list', '--parents', '-n1', SOURCE]).split(' ').slice(1), [HR3OT1_PARENT]);
+  assert.deepEqual(names(['diff', '--name-only', HR3OT1_PARENT, SOURCE, '--']).sort(), [...HR3OT1_SCOPE, RECORD].sort());
   assert.deepEqual(Object.keys(HR3OT1_PINS).sort(), [...HR3OT1_SCOPE].sort());
-  for (const args of [['diff', '--cached', '--name-only', 'HEAD', '--'], ['diff', '--name-only', 'HEAD', '--'],
+  if (!LAYERED) for (const args of [['diff', '--cached', '--name-only', 'HEAD', '--'], ['diff', '--name-only', 'HEAD', '--'],
     ['ls-files', '--others', '--', ':(exclude)node_modules', ':(exclude)test/historical/.deps']]) assert.deepEqual(names(args), [], args.join(' '));
   for (const f of HR3OT1_SCOPE) {
     assert.match(HR3OT1_PINS[f], /^[0-9a-f]{40}$/, f);
-    assert.equal(git(['rev-parse', `HEAD:${f}`]), HR3OT1_PINS[f], f + ' HEAD');
+    assert.equal(git(['rev-parse', `${SOURCE}:${f}`]), HR3OT1_PINS[f], f + ' HEAD');
+    if (LAYERED) assert.equal(m1EffectivePins(REPO, { withHR3OT2: false })[f], HR3OT1_PINS[f], f + ' overlay without the successor layer');
+    else {
     assert.equal(git(['rev-parse', `:${f}`]), HR3OT1_PINS[f], f + ' index');
     assert.equal(gitBlobId(readFileSync(join(REPO, f))), HR3OT1_PINS[f], f + ' checkout');
     assert.equal(m1EffectivePins(REPO)[f], HR3OT1_PINS[f], f + ' overlay');
+    }
     if (HR3S3_PINS[f]) assert.equal(m1EffectivePins(REPO, { withHR3OT1: false })[f], HR3S3_PINS[f], f + ' overlay without this layer is S3');
   }
 });
@@ -57,10 +65,10 @@ test('HR3OT1G-03 runtime, route, provider, Rules, build and receipt writer are S
     'database.rules.json', 'test/emulator/database.rules.json', 'test/support/rules-authorized-delta.mjs', 'vercel.json', 'package.json',
     'package-lock.json', 'index.html', 'test/support/hr3-s3-daily-hold.json', 'test/support/hr3-s3-daily-hold.mjs',
     'test/emulator/hr1-daily-hold-emulator.mjs', 'test/emulator/hr3-s3-roundtrip-emulator.mjs', 'test/delivery/hr1-operator-and-compat.test.mjs'])
-    assert.equal(git(['rev-parse', `HEAD:${f}`]), git(['rev-parse', `${HR3OT1_PARENT}:${f}`]), f);
-  assert.deepEqual(names(['diff', '--name-only', HR3OT1_PARENT, 'HEAD', '--', 'src', 'fincore', 'lib', 'api', 'scripts', 'migrations']), []);
+    assert.equal(git(['rev-parse', `${SOURCE}:${f}`]), git(['rev-parse', `${HR3OT1_PARENT}:${f}`]), f);
+  assert.deepEqual(names(['diff', '--name-only', HR3OT1_PARENT, SOURCE, '--', 'src', 'fincore', 'lib', 'api', 'scripts', 'migrations']), []);
   const code = (s) => s.split('\n').filter((l) => !l.trimStart().startsWith('//')).map((l) => l.trim());
-  const before = new Set(code(parentBlob('tools/daily-delivery/hold.mjs'))), after = new Set(code(readFileSync(join(REPO, 'tools/daily-delivery/hold.mjs'), 'utf8')));
+  const before = new Set(code(parentBlob('tools/daily-delivery/hold.mjs'))), after = new Set(code(LAYERED ? gitIn(REPO, ['cat-file', 'blob', `${SOURCE}:tools/daily-delivery/hold.mjs`]).stdout : readFileSync(join(REPO, 'tools/daily-delivery/hold.mjs'), 'utf8')));
   assert.deepEqual([...before].filter((l) => !after.has(l)),
     ['typeof x.claimId !== "string" || !/^[a-f0-9]{64}$/.test(x.recipientHash) || !Array.isArray(x.history) ||']);
   assert.deepEqual([...after].filter((l) => !before.has(l)).sort(),
