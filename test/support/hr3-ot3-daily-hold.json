@@ -1,0 +1,92 @@
+{
+  "decision": "HR3 OT3 proposed local successor of OT2 (raw duration tokens, OT2-R-01); independent Codex review pending",
+  "parent": "c8fc3f832e31037589180c83611a5012dfca0853",
+  "scope": [
+    "test/delivery/hr3-ot3-duration-raw-token.test.mjs",
+    "test/finance/hr3-ot2-daily-hold-guard.test.mjs",
+    "test/finance/hr3-ot3-daily-hold-guard.test.mjs",
+    "test/support/hr3-ot3-daily-hold.mjs",
+    "test/support/m1-r1-remediation.mjs",
+    "tools/daily-delivery/hold.mjs"
+  ],
+  "edits": {
+    "tools/daily-delivery/hold.mjs": [
+      {
+        "from": "\nexport function parseArgs(argv) {\n",
+        "to": "\nconst DURATION_FLAG = \"--max-duration-ms\";\nexport function parseArgs(argv) {\n"
+      },
+      {
+        "from": "  for (const a of argv) {\n    const m = /^--([a-z-]+)(?:=(.*))?$/.exec(a);\n",
+        "to": "  for (const a of argv) {\n    // HR3 OT3 (OT2-R-01): the duration option is recognised on the RAW token, before the generic matcher (whose `.` stops at a\n    // line terminator and would drop a malformed occurrence into the positionals). Every occurrence counts toward the repeat\n    // check, in any order, and its whole value is kept for maxDurationInput.\n    if (a.startsWith(DURATION_FLAG) && !/^[a-z-]/.test(a.slice(DURATION_FLAG.length))) {\n      if (Object.hasOwn(out, \"max-duration-ms\")) out.ambiguousDuration = true;\n      const rest = a.slice(DURATION_FLAG.length);\n      out[\"max-duration-ms\"] = rest === \"\" ? true : rest.startsWith(\"=\") ? rest.slice(1) : rest;\n      continue;\n    }\n    const m = /^--([a-z-]+)(?:=(.*))?$/.exec(a);\n"
+      },
+      {
+        "from": "    if (m[1] === \"max-duration-ms\" && Object.hasOwn(out, m[1])) out.ambiguousDuration = true;\n",
+        "to": ""
+      },
+      {
+        "from": "  if (args.ambiguousDuration || typeof v !== \"string\" || !/^[1-9][0-9]*$/.test(v)) return null;\n  const n = Number(v);\n",
+        "to": "  if (args.ambiguousDuration || typeof v !== \"string\" || !/^[1-9][0-9]*$/.test(v)) return null;\n  // HR3 OT3: `evidence` takes no positional argument. A stray token (a mis-spelt, mis-cased or mis-prefixed duration such as\n  // ` --max-duration-ms=…` or `--MAX-DURATION-MS=…`) makes the duration input unverifiable rather than silently ignored.\n  if (Array.isArray(args._) && args._.length > 1) return null;\n  const n = Number(v);\n"
+      }
+    ],
+    "test/finance/hr3-ot2-daily-hold-guard.test.mjs": [
+      {
+        "from": "const SKIP = !isHR3OT2Tree(REPO) && 'not an HR3 OT2 successor';\nconst RECORD = 'test/support/hr3-ot2-daily-hold.json';\n",
+        "to": "const SKIP = !isHR3OT2Tree(REPO) && 'not an HR3 OT2 successor';\n// HR3 OT3 (T-OT3-LAYERING): on a successor of OT2 this guard judges the literal, immutable OT2 object; HEAD / index / checkout\n// move to the successor's own guard (the OT1-on-OT2 pattern one layer up).\nconst OT2 = 'c8fc3f832e31037589180c83611a5012dfca0853';\nconst LAYERED = gitIn(REPO, ['merge-base', '--is-ancestor', OT2, 'HEAD']).status === 0 && gitIn(REPO, ['rev-parse', 'HEAD']).stdout.trim() !== OT2;\nconst SOURCE = LAYERED ? OT2 : 'HEAD';\nconst RECORD = 'test/support/hr3-ot2-daily-hold.json';\n"
+      },
+      {
+        "from": "  assert.deepEqual(git(['rev-list', '--parents', '-n1', 'HEAD']).split(' ').slice(1), [HR3OT2_PARENT]);\n",
+        "to": "  assert.deepEqual(git(['rev-list', '--parents', '-n1', SOURCE]).split(' ').slice(1), [HR3OT2_PARENT]);\n"
+      },
+      {
+        "from": "  assert.deepEqual(names(['diff', '--name-only', HR3OT2_PARENT, 'HEAD', '--']).sort(), [...HR3OT2_SCOPE, RECORD].sort());\n",
+        "to": "  assert.deepEqual(names(['diff', '--name-only', HR3OT2_PARENT, SOURCE, '--']).sort(), [...HR3OT2_SCOPE, RECORD].sort());\n"
+      },
+      {
+        "from": "  for (const args of [['diff', '--cached', '--name-only', 'HEAD', '--'], ['diff', '--name-only', 'HEAD', '--'],\n",
+        "to": "  if (!LAYERED) for (const args of [['diff', '--cached', '--name-only', 'HEAD', '--'], ['diff', '--name-only', 'HEAD', '--'],\n"
+      },
+      {
+        "from": "    assert.equal(git(['rev-parse', `HEAD:${f}`]), HR3OT2_PINS[f], f + ' HEAD');\n",
+        "to": "    assert.equal(git(['rev-parse', `${SOURCE}:${f}`]), HR3OT2_PINS[f], f + ' HEAD');\n    if (LAYERED) assert.equal(m1EffectivePins(REPO, { withHR3OT3: false })[f], HR3OT2_PINS[f], f + ' overlay without the successor layer');\n    else {\n"
+      },
+      {
+        "from": "    assert.equal(m1EffectivePins(REPO)[f], HR3OT2_PINS[f], f + ' overlay');\n    if (HR3OT1_PINS[f]) assert.equal(m1EffectivePins(REPO, { withHR3OT2: false })[f], HR3OT1_PINS[f], f + ' overlay without this layer is OT1');\n",
+        "to": "    assert.equal(m1EffectivePins(REPO)[f], HR3OT2_PINS[f], f + ' overlay');\n    }\n    if (HR3OT1_PINS[f]) assert.equal(m1EffectivePins(REPO, { withHR3OT2: false })[f], HR3OT1_PINS[f], f + ' overlay without this layer is OT1');\n"
+      },
+      {
+        "from": "    assert.equal(git(['rev-parse', `HEAD:${f}`]), git(['rev-parse', `${HR3OT2_PARENT}:${f}`]), f + ' is OT1 bytes');\n",
+        "to": "    assert.equal(git(['rev-parse', `${SOURCE}:${f}`]), git(['rev-parse', `${HR3OT2_PARENT}:${f}`]), f + ' is OT1 bytes');\n"
+      },
+      {
+        "from": "    assert.equal(git(['rev-parse', `HEAD:${f}`]), git(['rev-parse', `${HR3OT2_GRANDPARENT}:${f}`]), f + ' is S3 bytes');\n  assert.deepEqual(names(['diff', '--name-only', HR3OT2_PARENT, 'HEAD', '--', 'src', 'fincore', 'lib', 'api', 'scripts', 'migrations']), []);\n",
+        "to": "    assert.equal(git(['rev-parse', `${SOURCE}:${f}`]), git(['rev-parse', `${HR3OT2_GRANDPARENT}:${f}`]), f + ' is S3 bytes');\n  assert.deepEqual(names(['diff', '--name-only', HR3OT2_PARENT, SOURCE, '--', 'src', 'fincore', 'lib', 'api', 'scripts', 'migrations']), []);\n"
+      },
+      {
+        "from": "  const before = new Set(code(parentBlob(TOOL))), after = new Set(code(readFileSync(join(REPO, TOOL), 'utf8')));\n",
+        "to": "  const before = new Set(code(parentBlob(TOOL))), after = new Set(code(LAYERED ? gitIn(REPO, ['cat-file', 'blob', `${SOURCE}:${TOOL}`]).stdout : readFileSync(join(REPO, TOOL), 'utf8')));\n"
+      }
+    ],
+    "test/support/m1-r1-remediation.mjs": [
+      {
+        "from": "import { isHR3OT2Tree, HR3OT2_PINS } from \"./hr3-ot2-daily-hold.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"./hr3-s2-daily-hold.mjs\";\n",
+        "to": "import { isHR3OT2Tree, HR3OT2_PINS } from \"./hr3-ot2-daily-hold.mjs\";\nimport { isHR3OT3Tree, HR3OT3_PINS } from \"./hr3-ot3-daily-hold.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"./hr3-s2-daily-hold.mjs\";\n"
+      },
+      {
+        "from": "  withHR1 = withI7, withHR2 = withHR1, withHR3 = withHR2, withHR3S1 = withHR3, withHR3S2 = withHR3S1, withHR3S3 = withHR3S2, withHR3OT1 = withHR3S3, withHR3OT2 = withHR3OT1 } = {}) {\n",
+        "to": "  withHR1 = withI7, withHR2 = withHR1, withHR3 = withHR2, withHR3S1 = withHR3, withHR3S2 = withHR3S1, withHR3S3 = withHR3S2, withHR3OT1 = withHR3S3, withHR3OT2 = withHR3OT1, withHR3OT3 = withHR3OT2 } = {}) {\n"
+      },
+      {
+        "from": "    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && isHR3OT2Tree(repo) ? HR3OT2_PINS : {}) } : {};   // each successor overlays only its own protected files\n",
+        "to": "    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && isHR3OT2Tree(repo) ? HR3OT2_PINS : {}),\n    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && withHR3OT3 && isHR3OT3Tree(repo) ? HR3OT3_PINS : {}) } : {};   // each successor overlays only its own protected files\n"
+      }
+    ]
+  },
+  "pins": {
+    "test/delivery/hr3-ot3-duration-raw-token.test.mjs": "a57b9aa58d750e2e875a6fc2b0aac17b3b16cedd",
+    "test/finance/hr3-ot2-daily-hold-guard.test.mjs": "6e8461f9b84847f6b9312df9f9e4ed140d2a5937",
+    "test/finance/hr3-ot3-daily-hold-guard.test.mjs": "a43613d3b170cf6d08d26134211937607835ac74",
+    "test/support/hr3-ot3-daily-hold.mjs": "6aee2c58795b720250024fc3e739ee8b193c0aa0",
+    "test/support/m1-r1-remediation.mjs": "6be49bbdf97957f584a64c3a626139cad278cab3",
+    "tools/daily-delivery/hold.mjs": "da267374a8493676a8d628b62fe1799336e20530"
+  }
+}

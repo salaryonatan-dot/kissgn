@@ -19,6 +19,11 @@ import { HR3OT2_PARENT, HR3OT2_GRANDPARENT, HR3OT2_SCOPE, HR3OT2_PINS, isHR3OT2T
 import { HR3OT1_PINS } from '../support/hr3-ot1-daily-hold.mjs';
 import { releasedHoldRecord } from '../support/daily-email-harness.mjs';
 const SKIP = !isHR3OT2Tree(REPO) && 'not an HR3 OT2 successor';
+// HR3 OT3 (T-OT3-LAYERING): on a successor of OT2 this guard judges the literal, immutable OT2 object; HEAD / index / checkout
+// move to the successor's own guard (the OT1-on-OT2 pattern one layer up).
+const OT2 = 'c8fc3f832e31037589180c83611a5012dfca0853';
+const LAYERED = gitIn(REPO, ['merge-base', '--is-ancestor', OT2, 'HEAD']).status === 0 && gitIn(REPO, ['rev-parse', 'HEAD']).stdout.trim() !== OT2;
+const SOURCE = LAYERED ? OT2 : 'HEAD';
 const RECORD = 'test/support/hr3-ot2-daily-hold.json';
 const TOOL = 'tools/daily-delivery/hold.mjs';
 const EDITED = [TOOL, 'test/finance/hr3-ot1-daily-hold-guard.test.mjs', 'test/support/m1-r1-remediation.mjs'];
@@ -27,18 +32,21 @@ const names = (args) => { const r = gitIn(REPO, [args[0], '-z', ...args.slice(1)
 const parentBlob = (f) => { const r = gitIn(REPO, ['cat-file', 'blob', `${HR3OT2_PARENT}:${f}`]); assert.equal(r.status, 0, f); return r.stdout; };
 
 test('HR3OT2G-01 OT1 sole parent, fixed scope, HEAD / index / checkout / overlay pins, clean tree', { skip: SKIP }, () => {
-  assert.deepEqual(git(['rev-list', '--parents', '-n1', 'HEAD']).split(' ').slice(1), [HR3OT2_PARENT]);
+  assert.deepEqual(git(['rev-list', '--parents', '-n1', SOURCE]).split(' ').slice(1), [HR3OT2_PARENT]);
   assert.equal(git(['rev-parse', `${HR3OT2_PARENT}^`]), HR3OT2_GRANDPARENT, 'OT1 is the sole child of accepted S3');
-  assert.deepEqual(names(['diff', '--name-only', HR3OT2_PARENT, 'HEAD', '--']).sort(), [...HR3OT2_SCOPE, RECORD].sort());
+  assert.deepEqual(names(['diff', '--name-only', HR3OT2_PARENT, SOURCE, '--']).sort(), [...HR3OT2_SCOPE, RECORD].sort());
   assert.deepEqual(Object.keys(HR3OT2_PINS).sort(), [...HR3OT2_SCOPE].sort());
-  for (const args of [['diff', '--cached', '--name-only', 'HEAD', '--'], ['diff', '--name-only', 'HEAD', '--'],
+  if (!LAYERED) for (const args of [['diff', '--cached', '--name-only', 'HEAD', '--'], ['diff', '--name-only', 'HEAD', '--'],
     ['ls-files', '--others', '--', ':(exclude)node_modules', ':(exclude)test/historical/.deps']]) assert.deepEqual(names(args), [], args.join(' '));
   for (const f of HR3OT2_SCOPE) {
     assert.match(HR3OT2_PINS[f], /^[0-9a-f]{40}$/, f);
-    assert.equal(git(['rev-parse', `HEAD:${f}`]), HR3OT2_PINS[f], f + ' HEAD');
+    assert.equal(git(['rev-parse', `${SOURCE}:${f}`]), HR3OT2_PINS[f], f + ' HEAD');
+    if (LAYERED) assert.equal(m1EffectivePins(REPO, { withHR3OT3: false })[f], HR3OT2_PINS[f], f + ' overlay without the successor layer');
+    else {
     assert.equal(git(['rev-parse', `:${f}`]), HR3OT2_PINS[f], f + ' index');
     assert.equal(gitBlobId(readFileSync(join(REPO, f))), HR3OT2_PINS[f], f + ' checkout');
     assert.equal(m1EffectivePins(REPO)[f], HR3OT2_PINS[f], f + ' overlay');
+    }
     if (HR3OT1_PINS[f]) assert.equal(m1EffectivePins(REPO, { withHR3OT2: false })[f], HR3OT1_PINS[f], f + ' overlay without this layer is OT1');
   }
 });
@@ -62,14 +70,14 @@ test('HR3OT2G-03 runtime and everything outside the scope are OT1 bytes; the too
     'package-lock.json', 'index.html', 'test/support/hr3-ot1-daily-hold.json', 'test/support/hr3-ot1-daily-hold.mjs',
     'test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs', 'test/finance/hr3-s3-daily-hold-guard.test.mjs',
     'test/emulator/hr1-daily-hold-emulator.mjs', 'test/emulator/hr3-s3-roundtrip-emulator.mjs', 'test/delivery/hr1-operator-and-compat.test.mjs']) {
-    assert.equal(git(['rev-parse', `HEAD:${f}`]), git(['rev-parse', `${HR3OT2_PARENT}:${f}`]), f + ' is OT1 bytes');
+    assert.equal(git(['rev-parse', `${SOURCE}:${f}`]), git(['rev-parse', `${HR3OT2_PARENT}:${f}`]), f + ' is OT1 bytes');
   }
   for (const f of ['lib/emailDelivery.js', 'api/daily-snapshot/run.ts', 'lib/sendEmail.js', 'database.rules.json'])
-    assert.equal(git(['rev-parse', `HEAD:${f}`]), git(['rev-parse', `${HR3OT2_GRANDPARENT}:${f}`]), f + ' is S3 bytes');
-  assert.deepEqual(names(['diff', '--name-only', HR3OT2_PARENT, 'HEAD', '--', 'src', 'fincore', 'lib', 'api', 'scripts', 'migrations']), []);
+    assert.equal(git(['rev-parse', `${SOURCE}:${f}`]), git(['rev-parse', `${HR3OT2_GRANDPARENT}:${f}`]), f + ' is S3 bytes');
+  assert.deepEqual(names(['diff', '--name-only', HR3OT2_PARENT, SOURCE, '--', 'src', 'fincore', 'lib', 'api', 'scripts', 'migrations']), []);
   // executable lines only: line comments and JSDoc blocks are excluded
   const code = (s) => s.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('//') && !l.startsWith('*') && !l.startsWith('/*'));
-  const before = new Set(code(parentBlob(TOOL))), after = new Set(code(readFileSync(join(REPO, TOOL), 'utf8')));
+  const before = new Set(code(parentBlob(TOOL))), after = new Set(code(LAYERED ? gitIn(REPO, ['cat-file', 'blob', `${SOURCE}:${TOOL}`]).stdout : readFileSync(join(REPO, TOOL), 'utf8')));
   assert.deepEqual([...before].filter((l) => !after.has(l)),
     ['const maxDurationMs = args["max-duration-ms"] === undefined ? null : Number(args["max-duration-ms"]);']);
   assert.deepEqual([...after].filter((l) => !before.has(l)).sort(), [

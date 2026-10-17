@@ -36,13 +36,22 @@ export const DRAIN_MARGIN_MS = 60000;
 export const EXIT = Object.freeze({ OK: 0, USAGE: 2, REFUSED: 3, PROJECT: 4, ABORT_D: 5 });
 export const COMMANDS = Object.freeze(["status", "inventory", "confirm-inventory", "evidence", "init", "hold", "release"]);
 
+const DURATION_FLAG = "--max-duration-ms";
 export function parseArgs(argv) {
   const out = { _: [] };
   for (const a of argv) {
+    // HR3 OT3 (OT2-R-01): the duration option is recognised on the RAW token, before the generic matcher (whose `.` stops at a
+    // line terminator and would drop a malformed occurrence into the positionals). Every occurrence counts toward the repeat
+    // check, in any order, and its whole value is kept for maxDurationInput.
+    if (a.startsWith(DURATION_FLAG) && !/^[a-z-]/.test(a.slice(DURATION_FLAG.length))) {
+      if (Object.hasOwn(out, "max-duration-ms")) out.ambiguousDuration = true;
+      const rest = a.slice(DURATION_FLAG.length);
+      out["max-duration-ms"] = rest === "" ? true : rest.startsWith("=") ? rest.slice(1) : rest;
+      continue;
+    }
     const m = /^--([a-z-]+)(?:=(.*))?$/.exec(a);
     if (!m) { out._.push(a); continue; }
     if ((m[1] === "project" || m[1] === "database-url") && Object.hasOwn(out, m[1])) out.ambiguousTarget = true;
-    if (m[1] === "max-duration-ms" && Object.hasOwn(out, m[1])) out.ambiguousDuration = true;
     out[m[1]] = m[2] === undefined ? true : m[2];
   }
   return out;
@@ -207,6 +216,9 @@ export function drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurat
 export function maxDurationInput(args) {
   const v = args["max-duration-ms"];
   if (args.ambiguousDuration || typeof v !== "string" || !/^[1-9][0-9]*$/.test(v)) return null;
+  // HR3 OT3: `evidence` takes no positional argument. A stray token (a mis-spelt, mis-cased or mis-prefixed duration such as
+  // ` --max-duration-ms=…` or `--MAX-DURATION-MS=…`) makes the duration input unverifiable rather than silently ignored.
+  if (Array.isArray(args._) && args._.length > 1) return null;
   const n = Number(v);
   return Number.isSafeInteger(n) ? n : null;
 }
