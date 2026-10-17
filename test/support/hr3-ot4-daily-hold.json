@@ -1,0 +1,88 @@
+{
+  "decision": "HR3 OT4 proposed local successor of OT3 (complete duration grammar, OT3-R-01); independent Codex review pending",
+  "parent": "770c065946ebbce77ade4a80950698f9572526ff",
+  "scope": [
+    "test/delivery/hr3-ot4-duration-grammar.test.mjs",
+    "test/finance/hr3-ot3-daily-hold-guard.test.mjs",
+    "test/finance/hr3-ot4-daily-hold-guard.test.mjs",
+    "test/support/hr3-ot4-daily-hold.mjs",
+    "test/support/m1-r1-remediation.mjs",
+    "tools/daily-delivery/hold.mjs"
+  ],
+  "edits": {
+    "tools/daily-delivery/hold.mjs": [
+      {
+        "from": "      out[\"max-duration-ms\"] = rest === \"\" ? true : rest.startsWith(\"=\") ? rest.slice(1) : rest;\n      continue;\n",
+        "to": "      out[\"max-duration-ms\"] = rest === \"\" ? true : rest.startsWith(\"=\") ? rest.slice(1) : rest;\n      // HR3 OT4 (OT3-R-01): only the bare flag or `=` directly after the name is the option's grammar. Any other suffix is\n      // malformed whatever it contains (`--max-duration-ms1` is not a value of 1); its bytes are kept, and it still counts.\n      if (rest !== \"\" && !rest.startsWith(\"=\")) out.malformedDuration = true;\n      continue;\n"
+      },
+      {
+        "from": "  if (args.ambiguousDuration || typeof v !== \"string\" || !/^[1-9][0-9]*$/.test(v)) return null;\n",
+        "to": "  if (args.ambiguousDuration || args.malformedDuration || typeof v !== \"string\" || !/^[1-9][0-9]*$/.test(v)) return null;\n"
+      },
+      {
+        "from": "  return Number.isSafeInteger(n) ? n : null;\n",
+        "to": "  // HR3 OT4: the whole value must be consumed — it must be exactly the decimal spelling of a safe integer (no trailing byte)\n  return Number.isSafeInteger(n) && String(n) === v ? n : null;\n"
+      }
+    ],
+    "test/finance/hr3-ot3-daily-hold-guard.test.mjs": [
+      {
+        "from": "const SKIP = !isHR3OT3Tree(REPO) && 'not an HR3 OT3 successor';\nconst S3 = '7fa1b6e130dd0cdd24e02657d69a073e93a3f767';\n",
+        "to": "const SKIP = !isHR3OT3Tree(REPO) && 'not an HR3 OT3 successor';\n// HR3 OT4 (T-OT4-LAYERING): on a successor of OT3 this guard judges the literal, immutable OT3 object; HEAD / index / checkout\n// move to the successor's own guard (the OT2-on-OT3 pattern one layer up).\nconst OT3 = '770c065946ebbce77ade4a80950698f9572526ff';\nconst LAYERED = gitIn(REPO, ['merge-base', '--is-ancestor', OT3, 'HEAD']).status === 0 && gitIn(REPO, ['rev-parse', 'HEAD']).stdout.trim() !== OT3;\nconst SOURCE = LAYERED ? OT3 : 'HEAD';\nconst S3 = '7fa1b6e130dd0cdd24e02657d69a073e93a3f767';\n"
+      },
+      {
+        "from": "  assert.deepEqual(git(['rev-list', '--parents', '-n1', 'HEAD']).split(' ').slice(1), [HR3OT3_PARENT]);\n",
+        "to": "  assert.deepEqual(git(['rev-list', '--parents', '-n1', SOURCE]).split(' ').slice(1), [HR3OT3_PARENT]);\n"
+      },
+      {
+        "from": "  assert.deepEqual(names(['diff', '--name-only', HR3OT3_PARENT, 'HEAD', '--']).sort(), [...HR3OT3_SCOPE, RECORD].sort());\n",
+        "to": "  assert.deepEqual(names(['diff', '--name-only', HR3OT3_PARENT, SOURCE, '--']).sort(), [...HR3OT3_SCOPE, RECORD].sort());\n"
+      },
+      {
+        "from": "  for (const args of [['diff', '--cached', '--name-only', 'HEAD', '--'], ['diff', '--name-only', 'HEAD', '--'],\n",
+        "to": "  if (!LAYERED) for (const args of [['diff', '--cached', '--name-only', 'HEAD', '--'], ['diff', '--name-only', 'HEAD', '--'],\n"
+      },
+      {
+        "from": "    assert.equal(git(['rev-parse', `HEAD:${f}`]), HR3OT3_PINS[f], f + ' HEAD');\n",
+        "to": "    assert.equal(git(['rev-parse', `${SOURCE}:${f}`]), HR3OT3_PINS[f], f + ' HEAD');\n    if (LAYERED) assert.equal(m1EffectivePins(REPO, { withHR3OT4: false })[f], HR3OT3_PINS[f], f + ' overlay without the successor layer');\n    else {\n"
+      },
+      {
+        "from": "    assert.equal(m1EffectivePins(REPO)[f], HR3OT3_PINS[f], f + ' overlay');\n    if (HR3OT2_PINS[f]) assert.equal(m1EffectivePins(REPO, { withHR3OT3: false })[f], HR3OT2_PINS[f], f + ' overlay without this layer is OT2');\n",
+        "to": "    assert.equal(m1EffectivePins(REPO)[f], HR3OT3_PINS[f], f + ' overlay');\n    }\n    if (HR3OT2_PINS[f]) assert.equal(m1EffectivePins(REPO, { withHR3OT3: false })[f], HR3OT2_PINS[f], f + ' overlay without this layer is OT2');\n"
+      },
+      {
+        "from": "    assert.equal(git(['rev-parse', `HEAD:${f}`]), git(['rev-parse', `${HR3OT3_PARENT}:${f}`]), f + ' is OT2 bytes');\n",
+        "to": "    assert.equal(git(['rev-parse', `${SOURCE}:${f}`]), git(['rev-parse', `${HR3OT3_PARENT}:${f}`]), f + ' is OT2 bytes');\n"
+      },
+      {
+        "from": "    assert.equal(git(['rev-parse', `HEAD:${f}`]), git(['rev-parse', `${S3}:${f}`]), f + ' is S3 bytes');\n  assert.deepEqual(names(['diff', '--name-only', HR3OT3_PARENT, 'HEAD', '--', 'src', 'fincore', 'lib', 'api', 'scripts', 'migrations']), []);\n",
+        "to": "    assert.equal(git(['rev-parse', `${SOURCE}:${f}`]), git(['rev-parse', `${S3}:${f}`]), f + ' is S3 bytes');\n  assert.deepEqual(names(['diff', '--name-only', HR3OT3_PARENT, SOURCE, '--', 'src', 'fincore', 'lib', 'api', 'scripts', 'migrations']), []);\n"
+      },
+      {
+        "from": "  const before = new Set(code(parentBlob(TOOL))), after = new Set(code(readFileSync(join(REPO, TOOL), 'utf8')));\n",
+        "to": "  const before = new Set(code(parentBlob(TOOL))), after = new Set(code(LAYERED ? gitIn(REPO, ['cat-file', 'blob', `${SOURCE}:${TOOL}`]).stdout : readFileSync(join(REPO, TOOL), 'utf8')));\n"
+      }
+    ],
+    "test/support/m1-r1-remediation.mjs": [
+      {
+        "from": "import { isHR3OT3Tree, HR3OT3_PINS } from \"./hr3-ot3-daily-hold.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"./hr3-s2-daily-hold.mjs\";\n",
+        "to": "import { isHR3OT3Tree, HR3OT3_PINS } from \"./hr3-ot3-daily-hold.mjs\";\nimport { isHR3OT4Tree, HR3OT4_PINS } from \"./hr3-ot4-daily-hold.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"./hr3-s2-daily-hold.mjs\";\n"
+      },
+      {
+        "from": "  withHR1 = withI7, withHR2 = withHR1, withHR3 = withHR2, withHR3S1 = withHR3, withHR3S2 = withHR3S1, withHR3S3 = withHR3S2, withHR3OT1 = withHR3S3, withHR3OT2 = withHR3OT1, withHR3OT3 = withHR3OT2 } = {}) {\n",
+        "to": "  withHR1 = withI7, withHR2 = withHR1, withHR3 = withHR2, withHR3S1 = withHR3, withHR3S2 = withHR3S1, withHR3S3 = withHR3S2, withHR3OT1 = withHR3S3, withHR3OT2 = withHR3OT1, withHR3OT3 = withHR3OT2, withHR3OT4 = withHR3OT3 } = {}) {\n"
+      },
+      {
+        "from": "    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && withHR3OT3 && isHR3OT3Tree(repo) ? HR3OT3_PINS : {}) } : {};   // each successor overlays only its own protected files\n",
+        "to": "    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && withHR3OT3 && isHR3OT3Tree(repo) ? HR3OT3_PINS : {}),\n    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && withHR3OT3 && withHR3OT4 && isHR3OT4Tree(repo) ? HR3OT4_PINS : {}) } : {};   // each successor overlays only its own protected files\n"
+      }
+    ]
+  },
+  "pins": {
+    "test/delivery/hr3-ot4-duration-grammar.test.mjs": "99d378368b1bfb6651d1a058cfb91a065162ed51",
+    "test/finance/hr3-ot3-daily-hold-guard.test.mjs": "619364565ca1bb285c7fc269bda1107050e2a8d7",
+    "test/finance/hr3-ot4-daily-hold-guard.test.mjs": "c0ae1a41e84d9b2306e6636e210ad61309c569e6",
+    "test/support/hr3-ot4-daily-hold.mjs": "bea810c79e4333f4fc30b2e33eeec536125ff52a",
+    "test/support/m1-r1-remediation.mjs": "1669c6a834501cb3cf5f261c239ba6056c53a693",
+    "tools/daily-delivery/hold.mjs": "e46965dcd5511065c814bc6b7892477d967adfc6"
+  }
+}

@@ -47,6 +47,9 @@ export function parseArgs(argv) {
       if (Object.hasOwn(out, "max-duration-ms")) out.ambiguousDuration = true;
       const rest = a.slice(DURATION_FLAG.length);
       out["max-duration-ms"] = rest === "" ? true : rest.startsWith("=") ? rest.slice(1) : rest;
+      // HR3 OT4 (OT3-R-01): only the bare flag or `=` directly after the name is the option's grammar. Any other suffix is
+      // malformed whatever it contains (`--max-duration-ms1` is not a value of 1); its bytes are kept, and it still counts.
+      if (rest !== "" && !rest.startsWith("=")) out.malformedDuration = true;
       continue;
     }
     const m = /^--([a-z-]+)(?:=(.*))?$/.exec(a);
@@ -215,12 +218,13 @@ export function drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurat
  */
 export function maxDurationInput(args) {
   const v = args["max-duration-ms"];
-  if (args.ambiguousDuration || typeof v !== "string" || !/^[1-9][0-9]*$/.test(v)) return null;
+  if (args.ambiguousDuration || args.malformedDuration || typeof v !== "string" || !/^[1-9][0-9]*$/.test(v)) return null;
   // HR3 OT3: `evidence` takes no positional argument. A stray token (a mis-spelt, mis-cased or mis-prefixed duration such as
   // ` --max-duration-ms=…` or `--MAX-DURATION-MS=…`) makes the duration input unverifiable rather than silently ignored.
   if (Array.isArray(args._) && args._.length > 1) return null;
   const n = Number(v);
-  return Number.isSafeInteger(n) ? n : null;
+  // HR3 OT4: the whole value must be consumed — it must be exactly the decimal spelling of a safe integer (no trailing byte)
+  return Number.isSafeInteger(n) && String(n) === v ? n : null;
 }
 
 /**
