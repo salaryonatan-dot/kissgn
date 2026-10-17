@@ -14,14 +14,15 @@
 //   I6G-04  scope: no predicate module, registry reader, helper, core, page, route outside the three, delivery, Builder, Core cost
 //           history, backfill script, Rules, schedule or configuration byte moves
 //   I6G-05  the later layer on the approved M1 R5 entry base is exactly ADB-06 ∪ DE1 ∪ I1 ∪ I3 ∪ I4 ∪ I5 ∪ I6, each at its literal pin
-import { test } from "node:test";
+import { historicalTest } from "../support/m1-a1-inspection.mjs";
+const test = historicalTest(new URL("../../", import.meta.url), "7b1d3061c1a42b2d05d7702fbe376f98916e2ce6", "test/finance/i6-integration-guard.test.mjs");
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { gitBlobId, m1EffectivePins, m1R5Pins, m1EffectivePageVerdict } from "../support/m1-r1-remediation.mjs";
-import { SERVER_READER_EFFECTIVE_BLOBS } from "../support/server-reader-authorized-delta.mjs";
+import { serverReaderEffectiveBlobs } from "../support/server-reader-authorized-delta.mjs";
 import { de1EffectivePins, DE1_SCOPE } from "../support/de1-daily-email.mjs";
 import { ADB06_PINS, ADB06_FILES } from "../support/adb06-builder-layer.mjs";
 import { I1_ENTRY, I1_PINS, I1_SCOPE } from "../support/i1-integration.mjs";
@@ -30,15 +31,15 @@ import { I3_PINS, I3_SCOPE } from "../support/i3-integration.mjs";
 import { I4_PINS, I4_SCOPE } from "../support/i4-integration.mjs";
 import { I5_PINS, I5_SCOPE } from "../support/i5-integration.mjs";
 import { I6_PARENT, I6_PINS, I6_NEW_FILES, I6_EDITS, I6_SCOPE, isI6Tree, deriveI6 } from "../support/i6-integration.mjs";
-// I7 layering (Agent/Daily integration I7, T-I7-LAYER; PROPOSED for the M1 integration owner — the I5G-on-I6 pattern): on a tree that
-// carries the I7 successor on top of the I6 candidate, I6G-01..05 verify the I6 commit ITSELF (224a00a6) from git objects — sole parent
+// DT-O1 R2 layering (candidate technical transition; historical I6 proof remains scoped to the I6 object): on a tree that
+// carries the DT-O1 successor on top of the I6 candidate, I6G-01..05 verify the I6 commit ITSELF (224a00a6) from git objects — sole parent
 // I5, protected change set the six I6 files, pins the I6 pins, the I6 source rules — and the HEAD / index / checkout identity of the
-// later tree is held by its own guard (I7G-01). Nothing is skipped.
-import { isI7Tree, I7_PARENT } from "../support/i7-integration.mjs";
+// later tree is held by its own guard (DTO1G-01). Nothing is skipped.
+import { isDTO1Tree, DT_O1_I6 } from "../support/dt-o1-runtime.mjs";
 
 const SKIP = !isI6Tree(REPO) && "not an I6 tree";
-const LAYERED = isI7Tree(REPO);
-const I6_TREE = LAYERED ? I7_PARENT : "HEAD";          // the I6 commit itself when the I7 layer is checked out
+const LAYERED = isDTO1Tree(REPO);
+const I6_TREE = LAYERED ? DT_O1_I6 : "HEAD";          // the I6 commit itself when the DT-O1 layer is checked out
 const PROTECTED = /^(src\/|fincore\/|api\/|lib\/|database\.rules\.json$|test\/support\/rules-authorized-delta\.mjs$|test\/emulator\/database\.rules\.json$|index\.html$|vercel\.json$|package(-lock)?\.json$)/;
 const AD = "api/admin.js", SC = "lib/securityContext.js", PG = "index.html";
 const blobId = (spec) => { const r = gitIn(REPO, ["rev-parse", "--verify", "-q", spec]); return r.status === 0 ? r.stdout.trim() : null; };
@@ -86,8 +87,8 @@ test("I6G-01 identity: sole parent the I5 candidate; I6 changes exactly the six 
   }
   for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), [...I6_SCOPE].sort(), label + ": protected changes vs I5 = the I6 scope");
-  // the I6 commit's own pin table when layered: the effective tables without the I7 overlay (the I7 file is held by I7G-01)
-  const eff = { ...m1EffectivePins(REPO, { withI7: false }), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS };
+  // the I6 commit's own pin table when layered: the effective tables without the DT-O1 overlay (the successor files are held by DTO1G-01)
+  const eff = { ...m1EffectivePins(REPO, { withDTO1: false }), ...serverReaderEffectiveBlobs(REPO, { withDTO1: false }), ...ADB06_PINS };
   for (const f of I6_SCOPE) assert.equal(eff[f], I6_PINS[f], f + " is held to its I6 pin by the effective tables");
   for (const [f, pin] of Object.entries(eff)) {
     assert.equal(blobId(I6_TREE + ":" + f), pin, f + " committed" + (LAYERED ? " (at the I6 commit)" : ""));

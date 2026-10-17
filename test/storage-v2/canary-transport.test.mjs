@@ -25,7 +25,7 @@ test("environment gates fail closed on every row (CT-25)", () => {
   expectFail({ manifest: emu, envFlag: "emulator", processEnv: { FIREBASE_DATABASE_EMULATOR_HOST: "10.0.0.5:9000" } }, "emulator_host_required");
   expectFail({ manifest: emu, envFlag: "emulator", processEnv: { FIREBASE_DATABASE_EMULATOR_HOST: X.EMU_HOST } }, "emulator_project_required");
   expectFail({ manifest: emu, envFlag: "emulator", processEnv: { FIREBASE_DATABASE_EMULATOR_HOST: X.EMU_HOST, GCLOUD_PROJECT: "marjin-real" } }, "emulator_project_required");
-  expectFail({ manifest: X.manifestFor({ databaseURL: "http://127.0.0.1:9001?ns=demo-marjin-rules-default-rtdb" }), envFlag: "emulator", processEnv: X.EMU_ENV }, "emulator_url_mismatch");
+  expectFail({ manifest: X.diagnosticManifest({ databaseURL: "http://127.0.0.1:9001?ns=demo-marjin-rules-default-rtdb", approved: { rulesBlob: X.DIAGNOSTIC_RULES_BLOB } }, "CT-25 emulator_url_mismatch control"), envFlag: "emulator", processEnv: X.EMU_ENV }, "emulator_url_mismatch");   // RF2: a mis-shaped manifest is diagnostic and never carries the candidate outside its scope
   expectFail({ manifest: emu, envFlag: "emulator", processEnv: { ...X.EMU_ENV, GOOGLE_APPLICATION_CREDENTIALS: "/x" } }, "credentials_forbidden_in_emulator");
   expectFail({ manifest: emu, envFlag: "emulator", processEnv: X.EMU_ENV, credentialsFile: "/x/sa.json" }, "credentials_forbidden_in_emulator");
   const e = T.resolveEnvironment({ manifest: emu, envFlag: "emulator", processEnv: X.EMU_ENV, adminApps: [] }); assert.equal(e.mode, "emulator"); assert.equal(e.credentialsFile, null);
@@ -95,13 +95,15 @@ test("source-bound entries transaction: drift ⇒ abort with the node preserved,
 });
 
 test("Rules fingerprint: byte / structural / mismatch / UNKNOWN without invoking git; repo identity hashes blobs itself", () => {
+  // RF1 (T-RF1-GATE): the local gate expectation is CANDIDATE_RULES_BLOB (the checked-out integration Rules); the release pin
+  // APPROVED_RULES_BLOB is unchanged and is held apart by test/storage-v2/rf1-rules-gate.test.mjs (RF-01 / RF-02).
   const text = readFileSync(new URL("../../database.rules.json", import.meta.url), "utf8");
-  assert.equal(T.gitBlobId(text), X.APPROVED_RULES_BLOB, "the checked-out Rules are the approved blob");
-  assert.equal(T.rulesFingerprint({ text, approvedBlob: X.APPROVED_RULES_BLOB, root: X.ROOT }).match, "byte");
-  assert.equal(T.rulesFingerprint({ text: JSON.stringify(JSON.parse(text), null, 4), approvedBlob: X.APPROVED_RULES_BLOB, root: X.ROOT }).match, "structural");
-  const mm = T.rulesFingerprint({ text: text.replace("storage_v2_control", "storage_v2_controL"), approvedBlob: X.APPROVED_RULES_BLOB, root: X.ROOT }); assert.equal(mm.match, "mismatch"); assert.notEqual(mm.deployedRulesBlob, X.APPROVED_RULES_BLOB);
-  assert.equal(T.rulesFingerprint({ text: null, approvedBlob: X.APPROVED_RULES_BLOB, root: X.ROOT }).match, "UNKNOWN");
-  const id = T.repoIdentity(X.ROOT); assert.equal(id.blobs["database.rules.json"], X.APPROVED_RULES_BLOB); assert.equal(typeof id.nodeVersion, "string");
+  assert.equal(T.gitBlobId(text), X.CANDIDATE_RULES_BLOB, "the checked-out Rules are the local gate's candidate expectation");
+  assert.equal(T.rulesFingerprint({ text, approvedBlob: X.CANDIDATE_RULES_BLOB, root: X.ROOT }).match, "byte");
+  assert.equal(T.rulesFingerprint({ text: JSON.stringify(JSON.parse(text), null, 4), approvedBlob: X.CANDIDATE_RULES_BLOB, root: X.ROOT }).match, "structural");
+  const mm = T.rulesFingerprint({ text: text.replace("storage_v2_control", "storage_v2_controL"), approvedBlob: X.CANDIDATE_RULES_BLOB, root: X.ROOT }); assert.equal(mm.match, "mismatch"); assert.notEqual(mm.deployedRulesBlob, X.CANDIDATE_RULES_BLOB);
+  assert.equal(T.rulesFingerprint({ text: null, approvedBlob: X.CANDIDATE_RULES_BLOB, root: X.ROOT }).match, "UNKNOWN");
+  const id = T.repoIdentity(X.ROOT); assert.equal(id.blobs["database.rules.json"], X.CANDIDATE_RULES_BLOB); assert.equal(typeof id.nodeVersion, "string");
 });
 
 test("REST probe: emulator uses the `?auth=` query form (Bearer is admin-equivalent there), production uses Bearer; only control same-value PUT and reads exist", async () => {

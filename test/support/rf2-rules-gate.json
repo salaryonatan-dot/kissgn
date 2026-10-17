@@ -1,0 +1,26 @@
+{
+  "parent": "441d6716e2fcfca81818485f58ff878a763619da",
+  "modified": [
+    "test/finance/rf1-rules-gate-guard.test.mjs",
+    "test/storage-v2/canary-contract.test.mjs",
+    "test/storage-v2/canary-transport.test.mjs",
+    "test/storage-v2/rf1-rules-gate.test.mjs",
+    "test/support/canary-fixtures.mjs"
+  ],
+  "newFiles": [
+    "test/finance/rf2-rules-gate-guard.test.mjs",
+    "test/storage-v2/rf2-rules-gate.test.mjs",
+    "test/support/rf2-rules-gate.json",
+    "test/support/rf2-rules-gate.mjs"
+  ],
+  "pins": {
+    "test/finance/rf1-rules-gate-guard.test.mjs": "a464b0d5450d94e09d48ea1cd4e8002f582c1399",
+    "test/finance/rf2-rules-gate-guard.test.mjs": "5b1c5c2258bacc94bcbf5d3a98e43d089a139284",
+    "test/storage-v2/canary-contract.test.mjs": "3660f598d0970bf9726f869c7b7581f61e6fb6a3",
+    "test/storage-v2/canary-transport.test.mjs": "e2441ec8c4d1f8b88c0be2480b8a931d5f9a1e2f",
+    "test/storage-v2/rf1-rules-gate.test.mjs": "b388a8b2447c6667d55e0812c50433bff03770c7",
+    "test/storage-v2/rf2-rules-gate.test.mjs": "fedee7134ed86d6dc0a1f767f186da010b60a1e0",
+    "test/support/canary-fixtures.mjs": "2f04d03b45226314a57a5c7862727387ba321702",
+    "test/support/rf2-rules-gate.mjs": "c430d02dac0ce1ef65db28eba821cbd41f3bdf52"
+  }
+}

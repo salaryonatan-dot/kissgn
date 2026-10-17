@@ -1,0 +1,18 @@
+{
+  "parent": "9ac5b3d83b99aa13b01fe7dc8def902947889f01",
+  "modified": [
+    "test/finance/b1-downstream-compat.test.mjs",
+    "test/finance/rf3-rules-gate-guard.test.mjs"
+  ],
+  "newFiles": [
+    "test/finance/c07-compat-fixture-guard.test.mjs",
+    "test/support/c07-compat-fixture.json",
+    "test/support/c07-compat-fixture.mjs"
+  ],
+  "pins": {
+    "test/finance/b1-downstream-compat.test.mjs": "54823c5209da92e15bd532b95ed6bc33ab19690c",
+    "test/finance/c07-compat-fixture-guard.test.mjs": "1016bb2e172299de7a9b04b35d95740df4d555d2",
+    "test/finance/rf3-rules-gate-guard.test.mjs": "6fc7afa678ca589c07391e212a5283577920fac3",
+    "test/support/c07-compat-fixture.mjs": "2c6e8975128fda045c75f418fbf8d57135825634"
+  }
+}

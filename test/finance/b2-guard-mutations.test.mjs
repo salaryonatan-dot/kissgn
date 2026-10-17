@@ -76,6 +76,9 @@ import { isI5Tree, I5_SCOPE } from "../support/i5-integration.mjs";
 import { isI6Tree, I6_SCOPE, I6_PINS } from "../support/i6-integration.mjs";
 // I7 (Agent/Daily integration I7, T-I7-LAYER): the successor's recorded protected scope (api/admin.js only; test/support/i7-integration.mjs).
 import { isI7Tree, I7_SCOPE } from "../support/i7-integration.mjs";
+// CC1 (checklist cold-cache successor on I7, T-CC1-LAYER): its recorded protected scope (lib/repositories/bizDataRepo.js only;
+// test/support/cc1-checklist-cold-cache.mjs).
+import { isCC1Tree, CC1_SCOPE } from "../support/cc1-checklist-cold-cache.mjs";
 // HR1 (Daily-only delivery hold on I7, T-HR1-LAYER): its recorded protected scope (api/daily-snapshot/run.ts, lib/emailDelivery.js
 // + .d.ts; test/support/hr1-daily-hold.mjs).
 import { isHR1Tree, HR1_SCOPE, HR1_PINS } from "../support/hr1-daily-hold.mjs";
@@ -259,6 +262,7 @@ function assertB2Scope(root) {
     const I5_ADDED = i1 && isI5Tree(root) ? [...I5_SCOPE] : [];
     const I6_ADDED = i1 && isI6Tree(root) ? [...I6_SCOPE] : [];
     const I7_ADDED = i1 && isI7Tree(root) ? [...I7_SCOPE] : [];
+    const CC1_ADDED = i1 && isCC1Tree(root) ? [...CC1_SCOPE] : [];
     const HR1_ADDED = i1 && isHR1Tree(root) ? [...HR1_SCOPE] : [];
     const HR2_ADDED = i1 && isHR2Tree(root) ? [...HR2_SCOPE] : [];
     const HR3_ADDED = i1 && isHR3Tree(root) ? [...HR3_SCOPE] : [];
@@ -268,7 +272,7 @@ function assertB2Scope(root) {
     const DE1_LABEL = i1 && isHR2Tree(root) ? "HR2 / I1 integration fixed blob " : i1 && isHR1Tree(root) ? "HR1 / I1 integration fixed blob " : i1 ? "I1 integration fixed blob " : de1 && isDE1R8Tree(root) ? "DE1 R8 successor fixed blob " : de1 && isDE1R7Tree(root) ? "DE1 R7 successor fixed blob " : de1 && isDE1R6Tree(root) ? "DE1 R6 successor fixed blob " : de1 && isDE1R5Tree(root) ? "DE1 R5 successor fixed blob " : de1 && isDE1R4Tree(root) ? "DE1 R4 successor fixed blob " : de1 && isDE1R3Tree(root) ? "DE1 R3 successor fixed blob " : de1 && isDE1R2Tree(root) ? "DE1 R2 successor fixed blob " : de1 && isDE1R1Tree(root) ? "DE1 R1 successor fixed blob " : "DE1 checkpoint fixed blob ";
     const vd50Runtime = ["src/metrics/report.ts", "fincore/v1/metrics/report.js", "fincore/v1/MANIFEST.json"];
     const f1Runtime = ["database.rules.json", "fincore/v1/MANIFEST.json", "fincore/v1/browser/marjinFinanceGlobal.js", "fincore/v1/finance/costHistory.js", "fincore/v1/metrics/report.js", "fincore/v1/policy/productFinance.js", "lib/finance/costHistoryWriter.js", "src/browser/marjinFinanceGlobal.ts", "src/finance-server/canonicalInputs.ts", "src/finance/costHistory.ts", "src/finance/labor.ts", "src/finance/types.ts", "src/metrics/costTimeline.ts", "src/metrics/report.ts", "src/policy/productFinance.ts", "test/support/rules-authorized-delta.mjs"];
-    const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES, ...M1_R1_ADDED, ...M1_R2_ADDED, ...DE1_ADDED, ...I3_ADDED, ...I4_ADDED, ...I5_ADDED, ...I6_ADDED, ...I7_ADDED, ...HR1_ADDED, ...HR2_ADDED, ...HR3_ADDED])] : CDM2_APPROVED;
+    const allowed = assembled ? [...new Set([...CDM2_APPROVED, ...P0_APPROVED, ...(c2 ? C2_RETIRED : []), ...(vd50 ? vd50Runtime : []), ...(f1 ? f1Runtime : []), ...(f2 ? ["api/cost-history.js"] : []), ...(r4 ? R4_NEW_FILES : []), ...P1_FILES, ...M1_R1_ADDED, ...M1_R2_ADDED, ...DE1_ADDED, ...I3_ADDED, ...I4_ADDED, ...I5_ADDED, ...I6_ADDED, ...I7_ADDED, ...CC1_ADDED, ...HR1_ADDED, ...HR2_ADDED, ...HR3_ADDED])] : CDM2_APPROVED;
     const whole = [...names(["diff", "--name-only", BASE, "--"]), ...untracked].filter((f) => PROTECTED.test(f) || (f === "tools/daily-delivery/hold.mjs" && isHR2Tree(root)));
     assert.deepEqual([...new Set(whole)].sort(), [...allowed].sort(), assembled
       ? "assembled tree: protected changes are exactly CD-M2 R1's approved runtime files + P0 Scheduled Auth's three API routes" + (c2 ? " + the C2-03 retirement of " + C2_RETIRED.join(", ") : "") + (m1 ? " + the pinned P1 Supplier Credits files (M1 integration)" : "")

@@ -6,7 +6,8 @@
 //               is exactly the grammar lines; OT1's reporting lines and OT3's raw recognition / stray rule are retained
 //   HR3OT4G-04  regression control: the literal OT3 tool turns `--max-duration-ms1` into a 1 ms bound and completes the report;
 //               this tree leaves C4 not_evaluable
-import { test } from 'node:test';
+import { historicalTest } from "../support/m1-a1-inspection.mjs";
+const test = historicalTest(new URL("../../", import.meta.url), "f34eec92aed4851c2da8a8dfd8f1f353b1d582d7", "test/finance/hr3-ot4-daily-hold-guard.test.mjs");
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';

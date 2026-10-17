@@ -18,17 +18,19 @@ const codes = (r) => r.findings.map((f) => f.code);
 
 test("manifest validation: exact ids, no wildcards, environment-shaped URLs, placeholder ids refused in production (CT-01)", () => {
   assert.equal(C.validateManifest(m).ok, true);
-  const bad = (over, field) => { const v = C.validateManifest(X.manifestFor(over)); assert.equal(v.ok, false, JSON.stringify(over)); assert.ok(v.errors.some((e) => e.field === field), field + " " + JSON.stringify(v.errors)); };
+  // RF2: deliberately malformed manifests are built by the explicitly DIAGNOSTIC constructor (the ordinary fixture refuses scope
+  // overrides); a mis-shaped manifest that leaves the candidate scope carries the diagnostic sentinel pin, never the candidate
+  const bad = (over, field) => { const v = C.validateManifest(X.diagnosticManifest(over, "CT-01 malformed: " + field)); assert.equal(v.ok, false, JSON.stringify(over)); assert.ok(v.errors.some((e) => e.field === field), field + " " + JSON.stringify(v.errors)); };
   bad({ bizId: "*" }, "bizId"); bad({ bizId: "biz/A" }, "bizId"); bad({ tenantId: " tenantA" }, "tenantId"); bad({ bizId: "" }, "bizId");
-  bad({ environment: "staging" }, "environment");
+  bad({ environment: "staging", approved: { rulesBlob: X.DIAGNOSTIC_RULES_BLOB } }, "environment");
   bad({ environment: "production", databaseURL: "http://127.0.0.1:9000?ns=demo-x" }, "databaseURL");
   bad({ environment: "production", tenantId: "tenantA" }, "tenantId");
-  bad({ databaseURL: "https://example-prod-project-default-rtdb.firebaseio.com" }, "databaseURL");
+  bad({ databaseURL: "https://example-prod-project-default-rtdb.firebaseio.com", approved: { rulesBlob: X.DIAGNOSTIC_RULES_BLOB } }, "databaseURL");
   bad({ approved: { rulesBlob: "short" } }, "approved.rulesBlob"); bad({ approved: { repoSha: "zz" } }, "approved.repoSha");
   bad({ operation: { id: "" } }, "operation"); bad({ operation: { operator: "alice", observer: "alice" } }, "operation.observer");
   bad({ expectedIdentity: { businessName: "" } }, "expectedIdentity.businessName");
   bad({ liveWrite: { date: "20-09-2026" } }, "liveWrite");
-  assert.throws(() => C.assertManifest(X.manifestFor({ bizId: "*" })), (e) => e.code === "manifest_invalid" && e.exitCode === 14);
+  assert.throws(() => C.assertManifest(X.diagnosticManifest({ bizId: "*" }, "CT-01 malformed: bizId")), (e) => e.code === "manifest_invalid" && e.exitCode === 14);
   const p = C.derivePaths(m); assert.equal(p.entries, "tenants/tenantA/biz:bizA:entries"); assert.equal(p.control, "storage_v2_control/tenantA/bizA"); assert.equal(p.exceptions, "tenants/tenantA/entry_exceptions/bizA");
 });
 

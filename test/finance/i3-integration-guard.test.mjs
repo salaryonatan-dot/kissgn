@@ -12,14 +12,15 @@
 //           delivery / Builder composites are untouched (they now equal the shared predicates — DC-07)
 //   I3G-05  the later layer on the approved M1 R5 entry base is exactly ADB-06 ∪ DE1 ∪ I1 ∪ the two predicate modules, each held
 //           to its literal pin
-import { test } from "node:test";
+import { historicalTest } from "../support/m1-a1-inspection.mjs";
+const test = historicalTest(new URL("../../", import.meta.url), "7b1d3061c1a42b2d05d7702fbe376f98916e2ce6", "test/finance/i3-integration-guard.test.mjs");
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { gitBlobId, m1EffectivePins, m1R5Pins, m1EffectivePageVerdict } from "../support/m1-r1-remediation.mjs";
-import { SERVER_READER_EFFECTIVE_BLOBS } from "../support/server-reader-authorized-delta.mjs";
+import { serverReaderEffectiveBlobs } from "../support/server-reader-authorized-delta.mjs";
 import { de1EffectivePins, DE1_SCOPE } from "../support/de1-daily-email.mjs";
 import { ADB06_PINS, ADB06_FILES } from "../support/adb06-builder-layer.mjs";
 import { I1_ENTRY, I1_PINS, I1_SCOPE } from "../support/i1-integration.mjs";
@@ -57,7 +58,7 @@ test("I3G-01 identity: sole parent the I2 candidate; I3 changes exactly the two 
   for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), [...I3_SCOPE].sort(), label + ": protected changes vs I2 = the I3 scope");
   // the I3 commit's own pin table when layered: the effective tables without the I4 overlay (the I4 files are held by I4G-01)
-  const eff = { ...m1EffectivePins(REPO, { withI4: false }), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS };
+  const eff = { ...m1EffectivePins(REPO, { withI4: false }), ...serverReaderEffectiveBlobs(REPO, { withDTO1: !LAYERED }), ...ADB06_PINS };
   for (const f of I3_SCOPE) assert.equal(eff[f], I3_PINS[f], f + " is held to its I3 pin by the effective tables");
   for (const [f, pin] of Object.entries(eff)) {
     assert.equal(blobId(I3_TREE + ":" + f), pin, f + " committed" + (LAYERED ? " (at the I3 commit)" : ""));

@@ -1,0 +1,22 @@
+{
+  "parent": "d4ac50ca80fbc62d7942ef9a14284968c0348630",
+  "modified": [
+    "test/finance/rf2-rules-gate-guard.test.mjs",
+    "test/support/rf2-rules-gate.mjs"
+  ],
+  "newFiles": [
+    "test/finance/rf3-rules-gate-guard.test.mjs",
+    "test/storage-v2/rf3-rules-gate.test.mjs",
+    "test/support/rf3-rules-gate.json",
+    "test/support/rf3-rules-gate.mjs",
+    "test/support/rules-owner-acceptance.mjs"
+  ],
+  "pins": {
+    "test/finance/rf2-rules-gate-guard.test.mjs": "5140b79ff174728a9cfe02869e3a3235d8419862",
+    "test/finance/rf3-rules-gate-guard.test.mjs": "c79b85fe3ec968e54e3f695a03977720d94d421e",
+    "test/storage-v2/rf3-rules-gate.test.mjs": "eaa6a105dab152f9955030aaabaac6686e6b5aeb",
+    "test/support/rf2-rules-gate.mjs": "3e22f4f41e92ecf0dfac65eb55aa97a984c892c3",
+    "test/support/rf3-rules-gate.mjs": "77913ab153f919607d2c5e97dde0b0dc3c147168",
+    "test/support/rules-owner-acceptance.mjs": "6864393f17d1d37d1ddf688883658b24e433fb82"
+  }
+}

@@ -19,6 +19,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readerBackfillProjection as bf1Projection } from "../support/server-reader-authorized-delta.mjs";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -30,6 +31,7 @@ import { isM1R2Tree, M1_R2_PINS } from "../support/m1-r2-remediation.mjs";
 import { isM1R3Tree, M1_R3_PINS } from "../support/m1-r3-remediation.mjs";
 import { isM1R4Tree, M1_R4_PINS } from "../support/m1-r4-remediation.mjs";
 import { isM1R5Tree, M1_R5_PINS } from "../support/m1-r5-remediation.mjs";
+import { isDTO1Tree, DT_O1_PINS } from "../support/dt-o1-runtime.mjs";
 // The pin table holding the tree under test: the approved pins — on an M1 R2 tree with the ONE R2 candidate pin of
 // src/analytics/dailyBuilder.ts overlaid (pending independent review). Every mutation class below runs against it.
 const SERVER_READER_APPROVED_BLOBS = SERVER_READER_EFFECTIVE_BLOBS;
@@ -68,7 +70,9 @@ test("I. positive control: the exact approved tree passes; six plain files (B2 a
     // the reader layer still refuses them — the layer is the only authority for them
     assert.equal(ADB06.ok, true, JSON.stringify(ADB06));
     assert.deepEqual(ADB06.validated, [...ADB06_AGENT_FILES].sort(), "the layer validated exactly its Agent files");
-    const unprojected = { ...RAW, changedProtectedPaths: RAW.changedProtectedPathsUnprojected.filter((rel) => !(FENCE_OK && rel === "database.rules.json")) };
+    const bf1 = bf1Projection(ROOT, RAW.changedProtectedPathsUnprojected);
+    assert.ok(bf1.ok, "the separate BF1 script layer must validate before the Agent-only negative control");
+    const unprojected = { ...RAW, changedProtectedPaths: bf1.projected.filter((rel) => !(FENCE_OK && rel === "database.rules.json")) };
     assert.deepEqual(serverReaderScopeVerdict(unprojected), { ok: false, reason: "unauthorized_protected_path", detail: [...ADB06_AGENT_FILES].sort() }, "the reader table alone never authorizes an Agent file");
   }
   // the reader layer itself still rejects the Rules change: only the validated fence projection admits it
@@ -77,7 +81,8 @@ test("I. positive control: the exact approved tree passes; six plain files (B2 a
   assert.deepEqual(serverReaderScopeVerdict(RAW), { ok: false, reason: "unauthorized_protected_path", detail: ["database.rules.json"] }, "unprojected: Rules remain a protected path for the reader layer");
   assert.deepEqual([...SERVER_READER_AUTHORIZED_FILES].sort(), [DB, DM, "src/repositories/analytics/laborRepo.ts", "src/repositories/analytics/purchasesRepo.ts", SB, SE]);
   if (isM1R2Tree(ROOT)) {
-    if (isM1R5Tree(ROOT)) assert.equal(SERVER_READER_APPROVED_BLOBS[DB], M1_R5_PINS[DB], "R5 tree: dailyBuilder is held to its literal R5 candidate pin");
+    if (isDTO1Tree(ROOT)) assert.equal(SERVER_READER_APPROVED_BLOBS[DB], DT_O1_PINS[DB], "DT-O1 tree: dailyBuilder is held to its separately recorded candidate pin");
+    else if (isM1R5Tree(ROOT)) assert.equal(SERVER_READER_APPROVED_BLOBS[DB], M1_R5_PINS[DB], "R5 tree: dailyBuilder is held to its literal R5 candidate pin");
     else if (isM1R4Tree(ROOT)) assert.equal(SERVER_READER_APPROVED_BLOBS[DB], M1_R4_PINS[DB], "R4 tree: dailyBuilder is held to its literal R4 candidate pin");
     else if (isM1R3Tree(ROOT)) assert.equal(SERVER_READER_APPROVED_BLOBS[DB], M1_R3_PINS[DB], "R3 tree: dailyBuilder is held to its literal R3 candidate pin");
     else assert.equal(SERVER_READER_APPROVED_BLOBS[DB], M1_R2_PINS[DB], "R2 tree: dailyBuilder is held to its literal R2 candidate pin");

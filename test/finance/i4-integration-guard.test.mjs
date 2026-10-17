@@ -12,14 +12,15 @@
 //   I4G-04  scope: no route, delivery, Builder, Agent, Core, P1 repository, shared predicate, page, declaration, Rules, schedule
 //           or configuration byte moves
 //   I4G-05  the later layer on the approved M1 R5 entry base is exactly ADB-06 ∪ DE1 ∪ I1 ∪ I3 ∪ I4, each at its literal pin
-import { test } from "node:test";
+import { historicalTest } from "../support/m1-a1-inspection.mjs";
+const test = historicalTest(new URL("../../", import.meta.url), "7b1d3061c1a42b2d05d7702fbe376f98916e2ce6", "test/finance/i4-integration-guard.test.mjs");
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { gitBlobId, m1EffectivePins, m1R5Pins, m1EffectivePageVerdict } from "../support/m1-r1-remediation.mjs";
-import { SERVER_READER_EFFECTIVE_BLOBS } from "../support/server-reader-authorized-delta.mjs";
+import { serverReaderEffectiveBlobs } from "../support/server-reader-authorized-delta.mjs";
 import { de1EffectivePins, DE1_SCOPE } from "../support/de1-daily-email.mjs";
 import { ADB06_PINS, ADB06_FILES } from "../support/adb06-builder-layer.mjs";
 import { I1_ENTRY, I1_PINS, I1_SCOPE } from "../support/i1-integration.mjs";
@@ -60,7 +61,7 @@ test("I4G-01 identity: sole parent the I3 candidate; I4 changes exactly the four
   for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), [...I4_SCOPE].sort(), label + ": protected changes vs I3 = the I4 scope");
   // the I4 commit's own pin table when layered: the effective tables without the I5 overlay (the I5 files are held by I5G-01)
-  const eff = { ...m1EffectivePins(REPO, { withI5: false }), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS };
+  const eff = { ...m1EffectivePins(REPO, { withI5: false }), ...serverReaderEffectiveBlobs(REPO, { withDTO1: !LAYERED }), ...ADB06_PINS };
   for (const f of I4_SCOPE) assert.equal(eff[f], I4_PINS[f], f + " is held to its I4 pin by the effective tables");
   for (const [f, pin] of Object.entries(eff)) {
     assert.equal(blobId(I4_TREE + ":" + f), pin, f + " committed" + (LAYERED ? " (at the I4 commit)" : ""));

@@ -20,6 +20,7 @@ import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { gitBlobId, m1R5Pins } from "../support/m1-r1-remediation.mjs";
 import { collectServerReaderScopeInputs, serverReaderScopeVerdict } from "../support/server-reader-authorized-delta.mjs";
+import { bf1Projection } from "../support/bf1-backfill-layer.mjs";
 import { ADB06_ENTRY, ADB06_SOURCE, ADB06_CHAIN, ADB06_PINS, ADB06_ENTRY_BLOBS, ADB06_FILES, ADB06_AGENT_FILES, isADB06Tree, adb06RecordVerdict, adb06Projection } from "../support/adb06-builder-layer.mjs";
 
 const SKIP = !isADB06Tree(REPO) && "not an ADB-06 layer tree";
@@ -61,7 +62,10 @@ test("ADB6G-02 negative controls: altered / missing / stray Agent files, forged 
   const collector = readFileSync(join(REPO, "test/support/server-reader-authorized-delta.mjs"), "utf8");
   assert.ok(collector.includes("const changedProtectedPaths = adb06.ok ? adb06.projected : changedProtectedPathsUnprojected;"), "fail-closed projection in the collector");
   // a stray Agent file outside the record is never validated: the reader layer refuses it by name
-  const raw = collectServerReaderScopeInputs(REPO);
+  const collected = collectServerReaderScopeInputs(REPO);
+  const bf1 = bf1Projection(REPO, collected.changedProtectedPathsUnprojected);
+  assert.ok(bf1.ok, "the independent BF1 script layer must validate before judging the Agent-only projection");
+  const raw = { ...collected, changedProtectedPathsUnprojected: bf1.projected };
   const stray = "src/agent/proactive/detectors/detectNewThing.ts";
   const p = adb06Projection(REPO, [...raw.changedProtectedPathsUnprojected, stray]);
   assert.ok(p.ok && p.projected.includes(stray), "a non-layer Agent path is left for the reader layer");

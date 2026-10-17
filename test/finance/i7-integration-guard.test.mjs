@@ -16,7 +16,8 @@
 //           (this guard's and the S0 server-reader / VAT roots, which include stored-data scripts); no registry module, security
 //           context, route, repository, delivery, Builder, date helper, backfill script, page, Rules, schedule or configuration byte moves
 //   I7G-05  the later layer on the approved M1 R5 entry base is exactly ADB-06 ∪ DE1 ∪ I1 ∪ I3 ∪ I4 ∪ I5 ∪ I6 ∪ I7, each at its pin
-import { test } from "node:test";
+import { historicalTest } from "../support/m1-a1-inspection.mjs";
+const test = historicalTest(new URL("../../", import.meta.url), "f34eec92aed4851c2da8a8dfd8f1f353b1d582d7", "test/finance/i7-integration-guard.test.mjs");
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

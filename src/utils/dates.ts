@@ -3,9 +3,12 @@ export function todayIso(tz = "Asia/Jerusalem"): string {
 }
 
 export function daysAgoIso(days: number, tz = "Asia/Jerusalem"): string {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d.toLocaleDateString("en-CA", { timeZone: tz });
+  if (!Number.isFinite(days)) return "Invalid Date";
+  const [year, month, day] = todayIso(tz).split("-").map(Number);
+  const calendarDate = new Date(0);
+  const calendarDays = Math.sign(days) * Math.ceil(Math.abs(days));
+  calendarDate.setUTCFullYear(year, month - 1, day - calendarDays);
+  return calendarDate.toISOString().slice(0, 10);
 }
 
 export function startOfMonthIso(tz = "Asia/Jerusalem"): string {

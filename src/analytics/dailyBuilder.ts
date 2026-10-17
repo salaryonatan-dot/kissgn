@@ -1036,10 +1036,13 @@ export async function buildAnalyticsForAll(
 
 /**
  * Returns yesterday's date in Israel timezone, formatted YYYY-MM-DD.
- * The cron runs at 02:00 IST, so "yesterday" is the day that just ended.
+ * "Yesterday" is the calendar date preceding the current Israel business date.
  */
 export function yesterdayInIsrael(now: Date = new Date()): string {
-  const israelMs = now.getTime();
-  const israel = new Date(israelMs - 24 * 60 * 60 * 1000);
-  return israel.toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
+  const israelDate = now.toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
+  if (israelDate === "Invalid Date") return israelDate;
+  const [year, month, day] = israelDate.split("-").map(Number);
+  const calendarDate = new Date(0);
+  calendarDate.setUTCFullYear(year, month - 1, day - 1);
+  return calendarDate.toISOString().slice(0, 10);
 }

@@ -49,10 +49,12 @@ T("TOKEN unsupported/cyclic/non-finite/forbidden-key input rejected", () => {
 function makeNode(doc) { return { value: doc == null ? null : { _v: JSON.stringify(doc) } }; }
 function unwrap(raw) { if (raw && typeof raw === "object" && typeof raw._v === "string") { try { return JSON.parse(raw._v); } catch { return null; } } return raw ?? null; }
 function guardedSet(node, doc, expectedToken) {
-  // mirrors setBizDocGuarded's transaction body
+  // mirrors setBizDocGuarded's transaction body AS RUN ON THE SERVER'S VALUE: the decision is taken on the server's current
+  // document. (Since CC1 the real transaction's FIRST run — the instance's local cache, null on a cold instance — re-submits the
+  // value it saw unchanged so RTDB compares it with the server; every run on the server's value aborts on a mismatch, as here.)
   const currentDoc = unwrap(node.value);
   const currentToken = checklistVersionToken(currentDoc);
-  if (currentToken !== expectedToken) return { conflict: true, currentToken }; // abort — no write
+  if (currentToken !== expectedToken) return { conflict: true, currentToken }; // mismatch on the server's value — no write
   node.value = { _v: JSON.stringify(doc) };
   return { ok: true, versionToken: checklistVersionToken(doc) };
 }

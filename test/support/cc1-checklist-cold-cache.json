@@ -1,0 +1,29 @@
+{
+ "parent": "5bae812c9fde9f58bd9d1bc359dd3855c4658cf1",
+ "decision": "the existing checklist version contract (lib/checklistVersion.js: the server recomputes the current token inside the write transaction) + the reviewed CD-M2 cold-cache transaction pattern (lib/repositories/entryExceptionsRepo.js); no new policy",
+ "review": "agent-daily-integration-i7 I7-O1 / R7-5 (CALLER_COVERAGE.md §5, GATE_LEDGER.md, OWNERSHIP_AND_REQUESTS.md)",
+ "pins": {
+  "lib/repositories/bizDataRepo.js": "42cdb95c25154783615616285e486be15670ffc3"
+ },
+ "newFiles": [],
+ "edits": {
+  "lib/repositories/bizDataRepo.js": [
+   {
+    "from": " * token → compare to expectedVersionToken → on mismatch ABORT (no write) → on match\n * replace with the validated doc. Returns { ok } or { conflict:true, currentToken }.\n",
+    "to": " * token → compare to expectedVersionToken → on mismatch NO CHANGE (judged on the\n * server's value, see CC1 below) → on match replace with the validated doc.\n * Returns { ok } or { conflict:true, currentToken }.\n"
+   },
+   {
+    "from": "  let outcome = null;\n",
+    "to": "  let outcome = null;\n  let runs = 0;\n"
+   },
+   {
+    "from": "    await ref.transaction((current) => {\n",
+    "to": "    await ref.transaction((current) => {\n      runs += 1;\n"
+   },
+   {
+    "from": "      if (currentToken !== expectedVersionToken) { outcome = { conflict: true, currentToken }; return; } // abort\n",
+    "to": "      if (currentToken !== expectedVersionToken) {\n        outcome = { conflict: true, currentToken };\n        // CC1 (checklist cold cache; the CD-M2 entry-exception pattern): the FIRST invocation runs against the instance's LOCAL\n        // cache — `null` (or stale) on a cold server instance — and returning `undefined` there aborts WITHOUT consulting the\n        // server, so an edit of an EXISTING document with its correct token was refused as a conflict. The first run therefore\n        // re-submits the value it saw, unchanged: RTDB compares it with the server's value and either commits that identical\n        // value (the cache was right: a genuine conflict, nothing changes) or re-runs this function with the server's value.\n        // Every later run (the server's value) aborts on a mismatch exactly as before.\n        return runs === 1 ? current : undefined;\n      }\n"
+   }
+  ]
+ }
+}

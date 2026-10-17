@@ -15,14 +15,15 @@
 //           schedule and configuration bytes are I1's; outside the page only tests change
 //   I2G-05  the whole later layer on the approved M1 R5 entry base is still exactly ADB-06 ∪ DE1 ∪ I1 (the page is already in
 //           I1's scope), each file held to its literal pin with the page at the I2 pin
-import { test } from "node:test";
+import { historicalTest } from "../support/m1-a1-inspection.mjs";
+const test = historicalTest(new URL("../../", import.meta.url), "7b1d3061c1a42b2d05d7702fbe376f98916e2ce6", "test/finance/i2-integration-guard.test.mjs");
 import assert from "node:assert/strict";
 import { readFileSync, lstatSync } from "node:fs";
 import { join } from "node:path";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { gitBlobId, m1EffectivePins, m1R5Pins, m1EffectivePageVerdict } from "../support/m1-r1-remediation.mjs";
-import { SERVER_READER_EFFECTIVE_BLOBS } from "../support/server-reader-authorized-delta.mjs";
+import { serverReaderEffectiveBlobs } from "../support/server-reader-authorized-delta.mjs";
 import { de1EffectivePins, DE1_SCOPE } from "../support/de1-daily-email.mjs";
 import { OWNUI_PINS } from "../support/owner-notice-ui.mjs";
 import { ADB06_PINS, ADB06_FILES } from "../support/adb06-builder-layer.mjs";
@@ -74,7 +75,7 @@ test("I2G-01 identity: sole parent the I1 candidate; I2 changes exactly the page
     assert.deepEqual([...new Set(set)].sort(), [...I2_SCOPE].sort(), label + ": protected changes vs I1 = { index.html }");
   // the I2 commit's own pin table when layered: the effective tables with the I2 pins over every file the I3 layer moved
   // (the I2 commit's own table: the effective tables without the I3 overlay; the files only I3 pins are held by I2G-04 / I3G-02)
-  const eff = { ...m1EffectivePins(REPO, { withI3: false }), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS };
+  const eff = { ...m1EffectivePins(REPO, { withI3: false }), ...serverReaderEffectiveBlobs(REPO, { withDTO1: !LAYERED }), ...ADB06_PINS };
   assert.equal(eff[PG], I2_PINS[PG], "the page is held to its I2 pin by the effective tables");
   for (const [f, pin] of Object.entries(eff)) {
     assert.equal(blobId(I2_TREE + ":" + f), pin, f + " committed" + (LAYERED ? " (at the I2 commit)" : ""));

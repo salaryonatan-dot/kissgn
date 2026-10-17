@@ -1,0 +1,28 @@
+{
+  "parent": "f34eec92aed4851c2da8a8dfd8f1f353b1d582d7",
+  "historicalI6": "224a00a655f0f2af9a0e55abac96db3265355cfb",
+  "decision": "M1-A1 inspection-only carry of exact accepted DT-O1 R2 helper content; PROPOSED transition",
+  "pins": {
+    "src/analytics/dailyBuilder.ts": "3f7ac9783c8ed107cca6ca8afe5c1448730a9a63",
+    "src/utils/dates.ts": "f25d16e14f03a66d7e9db1b3caa12a241ec2ef22"
+  },
+  "previousPins": {
+    "src/analytics/dailyBuilder.ts": "857f66128a4edbf863e8c439f6b2af304d100e7a",
+    "src/utils/dates.ts": "7cea5fd8974ad2b0c524d8c43476f712b5be0abf"
+  },
+  "newFiles": [],
+  "edits": {
+    "src/analytics/dailyBuilder.ts": [
+      {
+        "from": "\n/**\n * Returns yesterday's date in Israel timezone, formatted YYYY-MM-DD.\n * The cron runs at 02:00 IST, so \"yesterday\" is the day that just ended.\n */\nexport function yesterdayInIsrael(now: Date = new Date()): string {\n  const israelMs = now.getTime();\n  const israel = new Date(israelMs - 24 * 60 * 60 * 1000);\n  return israel.toLocaleDateString(\"en-CA\", { timeZone: \"Asia/Jerusalem\" });\n}\n",
+        "to": "\n/**\n * Returns yesterday's date in Israel timezone, formatted YYYY-MM-DD.\n * \"Yesterday\" is the calendar date preceding the current Israel business date.\n */\nexport function yesterdayInIsrael(now: Date = new Date()): string {\n  const israelDate = now.toLocaleDateString(\"en-CA\", { timeZone: \"Asia/Jerusalem\" });\n  if (israelDate === \"Invalid Date\") return israelDate;\n  const [year, month, day] = israelDate.split(\"-\").map(Number);\n  const calendarDate = new Date(0);\n  calendarDate.setUTCFullYear(year, month - 1, day - 1);\n  return calendarDate.toISOString().slice(0, 10);\n}\n"
+      }
+    ],
+    "src/utils/dates.ts": [
+      {
+        "from": "}\n\nexport function daysAgoIso(days: number, tz = \"Asia/Jerusalem\"): string {\n  const d = new Date();\n  d.setDate(d.getDate() - days);\n  return d.toLocaleDateString(\"en-CA\", { timeZone: tz });\n}\n\nexport function startOfMonthIso(tz = \"Asia/Jerusalem\"): string {\n",
+        "to": "}\n\nexport function daysAgoIso(days: number, tz = \"Asia/Jerusalem\"): string {\n  if (!Number.isFinite(days)) return \"Invalid Date\";\n  const [year, month, day] = todayIso(tz).split(\"-\").map(Number);\n  const calendarDate = new Date(0);\n  const calendarDays = Math.sign(days) * Math.ceil(Math.abs(days));\n  calendarDate.setUTCFullYear(year, month - 1, day - calendarDays);\n  return calendarDate.toISOString().slice(0, 10);\n}\n\nexport function startOfMonthIso(tz = \"Asia/Jerusalem\"): string {\n"
+      }
+    ]
+  }
+}

@@ -20,6 +20,32 @@ export const APPROVED_SHA = "5afb27543cb3d81c2ff23905af5b4ceeff706203";
 // CANDIDATE — pending independent Codex review; NOT a publication approval. Kept equal to
 // F1_RULES_CANDIDATE_BLOB (test/support/rules-authorized-delta.mjs) by test/finance/f1-r1-review-state.test.mjs.
 export const APPROVED_RULES_BLOB = "32ea32bfc9b70c16c06b1acf87d045c5e28ff1d8";
+// RF1 (Rules / test-fixture transition T-RF1-GATE; LOCAL candidate, pending independent Codex review): the LOCAL GATE
+// EXPECTATION. Every local canary test and the emulator operator matrix check the checked-out Rules against THIS literal —
+// the integration Rules of this lineage, i.e. M1_INTEGRATION_RULES_BLOB (test/support/rules-authorized-delta.mjs) = the F1
+// candidate above composed with the P1 legacy `biz:*:credits` client-write denial (both deltas independently approved for
+// integration: Core/F1 R4 2026-10-04, P1 R3 / R7 2026-10-04 / 06; the composition verified exact and behaviour-narrowing
+// on 2026-10-13, RULES_COMPARISON.md + the independent review's three-way check and 420-cell differential probe).
+// It is a CANDIDATE EXPECTATION, NOT the release pin: APPROVED_RULES_BLOB above is UNCHANGED and remains the Rules-owner's
+// publication record (RELEASE_GATES §1 — moving it is a release-pin transition outside this candidate). The two differ by
+// exactly the P1 denial (test/storage-v2/rf1-rules-gate.test.mjs RF-01) and a manifest naming the release pin is refused
+// against the checked-out Rules (RF-02: publication pending). Neither value is ever derived from the artifact under test.
+export const CANDIDATE_RULES_BLOB = "27887d72da5431bd0b6ee69f53e0dfd10cc44caf";
+// RF2 (closes the independent RF1 review's RF1-R-01): the candidate expectation is CONFINED to the exact emulator scope — the demo
+// project, the loopback namespace URL, environment "emulator" — and is never caller-selected. Three constructors, no other path:
+//   candidateManifest(over)          the enforced candidate-emulator factory (the retired lane's RC-L04 semantics): refuses ANY
+//                                    `environment` / `projectId` / `databaseURL` / `approved` override, validates the FINAL object
+//                                    after the merge and freezes it
+//   manifestFor(over)                the ordinary fixture: emulator (the candidate, exact scope) or `environment: "production"`
+//                                    (the release pin, example production project / URL); the same four categories are refused
+//                                    except that one production switch; the FINAL object is scope-checked after the merge
+//   diagnosticManifest(over, reason) deliberately malformed / stale / mis-shaped manifests for fault injection — explicitly
+//                                    diagnostic (a non-empty `reason` is required, the result is registered as diagnostic); any
+//                                    override is allowed EXCEPT that the FINAL object may never carry the candidate expectation
+//                                    outside its exact scope and the candidate is never selectable through `approved.rulesBlob`
+// A diagnostic manifest that needs a pin outside the candidate scope names DIAGNOSTIC_RULES_BLOB — a 40-hex sentinel that is no
+// git object, never the candidate, never the release pin, never the P0 fence.
+export const DIAGNOSTIC_RULES_BLOB = "d1a6d1a6d1a6d1a6d1a6d1a6d1a6d1a6d1a6d1a6";
 export const EMU_NS = "demo-marjin-rules-default-rtdb", EMU_PROJECT = "demo-marjin-rules", EMU_HOST = "127.0.0.1:9000";
 export const EMU_URL = `http://${EMU_HOST}?ns=${EMU_NS}`;
 export const EMU_ENV = Object.freeze({ FIREBASE_DATABASE_EMULATOR_HOST: EMU_HOST, GCLOUD_PROJECT: EMU_PROJECT, GOOGLE_CLOUD_PROJECT: EMU_PROJECT, PATH: process.env.PATH });
@@ -27,7 +53,44 @@ export const PROD_ENV = Object.freeze({ PATH: process.env.PATH });
 export const T = "tenantA", B = "bizA", NAME = "Biz bizA";
 
 export const LIVE_ROW = () => { const { id, ...planned } = row("live", "2026-09-20", { sales: "12" }); void id; return planned; };
+const SCOPE_KEYS = Object.freeze(["environment", "projectId", "databaseURL", "approved"]);
+const scopeError = (code, detail) => { const e = new Error(`${code}: ${detail}`); e.code = code; return e; };
+/** The exact candidate-emulator scope: environment "emulator", the demo project, the loopback namespace URL, the candidate pin. */
+export function isCandidateScope(m) { return !!m && m.environment === "emulator" && m.projectId === EMU_PROJECT && m.databaseURL === EMU_URL; }
+/** Judge a FINAL (post-merge) manifest: the candidate expectation never leaves its exact scope. Throws `candidate_scope_refused`. */
+export function assertCandidateScope(m) {
+  const pin = m && m.approved && m.approved.rulesBlob;
+  if (pin === CANDIDATE_RULES_BLOB && !isCandidateScope(m)) throw scopeError("candidate_scope_refused", `the candidate expectation appears outside the emulator scope (${m.environment} ${m.projectId} ${m.databaseURL})`);
+  if (m && m.environment === "production" && pin === CANDIDATE_RULES_BLOB) throw scopeError("candidate_scope_refused", "a production-shaped manifest names the candidate");
+  return m;
+}
+const refuseSelectedCandidatePin = (over) => { if (over && over.approved && typeof over.approved === "object" && over.approved.rulesBlob === CANDIDATE_RULES_BLOB) throw scopeError("candidate_pin_selection_refused", "the candidate expectation is the emulator default, never a caller-selected pin"); };
+const deepFreeze = (o) => { if (o && typeof o === "object" && !Object.isFrozen(o)) { Object.freeze(o); for (const v of Object.values(o)) deepFreeze(v); } return o; };
+const DIAGNOSTIC = new WeakSet();
+/** True for a manifest built by diagnosticManifest(); such a manifest is fault-injection material, never a gate expectation. */
+export const isDiagnosticManifest = (m) => DIAGNOSTIC.has(m);
+
+/** The enforced candidate-emulator factory (RC-L04 semantics restored): no scope override of any kind; the final object is checked and frozen. */
+export function candidateManifest(over = {}) {
+  for (const k of SCOPE_KEYS) if (Object.hasOwn(over, k)) throw scopeError("candidate_scope_refused", `override of ${k} is not permitted on the candidate manifest`);
+  const m = buildManifest(over);
+  if (!isCandidateScope(m) || m.approved.rulesBlob !== CANDIDATE_RULES_BLOB) throw scopeError("candidate_scope_refused", "the constructed manifest is not the exact candidate-emulator scope");
+  return deepFreeze(assertCandidateScope(m));
+}
+/** Deliberately malformed / stale / mis-shaped manifests for fault injection: explicitly diagnostic, candidate never carried outside its scope. */
+export function diagnosticManifest(over = {}, reason) {
+  if (typeof reason !== "string" || !reason.trim()) throw scopeError("diagnostic_reason_required", "a diagnostic manifest must state why it is malformed / stale / mis-shaped");
+  refuseSelectedCandidatePin(over);
+  const m = assertCandidateScope(buildManifest(over));
+  DIAGNOSTIC.add(m);
+  return m;
+}
+/** The ordinary fixture: the exact candidate-emulator scope, or `environment: "production"` → the release pin on the example production shape. */
 export function manifestFor(over = {}) {
+  for (const k of SCOPE_KEYS) if (Object.hasOwn(over, k) && !(k === "environment" && over.environment === "production")) throw scopeError("candidate_scope_refused", `override of ${k} is not permitted on an ordinary manifest (use diagnosticManifest(over, reason) for fault injection)`);
+  return assertCandidateScope(buildManifest(over));
+}
+function buildManifest(over = {}) {
   const production = over.environment === "production";
   const m = {
     manifestVersion: 1, environment: production ? "production" : "emulator",
@@ -36,7 +99,9 @@ export function manifestFor(over = {}) {
     tenantId: production ? "t-example-1" : T, bizId: production ? "b-example-1" : B,
     expectedIdentity: { businessName: NAME, ownerAttestation: { by: "owner@example", at: "2026-09-25T08:00:00Z", ref: "attest-1" } },
     probeBizId: null,
-    approved: { repoSha: headSha(), rulesBlob: APPROVED_RULES_BLOB },
+    // RF1: an emulator manifest names the local gate expectation (the checked-out integration Rules); a production-shaped
+    // manifest keeps naming the release pin — the two are never conflated in a fixture.
+    approved: { repoSha: headSha(), rulesBlob: production ? APPROVED_RULES_BLOB : CANDIDATE_RULES_BLOB },
     operation: { id: "canary-op-1", operator: "alice", observer: "bob", approvalRef: "cto-ok-1" },
     expected: { policyRevisionAtStart: 1, sourceDigest: null, evidenceId: null },
     limits: { maxRows: 500, maxNodeBytes: 1048576 },

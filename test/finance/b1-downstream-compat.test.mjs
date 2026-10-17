@@ -161,28 +161,68 @@ test("COMPAT-06 the 5 active proactive detectors run on canonical series without
   }
 });
 
-test("COMPAT-07 alerts runner on B1 docs: no false alert from an omitted field; non-VD docs give the same alerts as pre-B1 docs", async () => {
-  const strip = (r) => JSON.parse(JSON.stringify(r, (k, v) => (/At$|^id$|^createdAt$|^timestamp$/.test(k) ? undefined : v)));
-  const alertsFor = async (builder, rows, extraDays = []) => {
-    const db = seed(rows);
-    db.seed(`tenants/${T}/biz:${B}:alertConfig`, { minDailyRevenue: 5000 });
-    for (let k = 1; k <= 8; k++) { const d = await builder.buildAnalyticsForBiz(T, B, ago(k)); await builder.saveAnalyticsDoc(d); }
-    for (const k of extraDays) { const d = await builder.buildAnalyticsForBiz(T, B, ago(k)); await builder.saveAnalyticsDoc(d); }
-    const res = await RUN.runAlertsForBiz(T, B);
-    const saved = db.read(`tenants/${T}/alerts`) || db.read(`tenants/${T}/biz:${B}:alerts`) || {};
-    return { res: strip(res), saved: strip(saved) };
+test("COMPAT-07 alerts runner on B1 docs: no false alert from an omitted field; non-VD docs give the same alerts as pre-B1 docs", async (t) => {
+  // C07T-F1: this row exercises a business-day consumer. Snapshot the executing instant (never file-load time),
+  // label fixture dates in Israel, and keep every async builder/checker read on that same instant.
+  const CallerDate = globalThis.Date;
+  const scenario = async (nowMs, expectedYesterday) => {
+    class FixtureDate extends CallerDate {
+      constructor(...args) { if (args.length === 0) super(nowMs); else super(...args); }
+      static now() { return nowMs; }
+    }
+    globalThis.Date = FixtureDate;
+    try {
+      const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jerusalem", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(nowMs);
+      const part = (kind) => Number(parts.find((p) => p.type === kind).value);
+      // UTC is used only for arithmetic on an already-selected Gregorian calendar label, not to choose the business day.
+      const calendar = CallerDate.UTC(part("year"), part("month") - 1, part("day"));
+      const ago = (n) => new CallerDate(calendar - n * 86400000).toISOString().slice(0, 10);
+      if (expectedYesterday !== undefined) assert.equal(ago(1), expectedYesterday, "literal Israel completed-day oracle");
+      const strip = (r) => JSON.parse(JSON.stringify(r, (k, v) => (/At$|^id$|^createdAt$|^timestamp$/.test(k) ? undefined : v)));
+      const alertsFor = async (builder, rows, extraDays = []) => {
+        const db = seed(rows);
+        // the threshold must be written where the alert repository reads it (src/alerts/configRepo.ts: tenants/{t}/alert_config/{biz});
+        // the previous path biz:{biz}:alertConfig was never read, so minDailyRevenue never applied and the fixture only fired through the
+        // open-month ratio checkers, which need complete evidence for every completed day of the month (C07-F1, 2026-10-16)
+        db.seed(`tenants/${T}/alert_config/${B}`, { minDailyRevenue: 5000 });
+        for (let k = 1; k <= 8; k++) { const d = await builder.buildAnalyticsForBiz(T, B, ago(k)); await builder.saveAnalyticsDoc(d); }
+        for (const k of extraDays) { const d = await builder.buildAnalyticsForBiz(T, B, ago(k)); await builder.saveAnalyticsDoc(d); }
+        const res = await RUN.runAlertsForBiz(T, B);
+        const saved = db.read(`tenants/${T}/alerts`) || db.read(`tenants/${T}/biz:${B}:alerts`) || {};
+        return { res: strip(res), saved: strip(saved) };
+      };
+      const nonVd = nonVdRows(10, 1).map((row, i) => ({ ...row, date: ago(i + 1) }));
+      const a = await alertsFor(DBLD, nonVd), b = await alertsFor(BASE_DB, nonVd);
+      assert.deepEqual(a.res.errors, []); assert.deepEqual(a, b, "non-VD: identical alert outcome");
+      // a non-VD set that DOES fire (labor and purchases at 50 % of revenue): identical alerts
+      const hot = Array.from({ length: 10 }, (_, i) => entry(uid(800 + i), ago(i + 1), { sales: String(REV[i % REV.length]), supplier_payments: { s1: String(REV[i % REV.length] / 2) }, payroll: String(REV[i % REV.length] / 2) }));
+      const h1 = await alertsFor(DBLD, hot), h0 = await alertsFor(BASE_DB, hot);
+      assert.ok(h1.res.alertsFired > 0, "the fixture fires alerts"); assert.deepEqual(h1, h0, "non-VD firing: identical alerts");
+      // omitted fields: purchases-only days (no revenue, no payroll) ⇒ B1 docs omit total/payroll ⇒ every date skipped
+      const purchasesOnly = Array.from({ length: 8 }, (_, i) => entry(uid(700 + i), ago(i + 1), { supplier_payments: { s1: "900" } }));
+      const c = await alertsFor(DBLD, purchasesOnly);
+      assert.deepEqual(c.res.errors, []); assert.equal(c.res.alertsFired, 0, "no alert manufactured from an omitted field");
+    } finally {
+      globalThis.Date = CallerDate;
+      assert.equal(globalThis.Date, CallerDate, "COMPAT-07 restores the caller clock");
+    }
   };
-  const nonVd = nonVdRows(10, 1);
-  const a = await alertsFor(DBLD, nonVd), b = await alertsFor(BASE_DB, nonVd);
-  assert.deepEqual(a.res.errors, []); assert.deepEqual(a, b, "non-VD: identical alert outcome");
-  // a non-VD set that DOES fire (labor and purchases at 50 % of revenue): identical alerts
-  const hot = Array.from({ length: 10 }, (_, i) => entry(uid(800 + i), ago(i + 1), { sales: String(REV[i % REV.length]), supplier_payments: { s1: String(REV[i % REV.length] / 2) }, payroll: String(REV[i % REV.length] / 2) }));
-  const h1 = await alertsFor(DBLD, hot), h0 = await alertsFor(BASE_DB, hot);
-  assert.ok(h1.res.alertsFired > 0, "the fixture fires alerts"); assert.deepEqual(h1, h0, "non-VD firing: identical alerts");
-  // omitted fields: purchases-only days (no revenue, no payroll) ⇒ B1 docs omit total/payroll ⇒ every date skipped
-  const purchasesOnly = Array.from({ length: 8 }, (_, i) => entry(uid(700 + i), ago(i + 1), { supplier_payments: { s1: "900" } }));
-  const c = await alertsFor(DBLD, purchasesOnly);
-  assert.deepEqual(c.res.errors, []); assert.equal(c.res.alertsFired, 0, "no alert manufactured from an omitted field");
+  await t.test("COMPAT-07 execution instant", async (execution) => {
+    const executingMs = CallerDate.now();
+    execution.diagnostic(JSON.stringify({ fixtureExecutionMs: executingMs }));
+    await scenario(executingMs);
+  });
+  // Literal expectations independently checked with Python zoneinfo, not with the helper above or a runtime date helper.
+  for (const [instant, yesterday] of [
+    ["2026-10-16T20:59:59.999Z", "2026-10-15"],
+    ["2026-10-16T21:00:00.001Z", "2026-10-16"],
+    ["2026-10-16T23:59:59.999Z", "2026-10-16"],
+    ["2026-10-17T00:00:00.001Z", "2026-10-16"],
+    ["2026-01-16T21:59:59.999Z", "2026-01-15"],
+    ["2026-01-16T22:00:00.001Z", "2026-01-16"],
+    ["2026-01-16T23:59:59.999Z", "2026-01-16"],
+    ["2026-01-17T00:00:00.001Z", "2026-01-16"],
+  ]) await t.test(`COMPAT-07 ${instant} / yesterday ${yesterday}`, () => scenario(CallerDate.parse(instant), yesterday));
 });
 
 test("COMPAT-08 the API wrapper (api/analytics/daily-builder.ts — B1 leaves it unchanged; the approved P0 Scheduled Auth bytes when integrated): GET summary, manual POST and rebuild_after_entry_save work with B1 docs", async () => {

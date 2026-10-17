@@ -16,14 +16,15 @@
 //   I1G-06  the whole later layer on the approved M1 R5 entry base (the M1 successor proof, CF-04): the protected changes
 //           cfa7e801 → HEAD are EXACTLY the ADB-06 Builder / Agent files ∪ the DE1 delivery files ∪ the I1 files, each held to
 //           its literal pin; no other M1-pinned file, Rules, page or schedule byte moves
-import { test } from "node:test";
+import { historicalTest } from "../support/m1-a1-inspection.mjs";
+const test = historicalTest(new URL("../../", import.meta.url), "7b1d3061c1a42b2d05d7702fbe376f98916e2ce6", "test/finance/i1-integration-guard.test.mjs");
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO } from "../support/fincore-load.mjs";
 import { gitIn } from "../support/git-context.mjs";
 import { gitBlobId, m1EffectivePins, m1R5Pins } from "../support/m1-r1-remediation.mjs";
-import { SERVER_READER_EFFECTIVE_BLOBS } from "../support/server-reader-authorized-delta.mjs";
+import { serverReaderEffectiveBlobs } from "../support/server-reader-authorized-delta.mjs";
 import { de1EffectivePins, DE1_SCOPE } from "../support/de1-daily-email.mjs";
 import { DE1R8_PINS } from "../support/de1-r8-provenance.mjs";
 import { OWNUI_PINS } from "../support/owner-notice-ui.mjs";
@@ -65,7 +66,7 @@ test("I1G-01 identity: sole parent the recorded merge (Builder ⊕ delivery R8);
   for (const [label, set] of sets)
     assert.deepEqual([...new Set(set)].sort(), [...I1_SCOPE].sort(), label + ": protected changes vs the merge = { route, page }");
   // the I1 commit's own pin table when layered: the effective tables with the I1 pins (the I2 page pin is not the I1 commit's)
-  const eff = LAYERED ? { ...m1EffectivePins(REPO, { withI3: false }), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS, ...I1_PINS } : { ...m1EffectivePins(REPO), ...SERVER_READER_EFFECTIVE_BLOBS, ...ADB06_PINS };
+  const eff = LAYERED ? { ...m1EffectivePins(REPO, { withI3: false }), ...serverReaderEffectiveBlobs(REPO, { withDTO1: !LAYERED }), ...ADB06_PINS, ...I1_PINS } : { ...m1EffectivePins(REPO), ...serverReaderEffectiveBlobs(REPO, { withDTO1: !LAYERED }), ...ADB06_PINS };
   for (const f of I1_SCOPE) assert.equal(eff[f], I1_PINS[f], f + " is held to its I1 pin by the effective tables");
   for (const [f, pin] of Object.entries(eff)) {
     assert.equal(blobId(I1_TREE + ":" + f), pin, f + " committed" + (LAYERED ? " (at the I1 commit)" : ""));

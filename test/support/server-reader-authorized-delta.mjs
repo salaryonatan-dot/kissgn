@@ -32,9 +32,13 @@ import { isM1R2Tree, M1_R2_PINS } from "./m1-r2-remediation.mjs";
 import { isM1R3Tree, M1_R3_PINS } from "./m1-r3-remediation.mjs";
 import { isM1R4Tree, M1_R4_PINS } from "./m1-r4-remediation.mjs";
 import { isM1R5Tree, M1_R5_PINS } from "./m1-r5-remediation.mjs";
+import { isDTO1Tree, DT_O1_PINS } from "./dt-o1-runtime.mjs";
 // ADB-06 successor layer (Agent/Daily integration I1, PROPOSED): the B2-owned snapshot builder is held to its ADB-06 pin on a
 // layer tree; the Agent files are authorized by that layer's own verdict (adb06-builder-layer.mjs), never by this table.
 import { adb06ReaderOverlay, adb06Projection } from "./adb06-builder-layer.mjs";
+import { bf1Projection as standaloneBF1Projection } from "./bf1-backfill-layer.mjs";
+import { isA1Tree, a1BackfillProjection } from "./m1-a1-inspection.mjs";
+export function readerBackfillProjection(root, paths) { return isA1Tree(root) ? a1BackfillProjection(root, paths) : standaloneBF1Projection(root, paths); }
 
 /** The Codex-approved Storage V2 core; the reader files are authorized on top of it. */
 export const SERVER_READER_BASE = "8cac71c1248ad5cc49dfa1a727bf292398ae74e8";
@@ -111,7 +115,7 @@ export const SERVER_READER_AUTHORIZED_FILES = Object.freeze(Object.keys(SERVER_R
  * SERVER_READER_APPROVED_BLOBS keeps the approved values (nothing here approves the R2 candidate).
  */
 const MODULE_REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-export function serverReaderEffectiveBlobs(root = MODULE_REPO) {
+export function serverReaderEffectiveBlobs(root = MODULE_REPO, { withDTO1 = true } = {}) {
   if (!isM1R2Tree(root)) {
     const o = adb06ReaderOverlay(root);
     return Object.keys(o).length ? Object.freeze({ ...SERVER_READER_APPROVED_BLOBS, ...o }) : SERVER_READER_APPROVED_BLOBS;
@@ -131,6 +135,7 @@ export function serverReaderEffectiveBlobs(root = MODULE_REPO) {
   // the ONE B2-owned builder file is held to its literal ADB-06 pin (= its blob at 690a07d9, verified by ADB6G-02 from git
   // objects). The file set is unchanged; SERVER_READER_APPROVED_BLOBS keeps the approved B2 value. Nothing here approves it.
   for (const [f, pin] of Object.entries(adb06ReaderOverlay(root))) if (Object.prototype.hasOwnProperty.call(out, f)) out[f] = pin;
+  if (withDTO1 && isDTO1Tree(root)) for (const [f, pin] of Object.entries(DT_O1_PINS)) if (Object.prototype.hasOwnProperty.call(out, f)) out[f] = pin;
   return Object.freeze(out);
 }
 export const SERVER_READER_EFFECTIVE_BLOBS = serverReaderEffectiveBlobs();
@@ -182,6 +187,8 @@ export function collectServerReaderScopeInputs(root, base = SERVER_READER_BASE) 
   // every changed Agent path by name. The six-file table is never widened (test H); on any other tree nothing changes.
   const adb06 = adb06Projection(root, changedProtectedPathsUnprojected);
   const changedProtectedPaths = adb06.ok ? adb06.projected : changedProtectedPathsUnprojected;
+  // BF1 (pending independent review): a separate exact-script verdict, not a widening of the reader table or protected roots.
+  const bf1 = readerBackfillProjection(root, changedProtectedPaths);
   const blobs = {}, baseBlobs = {};
   for (const rel of SERVER_READER_AUTHORIZED_FILES) {
     let bytes = null;
@@ -190,5 +197,5 @@ export function collectServerReaderScopeInputs(root, base = SERVER_READER_BASE) 
     const b = gitIn(root, ["rev-parse", `${base}:${rel}`]);
     baseBlobs[rel] = b.status === 0 ? b.stdout.trim() : null;
   }
-  return { changedAll, changedProtectedPaths, blobs, baseBlobs, changedProtectedPathsUnprojected, adb06 };
+  return { changedAll, changedProtectedPaths: bf1.ok ? bf1.projected : changedProtectedPaths, blobs, baseBlobs, changedProtectedPathsUnprojected, adb06, bf1 };
 }

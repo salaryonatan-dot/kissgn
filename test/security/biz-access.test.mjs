@@ -174,7 +174,11 @@ const fixtureTenants = {
       { firebaseUid: "uSuper", role: "super_owner" },
       { firebaseUid: "uMgr", role: "manager", allowedBizIds: ["bizA", "bizB", "bizA"] },
       { firebaseUid: "uView", role: "viewer", allowedBizIds: ["bizA"] },
-    ]) } },
+    ]) },
+    // BF-GATE test-contract transition (T-BF-GATE-TEST; P1 / user-access / operations owners — independent I6 review I6-R-03): the
+    // backfill plans a grant only for a business the tenant's runtime registry node registers, so the fixture carries that node
+    // (bizA, bizB). Every assertion below is unchanged; the registry gate itself is proven in test/finance/backfill-registry-gate.test.mjs.
+    business: { _v: JSON.stringify([{ id: "bizA", name: "A" }, { id: "bizB", name: "B" }]) } },
     // existing biz_access has a stale/unexpected entry (bizZ/uMgr) not in the plan:
     biz_access: { bizA: { uMgr: true, uView: true }, bizB: { uMgr: true }, bizZ: { uMgr: true } },
   },

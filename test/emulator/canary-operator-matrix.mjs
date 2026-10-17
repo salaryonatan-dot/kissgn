@@ -23,7 +23,11 @@ import { main } from "../../tools/storage-v2/canary.mjs";
 import * as C from "../../tools/storage-v2/canary-contract.mjs";
 import * as T from "../../tools/storage-v2/canary-transport.mjs";
 import { createDashboard, makeSdkStorage, loadProductionWindow } from "../support/dashboard-wiring-harness.mjs";
-import { row, uuid, asLegacy, asV2, ATTESTATION, LIVE_ROW, APPROVED_RULES_BLOB } from "../support/canary-fixtures.mjs";
+// RF1 (T-RF1-GATE): the matrix checks the canonical Rules against the LOCAL GATE EXPECTATION (CANDIDATE_RULES_BLOB = the
+// integration Rules of this lineage), not against the unchanged release pin APPROVED_RULES_BLOB. The value is a literal of the
+// fixture, never derived from the artifact; a differing canonical / mirror file still SAFETY-ABORTs. No argument and no
+// environment variable selects a different expectation.
+import { row, uuid, asLegacy, asV2, ATTESTATION, LIVE_ROW, CANDIDATE_RULES_BLOB } from "../support/canary-fixtures.mjs";
 
 const PROJECT = "demo-marjin-rules", NAMESPACE = "demo-marjin-rules-default-rtdb";
 const EMU = "127.0.0.1:9000", DB_URL = `http://${EMU}?ns=${NAMESPACE}`;
@@ -40,7 +44,7 @@ function assertSafe() {
   if (process.env.FIREBASE_DATABASE_URL) { const u = String(process.env.FIREBASE_DATABASE_URL); if (!DEMO.has(u) && !isLocal(u)) fail(`FIREBASE_DATABASE_URL is not demo/local: ${u}`); }
   const a = readFileSync(join(DIR, "database.rules.json")), b = readFileSync(join(ROOT, "database.rules.json"));
   if (Buffer.compare(a, b) !== 0) fail("test/emulator/database.rules.json differs from the canonical rules — refresh the copy");
-  if (T.gitBlobId(b) !== APPROVED_RULES_BLOB) fail("canonical Rules are not the approved blob");
+  if (T.gitBlobId(b) !== CANDIDATE_RULES_BLOB) fail("canonical Rules are not the local gate's candidate Rules blob (CANDIDATE_RULES_BLOB)");
 }
 
 // ─── fixtures ────────────────────────────────────────────────────────────────
@@ -78,7 +82,7 @@ let manifestPath = null, manifest = null;
 function writeManifest(over = {}) {
   manifest = { manifestVersion: 1, environment: "emulator", projectId: PROJECT, databaseURL: DB_URL, tenantId: TENANT, bizId: BIZ,
     expectedIdentity: { businessName: NAME, ownerAttestation: { by: "owner@demo", at: "2026-09-25T08:00:00Z", ref: "attest-1" } }, probeBizId: null,
-    approved: { repoSha: "5afb27543cb3d81c2ff23905af5b4ceeff706203", rulesBlob: APPROVED_RULES_BLOB },
+    approved: { repoSha: "5afb27543cb3d81c2ff23905af5b4ceeff706203", rulesBlob: CANDIDATE_RULES_BLOB },
     operation: { id: "canary-op-1", operator: "alice", observer: "bob", approvalRef: "cto-ok" }, expected: { policyRevisionAtStart: 1, sourceDigest: null, evidenceId: null },
     limits: { maxRows: 500, maxNodeBytes: 1048576 }, timezone: "Asia/Jerusalem", liveWrite: { date: "2026-09-20", plannedRow: LIVE_ROW(), editField: "sales", editValue: "34" }, ...over };
   manifestPath = join(EV, `manifest-${++appN}.json`); writeFileSync(manifestPath, JSON.stringify(manifest, null, 2)); chmodSync(manifestPath, 0o600);

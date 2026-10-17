@@ -1,0 +1,17 @@
+{
+  "parent": "142cb808ab0d043f10e2f84f2c7051e7c7af7f45",
+  "decision": "C07T-F1 temporal fixture correction; proposed pending independent review, no runtime/release authority",
+  "files": [
+    "test/finance/b1-downstream-compat.test.mjs",
+    "test/finance/c07-compat-fixture-guard.test.mjs",
+    "test/finance/c07-temporal-guard.test.mjs",
+    "test/support/c07-temporal-fixture.json",
+    "test/support/c07-temporal-fixture.mjs"
+  ],
+  "pins": {
+    "test/finance/b1-downstream-compat.test.mjs": "4fb0ab1475ff8986337af4cc7965dd4e94fa4be4",
+    "test/finance/c07-compat-fixture-guard.test.mjs": "c6b07d16077ef1d487e182366cf022263ad38985",
+    "test/finance/c07-temporal-guard.test.mjs": "b44470518897a8a21b5211e4482e68efffd257b8",
+    "test/support/c07-temporal-fixture.mjs": "32c12ab4a4ebb96b9f0b56fb8fc3389eb73a001f"
+  }
+}
