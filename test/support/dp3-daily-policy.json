@@ -1,0 +1,222 @@
+{
+  "decision": "DP3 proposed local correction successor of DP2 (unaccepted; DP1 unaccepted): closes the independent DP2 review findings DP2-R01 (a failed admission never erases older blocking evidence), DP2-R02 (present incomplete / contradictory evidence never permits a hand-off), DP2-R03 (the evidence report uses the runtime admission validation) and DP2-N01 (declarations); owner policies P4 (both routes) / E4 unchanged; P7 not implemented; independent Codex review of OT4 -> DP3 pending",
+  "parent": "78b6f05775cdbbad8de161c1377de79aafa41e96",
+  "scope": [
+    "lib/emailDelivery.d.ts",
+    "lib/emailDelivery.js",
+    "test/delivery/dp1-manual-delivery-policy.test.mjs",
+    "test/delivery/dp2-shared-admission.test.mjs",
+    "test/delivery/dp3-evidence-validation.test.mjs",
+    "test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs",
+    "test/emulator/dp3-evidence-emulator.mjs",
+    "test/finance/b2-guard-mutations.test.mjs",
+    "test/finance/dp2-daily-policy-guard.test.mjs",
+    "test/finance/dp3-daily-policy-guard.test.mjs",
+    "test/support/dp3-daily-policy.mjs",
+    "test/support/m1-r1-remediation.mjs",
+    "tools/daily-delivery/hold.mjs"
+  ],
+  "edits": {
+    "lib/emailDelivery.d.ts": [
+      {
+        "from": "export type AdmissionCode = \"delivery_already_accepted\" | \"delivery_outcome_unresolved\" | \"delivery_in_progress\" | \"delivery_admission_unreadable\" | \"delivery_admission_unavailable\";\n",
+        "to": "/** DP3 (DP2-N01): the other stored evidence's verdict a route hands to the admission (null: nothing blocks). The scheduled\n *  route maps manual_repeat_not_permitted to delivery_already_accepted; the manual route passes its ManualPolicyCode. */\nexport type AdmissionLegacyCode = ManualPolicyCode | \"delivery_already_accepted\";\nexport type AdmissionCode = \"delivery_already_accepted\" | \"delivery_outcome_unresolved\" | \"delivery_in_progress\" | \"delivery_admission_unreadable\" | \"delivery_admission_unavailable\" | AdmissionLegacyCode;\n"
+      },
+      {
+        "from": "export function admissionPath(kind: string, tenantId: string, bizId: string, businessDate: string): string | null;\nexport function decideAdmission(current: unknown, args: { route: \"scheduled\" | \"manual\"; ref: string; attempt?: number; nowMs: number; leaseMs?: number;\n",
+        "to": "export function admissionPath(kind: string, tenantId: string, bizId: string, businessDate: string): string | null;\n/** DP3: why a present admission value is not a complete record of its state (null when it is). */\nexport type AdmissionDefect = \"not_a_record\" | \"version\" | \"identity\" | \"holder\" | \"attempt\" | \"times\" | \"message_id\" | \"code\" | \"lease\" |\n  \"settled_lease\" | \"settled_at\" | \"failed_code\" | \"state\" | \"history\" | \"history_entry\";\nexport function admissionRecordDefect(x: unknown, ids: { kind: string; tenantId: string; bizId: string; businessDate: string }): AdmissionDefect | null;\nexport function decideAdmission(current: unknown, args: { route: \"scheduled\" | \"manual\"; ref: string; attempt?: number; nowMs: number; leaseMs?: number;\n"
+      },
+      {
+        "from": "  ids: { kind: string; tenantId: string; bizId: string; businessDate: string }; messageIdHeader?: string | null }): { next: unknown; result: { admitted: true } | { admitted: false; code: AdmissionCode } };\n",
+        "to": "  ids: { kind: string; tenantId: string; bizId: string; businessDate: string }; messageIdHeader?: string | null; legacy?: AdmissionLegacyCode | null }): { next: unknown; result: { admitted: true } | { admitted: false; code: AdmissionCode } };\n"
+      },
+      {
+        "from": "  attempt?: number; nowMs: number; leaseMs?: number; messageIdHeader?: string | null }): Promise<{ ok: true } | { ok: false; code: AdmissionCode }>;\n",
+        "to": "  attempt?: number; nowMs: number; leaseMs?: number; messageIdHeader?: string | null; legacy?: AdmissionLegacyCode | null }): Promise<{ ok: true } | { ok: false; code: AdmissionCode }>;\n"
+      }
+    ],
+    "lib/emailDelivery.js": [
+      {
+        "from": " * `legacy`: the caller's verdict on the evidence written BEFORE the admission existed (the receipt / manual records, read\n * just before; null when it blocks nothing). It decides only while NO admission exists for the identity: every attempt\n * since DP2 takes the admission before its own record can show a hand-off, so once an admission exists it is the authority.\n",
+        "to": " * `legacy`: the caller's verdict on the other stored delivery evidence of the identity (the receipt / manual records, read\n * just before; null when it blocks nothing).\n * DP3 (DP2-R01 / DP2-R02): the decision is derived from BOTH contracts, never from the presence of a record alone:\n *   - an admission that is present but not a complete record of its state (admissionRecordDefect) is unreadable — it never\n *     authorizes a hand-off (fail closed; nothing is repaired, defaulted, stripped or deleted);\n *   - a valid in_flight / accepted / unknown admission refuses with its own code (the current holder's consistent progress\n *     keeps its precise classification; the older evidence it may share the identity with is not consulted);\n *   - a valid failed admission (a definitive non-acceptance) re-admits ONLY when no other evidence blocks: older accepted,\n *     unresolved, in-progress or unreadable evidence refuses with its legacy code — an admission record never erases it;\n *   - absent: the legacy verdict alone decides (an ordinary first-time delivery when it is null).\n"
+      },
+      {
+        "from": " */\nexport function decideAdmission(current, { route, ref, attempt = 1, nowMs, leaseMs = CLAIM_LEASE_MS, ids, messageIdHeader = null, legacy = null }) {\n",
+        "to": " */\n/**\n * DP3 (DP2-R02 / DP2-R03): why a PRESENT admission value is not a complete, consistent record of its state — null when it is.\n * The schema is the one the writers produce (decideAdmission's admit, settleAdmission) as it comes back from the RTDB, where\n * an absent optional field is simply missing: `messageIdHeader` (admit writes it only when given), `history` (an empty list is\n * not stored), `code` on accepted / unknown. Required per state:\n *   common      v, the identity (kind, tenant, business, date = the path), route, ref, attempt (≥ 1), since, updatedAt\n *   in_flight   leaseUntil (it blocks in every case: live → in progress, expired → unresolved)\n *   accepted    settledAt; no leaseUntil                 unknown   settledAt; no leaseUntil\n *   failed      settledAt and the bounded refusal code; no leaseUntil (a definitive non-acceptance names its cause)\n *   history     absent, or a list of earlier holders that EACH ended definitively failed (route, ref, attempt, code, at);\n *               an earlier accepted / unknown / unreadable holder is a contradiction, never a \"previous failure\"\n * Used unchanged by the admission decision and by the operator evidence report (one validation, two readers).\n */\nexport function admissionRecordDefect(x, ids) {\n  const SAFE = Number.isSafeInteger;\n  if (!isPlain(x)) return \"not_a_record\";\n  if (x.v !== ADMISSION_VERSION) return \"version\";\n  if (!isPlain(ids) || x.kind !== ids.kind || x.tenantId !== ids.tenantId || x.bizId !== ids.bizId || x.businessDate !== ids.businessDate) return \"identity\";\n  if (!ADMISSION_ROUTES.has(x.route) || typeof x.ref !== \"string\" || !x.ref) return \"holder\";\n  if (!SAFE(x.attempt) || x.attempt < 1) return \"attempt\";\n  if (!SAFE(x.since) || !SAFE(x.updatedAt)) return \"times\";\n  if (x.messageIdHeader !== undefined && typeof x.messageIdHeader !== \"string\") return \"message_id\";\n  if (x.code !== undefined && typeof x.code !== \"string\") return \"code\";\n  if (x.state === \"in_flight\") {\n    if (!SAFE(x.leaseUntil)) return \"lease\";\n  } else if (x.state === \"accepted\" || x.state === \"unknown\" || x.state === \"failed\") {\n    if (x.leaseUntil !== undefined) return \"settled_lease\";\n    if (!SAFE(x.settledAt)) return \"settled_at\";\n    if (x.state === \"failed\" && typeof x.code !== \"string\") return \"failed_code\";\n  } else return \"state\";\n  if (x.history !== undefined) {\n    if (!Array.isArray(x.history)) return \"history\";\n    for (const h of x.history)\n      if (!isPlain(h) || h.state !== \"failed\" || !ADMISSION_ROUTES.has(h.route) || typeof h.ref !== \"string\" || !h.ref ||\n          !SAFE(h.attempt) || h.attempt < 1 || typeof h.code !== \"string\" || !SAFE(h.at)) return \"history_entry\";\n  }\n  return null;\n}\nexport function decideAdmission(current, { route, ref, attempt = 1, nowMs, leaseMs = CLAIM_LEASE_MS, ids, messageIdHeader = null, legacy = null }) {\n"
+      },
+      {
+        "from": "  if (!isPlain(current) || current.v !== ADMISSION_VERSION || current.kind !== ids.kind || current.tenantId !== ids.tenantId ||\n      current.bizId !== ids.bizId || current.businessDate !== ids.businessDate || !ADMISSION_ROUTES.has(current.route) ||\n      typeof current.ref !== \"string\" || (current.history !== undefined && !Array.isArray(current.history))) return refuse(\"delivery_admission_unreadable\");\n",
+        "to": "  if (admissionRecordDefect(current, ids) !== null) return refuse(\"delivery_admission_unreadable\");\n"
+      },
+      {
+        "from": "  if (current.state === \"in_flight\") {\n    if (!Number.isFinite(current.leaseUntil)) return refuse(\"delivery_admission_unreadable\");\n    return refuse(current.leaseUntil > nowMs ? \"delivery_in_progress\" : \"delivery_outcome_unresolved\");\n  }\n  if (current.state === \"failed\") return admit([...(current.history ?? []).slice(-(HISTORY_KEEP - 1)),\n    { route: current.route, ref: current.ref, attempt: current.attempt ?? null, state: \"failed\", code: current.code ?? null, at: current.settledAt ?? null }]);\n  return refuse(\"delivery_admission_unreadable\");\n",
+        "to": "  if (current.state === \"in_flight\") return refuse(current.leaseUntil > nowMs ? \"delivery_in_progress\" : \"delivery_outcome_unresolved\");\n  // state failed (validated): a definitive non-acceptance re-admits only when no other stored evidence blocks (DP2-R01)\n  if (legacy !== null) return refuse(legacy);\n  return admit([...(current.history ?? []).slice(-(HISTORY_KEEP - 1)),\n    { route: current.route, ref: current.ref, attempt: current.attempt, state: \"failed\", code: current.code, at: current.settledAt }]);\n"
+      },
+      {
+        "from": "// A definitive `failed` (the provider did not take it) and an expired `claimed` (never handed over) are no delivery.\nconst MANUAL_POLICY_ORDER = [\"manual_repeat_not_permitted\", \"delivery_outcome_unresolved\", \"delivery_in_progress\", \"delivery_history_unreadable\"];\n",
+        "to": "// A definitive `failed` (the provider did not take it) and an expired `claimed` (never handed over) are no delivery.\n// DP3 (DP2-R02, DP1 I-4 / I-5): only a COMPLETE record of its state counts as \"no delivery\". The receipt must be the record\n// its writer (decideClaim and the finalizer, DE1 onwards) produces for this identity — version, the identity itself, claimId,\n// attempt — and a claimed receipt counts as expired only on a valid finite lease (an absent / non-numeric lease is not an\n// expiry: unreadable); a failed receipt must name its refusal (code, retryable, finishedAt). A failed manual record must carry\n// its start, Message-ID and settlement (settledAt, code). Anything else present that would permit a send is unreadable.\n// decideClaim itself (the scheduled receipt contract) is unchanged.\nconst MANUAL_POLICY_ORDER = [\"manual_repeat_not_permitted\", \"delivery_outcome_unresolved\", \"delivery_in_progress\", \"delivery_history_unreadable\"];\n"
+      },
+      {
+        "from": "function scheduledEvidence(raw, nowMs) {\n",
+        "to": "function scheduledEvidence(raw, nowMs, tenantId, bizId, businessDate) {\n"
+      },
+      {
+        "from": "  if (!isPlain(raw) || raw.v !== RECEIPT_VERSION) return \"delivery_history_unreadable\";\n",
+        "to": "  if (!isPlain(raw) || raw.v !== RECEIPT_VERSION || raw.kind !== DAILY_SNAPSHOT_KIND || raw.tenantId !== tenantId || raw.bizId !== bizId ||\n      raw.businessDate !== businessDate || typeof raw.claimId !== \"string\" || !raw.claimId || !Number.isSafeInteger(raw.attempt) || raw.attempt < 1)\n    return \"delivery_history_unreadable\";\n"
+      },
+      {
+        "from": "  if (raw.state === \"claimed\") return Number(raw.leaseUntil) > nowMs ? \"delivery_in_progress\" : null;\n  if (raw.state === \"failed\") return null;\n",
+        "to": "  if (raw.state === \"claimed\") {\n    if (!Number.isSafeInteger(raw.leaseUntil)) return \"delivery_history_unreadable\";   // DP2-R02: no invented expiry\n    return raw.leaseUntil > nowMs ? \"delivery_in_progress\" : null;\n  }\n  if (raw.state === \"failed\")\n    return typeof raw.code === \"string\" && typeof raw.retryable === \"boolean\" && Number.isSafeInteger(raw.finishedAt) ? null : \"delivery_history_unreadable\";\n"
+      },
+      {
+        "from": "    }\n    if (x.state === \"accepted\") codes.push(\"manual_repeat_not_permitted\");\n",
+        "to": "    }\n    // DP3 (DP2-R02): a failed record is \"no delivery\" only when it is the complete settled record its writer produces\n    // (start, Message-ID, settlement time and the refusal code); accepted / unknown / handing_off block in any case\n    if (x.state === \"failed\" && (!Number.isSafeInteger(x.startedAt) || typeof x.messageIdHeader !== \"string\" ||\n        !Number.isSafeInteger(x.settledAt) || typeof x.code !== \"string\")) { codes.push(\"delivery_history_unreadable\"); continue; }\n    if (x.state === \"accepted\") codes.push(\"manual_repeat_not_permitted\");\n"
+      },
+      {
+        "from": "  const codes = [scheduledEvidence(receipt, nowMs), ...manualEvidence(records, tenantId, bizId, businessDate)];\n",
+        "to": "  const codes = [scheduledEvidence(receipt, nowMs, tenantId, bizId, businessDate), ...manualEvidence(records, tenantId, bizId, businessDate)];\n"
+      }
+    ],
+    "test/delivery/dp1-manual-delivery-policy.test.mjs": [
+      {
+        "from": "  const rec = (state, date = DATE, id = \"a0000000-0000-4000-8000-000000000001\") => ({ [id]: manualRecord(state, date, { attemptId: id }) });\n",
+        "to": "  const rec = (state, date = DATE, id = \"a0000000-0000-4000-8000-000000000001\", extra = {}) => ({ [id]: manualRecord(state, date, { attemptId: id, ...extra }) });\n"
+      },
+      {
+        "from": "  assert.equal(d(scheduledReceipt(\"failed\", { retryable: true }), null), null);\n  assert.equal(d(scheduledReceipt(\"failed\", { retryable: false }), null), null);\n",
+        "to": "  // DP3 (T-DP3-TEST-EXPECTATIONS): a definitive failure is \"no delivery\" only as the COMPLETE record its writer produces\n  // (receipt: code, retryable, finishedAt; manual record: settledAt, code) — the fixtures carry the writer's fields\n  const failedReceipt = (retryable) => scheduledReceipt(\"failed\", { retryable, code: \"provider_rejected_550\", finishedAt: AT - 500 });\n  const failedRecord = () => rec(\"failed\", DATE, undefined, { settledAt: AT - 500, code: \"provider_rejected_550\" });\n  assert.equal(d(failedReceipt(true), null), null);\n  assert.equal(d(failedReceipt(false), null), null);\n"
+      },
+      {
+        "from": "  assert.equal(d(null, rec(\"failed\")), null);\n",
+        "to": "  assert.equal(d(null, failedRecord()), null);\n"
+      }
+    ],
+    "test/delivery/dp2-shared-admission.test.mjs": [
+      {
+        "from": "  const rec = (state, extra = {}) => ({ v: E.ADMISSION_VERSION, ...ids, state, route: \"scheduled\", ref: \"c1\", attempt: 1, ...extra });\n",
+        "to": "  // DP3 (T-DP3-TEST-EXPECTATIONS): the stored values carry every field their writer produces (admit: since / updatedAt;\n  // settle: settledAt, and the code of a failure) — a partial record is unreadable since DP3 (DP2-R02)\n  const rec = (state, extra = {}) => ({ v: E.ADMISSION_VERSION, ...ids, state, route: \"scheduled\", ref: \"c1\", attempt: 1, since: AT - 100, updatedAt: AT - 50,\n    ...(state === \"in_flight\" ? {} : { settledAt: AT - 50 }), ...extra });\n"
+      },
+      {
+        "from": "  const adm = (state, route, extra = {}) => ({ v: E.ADMISSION_VERSION, kind: \"daily_snapshot\", tenantId: \"t1\", bizId: \"b1\", businessDate: DATE, state, route, ref: \"r1\", attempt: 1, ...extra });\n",
+        "to": "  // DP3 (T-DP3-TEST-EXPECTATIONS): complete writer-shaped admissions (a partial one is unreadable since DP3, DP2-R03)\n  const adm = (state, route, extra = {}) => ({ v: E.ADMISSION_VERSION, kind: \"daily_snapshot\", tenantId: \"t1\", bizId: \"b1\", businessDate: DATE, state, route, ref: \"r1\", attempt: 1,\n    since: NOW - 100, updatedAt: NOW - 50, ...(state === \"in_flight\" ? {} : { settledAt: NOW - 50 }), ...extra });\n"
+      },
+      {
+        "from": "    businessDate: DATE, state, messageIdHeader: \"<manual.legacy@delivery.marjin.app>\", startedAt: AT - 9000, updatedAt: AT - 9000, ...(state === \"handing_off\" ? {} : { settledAt: AT - 8000 }) });\n",
+        "to": "    businessDate: DATE, state, messageIdHeader: \"<manual.legacy@delivery.marjin.app>\", startedAt: AT - 9000, updatedAt: AT - 9000, ...(state === \"handing_off\" ? {} : { settledAt: AT - 8000 }),\n    ...(state === \"failed\" ? { code: \"provider_rejected_550\" } : {}) });   // DP3: a failed record names its refusal, as its writer does\n"
+      }
+    ],
+    "test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs": [
+      {
+        "from": "  assert.deepEqual(complete.admissions, { live: [], inFlightExpired: [], unknown: [], unreadable: [] });\n",
+        "to": "  // DP3 (T-DP3-TEST-EXPECTATIONS): an unreadable admission is also listed with its defect, for investigation\n  assert.deepEqual(complete.admissions, { live: [], inFlightExpired: [], unknown: [], unreadable: [], unreadableDetail: [] });\n"
+      }
+    ],
+    "test/finance/b2-guard-mutations.test.mjs": [
+      {
+        "from": "import { isDP2Tree, DP2_PINS } from \"../support/dp2-daily-policy.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"../support/hr3-s2-daily-hold.mjs\";\n",
+        "to": "import { isDP2Tree, DP2_PINS } from \"../support/dp2-daily-policy.mjs\";\nimport { isDP3Tree, DP3_PINS } from \"../support/dp3-daily-policy.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"../support/hr3-s2-daily-hold.mjs\";\n"
+      },
+      {
+        "from": "      ...(i1 && isDP2Tree(root) ? DP2_PINS : {}) } : {};\n",
+        "to": "      ...(i1 && isDP2Tree(root) ? DP2_PINS : {}),\n      // DP3 (T-DP3-LAYERING): on a DP3 tree the receipt module, its declarations and the operator tool are held to their literal DP3 pins\n      ...(i1 && isDP3Tree(root) ? DP3_PINS : {}) } : {};\n"
+      }
+    ],
+    "test/finance/dp2-daily-policy-guard.test.mjs": [
+      {
+        "from": "import { readFileSync, writeFileSync, mkdtempSync, cpSync } from \"node:fs\";\n",
+        "to": "import { readFileSync, writeFileSync, mkdtempSync, cpSync, mkdirSync } from \"node:fs\";\n"
+      },
+      {
+        "from": "const SKIP = !isDP2Tree(REPO) && \"not a DP2 successor\";\nconst OT4 = \"f34eec92aed4851c2da8a8dfd8f1f353b1d582d7\";\n",
+        "to": "const SKIP = !isDP2Tree(REPO) && \"not a DP2 successor\";\n// DP3 (T-DP3-LAYERING): on a successor of DP2 this guard judges the literal, immutable DP2 object; HEAD / index / checkout /\n// overlay move to the successor's own guard (the DP1-on-DP2 pattern one layer up).\nconst DP2 = \"78b6f05775cdbbad8de161c1377de79aafa41e96\";\nconst LAYERED = gitIn(REPO, [\"merge-base\", \"--is-ancestor\", DP2, \"HEAD\"]).status === 0 && gitIn(REPO, [\"rev-parse\", \"HEAD\"]).stdout.trim() !== DP2;\nconst SOURCE = LAYERED ? DP2 : \"HEAD\";\nconst src = (f) => LAYERED ? gitIn(REPO, [\"cat-file\", \"blob\", `${SOURCE}:${f}`]).stdout : readFileSync(join(REPO, f), \"utf8\");\nconst OT4 = \"f34eec92aed4851c2da8a8dfd8f1f353b1d582d7\";\n"
+      },
+      {
+        "from": "  assert.deepEqual(git([\"rev-list\", \"--parents\", \"-n1\", \"HEAD\"]).split(\" \").slice(1), [DP2_PARENT]);\n",
+        "to": "  assert.deepEqual(git([\"rev-list\", \"--parents\", \"-n1\", SOURCE]).split(\" \").slice(1), [DP2_PARENT]);\n"
+      },
+      {
+        "from": "  assert.deepEqual(names([\"diff\", \"--name-only\", DP2_PARENT, \"HEAD\", \"--\"]).sort(), [...DP2_SCOPE, RECORD].sort());\n",
+        "to": "  assert.deepEqual(names([\"diff\", \"--name-only\", DP2_PARENT, SOURCE, \"--\"]).sort(), [...DP2_SCOPE, RECORD].sort());\n"
+      },
+      {
+        "from": "  for (const args of [[\"diff\", \"--cached\", \"--name-only\", \"HEAD\", \"--\"], [\"diff\", \"--name-only\", \"HEAD\", \"--\"],\n",
+        "to": "  if (!LAYERED) for (const args of [[\"diff\", \"--cached\", \"--name-only\", \"HEAD\", \"--\"], [\"diff\", \"--name-only\", \"HEAD\", \"--\"],\n"
+      },
+      {
+        "from": "    assert.equal(git([\"rev-parse\", `HEAD:${f}`]), DP2_PINS[f], f + \" HEAD\");\n",
+        "to": "    assert.equal(git([\"rev-parse\", `${SOURCE}:${f}`]), DP2_PINS[f], f + \" HEAD\");\n    if (LAYERED) assert.equal(m1EffectivePins(REPO, { withDP3: false })[f], DP2_PINS[f], f + \" overlay without the successor layer\");\n    else {\n"
+      },
+      {
+        "from": "    assert.equal(m1EffectivePins(REPO)[f], DP2_PINS[f], f + \" overlay\");\n    if (without[f] !== undefined) assert.equal(without[f], git([\"rev-parse\", `${DP2_PARENT}:${f}`]), f + \" overlay without this layer = the DP1 bytes\");\n",
+        "to": "    assert.equal(m1EffectivePins(REPO)[f], DP2_PINS[f], f + \" overlay\");\n    }\n    if (without[f] !== undefined) assert.equal(without[f], git([\"rev-parse\", `${DP2_PARENT}:${f}`]), f + \" overlay without this layer = the DP1 bytes\");\n"
+      },
+      {
+        "from": "  const g = readFileSync(join(REPO, \"test/finance/dp1-daily-policy-guard.test.mjs\"), \"utf8\");\n",
+        "to": "  const g = src(\"test/finance/dp1-daily-policy-guard.test.mjs\");\n"
+      },
+      {
+        "from": "    assert.equal(git([\"rev-parse\", `HEAD:${f}`]), git([\"rev-parse\", `${DP2_PARENT}:${f}`]), f + \" is DP1 bytes\");\n  assert.deepEqual(names([\"diff\", \"--name-only\", DP2_PARENT, \"HEAD\", \"--\", \"src\", \"fincore\", \"scripts\", \"migrations\"]), []);\n  assert.deepEqual(names([\"diff\", \"--name-only\", DP2_PARENT, \"HEAD\", \"--\", \"lib\", \"api\", \"tools\"]).sort(), [RT, \"lib/emailDelivery.d.ts\", ED, TOOL].sort());\n  const ed = readFileSync(join(REPO, ED), \"utf8\"), dp1 = parentBlob(ED);\n",
+        "to": "    assert.equal(git([\"rev-parse\", `${SOURCE}:${f}`]), git([\"rev-parse\", `${DP2_PARENT}:${f}`]), f + \" is DP1 bytes\");\n  assert.deepEqual(names([\"diff\", \"--name-only\", DP2_PARENT, SOURCE, \"--\", \"src\", \"fincore\", \"scripts\", \"migrations\"]), []);\n  assert.deepEqual(names([\"diff\", \"--name-only\", DP2_PARENT, SOURCE, \"--\", \"lib\", \"api\", \"tools\"]).sort(), [RT, \"lib/emailDelivery.d.ts\", ED, TOOL].sort());\n  const ed = src(ED), dp1 = parentBlob(ED);\n"
+      },
+      {
+        "from": "  const rt = readFileSync(join(REPO, RT), \"utf8\"), rt1 = parentBlob(RT);\n",
+        "to": "  const rt = src(RT), rt1 = parentBlob(RT);\n"
+      },
+      {
+        "from": "  const tool = readFileSync(join(REPO, TOOL), \"utf8\"), tool1 = parentBlob(TOOL);\n",
+        "to": "  const tool = src(TOOL), tool1 = parentBlob(TOOL);\n"
+      },
+      {
+        "from": "  const DP2 = await import(pathToFileURL(join(REPO, ED)).href);\n",
+        "to": "  // on a successor the literal DP2 runtime is judged (written beside the copied library)\n  if (LAYERED) { mkdirSync(join(dir, \"dp2\", \"lib\"), { recursive: true }); cpSync(join(REPO, \"lib\"), join(dir, \"dp2\", \"lib\"), { recursive: true }); writeFileSync(join(dir, \"dp2\", \"lib\", \"emailDelivery.js\"), src(ED)); }\n  const DP2R = await import(pathToFileURL(LAYERED ? join(dir, \"dp2\", \"lib\", \"emailDelivery.js\") : join(REPO, ED)).href);\n"
+      },
+      {
+        "from": "  assert.deepEqual([await run(DP2, 1), await run(DP2, 2)], [1, 1], \"DP2: one hand-off per identity\");\n",
+        "to": "  assert.deepEqual([await run(DP2R, 1), await run(DP2R, 2)], [1, 1], \"DP2: one hand-off per identity\");\n"
+      }
+    ],
+    "test/support/m1-r1-remediation.mjs": [
+      {
+        "from": "import { isDP2Tree, DP2_PINS } from \"./dp2-daily-policy.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"./hr3-s2-daily-hold.mjs\";\n",
+        "to": "import { isDP2Tree, DP2_PINS } from \"./dp2-daily-policy.mjs\";\nimport { isDP3Tree, DP3_PINS } from \"./dp3-daily-policy.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"./hr3-s2-daily-hold.mjs\";\n"
+      },
+      {
+        "from": "  withHR1 = withI7, withHR2 = withHR1, withHR3 = withHR2, withHR3S1 = withHR3, withHR3S2 = withHR3S1, withHR3S3 = withHR3S2, withHR3OT1 = withHR3S3, withHR3OT2 = withHR3OT1, withHR3OT3 = withHR3OT2, withHR3OT4 = withHR3OT3, withDP1 = withHR3OT4, withDP2 = withDP1 } = {}) {\n",
+        "to": "  withHR1 = withI7, withHR2 = withHR1, withHR3 = withHR2, withHR3S1 = withHR3, withHR3S2 = withHR3S1, withHR3S3 = withHR3S2, withHR3OT1 = withHR3S3, withHR3OT2 = withHR3OT1, withHR3OT3 = withHR3OT2, withHR3OT4 = withHR3OT3, withDP1 = withHR3OT4, withDP2 = withDP1, withDP3 = withDP2 } = {}) {\n"
+      },
+      {
+        "from": "    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && withHR3OT3 && withHR3OT4 && withDP1 && withDP2 && isDP2Tree(repo) ? DP2_PINS : {}) } : {};   // each successor overlays only its own protected files\n",
+        "to": "    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && withHR3OT3 && withHR3OT4 && withDP1 && withDP2 && isDP2Tree(repo) ? DP2_PINS : {}),\n    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && withHR3OT3 && withHR3OT4 && withDP1 && withDP2 && withDP3 && isDP3Tree(repo) ? DP3_PINS : {}) } : {};   // each successor overlays only its own protected files\n"
+      }
+    ],
+    "tools/daily-delivery/hold.mjs": [
+      {
+        "from": "import { DELIVERY_HOLD_PATH, HELD_DATES_ROOT, MANUAL_ATTEMPT_ROOT, RECEIPT_ROOT, DAILY_SNAPSHOT_KIND, CLAIM_LEASE_MS, ADMISSION_ROOT, classifyHoldRecord,\n",
+        "to": "import { DELIVERY_HOLD_PATH, HELD_DATES_ROOT, MANUAL_ATTEMPT_ROOT, RECEIPT_ROOT, DAILY_SNAPSHOT_KIND, CLAIM_LEASE_MS, ADMISSION_ROOT, admissionRecordDefect, classifyHoldRecord,\n"
+      },
+      {
+        "from": "  const admissions = { live: [], inFlightExpired: [], unknown: [], unreadable: [] };\n",
+        "to": "  // DP3 (DP2-R03): the runtime's own admission validation (admissionRecordDefect) decides readability here too — an admission\n  // the runtime would refuse as unreadable is never left out of the report; it is listed (with the defect, for investigation)\n  // and keeps C2 not_met. Read-only: nothing is repaired, cleared or settled.\n  const admissions = { live: [], inFlightExpired: [], unknown: [], unreadable: [], unreadableDetail: [] };\n"
+      },
+      {
+        "from": "    if (!isPlain(x) || x.v !== \"MARJIN_DELIVERY_ADMISSION/1\" || x.kind !== DAILY_SNAPSHOT_KIND || x.tenantId !== tenantId || x.bizId !== bizId ||\n        x.businessDate !== businessDate || ![\"scheduled\", \"manual\"].includes(x.route) || typeof x.ref !== \"string\" ||\n        ![\"in_flight\", \"accepted\", \"failed\", \"unknown\"].includes(x.state) || (x.state === \"in_flight\" && !Number.isFinite(x.leaseUntil))) { admissions.unreadable.push(id); return; }\n",
+        "to": "    const defect = admissionRecordDefect(x, { kind: DAILY_SNAPSHOT_KIND, tenantId, bizId, businessDate });\n    if (defect !== null) { admissions.unreadable.push(id); admissions.unreadableDetail.push({ id, defect }); return; }\n"
+      }
+    ]
+  },
+  "pins": {
+    "lib/emailDelivery.d.ts": "9c366831a240c19269464f9a1fbbb393d4f008ae",
+    "lib/emailDelivery.js": "077b874cbf89d4f89c3e3c7ca68403a0a4695847",
+    "test/delivery/dp1-manual-delivery-policy.test.mjs": "e73fce7ebe891b33627aad7c126692a8725991a9",
+    "test/delivery/dp2-shared-admission.test.mjs": "8b70cbb7855da583f24c9f877a0dd63c0a85f3ae",
+    "test/delivery/dp3-evidence-validation.test.mjs": "7844478376776dcb4087c21736b08fe1c839d186",
+    "test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs": "51359866288a8457066b708a1dd53965c85aaa10",
+    "test/emulator/dp3-evidence-emulator.mjs": "9b3ff3c7473f3316badc67f6a5f544fda4f62898",
+    "test/finance/b2-guard-mutations.test.mjs": "7a5f5881101cee5a7183021617319dbe1c793d49",
+    "test/finance/dp2-daily-policy-guard.test.mjs": "c9dc08698cb8671cd22dfb90a152f6b6bd060e1c",
+    "test/finance/dp3-daily-policy-guard.test.mjs": "3fa03edac7e5d589cbebac09488dd012d1d402da",
+    "test/support/dp3-daily-policy.mjs": "be160a199953ab41470a06e1b9e522c5617d4c2c",
+    "test/support/m1-r1-remediation.mjs": "5285c9ee9361072a3032e503efdb057f775a8503",
+    "tools/daily-delivery/hold.mjs": "cbdaef40636822c6a804374c74c887279a8e909c"
+  }
+}

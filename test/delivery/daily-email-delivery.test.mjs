@@ -17,7 +17,8 @@
 //   DE-12  tenant / business isolation of recipients and receipts (same business id in two tenants)
 //   DE-13  business-date boundary (Asia/Jerusalem): one message per business date; the scheduled 04:05 UTC run
 //   DE-14  route authentication unchanged: no side effect without authorization
-//   DE-15  manual owner send: classified outcome, not de-duplicated against the schedule; the response names no recipient (R1)
+//   DE-15  manual owner send: classified outcome; the response names no recipient (R1); DP1 (owner decision P4, 2026-10-17): no
+//          manual repeat of a Daily the schedule already delivered for the same tenant / business / business date
 //   DE-16  no address, credential or provider response text in responses, logs or receipts
 //   DE-17  partial failure: one business refused, the others delivered and recorded
 import { test } from "node:test";
@@ -243,21 +244,28 @@ test("DE-14 authorization is unchanged: no claim, no receipt, no provider call w
   assert.equal(smtp.calls.length, 0); assert.equal(globalThis.__DB.read("email_delivery"), null);
 });
 
-test("DE-15 the manual owner send: classified outcome, no false success, not de-duplicated against the schedule", async () => {
+test("DE-15 the manual owner send: classified outcome, no false success; no manual repeat of a scheduled delivery (DP1 / P4)", async () => {
   seedWorld(); let smtp = installSmtp([SMTP.accept()]);
   await cron();
-  const m1 = await at(AT, () => runManual(route)), m2 = await at(AT, () => runManual(route));
+  // DP1 (owner decision P4, 2026-10-17; T-DP1-TEST-EXPECTATIONS): the schedule delivered this exact (tenant, business, business
+  // date) Daily, so both explicit owner requests are refused before the provider; the receipt is untouched (read, never changed)
+  const r1 = await at(AT, () => runManual(route)), r2 = await at(AT, () => runManual(route));
+  assert.deepEqual([r1.statusCode, r1.body.code, r2.statusCode, r2.body.code], [409, "manual_repeat_not_permitted", 409, "manual_repeat_not_permitted"]);
+  assert.equal(smtp.calls.length, 3, "3 scheduled; the manual repeats reach no provider");
+  assert.equal(receipt(T, B).attempt, 1, "the schedule receipt is untouched by manual sends");
+  // a first-time manual send (no delivery of this identity): the classified outcome and R1's response shape
+  seedWorld(); smtp = installSmtp([SMTP.accept()]);
+  const m1 = await at(AT, () => runManual(route));
   assert.equal(m1.statusCode, 200); assert.equal(m1.body.status, "success");
   // R1 (D2): the response names only the selection policy — no address, no hash
   assert.deepEqual(m1.body.delivery, { outcome: "accepted", recipient: "owner" }); assert.equal("emailSentTo" in m1.body, false);
   assert.ok(!/@|rcpt:|[0-9a-f]{12}/.test(JSON.stringify(m1.body.delivery)), JSON.stringify(m1.body));
-  assert.equal(m2.statusCode, 200); assert.equal(smtp.calls.length, 5, "3 scheduled + 2 explicit owner requests");
-  assert.match(smtp.calls[3].messageIdHeader, /^<manual\.[0-9a-f-]{36}@delivery\.marjin\.app>$/);
-  assert.equal(receipt(T, B).attempt, 1, "the schedule receipt is untouched by manual sends");
-  smtp = installSmtp([SMTP.rejectRecipient()]);
+  assert.match(smtp.calls[0].messageIdHeader, /^<manual\.[0-9a-f-]{36}@delivery\.marjin\.app>$/);
+  assert.equal(receipt(T, B), null, "a manual send writes no schedule receipt");
+  seedWorld(); smtp = installSmtp([SMTP.rejectRecipient()]);
   const f = await at(AT, () => runManual(route));
   assert.deepEqual([f.statusCode, f.body.error, f.body.code], [502, "email_not_sent", "provider_rejected_550"]);
-  smtp = installSmtp([SMTP.closedAfterData()]);
+  seedWorld(); smtp = installSmtp([SMTP.closedAfterData()]);
   const u = await at(AT, () => runManual(route));
   assert.deepEqual([u.statusCode, u.body.error, u.body.code], [504, "email_outcome_unknown", "provider_connection_lost"]);
 });

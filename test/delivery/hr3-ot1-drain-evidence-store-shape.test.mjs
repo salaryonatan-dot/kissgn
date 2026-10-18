@@ -98,10 +98,13 @@ test("OT1-04 a PRESENT non-array history is still unreadable; an absent history 
 test("OT1-05 the report shape: liveClaims is a list beside the P7 population; the complete report has none; no quiescence wording", () => {
   const complete = Tool.drainEvidence(full({ receiptsRaw: ot02Receipts, manualRaw: ot02Manual }));
   assert.deepEqual(complete.liveClaims, []);
-  assert.deepEqual(Object.keys(complete).sort(), ["criteria", "hold", "limits", "liveClaims", "notHandedOver", "p7Population", "timeBound", "unreadable", "verdict"]);
+  // DP2 (T-DP2-TEST-EXPECTATIONS): the report gains the shared hand-off admissions beside the existing keys
+  assert.deepEqual(Object.keys(complete).sort(), ["admissions", "criteria", "hold", "limits", "liveClaims", "notHandedOver", "p7Population", "timeBound", "unreadable", "verdict"]);
+  // DP3 (T-DP3-TEST-EXPECTATIONS): an unreadable admission is also listed with its defect, for investigation
+  assert.deepEqual(complete.admissions, { live: [], inFlightExpired: [], unknown: [], unreadable: [], unreadableDetail: [] });
   const liveOne = Tool.drainEvidence(full({ receiptsRaw: { t1: { b1: { "2026-09-08": rc("sending", "2026-09-08", { leaseUntil: NOW + 1 }) } } } }));
   assert.deepEqual([liveOne.verdict, liveOne.liveClaims.length], ["ABORT_D", 1]);
   for (const x of [complete, liveOne]) assert.doesNotMatch(JSON.stringify(x), /QUIESCENT|DRAINED|nothing sent/i);
   // everything except the new list is what S3 reported for a readable tree
-  assert.deepEqual(Object.keys(strip(complete)).sort(), ["criteria", "hold", "limits", "notHandedOver", "p7Population", "timeBound", "unreadable", "verdict"]);
+  assert.deepEqual(Object.keys(strip(complete)).sort(), ["admissions", "criteria", "hold", "limits", "notHandedOver", "p7Population", "timeBound", "unreadable", "verdict"]);
 });

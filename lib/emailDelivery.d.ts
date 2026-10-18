@@ -20,6 +20,8 @@ export interface DeliveryResult {
   messageId?: string;
   retryable?: boolean;
   phase?: "claimed" | "sending";
+  /** DP2: present only when the shared admission could not be settled (the identity then stays in_flight: blocked). */
+  admission?: "write_failed";
 }
 
 export interface TransportClassification {
@@ -144,7 +146,28 @@ export function deliverManualDaily(args: {
   clock?: () => number;
   newClaimId?: () => string;
   deploymentId?: string;
-}): Promise<{ outcome: "accepted" | "failed" | "unknown" | "held"; code: string | null; attemptId: string | null; record: "recorded" | "write_failed" | "not_written"; messageId?: string }>;
+}): Promise<{ outcome: "accepted" | "failed" | "unknown" | "held" | "refused"; code: string | null; attemptId: string | null; record: "recorded" | "write_failed" | "not_written"; messageId?: string; admission?: "write_failed" }>;
+/** DP2: the shared hand-off admission of one delivery identity (P4 across the scheduled and manual routes). */
+export const ADMISSION_ROOT: "email_delivery_admission";
+export const ADMISSION_VERSION: "MARJIN_DELIVERY_ADMISSION/1";
+/** DP3 (DP2-N01): the other stored evidence's verdict a route hands to the admission (null: nothing blocks). The scheduled
+ *  route maps manual_repeat_not_permitted to delivery_already_accepted; the manual route passes its ManualPolicyCode. */
+export type AdmissionLegacyCode = ManualPolicyCode | "delivery_already_accepted";
+export type AdmissionCode = "delivery_already_accepted" | "delivery_outcome_unresolved" | "delivery_in_progress" | "delivery_admission_unreadable" | "delivery_admission_unavailable" | AdmissionLegacyCode;
+export function admissionPath(kind: string, tenantId: string, bizId: string, businessDate: string): string | null;
+/** DP3: why a present admission value is not a complete record of its state (null when it is). */
+export type AdmissionDefect = "not_a_record" | "version" | "identity" | "holder" | "attempt" | "times" | "message_id" | "code" | "lease" |
+  "settled_lease" | "settled_at" | "failed_code" | "state" | "history" | "history_entry";
+export function admissionRecordDefect(x: unknown, ids: { kind: string; tenantId: string; bizId: string; businessDate: string }): AdmissionDefect | null;
+export function decideAdmission(current: unknown, args: { route: "scheduled" | "manual"; ref: string; attempt?: number; nowMs: number; leaseMs?: number;
+  ids: { kind: string; tenantId: string; bizId: string; businessDate: string }; messageIdHeader?: string | null; legacy?: AdmissionLegacyCode | null }): { next: unknown; result: { admitted: true } | { admitted: false; code: AdmissionCode } };
+export function admitHandoff(db: unknown, args: { kind?: string; tenantId: string; bizId: string; businessDate: string; route: "scheduled" | "manual"; ref: string;
+  attempt?: number; nowMs: number; leaseMs?: number; messageIdHeader?: string | null; legacy?: AdmissionLegacyCode | null }): Promise<{ ok: true } | { ok: false; code: AdmissionCode }>;
+export function settleAdmission(db: unknown, args: { kind?: string; tenantId: string; bizId: string; businessDate: string; ref: string;
+  state: "accepted" | "failed" | "unknown"; code?: string | null; nowMs: number }): Promise<"recorded" | "write_failed">;
+/** DP1 (P4): the stored evidence of one exact delivery identity, judged for a manual send. null = no delivery known. */
+export type ManualPolicyCode = "manual_repeat_not_permitted" | "delivery_outcome_unresolved" | "delivery_in_progress" | "delivery_history_unreadable";
+export function decideManualRepeat(args: { receipt?: unknown; records?: unknown; tenantId: string; bizId: string; businessDate: string | null; nowMs: number }): ManualPolicyCode | null;
 
 export function deliveryInventoryView(raw: unknown): { ok: boolean; code?: string; generation?: string; digest?: string; eligible?: boolean; complete?: boolean; pending?: string[]; unresolvedLegacy?: boolean };
 export function confirmDeliveryInventory(db: unknown, args: { generation: string; digest: string; actor: string; reason: string; nowMs?: number; timeoutMs?: number }): Promise<{ ok: boolean; code: string; generation?: string; digest?: string }>;

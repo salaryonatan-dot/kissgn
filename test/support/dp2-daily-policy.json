@@ -1,0 +1,292 @@
+{
+  "decision": "DP2 proposed local successor of DP1 (unaccepted): owner decision P4 extended 2026-10-17 — one provider hand-off per exact identity across the scheduled and manual routes (shared admission); P7 not implemented; independent Codex review of OT4 → DP2 pending",
+  "parent": "b2b7dd08c2de55b7103e5e0bdbfe10446368e2a6",
+  "scope": [
+    "api/daily-snapshot/run.ts",
+    "lib/emailDelivery.d.ts",
+    "lib/emailDelivery.js",
+    "test/delivery/dp1-manual-delivery-policy.test.mjs",
+    "test/delivery/dp2-shared-admission.test.mjs",
+    "test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs",
+    "test/emulator/dp1-manual-policy-emulator.mjs",
+    "test/emulator/dp2-admission-worker.mjs",
+    "test/emulator/dp2-shared-admission-emulator.mjs",
+    "test/finance/b2-guard-mutations.test.mjs",
+    "test/finance/b2-snapshot.test.mjs",
+    "test/finance/dp1-daily-policy-guard.test.mjs",
+    "test/finance/dp2-daily-policy-guard.test.mjs",
+    "test/support/dp2-daily-policy.mjs",
+    "test/support/m1-r1-remediation.mjs",
+    "tools/daily-delivery/hold.mjs"
+  ],
+  "edits": {
+    "api/daily-snapshot/run.ts": [
+      {
+        "from": "// invocation observes its outcome (accepted ⇒ already_accepted; an invocation that died while sending ⇒ unknown after the lease).\ntype Settlement = \"delivered\" | \"no_send\" | \"pending\" | \"unknown\" | \"unrecorded\" | \"held\" | \"failed\";\n",
+        "to": "// invocation observes its outcome (accepted ⇒ already_accepted; an invocation that died while sending ⇒ unknown after the lease).\n// DP2 (P4 across routes): the shared admission's refusals of a scheduled attempt (nothing handed over, no attempt consumed):\n//   delivery_already_accepted    the Daily of this identity was accepted through the other route  ⇒ delivered (recorded there)\n//   delivery_in_progress         another attempt of this identity holds the admission               ⇒ pending\n//   delivery_outcome_unresolved  an attempt of this identity may have been accepted (P7)            ⇒ unknown, never re-sent\n//   anything else (unreadable / unavailable evidence)                                               ⇒ failed (fail closed)\ntype Settlement = \"delivered\" | \"no_send\" | \"pending\" | \"unknown\" | \"unrecorded\" | \"held\" | \"failed\";\n"
+      },
+      {
+        "from": "  if (outcome === \"skipped\" && code === \"already_accepted\") return \"delivered\";\n  if (outcome === \"skipped\" && code === \"in_progress\") return \"pending\";\n  if (outcome === \"unknown\" || (outcome === \"skipped\" && code === \"unknown_requires_reconciliation\")) return \"unknown\";\n",
+        "to": "  if (outcome === \"skipped\" && (code === \"already_accepted\" || code === \"delivery_already_accepted\")) return \"delivered\";\n  if (outcome === \"skipped\" && (code === \"in_progress\" || code === \"delivery_in_progress\")) return \"pending\";\n  if (outcome === \"unknown\" || (outcome === \"skipped\" && (code === \"unknown_requires_reconciliation\" || code === \"delivery_outcome_unresolved\"))) return \"unknown\";\n"
+      },
+      {
+        "from": "  delivery_history_unavailable: { status: 503, error: \"Delivery history temporarily unavailable; email not sent\" },\n};\n",
+        "to": "  delivery_history_unavailable: { status: 503, error: \"Delivery history temporarily unavailable; email not sent\" },\n  // DP2: the shared hand-off admission (P4 across the scheduled and manual routes)\n  delivery_admission_unreadable: { status: 422, error: \"The delivery admission for this business date is unreadable; email not sent\" },\n  delivery_admission_unavailable: { status: 503, error: \"The delivery admission is temporarily unavailable; email not sent\" },\n};\n"
+      },
+      {
+        "from": "        attempt?: number; receipt?: string; phase?: string; recipientSelection?: RecipientSelection; notice?: \"recorded\" | \"not_recorded\" };\n",
+        "to": "        attempt?: number; receipt?: string; admission?: string; phase?: string; recipientSelection?: RecipientSelection; notice?: \"recorded\" | \"not_recorded\" };\n"
+      },
+      {
+        "from": "        results.push({ ...base, outcome: r.outcome, code, settlement, attempt: attemptNo, receipt: r.receipt,\n",
+        "to": "        results.push({ ...base, outcome: r.outcome, code, settlement, attempt: attemptNo, receipt: r.receipt, ...(r.admission === \"write_failed\" ? { admission: r.admission } : {}),\n"
+      },
+      {
+        "from": "      const receiptWriteFailures = count((x) => x.receipt === \"write_failed\" || x.receipt === \"unavailable\");\n",
+        "to": "      const receiptWriteFailures = count((x) => x.receipt === \"write_failed\" || x.receipt === \"unavailable\" || x.admission === \"write_failed\");\n"
+      },
+      {
+        "from": "      if (r.record === \"write_failed\") console.error(`[daily-snapshot] manual attempt record not finalized (${boundedCode(r.code) ?? \"accepted\"}) for ${tenantId}:${bizId}`);\n      const policyCode = boundedCode(r.code) ?? \"\";\n",
+        "to": "      if (r.record === \"write_failed\") console.error(`[daily-snapshot] manual attempt record not finalized (${boundedCode(r.code) ?? \"accepted\"}) for ${tenantId}:${bizId}`);\n      // DP2: an admission this send could not settle stays in_flight — the business date stays blocked on both routes (fail closed)\n      if (r.admission === \"write_failed\") console.error(`[daily-snapshot] delivery admission not settled (${boundedCode(r.code) ?? \"accepted\"}) for ${tenantId}:${bizId}`);\n      const policyCode = boundedCode(r.code) ?? \"\";\n"
+      }
+    ],
+    "lib/emailDelivery.d.ts": [
+      {
+        "from": "  phase?: \"claimed\" | \"sending\";\n}\n",
+        "to": "  phase?: \"claimed\" | \"sending\";\n  /** DP2: present only when the shared admission could not be settled (the identity then stays in_flight: blocked). */\n  admission?: \"write_failed\";\n}\n"
+      },
+      {
+        "from": "}): Promise<{ outcome: \"accepted\" | \"failed\" | \"unknown\" | \"held\" | \"refused\"; code: string | null; attemptId: string | null; record: \"recorded\" | \"write_failed\" | \"not_written\"; messageId?: string }>;\n",
+        "to": "}): Promise<{ outcome: \"accepted\" | \"failed\" | \"unknown\" | \"held\" | \"refused\"; code: string | null; attemptId: string | null; record: \"recorded\" | \"write_failed\" | \"not_written\"; messageId?: string; admission?: \"write_failed\" }>;\n/** DP2: the shared hand-off admission of one delivery identity (P4 across the scheduled and manual routes). */\nexport const ADMISSION_ROOT: \"email_delivery_admission\";\nexport const ADMISSION_VERSION: \"MARJIN_DELIVERY_ADMISSION/1\";\nexport type AdmissionCode = \"delivery_already_accepted\" | \"delivery_outcome_unresolved\" | \"delivery_in_progress\" | \"delivery_admission_unreadable\" | \"delivery_admission_unavailable\";\nexport function admissionPath(kind: string, tenantId: string, bizId: string, businessDate: string): string | null;\nexport function decideAdmission(current: unknown, args: { route: \"scheduled\" | \"manual\"; ref: string; attempt?: number; nowMs: number; leaseMs?: number;\n  ids: { kind: string; tenantId: string; bizId: string; businessDate: string }; messageIdHeader?: string | null }): { next: unknown; result: { admitted: true } | { admitted: false; code: AdmissionCode } };\nexport function admitHandoff(db: unknown, args: { kind?: string; tenantId: string; bizId: string; businessDate: string; route: \"scheduled\" | \"manual\"; ref: string;\n  attempt?: number; nowMs: number; leaseMs?: number; messageIdHeader?: string | null }): Promise<{ ok: true } | { ok: false; code: AdmissionCode }>;\nexport function settleAdmission(db: unknown, args: { kind?: string; tenantId: string; bizId: string; businessDate: string; ref: string;\n  state: \"accepted\" | \"failed\" | \"unknown\"; code?: string | null; nowMs: number }): Promise<\"recorded\" | \"write_failed\">;\n"
+      }
+    ],
+    "lib/emailDelivery.js": [
+      {
+        "from": " *       exists here. Unknown, `sending` and `handing_off` evidence is never changed by this module, and it keeps blocking P4.\n */\n",
+        "to": " *       exists here. Unknown, `sending` and `handing_off` evidence is never changed by this module, and it keeps blocking P4.\n *\n * DP2 — P4 ACROSS ROUTES: THE SHARED HAND-OFF ADMISSION (owner decision of 2026-10-17 extending P4; see admitHandoff)\n *   For one exact identity (kind, tenant, business, business date) at most ONE attempt — scheduled or manual — may be handed to\n *   the provider unless the previous one is a DEFINITIVE non-acceptance. Both routes take the same server-only record\n *   email_delivery_admission/{kind}/{tenant}/{business}/{date} by ONE transaction as the LAST step before their own hand-off\n *   transition (scheduled claimed → sending, manual record handing_off), after every gate. It is settled from the same outcome\n *   their own record is settled from. accepted / unknown / in_flight block every later attempt of both routes; an in_flight\n *   record whose holder disappeared is never released (possibly handed over: P7); failed (provider refusal, or never handed\n *   over) re-admits under each route's existing retry contract. It is application-side duplicate-attempt prevention, NOT\n *   exactly-once provider delivery. It is not a receipt: the scheduled receipt and the manual record keep their contracts.\n */\n"
+      },
+      {
+        "from": "      handedToProvider: false, claimLost: false, multipleHandoffs: false, info: null, error: null, held: null, heldReceipt: null,\n      async beforeTransport() {\n",
+        "to": "      handedToProvider: false, claimLost: false, multipleHandoffs: false, info: null, error: null, held: null, heldReceipt: null,\n      admissionRefused: null, admitted: false, admissionSettled: null,\n      async beforeTransport() {\n"
+      },
+      {
+        "from": "        }\n        let r;\n",
+        "to": "        }\n        // DP2 (P4 across routes): the manual records of this identity are judged (read-only, fail closed) as evidence written\n        // before the shared admission existed; the admission transaction applies that verdict only while no admission exists.\n        // Taking the admission is the LAST decision before claimed → sending.\n        // A refusal expires the claim at the same attempt number (like G3) and nothing is handed over.\n        const refuseAdmission = async (code) => {\n          ctx.admissionRefused = code;\n          let x;\n          try {\n            x = await transact(db, path, (cur) => (ownedIn(\"claimed\")(cur, claimId)\n              ? { next: { ...cur, leaseUntil: clock(), updatedAt: clock(), history: [...historyOf(cur), { attempt: cur.attempt, state: \"admission_refused\", code, at: clock() }] }, result: true }\n              : { next: undefined, result: false }));\n          } catch { x = null; }\n          ctx.heldReceipt = x && x.committed && x.result === true ? \"recorded\" : \"write_failed\";\n          const e = new Error(\"daily delivery admission refused\"); e.code = \"EDELIVERYADMISSION\"; throw e;\n        };\n        let legacy = null;\n        if (kind === DAILY_SNAPSHOT_KIND) {\n          const prior = await readBounded(db, `${MANUAL_ATTEMPT_ROOT}/${tenantId}/${bizId}`, HOLD_READ_TIMEOUT_MS);\n          if (!prior.ok) await refuseAdmission(\"delivery_history_unavailable\");\n          const code = decideManualRepeat({ records: prior.value ?? null, tenantId, bizId, businessDate, nowMs: clock() });\n          legacy = code === \"manual_repeat_not_permitted\" ? \"delivery_already_accepted\" : code;\n        }\n        const adm = await admitHandoff(db, { kind, tenantId, bizId, businessDate, route: \"scheduled\", ref: claimId, attempt, nowMs: clock(), leaseMs, messageIdHeader: ctx.messageId, legacy });\n        if (!adm.ok) await refuseAdmission(adm.code);\n        ctx.admitted = true;\n        let r;\n"
+      },
+      {
+        "from": "        if (!r || !r.committed || r.result !== true) { ctx.claimLost = true; throw new Error(\"delivery claim lost before transport\"); }\n",
+        "to": "        if (!r || !r.committed || r.result !== true) {\n          ctx.claimLost = true;   // never handed over: the admission is settled as a failure of this attempt (re-admittable)\n          ctx.admissionSettled = await settleAdmission(db, { kind, tenantId, bizId, businessDate, ref: claimId, state: \"failed\", code: \"claim_lost\", nowMs: clock() });\n          throw new Error(\"delivery claim lost before transport\");\n        }\n"
+      },
+      {
+        "from": "    try { await attemptStore.run(ctx, send); } catch (err) { threw = true; thrown = err; }\n    const outcome = attemptOutcome(ctx, threw, thrown, recipient);\n",
+        "to": "    try { await attemptStore.run(ctx, send); } catch (err) { threw = true; thrown = err; }\n    // DP2: an attempt the shared admission refused handed nothing over and consumed nothing (its claim is expired, like G3)\n    if (ctx.admissionRefused !== null && !ctx.handedToProvider) return { outcome: \"skipped\", code: ctx.admissionRefused, attempt, receipt: ctx.heldReceipt || \"write_failed\" };\n    const outcome = attemptOutcome(ctx, threw, thrown, recipient);\n"
+      },
+      {
+        "from": "    last = { outcome: outcome.outcome, code: outcome.code ?? null, attempt, receipt,\n",
+        "to": "    // DP2: the shared admission is settled from the same outcome (claim_lost already settled it before the throw)\n    // (reported only when it could not be written: the identity then stays in_flight — blocked, never released)\n    const admission = ctx.admitted && ctx.handedToProvider\n      ? await settleAdmission(db, { kind, tenantId, bizId, businessDate, ref: claimId, state: terminal.state, code: terminal.code ?? null, nowMs: now })\n      : ctx.admitted ? ctx.admissionSettled ?? \"write_failed\" : \"not_taken\";\n    last = { outcome: outcome.outcome, code: outcome.code ?? null, attempt, receipt, ...(admission === \"write_failed\" ? { admission } : {}),\n"
+      },
+      {
+        "from": "    const retryNow = outcome.outcome === \"failed\" && outcome.inRunRetry === true && terminal.retryable === true && receipt === \"recorded\" && round < inRunAttempts;\n",
+        "to": "    const retryNow = outcome.outcome === \"failed\" && outcome.inRunRetry === true && terminal.retryable === true && receipt === \"recorded\" && admission !== \"write_failed\" && round < inRunAttempts;\n"
+      },
+      {
+        "from": "  return c.outcome === \"accepted\" ? { outcome: \"accepted\", code: null, messageId: ctx.messageId } : { outcome: c.outcome, code: c.code };\n}\n",
+        "to": "  return c.outcome === \"accepted\" ? { outcome: \"accepted\", code: null, messageId: ctx.messageId } : { outcome: c.outcome, code: c.code };\n}\n\n// ── DP2: the shared hand-off admission of one delivery identity (P4 across the scheduled and manual routes) ─────────────────\n// Record (server-only; the Rules' top-level `$other` denies every client):\n//   email_delivery_admission/{kind}/{tenantId}/{bizId}/{businessDate} = { v: \"MARJIN_DELIVERY_ADMISSION/1\", kind, tenantId, bizId,\n//     businessDate, state: \"in_flight\" | \"accepted\" | \"failed\" | \"unknown\", route: \"scheduled\" | \"manual\", ref (the receipt\n//     claimId / the manual attemptId), attempt, messageIdHeader, since, leaseUntil (in_flight only), code, settledAt, updatedAt,\n//     history: [{ route, ref, attempt, state, code, at }] (the earlier, definitively failed holders; bounded) }\n// Lifecycle: (absent | failed) ──admit (one transaction)──▶ in_flight ──settle by its holder (one transaction)──▶ accepted |\n// failed | unknown. Nothing else writes it; nothing deletes, clears or releases it (P7 has no mechanism). An in_flight record\n// blocks while its lease runs (delivery_in_progress) and after it (delivery_outcome_unresolved: the holder may have handed\n// the message over before it stopped). The identity path is the receipt's own path rule (no trimming, aliasing or concatenation).\nexport const ADMISSION_ROOT = \"email_delivery_admission\";\nexport const ADMISSION_VERSION = \"MARJIN_DELIVERY_ADMISSION/1\";\nconst ADMISSION_ROUTES = new Set([\"scheduled\", \"manual\"]);\n/** The admission node path of an identity, or null when it is not safely addressable (receiptPath's identity rules). */\nexport function admissionPath(kind, tenantId, bizId, businessDate) {\n  const p = receiptPath(kind, tenantId, bizId, businessDate);\n  return p === null ? null : ADMISSION_ROOT + p.slice(RECEIPT_ROOT.length);\n}\n/**\n * DP2: the admission decision on the stored value (pure). Returns { next, result }: result { admitted: true } or\n * { admitted: false, code } with code delivery_already_accepted | delivery_outcome_unresolved | delivery_in_progress |\n * delivery_admission_unreadable (or the legacy code). A definitive failure (state failed) re-admits and keeps the earlier\n * holder in the history.\n * `legacy`: the caller's verdict on the evidence written BEFORE the admission existed (the receipt / manual records, read\n * just before; null when it blocks nothing). It decides only while NO admission exists for the identity: every attempt\n * since DP2 takes the admission before its own record can show a hand-off, so once an admission exists it is the authority.\n */\nexport function decideAdmission(current, { route, ref, attempt = 1, nowMs, leaseMs = CLAIM_LEASE_MS, ids, messageIdHeader = null, legacy = null }) {\n  const refuse = (code) => ({ next: undefined, result: { admitted: false, code } });\n  if (!ADMISSION_ROUTES.has(route) || typeof ref !== \"string\" || !ref || !Number.isSafeInteger(nowMs) || !isPlain(ids)) return refuse(\"delivery_admission_unreadable\");\n  const admit = (history) => ({ next: { v: ADMISSION_VERSION, kind: ids.kind, tenantId: ids.tenantId, bizId: ids.bizId, businessDate: ids.businessDate,\n    state: \"in_flight\", route, ref, attempt, ...(typeof messageIdHeader === \"string\" ? { messageIdHeader } : {}), since: nowMs, leaseUntil: nowMs + leaseMs,\n    updatedAt: nowMs, ...(history.length ? { history } : {}) }, result: { admitted: true } });\n  if (current === null || current === undefined) return legacy === null ? admit([]) : refuse(legacy);\n  if (!isPlain(current) || current.v !== ADMISSION_VERSION || current.kind !== ids.kind || current.tenantId !== ids.tenantId ||\n      current.bizId !== ids.bizId || current.businessDate !== ids.businessDate || !ADMISSION_ROUTES.has(current.route) ||\n      typeof current.ref !== \"string\" || (current.history !== undefined && !Array.isArray(current.history))) return refuse(\"delivery_admission_unreadable\");\n  if (current.state === \"accepted\") return refuse(\"delivery_already_accepted\");\n  if (current.state === \"unknown\") return refuse(\"delivery_outcome_unresolved\");\n  if (current.state === \"in_flight\") {\n    if (!Number.isFinite(current.leaseUntil)) return refuse(\"delivery_admission_unreadable\");\n    return refuse(current.leaseUntil > nowMs ? \"delivery_in_progress\" : \"delivery_outcome_unresolved\");\n  }\n  if (current.state === \"failed\") return admit([...(current.history ?? []).slice(-(HISTORY_KEEP - 1)),\n    { route: current.route, ref: current.ref, attempt: current.attempt ?? null, state: \"failed\", code: current.code ?? null, at: current.settledAt ?? null }]);\n  return refuse(\"delivery_admission_unreadable\");\n}\n/** DP2: take the admission (one transaction). Never throws: { ok: true } | { ok: false, code } (unavailable when not committed). */\nexport async function admitHandoff(db, { kind = DAILY_SNAPSHOT_KIND, tenantId, bizId, businessDate, route, ref, attempt = 1, nowMs, leaseMs = CLAIM_LEASE_MS, messageIdHeader = null, legacy = null }) {\n  const path = admissionPath(kind, tenantId, bizId, businessDate);\n  if (path === null) return { ok: false, code: \"delivery_admission_unreadable\" };\n  const ids = { kind, tenantId, bizId, businessDate };\n  let r;\n  try { r = await transact(db, path, (cur) => decideAdmission(cur, { route, ref, attempt, nowMs, leaseMs, ids, messageIdHeader, legacy })); }\n  catch { return { ok: false, code: \"delivery_admission_unavailable\" }; }\n  if (!r || !r.committed || !r.result) return { ok: false, code: \"delivery_admission_unavailable\" };\n  return r.result.admitted === true ? { ok: true } : { ok: false, code: r.result.code };\n}\n/** DP2: settle the admission this attempt holds (one transaction; only `in_flight` held by `ref`). \"recorded\" | \"write_failed\". */\nexport async function settleAdmission(db, { kind = DAILY_SNAPSHOT_KIND, tenantId, bizId, businessDate, ref, state, code = null, nowMs }) {\n  const path = admissionPath(kind, tenantId, bizId, businessDate);\n  if (path === null || ![\"accepted\", \"failed\", \"unknown\"].includes(state)) return \"write_failed\";\n  try {\n    const r = await transact(db, path, (cur) => {\n      if (!isPlain(cur) || cur.v !== ADMISSION_VERSION || cur.state !== \"in_flight\" || cur.ref !== ref) return { next: undefined, result: false };\n      const { leaseUntil, ...rest } = cur;\n      return { next: { ...rest, state, ...(code === null ? {} : { code: boundedCode(code) }), settledAt: nowMs, updatedAt: nowMs }, result: true };\n    });\n    return r && r.committed && r.result === true ? \"recorded\" : \"write_failed\";\n  } catch { return \"write_failed\"; }\n}\n"
+      },
+      {
+        "from": "    handedToProvider: false, claimLost: false, multipleHandoffs: false, info: null, error: null, held: null, recordFailed: false, refused: null,\n    async beforeTransport() {\n",
+        "to": "    handedToProvider: false, claimLost: false, multipleHandoffs: false, info: null, error: null, held: null, recordFailed: false, refused: null,\n    admitted: false, admissionSettled: null,\n    async beforeTransport() {\n"
+      },
+      {
+        "from": "      const receipt = receiptRead.value === undefined ? null : receiptRead.value;\n      let r;\n",
+        "to": "      const receipt = receiptRead.value === undefined ? null : receiptRead.value;\n      // DP2 (P4 across routes): the evidence written before the shared admission existed is judged (read-only) and handed to\n      // the admission transaction, which applies it only while no admission exists; a refused send leaves no admission trace.\n      // The shared admission is taken before the record enters handing_off.\n      const ids = { tenantId, bizId, businessDate };\n      const recordsRead = await readBounded(db, `${MANUAL_ATTEMPT_ROOT}/${tenantId}/${bizId}`, HOLD_READ_TIMEOUT_MS);\n      if (!recordsRead.ok) refuse(\"delivery_history_unavailable\");\n      const legacy = decideManualRepeat({ receipt, records: recordsRead.value ?? null, ...ids, nowMs: clock() });\n      const adm = await admitHandoff(db, { ...ids, route: \"manual\", ref: attemptId, attempt: 1, nowMs: clock(), messageIdHeader: ctx.messageId, legacy });\n      if (!adm.ok) refuse(adm.code === \"delivery_already_accepted\" ? \"manual_repeat_not_permitted\" : adm.code);\n      ctx.admitted = true;\n      const release = async (code) => { ctx.admissionSettled = await settleAdmission(db, { ...ids, ref: attemptId, state: \"failed\", code, nowMs: clock() }); };\n      let r;\n"
+      },
+      {
+        "from": "      if (r && r.committed && typeof r.result === \"string\") refuse(r.result);\n      if (!r || !r.committed || r.result !== true) { ctx.recordFailed = true; const e = new Error(\"manual attempt record unavailable\"); e.code = \"EATTEMPTRECORD\"; throw e; }\n",
+        "to": "      // never handed over: the admission this attempt took is settled as its failure (re-admittable), then the refusal stands\n      if (r && r.committed && typeof r.result === \"string\") { await release(r.result); refuse(r.result); }\n      if (!r || !r.committed || r.result !== true) { await release(\"manual_record_unavailable\"); ctx.recordFailed = true; const e = new Error(\"manual attempt record unavailable\"); e.code = \"EATTEMPTRECORD\"; throw e; }\n"
+      },
+      {
+        "from": "  if (ctx.refused !== null && !ctx.handedToProvider) return { outcome: \"refused\", code: ctx.refused, attemptId, record: \"not_written\" };\n",
+        "to": "  const unsettled = ctx.admitted && ctx.admissionSettled === \"write_failed\" ? { admission: \"write_failed\" } : {};\n  if (ctx.refused !== null && !ctx.handedToProvider) return { outcome: \"refused\", code: ctx.refused, attemptId, record: \"not_written\", ...unsettled };\n"
+      },
+      {
+        "from": "  if (!ctx.handedToProvider) return { outcome: c.outcome, code: c.code ?? null, attemptId, record: \"not_written\" };\n",
+        "to": "  if (!ctx.handedToProvider) return { outcome: c.outcome, code: c.code ?? null, attemptId, record: \"not_written\", ...unsettled };\n"
+      },
+      {
+        "from": "  } catch { record = \"write_failed\"; }\n  return c.outcome === \"accepted\"\n",
+        "to": "  } catch { record = \"write_failed\"; }\n  // DP2: the shared admission is settled from the same outcome (reported only when it could not be written)\n  const settled = await settleAdmission(db, { tenantId, bizId, businessDate, ref: attemptId, state: c.outcome, code: c.code ?? null, nowMs: clock() });\n  const adm = settled === \"write_failed\" ? { admission: \"write_failed\" } : {};\n  return c.outcome === \"accepted\"\n"
+      },
+      {
+        "from": "    ? { outcome: \"accepted\", code: null, attemptId, record, messageId: ctx.messageId }\n    : { outcome: c.outcome, code: c.code ?? null, attemptId, record };\n",
+        "to": "    ? { outcome: \"accepted\", code: null, attemptId, record, messageId: ctx.messageId, ...adm }\n    : { outcome: c.outcome, code: c.code ?? null, attemptId, record, ...adm };\n"
+      }
+    ],
+    "test/delivery/dp1-manual-delivery-policy.test.mjs": [
+      {
+        "from": "    assert.ok(all.filter((r) => r.statusCode === 409).every((r) => [\"manual_repeat_not_permitted\", \"delivery_outcome_unresolved\"].includes(r.body.code)));\n",
+        "to": "    // DP2 (T-DP2-TEST-EXPECTATIONS): the shared admission reports a holder that is still handing over as delivery_in_progress\n    assert.ok(all.filter((r) => r.statusCode === 409).every((r) => [\"manual_repeat_not_permitted\", \"delivery_outcome_unresolved\", \"delivery_in_progress\"].includes(r.body.code)));\n"
+      },
+      {
+        "from": "  assert.equal(rs.find((r) => r.outcome === \"refused\").code, \"delivery_outcome_unresolved\", \"the other one's hand-off is in progress\");\n",
+        "to": "  assert.equal(rs.find((r) => r.outcome === \"refused\").code, \"delivery_in_progress\", \"the other one's hand-off is in progress (DP2: the shared admission)\");\n"
+      }
+    ],
+    "test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs": [
+      {
+        "from": "  assert.deepEqual(Object.keys(complete).sort(), [\"criteria\", \"hold\", \"limits\", \"liveClaims\", \"notHandedOver\", \"p7Population\", \"timeBound\", \"unreadable\", \"verdict\"]);\n",
+        "to": "  // DP2 (T-DP2-TEST-EXPECTATIONS): the report gains the shared hand-off admissions beside the existing keys\n  assert.deepEqual(Object.keys(complete).sort(), [\"admissions\", \"criteria\", \"hold\", \"limits\", \"liveClaims\", \"notHandedOver\", \"p7Population\", \"timeBound\", \"unreadable\", \"verdict\"]);\n  assert.deepEqual(complete.admissions, { live: [], inFlightExpired: [], unknown: [], unreadable: [] });\n"
+      },
+      {
+        "from": "  assert.deepEqual(Object.keys(strip(complete)).sort(), [\"criteria\", \"hold\", \"limits\", \"notHandedOver\", \"p7Population\", \"timeBound\", \"unreadable\", \"verdict\"]);\n",
+        "to": "  assert.deepEqual(Object.keys(strip(complete)).sort(), [\"admissions\", \"criteria\", \"hold\", \"limits\", \"notHandedOver\", \"p7Population\", \"timeBound\", \"unreadable\", \"verdict\"]);\n"
+      }
+    ],
+    "test/emulator/dp1-manual-policy-emulator.mjs": [
+      {
+        "from": "    [\"delivery_outcome_unresolved\", \"manual_repeat_not_permitted\"].includes(x.code) && x.record === \"not_written\"), JSON.stringify(rs));\n",
+        "to": "    // DP2 (T-DP2-TEST-EXPECTATIONS): the shared admission reports a holder still handing over as delivery_in_progress\n    [\"delivery_outcome_unresolved\", \"manual_repeat_not_permitted\", \"delivery_in_progress\"].includes(x.code) && x.record === \"not_written\"), JSON.stringify(rs));\n"
+      }
+    ],
+    "test/finance/b2-guard-mutations.test.mjs": [
+      {
+        "from": "import { isDP1Tree, DP1_PINS } from \"../support/dp1-daily-policy.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"../support/hr3-s2-daily-hold.mjs\";\n",
+        "to": "import { isDP1Tree, DP1_PINS } from \"../support/dp1-daily-policy.mjs\";\nimport { isDP2Tree, DP2_PINS } from \"../support/dp2-daily-policy.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"../support/hr3-s2-daily-hold.mjs\";\n"
+      },
+      {
+        "from": "      ...(i1 && isDP1Tree(root) ? DP1_PINS : {}) } : {};\n",
+        "to": "      ...(i1 && isDP1Tree(root) ? DP1_PINS : {}),\n      // DP2 (T-DP2-LAYERING): on a DP2 tree the route and the receipt module are held to their literal DP2 pins\n      ...(i1 && isDP2Tree(root) ? DP2_PINS : {}) } : {};\n"
+      }
+    ],
+    "test/finance/b2-snapshot.test.mjs": [
+      {
+        "from": "import { DP1_PINS, isDP1Tree, deriveDP1 } from \"../support/dp1-daily-policy.mjs\";\n\n",
+        "to": "import { DP1_PINS, isDP1Tree, deriveDP1 } from \"../support/dp1-daily-policy.mjs\";\nimport { DP2_PINS, isDP2Tree, deriveDP2 } from \"../support/dp2-daily-policy.mjs\";\n\n"
+      },
+      {
+        "from": "    const want = dp1 ? DP1_PINS[RUN] : s3 ? HR3S3_PINS[RUN] : isHR2Tree(REPO) ? HR2_PINS[RUN] : isHR1Tree(REPO) ? HR1_PINS[RUN] : i1 ? I1_PINS[RUN] : isDE1Tree(REPO) ? de1EffectivePins(REPO)[RUN] : gitIn(REPO, [\"rev-parse\", `${P0}:${RUN}`]).stdout.trim();\n",
+        "to": "    // DP2 (T-DP2-B2-T14): on a DP2 tree the route is held to its literal DP2 pin (re-derived from the literal DP1 bytes); the\n    // DP1 statement below is then judged on the literal DP1 object\n    const dp2 = isDP2Tree(REPO);\n    const want = dp2 ? DP2_PINS[RUN] : dp1 ? DP1_PINS[RUN] : s3 ? HR3S3_PINS[RUN] : isHR2Tree(REPO) ? HR2_PINS[RUN] : isHR1Tree(REPO) ? HR1_PINS[RUN] : i1 ? I1_PINS[RUN] : isDE1Tree(REPO) ? de1EffectivePins(REPO)[RUN] : gitIn(REPO, [\"rev-parse\", `${P0}:${RUN}`]).stdout.trim();\n"
+      },
+      {
+        "from": "      assert.equal(gitBlobId(derived.bytes), want, \"DP1 route re-derived from literal OT4\");\n      assert.equal(gitIn(REPO, [\"rev-parse\", `:${RUN}`]).stdout.trim(), want, \"index route = exact DP1 pin\");\n",
+        "to": "      assert.equal(gitBlobId(derived.bytes), DP1_PINS[RUN], \"DP1 route re-derived from literal OT4\");\n      if (!dp2) assert.equal(gitIn(REPO, [\"rev-parse\", `:${RUN}`]).stdout.trim(), want, \"index route = exact DP1 pin\");\n    }\n    if (dp2) {\n      const derived = deriveDP2(REPO, RUN); assert.ok(derived.ok, derived.reason);\n      assert.equal(gitBlobId(derived.bytes), want, \"DP2 route re-derived from literal DP1\");\n      assert.equal(gitIn(REPO, [\"rev-parse\", `:${RUN}`]).stdout.trim(), want, \"index route = exact DP2 pin\");\n"
+      }
+    ],
+    "test/finance/dp1-daily-policy-guard.test.mjs": [
+      {
+        "from": "import { readFileSync, writeFileSync, mkdtempSync, cpSync } from \"node:fs\";\n",
+        "to": "import { readFileSync, writeFileSync, mkdtempSync, cpSync, mkdirSync } from \"node:fs\";\n"
+      },
+      {
+        "from": "const SKIP = !isDP1Tree(REPO) && \"not a DP1 successor\";\nconst OT3 = \"770c065946ebbce77ade4a80950698f9572526ff\", S3 = \"7fa1b6e130dd0cdd24e02657d69a073e93a3f767\";\n",
+        "to": "const SKIP = !isDP1Tree(REPO) && \"not a DP1 successor\";\n// DP2 (T-DP2-LAYERING): on a successor of DP1 this guard judges the literal, immutable DP1 object; HEAD / index / checkout /\n// overlay move to the successor's own guard (the OT4-on-DP1 pattern one layer up).\nconst DP1 = \"b2b7dd08c2de55b7103e5e0bdbfe10446368e2a6\";\nconst LAYERED = gitIn(REPO, [\"merge-base\", \"--is-ancestor\", DP1, \"HEAD\"]).status === 0 && gitIn(REPO, [\"rev-parse\", \"HEAD\"]).stdout.trim() !== DP1;\nconst SOURCE = LAYERED ? DP1 : \"HEAD\";\nconst src = (f) => LAYERED ? gitIn(REPO, [\"cat-file\", \"blob\", `${SOURCE}:${f}`]).stdout : readFileSync(join(REPO, f), \"utf8\");\nconst OT3 = \"770c065946ebbce77ade4a80950698f9572526ff\", S3 = \"7fa1b6e130dd0cdd24e02657d69a073e93a3f767\";\n"
+      },
+      {
+        "from": "  assert.deepEqual(git([\"rev-list\", \"--parents\", \"-n1\", \"HEAD\"]).split(\" \").slice(1), [DP1_PARENT]);\n",
+        "to": "  assert.deepEqual(git([\"rev-list\", \"--parents\", \"-n1\", SOURCE]).split(\" \").slice(1), [DP1_PARENT]);\n"
+      },
+      {
+        "from": "  assert.deepEqual(names([\"diff\", \"--name-only\", DP1_PARENT, \"HEAD\", \"--\"]).sort(), [...DP1_SCOPE, RECORD].sort());\n",
+        "to": "  assert.deepEqual(names([\"diff\", \"--name-only\", DP1_PARENT, SOURCE, \"--\"]).sort(), [...DP1_SCOPE, RECORD].sort());\n"
+      },
+      {
+        "from": "  for (const args of [[\"diff\", \"--cached\", \"--name-only\", \"HEAD\", \"--\"], [\"diff\", \"--name-only\", \"HEAD\", \"--\"],\n",
+        "to": "  if (!LAYERED) for (const args of [[\"diff\", \"--cached\", \"--name-only\", \"HEAD\", \"--\"], [\"diff\", \"--name-only\", \"HEAD\", \"--\"],\n"
+      },
+      {
+        "from": "    assert.equal(git([\"rev-parse\", `HEAD:${f}`]), DP1_PINS[f], f + \" HEAD\");\n",
+        "to": "    assert.equal(git([\"rev-parse\", `${SOURCE}:${f}`]), DP1_PINS[f], f + \" HEAD\");\n    if (LAYERED) assert.equal(m1EffectivePins(REPO, { withDP2: false })[f], DP1_PINS[f], f + \" overlay without the successor layer\");\n    else {\n"
+      },
+      {
+        "from": "    assert.equal(m1EffectivePins(REPO)[f], DP1_PINS[f], f + \" overlay\");\n    if (without[f] !== undefined) assert.equal(without[f], git([\"rev-parse\", `${DP1_PARENT}:${f}`]), f + \" overlay without this layer = the OT4 bytes\");\n",
+        "to": "    assert.equal(m1EffectivePins(REPO)[f], DP1_PINS[f], f + \" overlay\");\n    }\n    if (without[f] !== undefined) assert.equal(without[f], git([\"rev-parse\", `${DP1_PARENT}:${f}`]), f + \" overlay without this layer = the OT4 bytes\");\n"
+      },
+      {
+        "from": "  const g = readFileSync(join(REPO, \"test/finance/hr3-ot4-daily-hold-guard.test.mjs\"), \"utf8\");\n",
+        "to": "  const g = src(\"test/finance/hr3-ot4-daily-hold-guard.test.mjs\");\n"
+      },
+      {
+        "from": "    assert.equal(git([\"rev-parse\", `HEAD:${f}`]), git([\"rev-parse\", `${DP1_PARENT}:${f}`]), f + \" is OT4 bytes\");\n  assert.deepEqual(names([\"diff\", \"--name-only\", DP1_PARENT, \"HEAD\", \"--\", \"src\", \"fincore\", \"scripts\", \"migrations\", \"tools\"]), []);\n  assert.deepEqual(names([\"diff\", \"--name-only\", DP1_PARENT, \"HEAD\", \"--\", \"lib\", \"api\"]).sort(), [RT, \"lib/emailDelivery.d.ts\", ED].sort());\n",
+        "to": "    assert.equal(git([\"rev-parse\", `${SOURCE}:${f}`]), git([\"rev-parse\", `${DP1_PARENT}:${f}`]), f + \" is OT4 bytes\");\n  assert.deepEqual(names([\"diff\", \"--name-only\", DP1_PARENT, SOURCE, \"--\", \"src\", \"fincore\", \"scripts\", \"migrations\", \"tools\"]), []);\n  assert.deepEqual(names([\"diff\", \"--name-only\", DP1_PARENT, SOURCE, \"--\", \"lib\", \"api\"]).sort(), [RT, \"lib/emailDelivery.d.ts\", ED].sort());\n"
+      },
+      {
+        "from": "  const ed = readFileSync(join(REPO, ED), \"utf8\"), ot4 = parentBlob(ED);\n",
+        "to": "  const ed = src(ED), ot4 = parentBlob(ED);\n"
+      },
+      {
+        "from": "  const rt = readFileSync(join(REPO, RT), \"utf8\"), rt4 = parentBlob(RT);\n",
+        "to": "  const rt = src(RT), rt4 = parentBlob(RT);\n"
+      },
+      {
+        "from": "  const DP1 = await import(pathToFileURL(join(REPO, ED)).href);\n",
+        "to": "  // on a successor the literal DP1 runtime is judged (written beside the copied library)\n  if (LAYERED) { mkdirSync(join(dir, \"dp1\", \"lib\"), { recursive: true }); cpSync(join(REPO, \"lib\"), join(dir, \"dp1\", \"lib\"), { recursive: true }); writeFileSync(join(dir, \"dp1\", \"lib\", \"emailDelivery.js\"), src(ED)); }\n  const DP1 = await import(pathToFileURL(LAYERED ? join(dir, \"dp1\", \"lib\", \"emailDelivery.js\") : join(REPO, ED)).href);\n"
+      }
+    ],
+    "test/support/m1-r1-remediation.mjs": [
+      {
+        "from": "import { isDP1Tree, DP1_PINS } from \"./dp1-daily-policy.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"./hr3-s2-daily-hold.mjs\";\n",
+        "to": "import { isDP1Tree, DP1_PINS } from \"./dp1-daily-policy.mjs\";\nimport { isDP2Tree, DP2_PINS } from \"./dp2-daily-policy.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"./hr3-s2-daily-hold.mjs\";\n"
+      },
+      {
+        "from": "  withHR1 = withI7, withHR2 = withHR1, withHR3 = withHR2, withHR3S1 = withHR3, withHR3S2 = withHR3S1, withHR3S3 = withHR3S2, withHR3OT1 = withHR3S3, withHR3OT2 = withHR3OT1, withHR3OT3 = withHR3OT2, withHR3OT4 = withHR3OT3, withDP1 = withHR3OT4 } = {}) {\n",
+        "to": "  withHR1 = withI7, withHR2 = withHR1, withHR3 = withHR2, withHR3S1 = withHR3, withHR3S2 = withHR3S1, withHR3S3 = withHR3S2, withHR3OT1 = withHR3S3, withHR3OT2 = withHR3OT1, withHR3OT3 = withHR3OT2, withHR3OT4 = withHR3OT3, withDP1 = withHR3OT4, withDP2 = withDP1 } = {}) {\n"
+      },
+      {
+        "from": "    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && withHR3OT3 && withHR3OT4 && withDP1 && isDP1Tree(repo) ? DP1_PINS : {}) } : {};   // each successor overlays only its own protected files\n",
+        "to": "    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && withHR3OT3 && withHR3OT4 && withDP1 && isDP1Tree(repo) ? DP1_PINS : {}),\n    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && withHR3OT3 && withHR3OT4 && withDP1 && withDP2 && isDP2Tree(repo) ? DP2_PINS : {}) } : {};   // each successor overlays only its own protected files\n"
+      }
+    ],
+    "tools/daily-delivery/hold.mjs": [
+      {
+        "from": "// unreadable. The report also names the live claims (`liveClaims`) that make C2 not_met. No other reading changes.\n// Writes are ONE transaction on delivery_control/daily_snapshot (lib/emailDelivery.js changeDeliveryHold): state, version and\n",
+        "to": "// unreadable. The report also names the live claims (`liveClaims`) that make C2 not_met. No other reading changes.\n// DP2 (P4 across routes): the evidence report also reads the shared hand-off admissions (email_delivery_admission/daily_snapshot)\n// and reports them under `admissions`. A live in_flight admission (either route) or an unreadable one makes C2 not_met; an\n// in_flight manual admission whose lease ran out makes C3 not_met, exactly like a handing_off record (its holder may have\n// handed the message over); an expired in_flight scheduled admission and every unknown admission are P7 population, like an\n// expired `sending` / `unknown` receipt. Nothing here changes or clears an admission.\n// Writes are ONE transaction on delivery_control/daily_snapshot (lib/emailDelivery.js changeDeliveryHold): state, version and\n"
+      },
+      {
+        "from": "import { DELIVERY_HOLD_PATH, HELD_DATES_ROOT, MANUAL_ATTEMPT_ROOT, RECEIPT_ROOT, DAILY_SNAPSHOT_KIND, CLAIM_LEASE_MS, classifyHoldRecord,\n",
+        "to": "import { DELIVERY_HOLD_PATH, HELD_DATES_ROOT, MANUAL_ATTEMPT_ROOT, RECEIPT_ROOT, DAILY_SNAPSHOT_KIND, CLAIM_LEASE_MS, ADMISSION_ROOT, classifyHoldRecord,\n"
+      },
+      {
+        "from": "export function drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurationMs = null, inventoryAttested = false, logsAttested = false,\n",
+        "to": "export function drainEvidence({ holdRaw, receiptsRaw, manualRaw, admissionRaw = null, nowMs, maxDurationMs = null, inventoryAttested = false, logsAttested = false,\n"
+      },
+      {
+        "from": "  });\n  const bound = tHold !== null && Number.isInteger(maxDurationMs) && maxDurationMs > 0 ? tHold + maxDurationMs + SEND_DEADLINE_MS + CLAIM_LEASE_MS + DRAIN_MARGIN_MS : null;\n",
+        "to": "  });\n  const admissions = { live: [], inFlightExpired: [], unknown: [], unreadable: [] };\n  walk(admissionRaw, admissions.unreadable, (id, x) => {\n    const [tenantId, bizId, businessDate] = id.split(\"/\");\n    if (!isPlain(x) || x.v !== \"MARJIN_DELIVERY_ADMISSION/1\" || x.kind !== DAILY_SNAPSHOT_KIND || x.tenantId !== tenantId || x.bizId !== bizId ||\n        x.businessDate !== businessDate || ![\"scheduled\", \"manual\"].includes(x.route) || typeof x.ref !== \"string\" ||\n        ![\"in_flight\", \"accepted\", \"failed\", \"unknown\"].includes(x.state) || (x.state === \"in_flight\" && !Number.isFinite(x.leaseUntil))) { admissions.unreadable.push(id); return; }\n    const entry = { id, route: x.route, ref: x.ref, attempt: x.attempt ?? null, messageIdHeader: x.messageIdHeader ?? null };\n    if (x.state === \"in_flight\") (x.leaseUntil > nowMs ? admissions.live : admissions.inFlightExpired).push(entry);\n    else if (x.state === \"unknown\") admissions.unknown.push({ ...entry, code: x.code ?? null });\n  });\n  const bound = tHold !== null && Number.isInteger(maxDurationMs) && maxDurationMs > 0 ? tHold + maxDurationMs + SEND_DEADLINE_MS + CLAIM_LEASE_MS + DRAIN_MARGIN_MS : null;\n"
+      },
+      {
+        "from": "    C2_no_live_scheduled_claim: receipts.unreadable.length ? \"not_met\" : receipts.active.length === 0 ? \"met\" : \"not_met\",\n",
+        "to": "    C2_no_live_scheduled_claim: receipts.unreadable.length || admissions.unreadable.length || admissions.live.length ? \"not_met\" : receipts.active.length === 0 ? \"met\" : \"not_met\",\n"
+      },
+      {
+        "from": "    C3_no_manual_attempt_handing_off: manual.unreadable.length ? \"not_met\" : manual.handingOff.length === 0 ? \"met\" : \"not_met\",\n",
+        "to": "    C3_no_manual_attempt_handing_off: manual.unreadable.length || admissions.inFlightExpired.some((x) => x.route === \"manual\") ? \"not_met\" : manual.handingOff.length === 0 ? \"met\" : \"not_met\",\n"
+      },
+      {
+        "from": "    unreadable: { receipts: receipts.unreadable, manual: manual.unreadable },\n    limits: [\n",
+        "to": "    unreadable: { receipts: receipts.unreadable, manual: manual.unreadable },\n    admissions,\n    limits: [\n"
+      },
+      {
+        "from": "      const [holdRaw, receiptsRaw, manualRaw] = await Promise.all([read(db, DELIVERY_HOLD_PATH, timeout),\n        read(db, `${RECEIPT_ROOT}/${DAILY_SNAPSHOT_KIND}`, timeout), read(db, MANUAL_ATTEMPT_ROOT, timeout)]);\n      report = drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurationMs: Number.isInteger(maxDurationMs) ? maxDurationMs : null,\n",
+        "to": "      const [holdRaw, receiptsRaw, manualRaw, admissionRaw] = await Promise.all([read(db, DELIVERY_HOLD_PATH, timeout),\n        read(db, `${RECEIPT_ROOT}/${DAILY_SNAPSHOT_KIND}`, timeout), read(db, MANUAL_ATTEMPT_ROOT, timeout), read(db, `${ADMISSION_ROOT}/${DAILY_SNAPSHOT_KIND}`, timeout)]);\n      report = drainEvidence({ holdRaw, receiptsRaw, manualRaw, admissionRaw, nowMs, maxDurationMs: Number.isInteger(maxDurationMs) ? maxDurationMs : null,\n"
+      }
+    ]
+  },
+  "pins": {
+    "api/daily-snapshot/run.ts": "cb7221087c5c4ea0b2d742a70ac2208c616efece",
+    "lib/emailDelivery.d.ts": "d25675d8bf9078c1c6d7ed795c1e0fc47640d371",
+    "lib/emailDelivery.js": "d669f6241d031454721e03cb276ecff0d703528b",
+    "test/delivery/dp1-manual-delivery-policy.test.mjs": "4fa180a635f880e842529afbe90b6851565331a6",
+    "test/delivery/dp2-shared-admission.test.mjs": "aa9180540f10350e78e0d3792d2967af8f277ba8",
+    "test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs": "25ae4152405764be47cb14aa911b7f637dfce294",
+    "test/emulator/dp1-manual-policy-emulator.mjs": "7adc8e59648e0da778af11e77b20690a48b04e22",
+    "test/emulator/dp2-admission-worker.mjs": "aa641603a83eb78d7c17aa92b6931e3df1feeb5f",
+    "test/emulator/dp2-shared-admission-emulator.mjs": "3432625fb6b4197ca2880e7ab325d4b4f0151f54",
+    "test/finance/b2-guard-mutations.test.mjs": "94683d9daffad4c56203f342f6e8e78eb48400fa",
+    "test/finance/b2-snapshot.test.mjs": "87dc68436033d1f1913fe1e9e32bc4cace723e4d",
+    "test/finance/dp1-daily-policy-guard.test.mjs": "f04b4aa9336879a294070600fc16224bea073852",
+    "test/finance/dp2-daily-policy-guard.test.mjs": "eb49f6094f6b14561eb240b7189dc890142b691f",
+    "test/support/dp2-daily-policy.mjs": "3985dcf657c13daf2549c857ac3ef7405110918f",
+    "test/support/m1-r1-remediation.mjs": "d95ff0a0665531578fca2015f5a62c26acd88891",
+    "tools/daily-delivery/hold.mjs": "ced0f3d80ff78d4830264a6a62f67cc1c27f0b78"
+  }
+}

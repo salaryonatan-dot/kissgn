@@ -66,7 +66,7 @@ import { isHR3OT4Tree, HR3OT4_PINS } from "./hr3-ot4-daily-hold.mjs";
 import { isHR3S2Tree, HR3S2_PINS } from "./hr3-s2-daily-hold.mjs";
 
 import { isDTO1Tree, DT_O1_PINS } from "./dt-o1-runtime.mjs";
-import { isA1Tree, a1LocalPins } from "./m1-a1-inspection.mjs";
+import { isA1Tree, a1LocalPins, a3PolicyPins } from "./m1-a1-inspection.mjs";
 
 const RECORD = JSON.parse(readFileSync(new URL("./m1-r1-remediation.json", import.meta.url), "utf8"));
 export const M1_R1_PARENT = RECORD.parent;
@@ -98,7 +98,8 @@ export function m1EffectivePins(repo, { withI3 = true, withI4 = withI3, withI5 =
   const de1 = isDE1Tree(repo) ? de1EffectivePins(repo) : {};
   const dto = withDTO1 && isDTO1Tree(repo) ? DT_O1_PINS : {};
   // A1-local B2 composition pin; original S3/approved tables are unchanged.
-  const a1 = withDTO1 && withHR3OT4 && isA1Tree(repo) ? a1LocalPins(repo) : {};
+  // M1-A3 (T-A3-M1-PINS): the A3 policy pins ride on the A1 overlay, with the same gating; empty off A3.
+  const a1 = withDTO1 && withHR3OT4 && isA1Tree(repo) ? { ...a1LocalPins(repo), ...a3PolicyPins(repo) } : {};
   const i1 = isI1Tree(repo) ? { ...I1_PINS, ...(isI2Tree(repo) ? I2_PINS : {}), ...(withI3 && isI3Tree(repo) ? I3_PINS : {}), ...(withI3 && withI4 && isI4Tree(repo) ? I4_PINS : {}), ...(withI3 && withI4 && withI5 && isI5Tree(repo) ? I5_PINS : {}), ...(withI3 && withI4 && withI5 && withI6 && isI6Tree(repo) ? I6_PINS : {}), ...(withI3 && withI4 && withI5 && withI6 && withI7 && isI7Tree(repo) ? I7_PINS : {}), ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && isHR1Tree(repo) ? HR1_PINS : {}),
     ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && isHR2Tree(repo) ? HR2_PINS : {}),
     ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && isHR3Tree(repo) ? HR3_PINS : {}),

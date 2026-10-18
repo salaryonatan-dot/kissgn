@@ -115,13 +115,18 @@ async function resolveOwnerRecipient(tenantId: string): Promise<RecipientResult>
 // receipt write problem) ⇒ "completed_with_failures" (500); otherwise any pending or held row ⇒ 503 — "held" when every row
 // that is not delivered is held, else "incomplete". An unresolved claim is never re-claimed early and never re-sent: a later
 // invocation observes its outcome (accepted ⇒ already_accepted; an invocation that died while sending ⇒ unknown after the lease).
+// DP2 (P4 across routes): the shared admission's refusals of a scheduled attempt (nothing handed over, no attempt consumed):
+//   delivery_already_accepted    the Daily of this identity was accepted through the other route  ⇒ delivered (recorded there)
+//   delivery_in_progress         another attempt of this identity holds the admission               ⇒ pending
+//   delivery_outcome_unresolved  an attempt of this identity may have been accepted (P7)            ⇒ unknown, never re-sent
+//   anything else (unreadable / unavailable evidence)                                               ⇒ failed (fail closed)
 type Settlement = "delivered" | "no_send" | "pending" | "unknown" | "unrecorded" | "held" | "failed";
 function settle(outcome: string, code: string | null, receipt?: string): Settlement {
   if (outcome === "held") return "held";
   if (outcome === "accepted") return receipt === "recorded" ? "delivered" : "unrecorded";
-  if (outcome === "skipped" && code === "already_accepted") return "delivered";
-  if (outcome === "skipped" && code === "in_progress") return "pending";
-  if (outcome === "unknown" || (outcome === "skipped" && code === "unknown_requires_reconciliation")) return "unknown";
+  if (outcome === "skipped" && (code === "already_accepted" || code === "delivery_already_accepted")) return "delivered";
+  if (outcome === "skipped" && (code === "in_progress" || code === "delivery_in_progress")) return "pending";
+  if (outcome === "unknown" || (outcome === "skipped" && (code === "unknown_requires_reconciliation" || code === "delivery_outcome_unresolved"))) return "unknown";
   return "failed";
 }
 const SAFE_ERROR_NAMES = new Set(["Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError", "URIError", "EvalError", "AggregateError"]);
@@ -190,6 +195,24 @@ function builderRefusal(error: unknown): keyof typeof MANUAL_REFUSALS {
   if (name !== BUILDER_REFUSAL_NAME || !ownCode || typeof message !== "string" || code !== message) return "snapshot_build_failed";
   return BUILDER_ATTRIBUTED_CODES.has(message) ? (message as DeliveryTargetCode) : "snapshot_build_failed";
 }
+
+// ── DP1: the 1.0 owner policies on the manual Daily (P4 / E4, approved 2026-10-17; lib/emailDelivery.js deliverManualDaily) ──
+// Every refusal is decided at the final boundary before the attempt record and the hand-off: nothing was sent, no record or
+// receipt was written or changed. 409 = the policy forbids this send for this exact (tenant, business, business date);
+// 422 = the stored evidence cannot be read; 503 = it could not be read now. A held Daily keeps its 503 `delivery_held` reply.
+const MANUAL_POLICY_REFUSALS: Record<string, { status: number; error: string }> = {
+  held_day:                    { status: 409, error: "This business date was refused by the Daily hold; manual delivery is not permitted; email not sent" },
+  legacy_evidence_unresolved:  { status: 409, error: "This business date may have been refused by the Daily hold; manual delivery is not permitted; email not sent" },
+  held_day_unverifiable:       { status: 503, error: "Held-day status temporarily unavailable; email not sent" },
+  manual_repeat_not_permitted: { status: 409, error: "The Daily for this business date was already accepted by the provider; a manual repeat is not permitted; email not sent" },
+  delivery_outcome_unresolved: { status: 409, error: "An earlier Daily for this business date has an unresolved outcome that requires reconciliation; email not sent" },
+  delivery_in_progress:        { status: 409, error: "The Daily for this business date is being delivered; email not sent" },
+  delivery_history_unreadable: { status: 422, error: "Delivery history for this business date is unreadable; email not sent" },
+  delivery_history_unavailable: { status: 503, error: "Delivery history temporarily unavailable; email not sent" },
+  // DP2: the shared hand-off admission (P4 across the scheduled and manual routes)
+  delivery_admission_unreadable: { status: 422, error: "The delivery admission for this business date is unreadable; email not sent" },
+  delivery_admission_unavailable: { status: 503, error: "The delivery admission is temporarily unavailable; email not sent" },
+};
 
 // ── the owner notice read (action: "notice"; R7, review finding OD-02) ─────────────────────────────────────────────────
 // Three states are reported DISTINCTLY and never collapsed into one another:
@@ -295,7 +318,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // (business, business date) by automation: a receipt (lib/emailDelivery.js) is claimed before the provider is
       // called, so a duplicate, concurrent or re-run invocation never re-sends an accepted or possibly-accepted message.
       type Row = { tenantId: string; bizId: string; businessDate: string | null; outcome: string; code: string | null; settlement: Settlement;
-        attempt?: number; receipt?: string; phase?: string; recipientSelection?: RecipientSelection; notice?: "recorded" | "not_recorded" };
+        attempt?: number; receipt?: string; admission?: string; phase?: string; recipientSelection?: RecipientSelection; notice?: "recorded" | "not_recorded" };
       const results: Row[] = [];
       const registryCache = new Map<string, unknown>();   // one registry read per tenant per run
       // HR1: once a message of this run is held, every later message of the run is held too (one held day, never a partial
@@ -369,7 +392,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         } else if (settlement !== "delivered") {
           console.error(`[daily-snapshot] delivery ${settlement} for ${snapshot.tenantId}:${snapshot.bizId}:${snapshot.date} code=${code} attempt=${attemptNo ?? "-"} receipt=${r.receipt}`);
         }
-        results.push({ ...base, outcome: r.outcome, code, settlement, attempt: attemptNo, receipt: r.receipt,
+        results.push({ ...base, outcome: r.outcome, code, settlement, attempt: attemptNo, receipt: r.receipt, ...(r.admission === "write_failed" ? { admission: r.admission } : {}),
           ...(settlement === "pending" ? { phase: r.phase === "sending" ? "sending" : "claimed" } : {}), recipientSelection: recipient.selection });
       }
 
@@ -383,7 +406,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const skippedCount = count((x) => x.settlement === "no_send");
       const deliveredCount = count((x) => x.settlement === "delivered");
       const heldCount = count((x) => x.settlement === "held");
-      const receiptWriteFailures = count((x) => x.receipt === "write_failed" || x.receipt === "unavailable");
+      const receiptWriteFailures = count((x) => x.receipt === "write_failed" || x.receipt === "unavailable" || x.admission === "write_failed");
       // G2: a failed discovery breaks the run even with zero known businesses; G1: the builder's own status must be complete
       const discoveryFailed = run.discovery.status !== "complete";
       const broken = failureCount > 0 || unknownCount > 0 || unrecordedCount > 0 || receiptWriteFailures > 0 || discoveryFailed;
@@ -416,8 +439,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // POST = manual trigger for single business (authorized above). A manual send is an explicit owner request: it is not
-    // de-duplicated against the scheduled receipt, but its provider outcome is classified (never a false success).
+    // POST = manual trigger for single business (authorized above). A manual send is an explicit owner request; its provider
+    // outcome is classified (never a false success). DP1: it never claims or changes the scheduled receipt, but it is refused
+    // when that receipt or an earlier manual record shows the exact Daily accepted or possibly accepted (P4), or the business
+    // date was refused by the hold (E4).
     if (req.method === "POST" && snapshotCtx) {
       const { tenantId, bizId } = snapshotCtx;
       const db = getDb();
@@ -491,6 +516,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const r = await deliverManualDaily({ db, tenantId, bizId, businessDate: snapshot.date ?? null, recipient: ownerEmail,
         recipientSelection: recipient.selection, actorRole: snapshotCtx.role, send: () => sendSnapshotEmail(ownerEmail, snapshot) });
       if (r.record === "write_failed") console.error(`[daily-snapshot] manual attempt record not finalized (${boundedCode(r.code) ?? "accepted"}) for ${tenantId}:${bizId}`);
+      // DP2: an admission this send could not settle stays in_flight — the business date stays blocked on both routes (fail closed)
+      if (r.admission === "write_failed") console.error(`[daily-snapshot] delivery admission not settled (${boundedCode(r.code) ?? "accepted"}) for ${tenantId}:${bizId}`);
+      const policyCode = boundedCode(r.code) ?? "";
+      if ((r.outcome === "held" || r.outcome === "refused") && Object.prototype.hasOwnProperty.call(MANUAL_POLICY_REFUSALS, policyCode)) {
+        console.warn("[daily-snapshot] manual send refused by delivery policy", { tenantId, bizId, code: policyCode });
+        return res.status(MANUAL_POLICY_REFUSALS[policyCode].status).json({ error: MANUAL_POLICY_REFUSALS[policyCode].error, code: policyCode, tenantId, bizId });
+      }
+      if (r.outcome === "refused") return res.status(503).json({ error: "Manual delivery refused; email not sent", code: boundedCode(r.code), tenantId, bizId });
       if (r.outcome === "held") return heldReply(r.code);
       if (r.outcome === "failed" && r.code === "manual_record_unavailable") return res.status(503).json({ error: "Delivery record unavailable; email not sent", code: r.code, tenantId, bizId });
       if (r.outcome === "failed") return res.status(502).json({ error: "email_not_sent", code: boundedCode(r.code) });

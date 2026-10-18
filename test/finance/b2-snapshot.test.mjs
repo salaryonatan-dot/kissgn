@@ -17,6 +17,10 @@ import { isHR1Tree, HR1_PINS } from "../support/hr1-daily-hold.mjs";
 import { isHR2Tree, HR2_PINS } from "../support/hr2-daily-hold.mjs";
 import { HR3S3_PARENT, HR3S3_PINS, isHR3S3Tree, deriveHR3S3 } from "../support/hr3-s3-daily-hold.mjs";
 import { gitBlobId } from "../support/m1-r1-remediation.mjs";
+import { DP1_PINS, isDP1Tree, deriveDP1 } from "../support/dp1-daily-policy.mjs";
+import { DP2_PINS, isDP2Tree, deriveDP2 } from "../support/dp2-daily-policy.mjs";
+// M1-A3 (T-A3-B2-T14): a content carry of DP4 has no DP ancestry; the joint holder's A3 predicate stands in for it here.
+import { isA3Tree } from "../support/m1-a1-inspection.mjs";
 
 offlineFetch();
 const srv = compileServer();
@@ -260,18 +264,36 @@ test("B2-T14 run.ts compatibility: the endpoint file is byte-identical (pre-B2, 
     // the I7 bytes by recorded exact edits; the authorization section stays the P0 bytes — HR1G-03 / DE1G-03).
     const i1 = isI1Tree(REPO);
     const s3 = isHR3S3Tree(REPO);
-    const want = s3 ? HR3S3_PINS[RUN] : isHR2Tree(REPO) ? HR2_PINS[RUN] : isHR1Tree(REPO) ? HR1_PINS[RUN] : i1 ? I1_PINS[RUN] : isDE1Tree(REPO) ? de1EffectivePins(REPO)[RUN] : gitIn(REPO, ["rev-parse", `${P0}:${RUN}`]).stdout.trim();
+    // DP1 (T-DP1-B2-T14): on a DP1 tree the route is held to its literal DP1 pin (re-derived from the literal OT4 = S3 bytes by
+    // recorded exact edits; the executable delta is the P4 / E4 refusal mapping only — DP1G-03); the S3 statement below is
+    // judged on the literal S3 object.
+    const dp1 = isDP1Tree(REPO) || isA3Tree(REPO);
+    // DP2 (T-DP2-B2-T14): on a DP2 tree the route is held to its literal DP2 pin (re-derived from the literal DP1 bytes); the
+    // DP1 statement below is then judged on the literal DP1 object
+    const dp2 = isDP2Tree(REPO) || isA3Tree(REPO);
+    const want = dp2 ? DP2_PINS[RUN] : dp1 ? DP1_PINS[RUN] : s3 ? HR3S3_PINS[RUN] : isHR2Tree(REPO) ? HR2_PINS[RUN] : isHR1Tree(REPO) ? HR1_PINS[RUN] : i1 ? I1_PINS[RUN] : isDE1Tree(REPO) ? de1EffectivePins(REPO)[RUN] : gitIn(REPO, ["rev-parse", `${P0}:${RUN}`]).stdout.trim();
     assert.equal(gitIn(REPO, ["rev-parse", `HEAD:${RUN}`]).stdout.trim(), want, "committed run.ts = approved P0 blob (or the DE1 pin)");
     assert.equal(gitIn(REPO, ["hash-object", RUN]).stdout.trim(), want, "checked-out run.ts = approved P0 blob (or the DE1 pin)");
     const src = readFileSync(join(REPO, RUN), "utf8");
     if (s3) {
       // T-S3-B2-T14: only the recorded G1 policy comment changes; executable route/auth/builder bytes stay S2.
       const derived = deriveHR3S3(REPO, RUN); assert.ok(derived.ok, derived.reason);
-      assert.equal(gitBlobId(derived.bytes), want, "S3 route re-derived from literal S2");
-      assert.equal(gitIn(REPO, ["rev-parse", `:${RUN}`]).stdout.trim(), want, "index route = exact S3 pin");
+      assert.equal(gitBlobId(derived.bytes), HR3S3_PINS[RUN], "S3 route re-derived from literal S2");
+      if (!dp1) assert.equal(gitIn(REPO, ["rev-parse", `:${RUN}`]).stdout.trim(), want, "index route = exact S3 pin");
+      const s3src = dp1 ? gitIn(REPO, ["cat-file", "blob", `7fa1b6e130dd0cdd24e02657d69a073e93a3f767:${RUN}`]).stdout : src;
       const parent = gitIn(REPO, ["cat-file", "blob", `${HR3S3_PARENT}:${RUN}`]); assert.equal(parent.status, 0);
       const executable = text => text.split("\n").filter(line => !line.trimStart().startsWith("//")).join("\n");
-      assert.equal(executable(src), executable(parent.stdout), "S3 changes comment-only lines, never route code");
+      assert.equal(executable(s3src), executable(parent.stdout), "S3 changes comment-only lines, never route code");
+    }
+    if (dp1) {
+      const derived = deriveDP1(REPO, RUN); assert.ok(derived.ok, derived.reason);
+      assert.equal(gitBlobId(derived.bytes), DP1_PINS[RUN], "DP1 route re-derived from literal OT4");
+      if (!dp2) assert.equal(gitIn(REPO, ["rev-parse", `:${RUN}`]).stdout.trim(), want, "index route = exact DP1 pin");
+    }
+    if (dp2) {
+      const derived = deriveDP2(REPO, RUN); assert.ok(derived.ok, derived.reason);
+      assert.equal(gitBlobId(derived.bytes), want, "DP2 route re-derived from literal DP1");
+      assert.equal(gitIn(REPO, ["rev-parse", `:${RUN}`]).stdout.trim(), want, "index route = exact DP2 pin");
     }
     if (i1) {
       assert.match(src, /import \{ buildSnapshotForBiz, buildSnapshotRun \} from "\.\.\/\.\.\/src\/snapshot\/snapshotBuilder\.js";/);

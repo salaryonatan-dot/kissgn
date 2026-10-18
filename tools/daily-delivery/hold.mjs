@@ -14,6 +14,11 @@
 // HR3 OT1 (operational rehearsal OR-F1): on the real RTDB a first-attempt receipt carries NO `history` key (the store drops
 // the empty array lib/emailDelivery.js writes), so an absent history is read as empty; only a present non-array is
 // unreadable. The report also names the live claims (`liveClaims`) that make C2 not_met. No other reading changes.
+// DP2 (P4 across routes): the evidence report also reads the shared hand-off admissions (email_delivery_admission/daily_snapshot)
+// and reports them under `admissions`. A live in_flight admission (either route) or an unreadable one makes C2 not_met; an
+// in_flight manual admission whose lease ran out makes C3 not_met, exactly like a handing_off record (its holder may have
+// handed the message over); an expired in_flight scheduled admission and every unknown admission are P7 population, like an
+// expired `sending` / `unknown` receipt. Nothing here changes or clears an admission.
 // Writes are ONE transaction on delivery_control/daily_snapshot (lib/emailDelivery.js changeDeliveryHold): state, version and
 // the audit-log entry together, or nothing. Every command verifies the ACTUAL project of the credentials against --project
 // and the ACTUAL default database instance against --database-url before any database reference. Named instances are refused
@@ -28,7 +33,7 @@
 //   node tools/daily-delivery/hold.mjs init|hold|release --project=<id> --database-url=<exact-url> --actor=<id>
 //       --reason="…" [--expect-version=<n>] --confirm=<action>@<id>
 import { fileURLToPath } from "node:url";
-import { DELIVERY_HOLD_PATH, HELD_DATES_ROOT, MANUAL_ATTEMPT_ROOT, RECEIPT_ROOT, DAILY_SNAPSHOT_KIND, CLAIM_LEASE_MS, classifyHoldRecord,
+import { DELIVERY_HOLD_PATH, HELD_DATES_ROOT, MANUAL_ATTEMPT_ROOT, RECEIPT_ROOT, DAILY_SNAPSHOT_KIND, CLAIM_LEASE_MS, ADMISSION_ROOT, admissionRecordDefect, classifyHoldRecord,
   changeDeliveryHold, deliveryInventoryView, confirmDeliveryInventory, HOLD_READ_TIMEOUT_MS } from "../../lib/emailDelivery.js";
 
 export const SEND_DEADLINE_MS = 60000;      // lib/sendEmail.js SEND_DEADLINE_MS (asserted equal by the HR1 tests)
@@ -133,7 +138,7 @@ export function statusView(raw, heldDates) {
  * Each criterion is "met" | "not_met" | "not_evaluable" | "attested" (an operator attestation the tool cannot verify).
  * verdict: "EVIDENCE_COMPLETE_FOR_OWNER_REVIEW" only when C1–C4 are met and C2b, C5–C7 are attested; otherwise "ABORT_D".
  */
-export function drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurationMs = null, inventoryAttested = false, logsAttested = false,
+export function drainEvidence({ holdRaw, receiptsRaw, manualRaw, admissionRaw = null, nowMs, maxDurationMs = null, inventoryAttested = false, logsAttested = false,
   invocationReceiptAttested = false, providerAttested = false }) {
   const c = classifyHoldRecord(holdRaw);
   const log = holdLog(holdRaw);
@@ -178,12 +183,24 @@ export function drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurat
     if (x.state === "handing_off") manual.handingOff.push({ id, startedAt: x.startedAt ?? null, deploymentId: x.deploymentId ?? null, messageIdHeader: x.messageIdHeader ?? null });
     else if (x.state === "unknown") manual.unknown.push({ id, code: x.code ?? null, messageIdHeader: x.messageIdHeader ?? null });
   });
+  // DP3 (DP2-R03): the runtime's own admission validation (admissionRecordDefect) decides readability here too — an admission
+  // the runtime would refuse as unreadable is never left out of the report; it is listed (with the defect, for investigation)
+  // and keeps C2 not_met. Read-only: nothing is repaired, cleared or settled.
+  const admissions = { live: [], inFlightExpired: [], unknown: [], unreadable: [], unreadableDetail: [] };
+  walk(admissionRaw, admissions.unreadable, (id, x) => {
+    const [tenantId, bizId, businessDate] = id.split("/");
+    const defect = admissionRecordDefect(x, { kind: DAILY_SNAPSHOT_KIND, tenantId, bizId, businessDate });
+    if (defect !== null) { admissions.unreadable.push(id); admissions.unreadableDetail.push({ id, defect }); return; }
+    const entry = { id, route: x.route, ref: x.ref, attempt: x.attempt ?? null, messageIdHeader: x.messageIdHeader ?? null };
+    if (x.state === "in_flight") (x.leaseUntil > nowMs ? admissions.live : admissions.inFlightExpired).push(entry);
+    else if (x.state === "unknown") admissions.unknown.push({ ...entry, code: x.code ?? null });
+  });
   const bound = tHold !== null && Number.isInteger(maxDurationMs) && maxDurationMs > 0 ? tHold + maxDurationMs + SEND_DEADLINE_MS + CLAIM_LEASE_MS + DRAIN_MARGIN_MS : null;
   const criteria = {
     C1_hold_continuously_held: tHold !== null ? "met" : "not_met",
-    C2_no_live_scheduled_claim: receipts.unreadable.length ? "not_met" : receipts.active.length === 0 ? "met" : "not_met",
+    C2_no_live_scheduled_claim: receipts.unreadable.length || admissions.unreadable.length || admissions.live.length ? "not_met" : receipts.active.length === 0 ? "met" : "not_met",
     C2b_invocations_explained_by_receipts: invocationReceiptAttested ? "attested" : "not_evaluable",
-    C3_no_manual_attempt_handing_off: manual.unreadable.length ? "not_met" : manual.handingOff.length === 0 ? "met" : "not_met",
+    C3_no_manual_attempt_handing_off: manual.unreadable.length || admissions.inFlightExpired.some((x) => x.route === "manual") ? "not_met" : manual.handingOff.length === 0 ? "met" : "not_met",
     C4_time_bound_passed: bound === null ? "not_evaluable" : nowMs >= bound ? "met" : "not_met",
     C5_every_reachable_deployment_gated: inventoryAttested ? "attested" : "not_evaluable",
     C6_hosted_logs_complete: logsAttested ? "attested" : "not_evaluable",
@@ -202,6 +219,7 @@ export function drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurat
     liveClaims: receipts.active,
     notHandedOver: { scheduledHeldBeforeSend: receipts.heldBeforeSend, scheduledClaimedExpired: receipts.claimedExpired },
     unreadable: { receipts: receipts.unreadable, manual: manual.unreadable },
+    admissions,
     limits: [
       "This report is evidence for an owner judgement. Empty trees and complete logs do not prove that no message is in flight or was sent.",
       "C2b requires an explicit cross-check of every reachable scheduled invocation against its receipt, including invocations with no receipt.",
@@ -243,9 +261,9 @@ export async function runCommand(db, command, args, { project, nowMs = Date.now(
     const maxDurationMs = maxDurationInput(args);
     let report;
     try {
-      const [holdRaw, receiptsRaw, manualRaw] = await Promise.all([read(db, DELIVERY_HOLD_PATH, timeout),
-        read(db, `${RECEIPT_ROOT}/${DAILY_SNAPSHOT_KIND}`, timeout), read(db, MANUAL_ATTEMPT_ROOT, timeout)]);
-      report = drainEvidence({ holdRaw, receiptsRaw, manualRaw, nowMs, maxDurationMs: Number.isInteger(maxDurationMs) ? maxDurationMs : null,
+      const [holdRaw, receiptsRaw, manualRaw, admissionRaw] = await Promise.all([read(db, DELIVERY_HOLD_PATH, timeout),
+        read(db, `${RECEIPT_ROOT}/${DAILY_SNAPSHOT_KIND}`, timeout), read(db, MANUAL_ATTEMPT_ROOT, timeout), read(db, `${ADMISSION_ROOT}/${DAILY_SNAPSHOT_KIND}`, timeout)]);
+      report = drainEvidence({ holdRaw, receiptsRaw, manualRaw, admissionRaw, nowMs, maxDurationMs: Number.isInteger(maxDurationMs) ? maxDurationMs : null,
         inventoryAttested: args["inventory-attested"] === true, logsAttested: args["logs-attested"] === true,
         invocationReceiptAttested: args["invocation-receipt-attested"] === true, providerAttested: args["provider-attested"] === true });
     } catch { return { exitCode: EXIT.ABORT_D, result: { verdict: "ABORT_D", error: "evidence_read_unavailable" } }; }

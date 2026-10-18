@@ -104,13 +104,18 @@ await check("HRE-03 the manual send over the real transport: record before the h
     recordAtHandoff = await read(E.manualAttemptPath("tA", "bA", a.claimId));
     calls++; a.info = { accepted: [TO], rejected: [], response: "250 OK" };
   };
-  const r = await E.deliverManualDaily({ db, tenantId: "tA", bizId: "bA", businessDate: D, recipient: TO, recipientSelection: "owner", actorRole: "owner", send });
+  // DP1 (owner decision E4, 2026-10-17; T-DP1-TEST-EXPECTATIONS): D was refused by the hold in HRE-02, so it is never delivered
+  // deliberately; the record-before-hand-off contract is exercised on a business date the hold did not refuse
+  const e4 = await E.deliverManualDaily({ db, tenantId: "tA", bizId: "bA", businessDate: D, recipient: TO, send });
+  assert.deepEqual([e4.outcome, e4.code, e4.record, calls], ["held", "held_day", "not_written", 0]);
+  const M = "2026-09-10";
+  const r = await E.deliverManualDaily({ db, tenantId: "tA", bizId: "bA", businessDate: M, recipient: TO, recipientSelection: "owner", actorRole: "owner", send });
   assert.deepEqual([r.outcome, r.record, calls], ["accepted", "recorded", 1]);
   assert.equal(recordAtHandoff.state, "handing_off", "the record existed when the provider was invoked");
   const rec = await read(E.manualAttemptPath("tA", "bA", r.attemptId));
   assert.deepEqual([rec.state, rec.v, rec.actorRole], ["accepted", E.MANUAL_ATTEMPT_VERSION, "owner"]);
   await E.changeDeliveryHold(cold(), { action: "hold", ...op, expectVersion: 4 });
-  const h = await E.deliverManualDaily({ db, tenantId: "tA", bizId: "bA", businessDate: D, recipient: TO, send });
+  const h = await E.deliverManualDaily({ db, tenantId: "tA", bizId: "bA", businessDate: M, recipient: TO, send });
   assert.deepEqual([h.outcome, h.code, h.record, calls], ["held", "delivery_held", "not_written", 1]);
   assert.equal(Object.keys(await read(`${E.MANUAL_ATTEMPT_ROOT}/tA/bA`)).length, 1, "no record for the held attempt");
 });

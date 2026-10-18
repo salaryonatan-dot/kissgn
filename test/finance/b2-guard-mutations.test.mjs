@@ -79,6 +79,8 @@ import { isI7Tree, I7_SCOPE } from "../support/i7-integration.mjs";
 // CC1 (checklist cold-cache successor on I7, T-CC1-LAYER): its recorded protected scope (lib/repositories/bizDataRepo.js only;
 // test/support/cc1-checklist-cold-cache.mjs).
 import { isCC1Tree, CC1_SCOPE } from "../support/cc1-checklist-cold-cache.mjs";
+// M1-A3 (T-A3-B2-PINS): the content-carried DP4 policy files, held to the A3 record's pins (A3 has no DP ancestry).
+import { isA3Tree, a3PolicyPins } from "../support/m1-a1-inspection.mjs";
 // HR1 (Daily-only delivery hold on I7, T-HR1-LAYER): its recorded protected scope (api/daily-snapshot/run.ts, lib/emailDelivery.js
 // + .d.ts; test/support/hr1-daily-hold.mjs).
 import { isHR1Tree, HR1_SCOPE, HR1_PINS } from "../support/hr1-daily-hold.mjs";
@@ -256,7 +258,8 @@ function assertB2Scope(root) {
     // HR1 (T-HR1-LAYER): on an HR1 tree the Daily route (and the receipt module) are held to their literal HR1 pins
     const DE1_EFF = de1 ? { ...de1EffectivePins(root), ...(i1 ? I1_PINS : {}), ...(i1 && isHR1Tree(root) ? HR1_PINS : {}),
       ...(i1 && isHR2Tree(root) ? HR2_PINS : {}), ...(i1 && isHR3Tree(root) ? HR3_PINS : {}), ...(i1 && isHR3S1Tree(root) ? HR3S1_PINS : {}),
-      ...(i1 && isHR3S2Tree(root) ? HR3S2_PINS : {}), ...(i1 && isHR3S3Tree(root) ? HR3S3_PINS : {}) } : {};
+      ...(i1 && isHR3S2Tree(root) ? HR3S2_PINS : {}), ...(i1 && isHR3S3Tree(root) ? HR3S3_PINS : {}),
+      ...(i1 && isA3Tree(root) ? a3PolicyPins(root) : {}) } : {};
     const I3_ADDED = i1 && isI3Tree(root) ? I3_SCOPE.filter((f) => f !== "index.html") : [];
     const I4_ADDED = i1 && isI4Tree(root) ? [...I4_SCOPE] : [];
     const I5_ADDED = i1 && isI5Tree(root) ? [...I5_SCOPE] : [];

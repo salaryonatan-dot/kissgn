@@ -11,7 +11,8 @@
 //   HR-05  G3: a hold set after the claim, before the hand-off — no provider call; the claim expires at the SAME attempt with a
 //          held_before_send entry; no terminal state
 //   HR-06  a hold never consumes the provider-failure budget (MAX_AUTOMATIC_ATTEMPTS); provider failures keep their semantics
-//   HR-07  release sends no held day automatically (held_day); the next day is delivered; the manual route remains available
+//   HR-07  release sends no held day automatically (held_day); the next day is delivered; DP1 (owner decisions E4 / P4,
+//          2026-10-17): no manual delivery of the held day, no manual repeat of the delivered next day
 //          under its existing owner authorization. This test is not blanket permission for operational catch-up.
 //   HR-08  manual send: G2 / G3 held ⇒ 503, no provider call, no record; the durable attempt record before the hand-off
 //          (refused when it cannot be written), finalized to accepted / failed / unknown, left handing_off when finalization
@@ -259,7 +260,7 @@ test("HR-06 a hold never consumes the provider-failure budget; provider failures
   assert.deepEqual(receipts(db2), {}); assert.equal(smtp.calls.length, 0);
 });
 
-test("HR-07 release sends no held day automatically; the next day is delivered; a manual send after release is the owner's catch-up", async () => {
+test("HR-07 release sends no held day automatically; the next day is delivered; no manual catch-up or repeat after release (DP1)", async () => {
   const db = world(); db.seed(HOLD_PATH, held(3));
   const smtp = installSmtp([SMTP.accept()]);
   assert.equal((await cron()).body.code, "delivery_held");
@@ -276,10 +277,14 @@ test("HR-07 release sends no held day automatically; the next day is delivered; 
     const next = await cron();
     assert.deepEqual([next.statusCode, next.body.status, next.body.successCount], [200, "completed", 3]);
     assert.deepEqual(Object.keys(receipts(db)[T][B]), [D2], "only the next day has receipts; the held day has none");
-    // a manual send is the owner's explicit choice (not automatic) and is allowed after release
+    // DP1 (owner decision P4, 2026-10-17; T-DP1-TEST-EXPECTATIONS): the next day's Daily was delivered — no manual repeat
     const m = await manual();
-    assert.equal(m.statusCode, 200);
+    assert.deepEqual([m.statusCode, m.body.code], [409, "manual_repeat_not_permitted"]);
   } finally { setNow(DAY); }
+  // DP1 (owner decision E4): the held day is never delivered deliberately — the manual send is refused, nothing is sent
+  const h = await manual();
+  assert.deepEqual([h.statusCode, h.body.code], [409, "held_day"]);
+  assert.equal(smtp.calls.length, 3, "only the next day's scheduled messages");
 });
 
 test("HR-08 manual send: G2 / G3 holds, the durable attempt record before the hand-off, its finalization, the notice read", async () => {

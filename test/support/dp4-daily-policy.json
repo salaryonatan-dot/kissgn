@@ -1,0 +1,116 @@
+{
+  "decision": "DP4 proposed local correction successor of DP3 (unaccepted; DP1 / DP2 unaccepted): closes the independent DP3 review finding DP3-R01 (the remaining DP2-R02 path: a failed manual record whose business date cannot be read is excused only by a complete definitive failure); owner policies P4 (both routes) / E4 unchanged; P7 not implemented; independent Codex review of OT4 -> DP4 pending",
+  "parent": "a125824cdf1b824da3e60c6a85f43b73d5ee4e68",
+  "scope": [
+    "lib/emailDelivery.js",
+    "test/delivery/dp1-manual-delivery-policy.test.mjs",
+    "test/delivery/dp4-legacy-date-scope.test.mjs",
+    "test/finance/b2-guard-mutations.test.mjs",
+    "test/finance/dp3-daily-policy-guard.test.mjs",
+    "test/finance/dp4-daily-policy-guard.test.mjs",
+    "test/support/dp4-daily-policy.mjs",
+    "test/support/m1-r1-remediation.mjs"
+  ],
+  "edits": {
+    "lib/emailDelivery.js": [
+      {
+        "from": "        x.kind !== DAILY_SNAPSHOT_KIND || !MANUAL_RECORD_STATES.has(x.state)) { codes.push(\"delivery_history_unreadable\"); continue; }\n    if (x.businessDate !== businessDate) {\n",
+        "to": "        x.kind !== DAILY_SNAPSHOT_KIND || !MANUAL_RECORD_STATES.has(x.state)) { codes.push(\"delivery_history_unreadable\"); continue; }\n    // DP3 (DP2-R02): a failed record is \"no delivery\" only when it is the complete settled record its writer produces\n    // (start, Message-ID, settlement time and the refusal code); accepted / unknown / handing_off block in any case\n    const definitiveFailure = x.state === \"failed\" && Number.isSafeInteger(x.startedAt) && typeof x.messageIdHeader === \"string\" &&\n      Number.isSafeInteger(x.settledAt) && typeof x.code === \"string\";\n    if (x.businessDate !== businessDate) {\n"
+      },
+      {
+        "from": "      // another business date is another delivery; a record whose date cannot be read is this one unless it is a definitive failure\n      if (!validDate(x.businessDate) && x.state !== \"failed\") codes.push(\"delivery_history_unreadable\");\n",
+        "to": "      // a VALID other business date is another delivery (whatever its state or completeness). DP4 (DP3-R01): a record whose date\n      // cannot be read may be this delivery — it is excused only by the same complete definitive failure a same-date record needs;\n      // anything else (an incomplete failure included) is unreadable evidence of this business and blocks (DP1 I-5 scope)\n      if (!validDate(x.businessDate) && !definitiveFailure) codes.push(\"delivery_history_unreadable\");\n"
+      },
+      {
+        "from": "    // DP3 (DP2-R02): a failed record is \"no delivery\" only when it is the complete settled record its writer produces\n    // (start, Message-ID, settlement time and the refusal code); accepted / unknown / handing_off block in any case\n    if (x.state === \"failed\" && (!Number.isSafeInteger(x.startedAt) || typeof x.messageIdHeader !== \"string\" ||\n        !Number.isSafeInteger(x.settledAt) || typeof x.code !== \"string\")) { codes.push(\"delivery_history_unreadable\"); continue; }\n",
+        "to": "    if (x.state === \"failed\" && !definitiveFailure) { codes.push(\"delivery_history_unreadable\"); continue; }\n"
+      }
+    ],
+    "test/delivery/dp1-manual-delivery-policy.test.mjs": [
+      {
+        "from": "    [\"failed record without a readable date\", () => seedRecord(manualRecord(\"failed\", null)), [200, undefined]],\n",
+        "to": "    // DP4 (T-DP4-TEST-EXPECTATIONS, DP3-R01): only a COMPLETE definitive failure excuses an unreadable date; the fixture carries\n    // the fields its writer sets (settledAt, code) — the incomplete variant is refused (dp4-legacy-date-scope.test.mjs)\n    [\"failed record without a readable date\", () => seedRecord(manualRecord(\"failed\", null, { settledAt: AT - 500, code: \"provider_rejected_550\" })), [200, undefined]],\n"
+      }
+    ],
+    "test/finance/b2-guard-mutations.test.mjs": [
+      {
+        "from": "import { isDP3Tree, DP3_PINS } from \"../support/dp3-daily-policy.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"../support/hr3-s2-daily-hold.mjs\";\n",
+        "to": "import { isDP3Tree, DP3_PINS } from \"../support/dp3-daily-policy.mjs\";\nimport { isDP4Tree, DP4_PINS } from \"../support/dp4-daily-policy.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"../support/hr3-s2-daily-hold.mjs\";\n"
+      },
+      {
+        "from": "      ...(i1 && isDP3Tree(root) ? DP3_PINS : {}) } : {};\n",
+        "to": "      ...(i1 && isDP3Tree(root) ? DP3_PINS : {}),\n      // DP4 (T-DP4-LAYERING): on a DP4 tree the receipt module is held to its literal DP4 pin\n      ...(i1 && isDP4Tree(root) ? DP4_PINS : {}) } : {};\n"
+      }
+    ],
+    "test/finance/dp3-daily-policy-guard.test.mjs": [
+      {
+        "from": "const SKIP = !isDP3Tree(REPO) && \"not a DP3 successor\";\nconst DP1 = \"b2b7dd08c2de55b7103e5e0bdbfe10446368e2a6\", OT4 = \"f34eec92aed4851c2da8a8dfd8f1f353b1d582d7\";\n",
+        "to": "const SKIP = !isDP3Tree(REPO) && \"not a DP3 successor\";\n// DP4 (T-DP4-LAYERING): on a successor of DP3 this guard judges the literal, immutable DP3 object; HEAD / index / checkout /\n// overlay move to the successor's own guard (the DP2-on-DP3 pattern one layer up).\nconst DP3 = \"a125824cdf1b824da3e60c6a85f43b73d5ee4e68\";\nconst LAYERED = gitIn(REPO, [\"merge-base\", \"--is-ancestor\", DP3, \"HEAD\"]).status === 0 && gitIn(REPO, [\"rev-parse\", \"HEAD\"]).stdout.trim() !== DP3;\nconst SOURCE = LAYERED ? DP3 : \"HEAD\";\nconst src = (f) => LAYERED ? gitIn(REPO, [\"cat-file\", \"blob\", `${SOURCE}:${f}`]).stdout : readFileSync(join(REPO, f), \"utf8\");\nconst DP1 = \"b2b7dd08c2de55b7103e5e0bdbfe10446368e2a6\", OT4 = \"f34eec92aed4851c2da8a8dfd8f1f353b1d582d7\";\n"
+      },
+      {
+        "from": "  assert.deepEqual(git([\"rev-list\", \"--parents\", \"-n1\", \"HEAD\"]).split(\" \").slice(1), [DP3_PARENT]);\n",
+        "to": "  assert.deepEqual(git([\"rev-list\", \"--parents\", \"-n1\", SOURCE]).split(\" \").slice(1), [DP3_PARENT]);\n"
+      },
+      {
+        "from": "  assert.deepEqual(names([\"diff\", \"--name-only\", DP3_PARENT, \"HEAD\", \"--\"]).sort(), [...DP3_SCOPE, RECORD].sort());\n",
+        "to": "  assert.deepEqual(names([\"diff\", \"--name-only\", DP3_PARENT, SOURCE, \"--\"]).sort(), [...DP3_SCOPE, RECORD].sort());\n"
+      },
+      {
+        "from": "  for (const args of [[\"diff\", \"--cached\", \"--name-only\", \"HEAD\", \"--\"], [\"diff\", \"--name-only\", \"HEAD\", \"--\"],\n",
+        "to": "  if (!LAYERED) for (const args of [[\"diff\", \"--cached\", \"--name-only\", \"HEAD\", \"--\"], [\"diff\", \"--name-only\", \"HEAD\", \"--\"],\n"
+      },
+      {
+        "from": "    assert.equal(git([\"rev-parse\", `HEAD:${f}`]), DP3_PINS[f], f + \" HEAD\");\n",
+        "to": "    assert.equal(git([\"rev-parse\", `${SOURCE}:${f}`]), DP3_PINS[f], f + \" HEAD\");\n    if (LAYERED) assert.equal(m1EffectivePins(REPO, { withDP4: false })[f], DP3_PINS[f], f + \" overlay without the successor layer\");\n    else {\n"
+      },
+      {
+        "from": "    assert.equal(m1EffectivePins(REPO)[f], DP3_PINS[f], f + \" overlay\");\n    if (without[f] !== undefined) assert.equal(without[f], git([\"rev-parse\", `${DP3_PARENT}:${f}`]), f + \" overlay without this layer = the DP2 bytes\");\n",
+        "to": "    assert.equal(m1EffectivePins(REPO)[f], DP3_PINS[f], f + \" overlay\");\n    }\n    if (without[f] !== undefined) assert.equal(without[f], git([\"rev-parse\", `${DP3_PARENT}:${f}`]), f + \" overlay without this layer = the DP2 bytes\");\n"
+      },
+      {
+        "from": "  const g = readFileSync(join(REPO, \"test/finance/dp2-daily-policy-guard.test.mjs\"), \"utf8\");\n",
+        "to": "  const g = src(\"test/finance/dp2-daily-policy-guard.test.mjs\");\n"
+      },
+      {
+        "from": "    assert.equal(git([\"rev-parse\", `HEAD:${f}`]), git([\"rev-parse\", `${DP3_PARENT}:${f}`]), f + \" is DP2 bytes\");\n  assert.deepEqual(names([\"diff\", \"--name-only\", DP3_PARENT, \"HEAD\", \"--\", \"src\", \"fincore\", \"scripts\", \"migrations\"]), []);\n  assert.deepEqual(names([\"diff\", \"--name-only\", DP3_PARENT, \"HEAD\", \"--\", \"lib\", \"api\", \"tools\"]).sort(), [DTS, ED, TOOL].sort());\n  const ed = readFileSync(join(REPO, ED), \"utf8\"), dp2 = parentBlob(ED);\n",
+        "to": "    assert.equal(git([\"rev-parse\", `${SOURCE}:${f}`]), git([\"rev-parse\", `${DP3_PARENT}:${f}`]), f + \" is DP2 bytes\");\n  assert.deepEqual(names([\"diff\", \"--name-only\", DP3_PARENT, SOURCE, \"--\", \"src\", \"fincore\", \"scripts\", \"migrations\"]), []);\n  assert.deepEqual(names([\"diff\", \"--name-only\", DP3_PARENT, SOURCE, \"--\", \"lib\", \"api\", \"tools\"]).sort(), [DTS, ED, TOOL].sort());\n  const ed = src(ED), dp2 = parentBlob(ED);\n"
+      },
+      {
+        "from": "  const d = readFileSync(join(REPO, DTS), \"utf8\"), d2 = parentBlob(DTS);\n",
+        "to": "  const d = src(DTS), d2 = parentBlob(DTS);\n"
+      },
+      {
+        "from": "  const tool = readFileSync(join(REPO, TOOL), \"utf8\"), tool2 = parentBlob(TOOL);\n",
+        "to": "  const tool = src(TOOL), tool2 = parentBlob(TOOL);\n"
+      },
+      {
+        "from": "  const C = { lib: await import(pathToFileURL(join(REPO, ED)).href), tool: await import(pathToFileURL(join(REPO, TOOL)).href) };\n",
+        "to": "  // on a successor the literal DP3 runtime and report are judged (written beside the copied library)\n  if (LAYERED) { mkdirSync(join(dir, \"dp3\", \"tools\", \"daily-delivery\"), { recursive: true }); cpSync(join(REPO, \"lib\"), join(dir, \"dp3\", \"lib\"), { recursive: true });\n    writeFileSync(join(dir, \"dp3\", \"lib\", \"emailDelivery.js\"), src(ED)); writeFileSync(join(dir, \"dp3\", TOOL), src(TOOL)); }\n  const CR = LAYERED ? join(dir, \"dp3\") : REPO;\n  const C = { lib: await import(pathToFileURL(join(CR, ED)).href), tool: await import(pathToFileURL(join(CR, TOOL)).href) };\n"
+      }
+    ],
+    "test/support/m1-r1-remediation.mjs": [
+      {
+        "from": "import { isDP3Tree, DP3_PINS } from \"./dp3-daily-policy.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"./hr3-s2-daily-hold.mjs\";\n",
+        "to": "import { isDP3Tree, DP3_PINS } from \"./dp3-daily-policy.mjs\";\nimport { isDP4Tree, DP4_PINS } from \"./dp4-daily-policy.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"./hr3-s2-daily-hold.mjs\";\n"
+      },
+      {
+        "from": "  withHR1 = withI7, withHR2 = withHR1, withHR3 = withHR2, withHR3S1 = withHR3, withHR3S2 = withHR3S1, withHR3S3 = withHR3S2, withHR3OT1 = withHR3S3, withHR3OT2 = withHR3OT1, withHR3OT3 = withHR3OT2, withHR3OT4 = withHR3OT3, withDP1 = withHR3OT4, withDP2 = withDP1, withDP3 = withDP2 } = {}) {\n",
+        "to": "  withHR1 = withI7, withHR2 = withHR1, withHR3 = withHR2, withHR3S1 = withHR3, withHR3S2 = withHR3S1, withHR3S3 = withHR3S2, withHR3OT1 = withHR3S3, withHR3OT2 = withHR3OT1, withHR3OT3 = withHR3OT2, withHR3OT4 = withHR3OT3, withDP1 = withHR3OT4, withDP2 = withDP1, withDP3 = withDP2, withDP4 = withDP3 } = {}) {\n"
+      },
+      {
+        "from": "    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && withHR3OT3 && withHR3OT4 && withDP1 && withDP2 && withDP3 && isDP3Tree(repo) ? DP3_PINS : {}) } : {};   // each successor overlays only its own protected files\n",
+        "to": "    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && withHR3OT3 && withHR3OT4 && withDP1 && withDP2 && withDP3 && isDP3Tree(repo) ? DP3_PINS : {}),\n    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && withHR3OT3 && withHR3OT4 && withDP1 && withDP2 && withDP3 && withDP4 && isDP4Tree(repo) ? DP4_PINS : {}) } : {};   // each successor overlays only its own protected files\n"
+      }
+    ]
+  },
+  "pins": {
+    "lib/emailDelivery.js": "50d6427e3bbd1013c8d933a40d442a9c05a081e0",
+    "test/delivery/dp1-manual-delivery-policy.test.mjs": "070fe3aeb1644157e45b3f764f759be97b8d3eef",
+    "test/delivery/dp4-legacy-date-scope.test.mjs": "0732f3daf3b4549e3162af0110ad051cf1b59201",
+    "test/finance/b2-guard-mutations.test.mjs": "dfcf6e1153bd234308a5d79cdc2f949ad49f0abf",
+    "test/finance/dp3-daily-policy-guard.test.mjs": "ed1175654668e22be3959aa51cf6e8e6fae8e586",
+    "test/finance/dp4-daily-policy-guard.test.mjs": "296db5e8147876d3ad62d76579dabe2441e485ee",
+    "test/support/dp4-daily-policy.mjs": "c9e8f44f7c60ca4fd7cf70dd82f43c3f2b0ca2de",
+    "test/support/m1-r1-remediation.mjs": "4cf1e9d1de7cd8ab4417130a0f926e685900f22d"
+  }
+}

@@ -8,18 +8,34 @@
     "dt": "7b1d3061c1a42b2d05d7702fbe376f98916e2ce6"
   },
   "scope": [
+    "api/daily-snapshot/run.ts",
+    "lib/emailDelivery.d.ts",
+    "lib/emailDelivery.js",
     "lib/repositories/bizDataRepo.js",
     "scripts/backfill-biz-access.mjs",
     "src/analytics/dailyBuilder.ts",
     "src/utils/dates.ts",
     "test/analytics/dt-o1-calendar-date.test.mjs",
+    "test/delivery/daily-email-delivery.test.mjs",
+    "test/delivery/dp1-manual-delivery-policy.test.mjs",
+    "test/delivery/dp2-shared-admission.test.mjs",
+    "test/delivery/dp3-evidence-validation.test.mjs",
+    "test/delivery/dp4-legacy-date-scope.test.mjs",
+    "test/delivery/hr1-daily-hold.test.mjs",
+    "test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs",
     "test/emulator/backfill-registry-cli-emulator.mjs",
     "test/emulator/backfill-registry-gate-emulator.mjs",
     "test/emulator/canary-operator-matrix.mjs",
     "test/emulator/checklist-cold-cache-emulator.mjs",
+    "test/emulator/dp1-manual-policy-emulator.mjs",
+    "test/emulator/dp2-admission-worker.mjs",
+    "test/emulator/dp2-shared-admission-emulator.mjs",
+    "test/emulator/dp3-evidence-emulator.mjs",
+    "test/emulator/hr1-daily-hold-emulator.mjs",
     "test/finance/adb06-builder-layer-guard.test.mjs",
     "test/finance/b1-downstream-compat.test.mjs",
     "test/finance/b2-guard-mutations.test.mjs",
+    "test/finance/b2-snapshot.test.mjs",
     "test/finance/backfill-registry-gate.test.mjs",
     "test/finance/bf1-backfill-layer-guard.test.mjs",
     "test/finance/bf2-backfill-layer-guard.test.mjs",
@@ -27,6 +43,10 @@
     "test/finance/c07-temporal-guard.test.mjs",
     "test/finance/cc1-checklist-cold-cache-guard.test.mjs",
     "test/finance/cc2-checklist-concurrency-guard.test.mjs",
+    "test/finance/dp1-daily-policy-guard.test.mjs",
+    "test/finance/dp2-daily-policy-guard.test.mjs",
+    "test/finance/dp3-daily-policy-guard.test.mjs",
+    "test/finance/dp4-daily-policy-guard.test.mjs",
     "test/finance/dt-o1-runtime-guard.test.mjs",
     "test/finance/hr1-daily-hold-guard.test.mjs",
     "test/finance/hr3-ot4-daily-hold-guard.test.mjs",
@@ -39,6 +59,7 @@
     "test/finance/i7-integration-guard.test.mjs",
     "test/finance/m1-a1-carriage-regressions.test.mjs",
     "test/finance/m1-a1-inspection-guard.test.mjs",
+    "test/finance/m1-a3-policy-carriage-guard.test.mjs",
     "test/finance/rf1-rules-gate-guard.test.mjs",
     "test/finance/rf2-rules-gate-guard.test.mjs",
     "test/finance/rf3-rules-gate-guard.test.mjs",
@@ -63,6 +84,14 @@
     "test/support/cc1-checklist-cold-cache.json",
     "test/support/cc1-checklist-cold-cache.mjs",
     "test/support/cc2-checklist-concurrency.mjs",
+    "test/support/dp1-daily-policy.json",
+    "test/support/dp1-daily-policy.mjs",
+    "test/support/dp2-daily-policy.json",
+    "test/support/dp2-daily-policy.mjs",
+    "test/support/dp3-daily-policy.json",
+    "test/support/dp3-daily-policy.mjs",
+    "test/support/dp4-daily-policy.json",
+    "test/support/dp4-daily-policy.mjs",
     "test/support/dt-o1-runtime.json",
     "test/support/dt-o1-runtime.mjs",
     "test/support/m1-a1-inspection.json",
@@ -75,21 +104,38 @@
     "test/support/rf3-rules-gate.json",
     "test/support/rf3-rules-gate.mjs",
     "test/support/rules-owner-acceptance.mjs",
-    "test/support/server-reader-authorized-delta.mjs"
+    "test/support/server-reader-authorized-delta.mjs",
+    "tools/daily-delivery/hold.mjs"
   ],
   "allowedScope": [
+    "api/daily-snapshot/run.ts",
+    "lib/emailDelivery.d.ts",
+    "lib/emailDelivery.js",
     "lib/repositories/bizDataRepo.js",
     "scripts/backfill-biz-access.mjs",
     "src/analytics/dailyBuilder.ts",
     "src/utils/dates.ts",
     "test/analytics/dt-o1-calendar-date.test.mjs",
+    "test/delivery/daily-email-delivery.test.mjs",
+    "test/delivery/dp1-manual-delivery-policy.test.mjs",
+    "test/delivery/dp2-shared-admission.test.mjs",
+    "test/delivery/dp3-evidence-validation.test.mjs",
+    "test/delivery/dp4-legacy-date-scope.test.mjs",
+    "test/delivery/hr1-daily-hold.test.mjs",
+    "test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs",
     "test/emulator/backfill-registry-cli-emulator.mjs",
     "test/emulator/backfill-registry-gate-emulator.mjs",
     "test/emulator/canary-operator-matrix.mjs",
     "test/emulator/checklist-cold-cache-emulator.mjs",
+    "test/emulator/dp1-manual-policy-emulator.mjs",
+    "test/emulator/dp2-admission-worker.mjs",
+    "test/emulator/dp2-shared-admission-emulator.mjs",
+    "test/emulator/dp3-evidence-emulator.mjs",
+    "test/emulator/hr1-daily-hold-emulator.mjs",
     "test/finance/adb06-builder-layer-guard.test.mjs",
     "test/finance/b1-downstream-compat.test.mjs",
     "test/finance/b2-guard-mutations.test.mjs",
+    "test/finance/b2-snapshot.test.mjs",
     "test/finance/backfill-registry-gate.test.mjs",
     "test/finance/bf1-backfill-layer-guard.test.mjs",
     "test/finance/bf2-backfill-layer-guard.test.mjs",
@@ -97,6 +143,10 @@
     "test/finance/c07-temporal-guard.test.mjs",
     "test/finance/cc1-checklist-cold-cache-guard.test.mjs",
     "test/finance/cc2-checklist-concurrency-guard.test.mjs",
+    "test/finance/dp1-daily-policy-guard.test.mjs",
+    "test/finance/dp2-daily-policy-guard.test.mjs",
+    "test/finance/dp3-daily-policy-guard.test.mjs",
+    "test/finance/dp4-daily-policy-guard.test.mjs",
     "test/finance/dt-o1-runtime-guard.test.mjs",
     "test/finance/hr1-daily-hold-guard.test.mjs",
     "test/finance/hr3-ot4-daily-hold-guard.test.mjs",
@@ -109,6 +159,7 @@
     "test/finance/i7-integration-guard.test.mjs",
     "test/finance/m1-a1-carriage-regressions.test.mjs",
     "test/finance/m1-a1-inspection-guard.test.mjs",
+    "test/finance/m1-a3-policy-carriage-guard.test.mjs",
     "test/finance/rf1-rules-gate-guard.test.mjs",
     "test/finance/rf2-rules-gate-guard.test.mjs",
     "test/finance/rf3-rules-gate-guard.test.mjs",
@@ -133,6 +184,14 @@
     "test/support/cc1-checklist-cold-cache.json",
     "test/support/cc1-checklist-cold-cache.mjs",
     "test/support/cc2-checklist-concurrency.mjs",
+    "test/support/dp1-daily-policy.json",
+    "test/support/dp1-daily-policy.mjs",
+    "test/support/dp2-daily-policy.json",
+    "test/support/dp2-daily-policy.mjs",
+    "test/support/dp3-daily-policy.json",
+    "test/support/dp3-daily-policy.mjs",
+    "test/support/dp4-daily-policy.json",
+    "test/support/dp4-daily-policy.mjs",
     "test/support/dt-o1-runtime.json",
     "test/support/dt-o1-runtime.mjs",
     "test/support/hr3-ot4-daily-hold.mjs",
@@ -146,7 +205,8 @@
     "test/support/rf3-rules-gate.json",
     "test/support/rf3-rules-gate.mjs",
     "test/support/rules-owner-acceptance.mjs",
-    "test/support/server-reader-authorized-delta.mjs"
+    "test/support/server-reader-authorized-delta.mjs",
+    "tools/daily-delivery/hold.mjs"
   ],
   "treePins": {
     ".vercelignore": "c7140b012034e18f47e652950ee90ad4dec18112",
@@ -163,7 +223,7 @@
     "api/config.js": "c26fa61972c986c2f4b4bcb166a54fb705d55f63",
     "api/cost-history.js": "88324f61cc660e09b3028679c08f83ef7152a6f2",
     "api/create-tenant.js": "c8d626124e460f0024b618d4e38d043e6b85eb85",
-    "api/daily-snapshot/run.ts": "44e835cf6450b048b8ea7e1251446edf86a47ef8",
+    "api/daily-snapshot/run.ts": "cb7221087c5c4ea0b2d742a70ac2208c616efece",
     "api/oref.js": "0107ef2742379a6612f60fb1fd702f1f3192ba55",
     "api/proactive/run.ts": "0ebc63c3cc7412ee0f2fbff8a3193b35e0d416ff",
     "api/whatsapp.js": "86e702d256b7ed0894e226b3a7cb088b5144c3d7",
@@ -591,8 +651,8 @@
     "lib/businessRegistry.d.ts": "4e52c03a703bcdead58ee4025a1f16e7ea28b69e",
     "lib/businessRegistry.js": "fb11a9ba1c62e5648595302be1c5b336ae6b9114",
     "lib/checklistVersion.js": "15f4834ebcacc4c6af6b51d0ea0ed0184189f94e",
-    "lib/emailDelivery.d.ts": "7fbcc083add4436c1a33700349cb6185f368754a",
-    "lib/emailDelivery.js": "331f28f188ee46d8803b803bed143bf5382e169f",
+    "lib/emailDelivery.d.ts": "9c366831a240c19269464f9a1fbbb393d4f008ae",
+    "lib/emailDelivery.js": "50d6427e3bbd1013c8d933a40d442a9c05a081e0",
     "lib/entryExceptions.js": "13c844a19b0aa9c4e6a26157de61b7292fe0ef00",
     "lib/finance/costHistoryWriter.js": "51ec2e77d9cc800bab12467d5a0f9f776d307b71",
     "lib/helpers.d.ts": "e0a64e5d622de2762085f56c134e09120dc399c8",
@@ -784,7 +844,7 @@
     "test/dashboard/entries-ui-call-sites.test.mjs": "02ce908236fe09ed5274224b808ffbf04211569a",
     "test/dashboard/entries-version-fence.test.mjs": "7a1267046bb6313b11d9a97a7c0bebb5433cc05c",
     "test/dashboard/setup-config-preservation.test.mjs": "35d5d598b8e500e8dd8b99095b9459add47841cd",
-    "test/delivery/daily-email-delivery.test.mjs": "75196e220905befb79fe1ca1d92a90763d734090",
+    "test/delivery/daily-email-delivery.test.mjs": "40c3bee556f6b25af982da524df1fd5c355d035f",
     "test/delivery/de1-daily-email-guard.test.mjs": "58f452b41721873a4e0c2c9d64b8e158582562c5",
     "test/delivery/de1-r1-email-guard.test.mjs": "18775ba7b498638113666169080ed86e6083199c",
     "test/delivery/de1-r1-remediation.test.mjs": "36549e601be8b3343414f60d74b81592bb17921b",
@@ -803,12 +863,16 @@
     "test/delivery/de1-r7-notice-integrity.test.mjs": "f7c12b17e620e81018cd25180722b2208eb908a3",
     "test/delivery/de1-r8-provenance-guard.test.mjs": "6cad77ccb4d329e7c2ff0cc87ab104188619c77d",
     "test/delivery/de1-r8-refusal-provenance.test.mjs": "bc738fb1766358f2c286bfb77d23a70befc0f4fa",
+    "test/delivery/dp1-manual-delivery-policy.test.mjs": "070fe3aeb1644157e45b3f764f759be97b8d3eef",
+    "test/delivery/dp2-shared-admission.test.mjs": "8b70cbb7855da583f24c9f877a0dd63c0a85f3ae",
+    "test/delivery/dp3-evidence-validation.test.mjs": "7844478376776dcb4087c21736b08fe1c839d186",
+    "test/delivery/dp4-legacy-date-scope.test.mjs": "0732f3daf3b4549e3162af0110ad051cf1b59201",
     "test/delivery/email-delivery-unit.test.mjs": "945009fb3f6cc562ff73fb1ae2c833ff826a2d64",
-    "test/delivery/hr1-daily-hold.test.mjs": "6d957725de5632c1d2e2c16268cdd0f08b7cc759",
+    "test/delivery/hr1-daily-hold.test.mjs": "47911c16184520dc6c40e47a97f0a2cd80004fd8",
     "test/delivery/hr1-operator-and-compat.test.mjs": "d1642552572f17f13f0dc73108842ac213f9ec8e",
     "test/delivery/hr2-review-findings.test.mjs": "7b91538d8937409779c5c6cbb10ba1a067875fd5",
     "test/delivery/hr3-inventory-protocol.test.mjs": "bc0ee94ff063dd055f8e5a51b27b2a48022c6c39",
-    "test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs": "0ea9a5d7f9dbd1584f08604e6547b35db3db1aeb",
+    "test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs": "51359866288a8457066b708a1dd53965c85aaa10",
     "test/delivery/hr3-ot2-duration-input.test.mjs": "725739fd8fd5745cc6b1c18c057e448f974e168f",
     "test/delivery/hr3-ot3-duration-raw-token.test.mjs": "a57b9aa58d750e2e875a6fc2b0aac17b3b16cedd",
     "test/delivery/hr3-ot4-duration-grammar.test.mjs": "99d378368b1bfb6651d1a058cfb91a065162ed51",
@@ -829,6 +893,10 @@
     "test/emulator/de1-r1-receipt-emulator.mjs": "20c9e5bfd9c5e024f2e97071e2018e7ef86dddd2",
     "test/emulator/de1-r2-receipt-emulator.mjs": "1404cba3c62b051693aec63e8fb9411dc36b0963",
     "test/emulator/de1-receipt-emulator.mjs": "39d0cf3364174bb754bc2c3e1c04e513df8901d2",
+    "test/emulator/dp1-manual-policy-emulator.mjs": "7adc8e59648e0da778af11e77b20690a48b04e22",
+    "test/emulator/dp2-admission-worker.mjs": "aa641603a83eb78d7c17aa92b6931e3df1feeb5f",
+    "test/emulator/dp2-shared-admission-emulator.mjs": "3432625fb6b4197ca2880e7ab325d4b4f0151f54",
+    "test/emulator/dp3-evidence-emulator.mjs": "9b3ff3c7473f3316badc67f6a5f544fda4f62898",
     "test/emulator/entries-hydrate-immediate.mjs": "e6286e50566eeb362c20f8139f26a4d3b3c8b7fd",
     "test/emulator/entries-remote-atomic-emulator.mjs": "f2f286c6749371e29800340926d576ebd424c2dc",
     "test/emulator/entries-rules-validation-matrix.mjs": "3623ae2755dc1d7f2abade8ca43c9a71fac689e1",
@@ -837,7 +905,7 @@
     "test/emulator/f2-rendered-editor.mjs": "c7a47ff25fa59bf6f49f7c5a5079a523e263d148",
     "test/emulator/firebase.json": "06eea473e48e681410250768a6493e65f1ba126e",
     "test/emulator/historical-page-version-fence.mjs": "be5727cf2d3eb80f058814242a6533f6571b12e9",
-    "test/emulator/hr1-daily-hold-emulator.mjs": "8d8332b55139ea4ee882327016812d60893e8b15",
+    "test/emulator/hr1-daily-hold-emulator.mjs": "d4cc2efc35a0fdaa5496cf564da15fe20feebee8",
     "test/emulator/hr3-s3-roundtrip-emulator.mjs": "5024febf4c934e2ed335266fae878114109cbf58",
     "test/emulator/i1-integration-emulator.mjs": "785dee36140d0d44c008063a77d9428dc2f05763",
     "test/emulator/i4-boundary-emulator.mjs": "3cd576560bb2252a8e26ba02c96b38172f4d683d",
@@ -872,8 +940,8 @@
     "test/finance/b1-repositories.test.mjs": "74ef4b271f6dea2a82f78da2bfe181d8322ff29d",
     "test/finance/b2-email-goldens.test.mjs": "17ae42c841aa2d4f6bc059b13d5f29f4ffb788e1",
     "test/finance/b2-email.test.mjs": "01073cdcc08febbe9d8953cbc29adb9bd23435ab",
-    "test/finance/b2-guard-mutations.test.mjs": "8e281d4ed984ed95b01f72a885b89290320fa01c",
-    "test/finance/b2-snapshot.test.mjs": "02103ec09b0ce44e87f827b31656a00325067a20",
+    "test/finance/b2-guard-mutations.test.mjs": "caef63042854220fdd06c22f0cdee240769321af",
+    "test/finance/b2-snapshot.test.mjs": "5f0e341ca16349a40e69e19f2f614c5095834ee7",
     "test/finance/b2-successor.test.mjs": "2bc6cbae6226c0c3bd2ffab5b1e2497c3ce2cb82",
     "test/finance/backfill-registry-gate.test.mjs": "3ff2836ab74d3be609ce4118f456ca2cee51fd86",
     "test/finance/bf1-backfill-layer-guard.test.mjs": "59b7e091f6a1ab24287c606c3dad5c22fcbd3146",
@@ -900,6 +968,10 @@
     "test/finance/core-consumers/f1.json": "2eb122d0dc5727b744fcdbfb89ee646212535ae4",
     "test/finance/core-consumers/f2.json": "b239aec8bcebd35e4bc3ab6090d79dda4e27c700",
     "test/finance/core-consumers/p1.json": "3dc6a13aab685265beb14f25d2ea0ec27b737017",
+    "test/finance/dp1-daily-policy-guard.test.mjs": "7606281de9de6903f85b7eaaf60a773b6bcd790b",
+    "test/finance/dp2-daily-policy-guard.test.mjs": "a09072df5601686631b80741c06947b0aa351461",
+    "test/finance/dp3-daily-policy-guard.test.mjs": "2279e5f15557c24d93c7c8f9fbd371747ea5cc15",
+    "test/finance/dp4-daily-policy-guard.test.mjs": "f6a5816d871538c55f93a8a05cad1b8086622ea4",
     "test/finance/dt-o1-runtime-guard.test.mjs": "9220d205426ce1390aaa84118770a395b4f36790",
     "test/finance/ev1-classifier.test.mjs": "39874c71a821ba6fc612b719fdfbda320563f537",
     "test/finance/ev1-collector.test.mjs": "f81299dd54e8ef54a39ac79b0153bc5f137b4cae",
@@ -992,7 +1064,8 @@
     "test/finance/i7-parity.test.mjs": "512889fddf674f5aebb1dcb1f2be96e62288a831",
     "test/finance/i7-update-user-alignment.test.mjs": "7214b1e21389bfa2b57ed850e3a302c990870a03",
     "test/finance/m1-a1-carriage-regressions.test.mjs": "75f67439ee6be0a2d211360849d0197196b1189b",
-    "test/finance/m1-a1-inspection-guard.test.mjs": "a63a0bce8ce6f0b299143df0d1acf34654fc7758",
+    "test/finance/m1-a1-inspection-guard.test.mjs": "86f7bcbbf20ad8f47756dc8eadc6b5bad6a5f961",
+    "test/finance/m1-a3-policy-carriage-guard.test.mjs": "8b9278122633f5e5df70464add1d3cb9d78bf155",
     "test/finance/m1-integration-contracts.test.mjs": "ab6e613c1a9fc38a9d10eb3135b268b3e9620bc7",
     "test/finance/m1-integration-guard.test.mjs": "2692fdb56aa0e8b05eb8fa4cb2b0c387060dd10d",
     "test/finance/m1-r1-guard.test.mjs": "8243932dda304c0d2a2611991da46d0adec9a7b6",
@@ -1129,6 +1202,14 @@
     "test/support/de1-r8-mutations.mjs": "1a23a8ded8129df5f124a2fc4009c0e28be9a135",
     "test/support/de1-r8-provenance.json": "751d0e7edce863819b6d7ce88cf000bcf6d62ad0",
     "test/support/de1-r8-provenance.mjs": "ff5d1cf14ffe0e0bed6667ec3b07300608ef9742",
+    "test/support/dp1-daily-policy.json": "60d01ddd83e70a6766bef04815bd470ac30cf60a",
+    "test/support/dp1-daily-policy.mjs": "9edd0ab239782572c2b8a4a72634869f6fcb0b95",
+    "test/support/dp2-daily-policy.json": "6c8b143a2b8db1aa6b34384584c89dd42e38344f",
+    "test/support/dp2-daily-policy.mjs": "3985dcf657c13daf2549c857ac3ef7405110918f",
+    "test/support/dp3-daily-policy.json": "eaa6fad4470c8d53a3cd26a01fb49ffb2436b99c",
+    "test/support/dp3-daily-policy.mjs": "be160a199953ab41470a06e1b9e522c5617d4c2c",
+    "test/support/dp4-daily-policy.json": "5726445d34d59c86b9330135035f116303126fbe",
+    "test/support/dp4-daily-policy.mjs": "c9e8f44f7c60ca4fd7cf70dd82f43c3f2b0ca2de",
     "test/support/dt-o1-runtime.json": "ba81bd9d49eaa79a22f4d96e07946c2fb3c63139",
     "test/support/dt-o1-runtime.mjs": "e95164b05e161f0201b250968dc0b409cec11d76",
     "test/support/entries-fixtures.mjs": "f668364c324bdcc66715ad817da943ad57c859b4",
@@ -1183,7 +1264,7 @@
     "test/support/i6-integration.mjs": "570683092a17411ce337ca2ff7e9ec7f121ed23a",
     "test/support/i7-integration.json": "3d069d769b5e407515c20cad053674a977152dd3",
     "test/support/i7-integration.mjs": "a52695329d06627d41d49e467f8090cd282453fc",
-    "test/support/m1-a1-inspection.mjs": "879c6b9e86a49ab581f07db579015dca0108d732",
+    "test/support/m1-a1-inspection.mjs": "6955727d99d157cf6a1ba6988bf70412d309cf52",
     "test/support/m1-derivation.mjs": "5ee45583bf800bd4d9551cd76ec5662827e6c01b",
     "test/support/m1-index-scope.mjs": "7f82aa1b534598cd4d87ae3b75394281598d2ac2",
     "test/support/m1-integration-pin.mjs": "b98d35b0fd76ca482ff2a2c888ef2e69ed90c6c3",
@@ -1191,7 +1272,7 @@
     "test/support/m1-merge-resolutions.json": "65fac7ce6bcc276aed1bb1c600a0662cd8831950",
     "test/support/m1-r1-mutations.mjs": "a2f97b682047656fcb17be096e94ae5c92ac5ce2",
     "test/support/m1-r1-remediation.json": "58b0df2ef93b19de4a6de73df45817d7b65af957",
-    "test/support/m1-r1-remediation.mjs": "e5ac1287d0fa0adb9afbef926375a6e1a9069130",
+    "test/support/m1-r1-remediation.mjs": "17136948b627fc781402e3b0670fd5526cb1c35e",
     "test/support/m1-r2-remediation.json": "866cbc812765cf221d133053ae02ce42e6e515a2",
     "test/support/m1-r2-remediation.mjs": "d1d520e6042ae5628047c3a4d4360591247879bc",
     "test/support/m1-r3-mutations.mjs": "fff95f293557483e8a56283ea34c480efd443cab",
@@ -1247,7 +1328,7 @@
     "tools/agent-daily/run-mutations.mjs": "61c31330e5167457d2349cf2aa3a1ecdea50353d",
     "tools/daily-builder/run-mutations.mjs": "30e254745291eeafedf86a6cd17a8a9e637510b9",
     "tools/daily-builder/run-registry-mutations.mjs": "84823911a9146727b0a82e20363ec55e77ff22af",
-    "tools/daily-delivery/hold.mjs": "e46965dcd5511065c814bc6b7892477d967adfc6",
+    "tools/daily-delivery/hold.mjs": "cbdaef40636822c6a804374c74c887279a8e909c",
     "tools/finance-core/ev1-classifier.mjs": "98c14ab63c9d917d15300579792be527f4d4d01c",
     "tools/finance-core/ev1-collector.mjs": "fbe3a7067713f7a9872f5e34238f880b784766b3",
     "tools/finance-core/ev1-preflight.mjs": "376b3d915d8a3826d035bd1f73bb583cf5b2bbb8",
@@ -1301,7 +1382,31 @@
     "test/support/bf2-backfill-layer.mjs": "3a3b6ff21632d76563eae95c6a8717e1cc263f76",
     "src/analytics/dailyBuilder.ts": "7b1d3061c1a42b2d05d7702fbe376f98916e2ce6",
     "src/utils/dates.ts": "7b1d3061c1a42b2d05d7702fbe376f98916e2ce6",
-    "test/analytics/dt-o1-calendar-date.test.mjs": "7b1d3061c1a42b2d05d7702fbe376f98916e2ce6"
+    "test/analytics/dt-o1-calendar-date.test.mjs": "7b1d3061c1a42b2d05d7702fbe376f98916e2ce6",
+    "api/daily-snapshot/run.ts": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "lib/emailDelivery.d.ts": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "lib/emailDelivery.js": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/delivery/daily-email-delivery.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/delivery/dp1-manual-delivery-policy.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/delivery/dp2-shared-admission.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/delivery/dp3-evidence-validation.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/delivery/dp4-legacy-date-scope.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/delivery/hr1-daily-hold.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/emulator/dp1-manual-policy-emulator.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/emulator/dp2-admission-worker.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/emulator/dp2-shared-admission-emulator.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/emulator/dp3-evidence-emulator.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/emulator/hr1-daily-hold-emulator.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/support/dp1-daily-policy.json": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/support/dp1-daily-policy.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/support/dp2-daily-policy.json": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/support/dp2-daily-policy.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/support/dp3-daily-policy.json": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/support/dp3-daily-policy.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/support/dp4-daily-policy.json": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/support/dp4-daily-policy.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "tools/daily-delivery/hold.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef"
   },
   "derivations": {
     "src/analytics/dailyBuilder.ts": [
@@ -1333,7 +1438,11 @@
     "test/finance/i7-integration-guard.test.mjs": "f34eec92aed4851c2da8a8dfd8f1f353b1d582d7",
     "test/finance/rf1-rules-gate-guard.test.mjs": "7062046c0227a3647fbd034e83c9bcff937e79f6",
     "test/finance/rf2-rules-gate-guard.test.mjs": "7062046c0227a3647fbd034e83c9bcff937e79f6",
-    "test/finance/rf3-rules-gate-guard.test.mjs": "7062046c0227a3647fbd034e83c9bcff937e79f6"
+    "test/finance/rf3-rules-gate-guard.test.mjs": "7062046c0227a3647fbd034e83c9bcff937e79f6",
+    "test/finance/dp1-daily-policy-guard.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/finance/dp2-daily-policy-guard.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/finance/dp3-daily-policy-guard.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/finance/dp4-daily-policy-guard.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef"
   },
   "exclusions": {
     "pbd": "7ae41336b7c2f02b953b9267768b90f97e39278f",
@@ -1408,5 +1517,123 @@
     "test/finance/cc1-checklist-cold-cache-guard.test.mjs": "838b63659596cd995331bbf8c681e6ad12cf1ec1",
     "test/finance/adb06-builder-layer-guard.test.mjs": "3a3b6ff21632d76563eae95c6a8717e1cc263f76",
     "test/finance/hr1-daily-hold-guard.test.mjs": "a5f9f1b471e9d7004aba3dec923f717dbfe36c3e"
+  },
+  "successor": {
+    "parent": "43387d824e539fe5233c3b4112e6bf47a80366bb",
+    "source": {
+      "dp4": "079fe656779eb6f922d2e3bfe3a567a6a73545ef"
+    },
+    "scope": [
+      "api/daily-snapshot/run.ts",
+      "lib/emailDelivery.d.ts",
+      "lib/emailDelivery.js",
+      "test/delivery/daily-email-delivery.test.mjs",
+      "test/delivery/dp1-manual-delivery-policy.test.mjs",
+      "test/delivery/dp2-shared-admission.test.mjs",
+      "test/delivery/dp3-evidence-validation.test.mjs",
+      "test/delivery/dp4-legacy-date-scope.test.mjs",
+      "test/delivery/hr1-daily-hold.test.mjs",
+      "test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs",
+      "test/emulator/dp1-manual-policy-emulator.mjs",
+      "test/emulator/dp2-admission-worker.mjs",
+      "test/emulator/dp2-shared-admission-emulator.mjs",
+      "test/emulator/dp3-evidence-emulator.mjs",
+      "test/emulator/hr1-daily-hold-emulator.mjs",
+      "test/finance/b2-guard-mutations.test.mjs",
+      "test/finance/b2-snapshot.test.mjs",
+      "test/finance/dp1-daily-policy-guard.test.mjs",
+      "test/finance/dp2-daily-policy-guard.test.mjs",
+      "test/finance/dp3-daily-policy-guard.test.mjs",
+      "test/finance/dp4-daily-policy-guard.test.mjs",
+      "test/finance/m1-a1-inspection-guard.test.mjs",
+      "test/finance/m1-a3-policy-carriage-guard.test.mjs",
+      "test/support/dp1-daily-policy.json",
+      "test/support/dp1-daily-policy.mjs",
+      "test/support/dp2-daily-policy.json",
+      "test/support/dp2-daily-policy.mjs",
+      "test/support/dp3-daily-policy.json",
+      "test/support/dp3-daily-policy.mjs",
+      "test/support/dp4-daily-policy.json",
+      "test/support/dp4-daily-policy.mjs",
+      "test/support/m1-a1-inspection.json",
+      "test/support/m1-a1-inspection.mjs",
+      "test/support/m1-r1-remediation.mjs",
+      "tools/daily-delivery/hold.mjs"
+    ],
+    "status": "PROPOSED_FOR_INDEPENDENT_REVIEW",
+    "edits": {
+      "test/finance/b2-guard-mutations.test.mjs": {
+        "base": "43387d824e539fe5233c3b4112e6bf47a80366bb",
+        "edits": [
+          {
+            "from": "import { isCC1Tree, CC1_SCOPE } from \"../support/cc1-checklist-cold-cache.mjs\";\n",
+            "to": "import { isCC1Tree, CC1_SCOPE } from \"../support/cc1-checklist-cold-cache.mjs\";\n// M1-A3 (T-A3-B2-PINS): the content-carried DP4 policy files, held to the A3 record's pins (A3 has no DP ancestry).\nimport { isA3Tree, a3PolicyPins } from \"../support/m1-a1-inspection.mjs\";\n"
+          },
+          {
+            "from": "      ...(i1 && isHR3S2Tree(root) ? HR3S2_PINS : {}), ...(i1 && isHR3S3Tree(root) ? HR3S3_PINS : {}) } : {};\n",
+            "to": "      ...(i1 && isHR3S2Tree(root) ? HR3S2_PINS : {}), ...(i1 && isHR3S3Tree(root) ? HR3S3_PINS : {}),\n      ...(i1 && isA3Tree(root) ? a3PolicyPins(root) : {}) } : {};\n"
+          }
+        ]
+      },
+      "test/finance/b2-snapshot.test.mjs": {
+        "base": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+        "edits": [
+          {
+            "from": "import { DP2_PINS, isDP2Tree, deriveDP2 } from \"../support/dp2-daily-policy.mjs\";\n",
+            "to": "import { DP2_PINS, isDP2Tree, deriveDP2 } from \"../support/dp2-daily-policy.mjs\";\n// M1-A3 (T-A3-B2-T14): a content carry of DP4 has no DP ancestry; the joint holder's A3 predicate stands in for it here.\nimport { isA3Tree } from \"../support/m1-a1-inspection.mjs\";\n"
+          },
+          {
+            "from": "    const dp1 = isDP1Tree(REPO);\n",
+            "to": "    const dp1 = isDP1Tree(REPO) || isA3Tree(REPO);\n"
+          },
+          {
+            "from": "    const dp2 = isDP2Tree(REPO);\n",
+            "to": "    const dp2 = isDP2Tree(REPO) || isA3Tree(REPO);\n"
+          }
+        ]
+      },
+      "test/finance/m1-a1-inspection-guard.test.mjs": {
+        "base": "43387d824e539fe5233c3b4112e6bf47a80366bb",
+        "edits": [
+          {
+            "from": "import { verifyA1Head, A1_PARENT, A1_SOURCES, A2_PARENT, A2_SCOPE, a1Blob } from '../support/m1-a1-inspection.mjs';\n",
+            "to": "import { verifyA1Head, A1_PARENT, A1_SOURCES, A2_PARENT, A2_SCOPE, A3_PARENT, A3_SOURCE, A3_RUNTIME, a1Blob } from '../support/m1-a1-inspection.mjs';\n"
+          },
+          {
+            "from": " for(const f of ['test/support/m1-a1-inspection.mjs','test/finance/m1-a1-inspection-guard.test.mjs','test/finance/m1-a1-carriage-regressions.test.mjs']) {\n",
+            "to": " for(const f of ['test/support/m1-a1-inspection.mjs','test/finance/m1-a1-inspection-guard.test.mjs','test/finance/m1-a1-carriage-regressions.test.mjs',...(r.successor?['test/finance/m1-a3-policy-carriage-guard.test.mjs']:[])]) {\n"
+          },
+          {
+            "from": " for(const f of fixed)assert.equal(git('rev-parse','HEAD:'+f),git('rev-parse',A1_PARENT+':'+f),f);\n",
+            "to": " // M1-A3 (T-A3-A1G03): the four accepted DP4 policy runtime files carry exact DP4 bytes; every other fixed file stays OT4.\n for(const f of fixed)assert.equal(git('rev-parse','HEAD:'+f),git('rev-parse',(r.successor&&A3_RUNTIME.includes(f)?A3_SOURCE.dp4:A1_PARENT)+':'+f),f);\n"
+          },
+          {
+            "from": " assert.equal(git('rev-parse','HEAD^'),A2_PARENT);\n",
+            "to": " // M1-A3 (T-A3-A2G01): on A3 these A2 statements are judged on the fixed A2 commit object; A3G-* protects HEAD.\n const A2=r.successor?A3_PARENT:'HEAD';\n assert.equal(git('rev-parse',A2+'^'),A2_PARENT);\n"
+          },
+          {
+            "from": "git('diff','--name-only',A2_PARENT,'HEAD','--').split(",
+            "to": "git('diff','--name-only',A2_PARENT,A2,'--').split("
+          },
+          {
+            "from": "git('diff','--name-only',A2_PARENT,'HEAD','--','src',",
+            "to": "git('diff','--name-only',A2_PARENT,A2,'--','src',"
+          }
+        ]
+      },
+      "test/support/m1-r1-remediation.mjs": {
+        "base": "43387d824e539fe5233c3b4112e6bf47a80366bb",
+        "edits": [
+          {
+            "from": "import { isA1Tree, a1LocalPins } from \"./m1-a1-inspection.mjs\";\n",
+            "to": "import { isA1Tree, a1LocalPins, a3PolicyPins } from \"./m1-a1-inspection.mjs\";\n"
+          },
+          {
+            "from": "  const a1 = withDTO1 && withHR3OT4 && isA1Tree(repo) ? a1LocalPins(repo) : {};\n",
+            "to": "  // M1-A3 (T-A3-M1-PINS): the A3 policy pins ride on the A1 overlay, with the same gating; empty off A3.\n  const a1 = withDTO1 && withHR3OT4 && isA1Tree(repo) ? { ...a1LocalPins(repo), ...a3PolicyPins(repo) } : {};\n"
+          }
+        ]
+      }
+    }
   }
 }

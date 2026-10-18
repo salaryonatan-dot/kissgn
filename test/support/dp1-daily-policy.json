@@ -1,0 +1,246 @@
+{
+  "decision": "DP1 proposed local successor of accepted OT4: owner policies P4 / E4 (approved 2026-10-17) on the manual Daily; P7 recorded, not implemented; independent Codex review pending",
+  "parent": "f34eec92aed4851c2da8a8dfd8f1f353b1d582d7",
+  "scope": [
+    "api/daily-snapshot/run.ts",
+    "lib/emailDelivery.d.ts",
+    "lib/emailDelivery.js",
+    "test/delivery/daily-email-delivery.test.mjs",
+    "test/delivery/dp1-manual-delivery-policy.test.mjs",
+    "test/delivery/hr1-daily-hold.test.mjs",
+    "test/emulator/dp1-manual-policy-emulator.mjs",
+    "test/emulator/hr1-daily-hold-emulator.mjs",
+    "test/finance/b2-guard-mutations.test.mjs",
+    "test/finance/b2-snapshot.test.mjs",
+    "test/finance/dp1-daily-policy-guard.test.mjs",
+    "test/finance/hr3-ot4-daily-hold-guard.test.mjs",
+    "test/support/dp1-daily-policy.mjs",
+    "test/support/m1-r1-remediation.mjs"
+  ],
+  "edits": {
+    "api/daily-snapshot/run.ts": [
+      {
+        "from": "  return BUILDER_ATTRIBUTED_CODES.has(message) ? (message as DeliveryTargetCode) : \"snapshot_build_failed\";\n}\n\n// ── the owner notice read (action: \"notice\"; R7, review finding OD-02) ─────────────────────────────────────────────────\n",
+        "to": "  return BUILDER_ATTRIBUTED_CODES.has(message) ? (message as DeliveryTargetCode) : \"snapshot_build_failed\";\n}\n\n// ── DP1: the 1.0 owner policies on the manual Daily (P4 / E4, approved 2026-10-17; lib/emailDelivery.js deliverManualDaily) ──\n// Every refusal is decided at the final boundary before the attempt record and the hand-off: nothing was sent, no record or\n// receipt was written or changed. 409 = the policy forbids this send for this exact (tenant, business, business date);\n// 422 = the stored evidence cannot be read; 503 = it could not be read now. A held Daily keeps its 503 `delivery_held` reply.\nconst MANUAL_POLICY_REFUSALS: Record<string, { status: number; error: string }> = {\n  held_day:                    { status: 409, error: \"This business date was refused by the Daily hold; manual delivery is not permitted; email not sent\" },\n  legacy_evidence_unresolved:  { status: 409, error: \"This business date may have been refused by the Daily hold; manual delivery is not permitted; email not sent\" },\n  held_day_unverifiable:       { status: 503, error: \"Held-day status temporarily unavailable; email not sent\" },\n  manual_repeat_not_permitted: { status: 409, error: \"The Daily for this business date was already accepted by the provider; a manual repeat is not permitted; email not sent\" },\n  delivery_outcome_unresolved: { status: 409, error: \"An earlier Daily for this business date has an unresolved outcome that requires reconciliation; email not sent\" },\n  delivery_in_progress:        { status: 409, error: \"The Daily for this business date is being delivered; email not sent\" },\n  delivery_history_unreadable: { status: 422, error: \"Delivery history for this business date is unreadable; email not sent\" },\n  delivery_history_unavailable: { status: 503, error: \"Delivery history temporarily unavailable; email not sent\" },\n};\n\n// ── the owner notice read (action: \"notice\"; R7, review finding OD-02) ─────────────────────────────────────────────────\n"
+      },
+      {
+        "from": "    // POST = manual trigger for single business (authorized above). A manual send is an explicit owner request: it is not\n    // de-duplicated against the scheduled receipt, but its provider outcome is classified (never a false success).\n",
+        "to": "    // POST = manual trigger for single business (authorized above). A manual send is an explicit owner request; its provider\n    // outcome is classified (never a false success). DP1: it never claims or changes the scheduled receipt, but it is refused\n    // when that receipt or an earlier manual record shows the exact Daily accepted or possibly accepted (P4), or the business\n    // date was refused by the hold (E4).\n"
+      },
+      {
+        "from": "      if (r.record === \"write_failed\") console.error(`[daily-snapshot] manual attempt record not finalized (${boundedCode(r.code) ?? \"accepted\"}) for ${tenantId}:${bizId}`);\n      if (r.outcome === \"held\") return heldReply(r.code);\n",
+        "to": "      if (r.record === \"write_failed\") console.error(`[daily-snapshot] manual attempt record not finalized (${boundedCode(r.code) ?? \"accepted\"}) for ${tenantId}:${bizId}`);\n      const policyCode = boundedCode(r.code) ?? \"\";\n      if ((r.outcome === \"held\" || r.outcome === \"refused\") && Object.prototype.hasOwnProperty.call(MANUAL_POLICY_REFUSALS, policyCode)) {\n        console.warn(\"[daily-snapshot] manual send refused by delivery policy\", { tenantId, bizId, code: policyCode });\n        return res.status(MANUAL_POLICY_REFUSALS[policyCode].status).json({ error: MANUAL_POLICY_REFUSALS[policyCode].error, code: policyCode, tenantId, bizId });\n      }\n      if (r.outcome === \"refused\") return res.status(503).json({ error: \"Manual delivery refused; email not sent\", code: boundedCode(r.code), tenantId, bizId });\n      if (r.outcome === \"held\") return heldReply(r.code);\n"
+      }
+    ],
+    "lib/emailDelivery.d.ts": [
+      {
+        "from": "}): Promise<{ outcome: \"accepted\" | \"failed\" | \"unknown\" | \"held\"; code: string | null; attemptId: string | null; record: \"recorded\" | \"write_failed\" | \"not_written\"; messageId?: string }>;\n",
+        "to": "}): Promise<{ outcome: \"accepted\" | \"failed\" | \"unknown\" | \"held\" | \"refused\"; code: string | null; attemptId: string | null; record: \"recorded\" | \"write_failed\" | \"not_written\"; messageId?: string }>;\n/** DP1 (P4): the stored evidence of one exact delivery identity, judged for a manual send. null = no delivery known. */\nexport type ManualPolicyCode = \"manual_repeat_not_permitted\" | \"delivery_outcome_unresolved\" | \"delivery_in_progress\" | \"delivery_history_unreadable\";\nexport function decideManualRepeat(args: { receipt?: unknown; records?: unknown; tenantId: string; bizId: string; businessDate: string | null; nowMs: number }): ManualPolicyCode | null;\n"
+      }
+    ],
+    "lib/emailDelivery.js": [
+      {
+        "from": " *   needs. A hand-off that already started cannot be recalled; `unknown` stays held for reconciliation (P7) exactly as before.\n */\n",
+        "to": " *   needs. A hand-off that already started cannot be recalled; `unknown` stays held for reconciliation (P7) exactly as before.\n *\n * DP1 — THE 1.0 OWNER POLICIES ON THE MANUAL DAILY (owner decisions P4 / E4 / P7, approved 2026-10-17; see deliverManualDaily)\n *   E4  a business date the hold refused is never delivered deliberately: the manual send's final boundary (G3) is the\n *       scheduled gate of its own business date (readDailyDeliveryGate) — the same exclusion automation already honours.\n *   P4  no manual repeat: a manual send is refused when the provider accepted, or may have accepted, a Daily for the EXACT\n *       delivery identity (kind, tenant, business, business date) — the scheduled receipt or an earlier manual record.\n *   P7  reconciliation authority belongs to the verified business owner; NO reconciliation, clearing or settlement mechanism\n *       exists here. Unknown, `sending` and `handing_off` evidence is never changed by this module, and it keeps blocking P4.\n */\n"
+      },
+      {
+        "from": "/** The manual Daily gate: the hold record only (a held-date marker does not block an owner's explicit send). Never throws. */\n",
+        "to": "/** The manual Daily gate BEFORE the build (G2): the hold record only — the business date is not known yet. Never throws.\n *  DP1 (E4): it is not the manual send's final boundary; deliverManualDaily's G3 also applies the held-day exclusion. */\n"
+      },
+      {
+        "from": "}\n\n/**\n * HR1 — the manual (owner-requested) Daily send with the hold's final boundary and a DURABLE attempt record (the evidence a\n",
+        "to": "}\n\n// ── DP1: the P4 evidence of one delivery identity (kind, tenant, business, business date) ───────────────────────────────\n// What the stored evidence says about a manual send of that identity. Never a time window, never the recipient: the scheduled\n// receipt node IS the identity (receiptPath), and a manual record names its own tenant, business and business date. Each\n// source yields at most one code; the strongest wins (a definitive acceptance before an unresolved outcome before an active\n// claim before evidence that cannot be read). null = no delivery is known or possible: an ordinary first-time manual send.\n//   manual_repeat_not_permitted   the provider accepted a Daily of this identity (scheduled `accepted`, manual `accepted`)\n//   delivery_outcome_unresolved   it may have (scheduled `unknown` / `sending`, manual `unknown` / `handing_off`): P7, no retry\n//   delivery_in_progress          a scheduled claim with a running lease (it is about to be handed over)\n//   delivery_history_unreadable   a stored receipt / record of this business that is not a well-formed one (fail closed)\n// A definitive `failed` (the provider did not take it) and an expired `claimed` (never handed over) are no delivery.\nconst MANUAL_POLICY_ORDER = [\"manual_repeat_not_permitted\", \"delivery_outcome_unresolved\", \"delivery_in_progress\", \"delivery_history_unreadable\"];\nconst MANUAL_RECORD_STATES = new Set([\"handing_off\", \"accepted\", \"failed\", \"unknown\"]);\nfunction scheduledEvidence(raw, nowMs) {\n  if (raw === null || raw === undefined) return null;\n  if (!isPlain(raw) || raw.v !== RECEIPT_VERSION) return \"delivery_history_unreadable\";\n  if (raw.state === \"accepted\") return \"manual_repeat_not_permitted\";\n  if (raw.state === \"unknown\" || raw.state === \"sending\") return \"delivery_outcome_unresolved\";\n  if (raw.state === \"claimed\") return Number(raw.leaseUntil) > nowMs ? \"delivery_in_progress\" : null;\n  if (raw.state === \"failed\") return null;\n  return \"delivery_history_unreadable\";\n}\nfunction manualEvidence(raw, tenantId, bizId, businessDate) {\n  if (raw === null || raw === undefined) return [];\n  if (!isPlain(raw)) return [\"delivery_history_unreadable\"];\n  const codes = [];\n  for (const [id, x] of Object.entries(raw)) {\n    if (!isPlain(x) || x.v !== MANUAL_ATTEMPT_VERSION || x.attemptId !== id || x.tenantId !== tenantId || x.bizId !== bizId ||\n        x.kind !== DAILY_SNAPSHOT_KIND || !MANUAL_RECORD_STATES.has(x.state)) { codes.push(\"delivery_history_unreadable\"); continue; }\n    if (x.businessDate !== businessDate) {\n      // another business date is another delivery; a record whose date cannot be read is this one unless it is a definitive failure\n      if (!validDate(x.businessDate) && x.state !== \"failed\") codes.push(\"delivery_history_unreadable\");\n      continue;\n    }\n    if (x.state === \"accepted\") codes.push(\"manual_repeat_not_permitted\");\n    else if (x.state !== \"failed\") codes.push(\"delivery_outcome_unresolved\");\n  }\n  return codes;\n}\n/**\n * DP1 (P4): the decision for a manual send of (tenantId, bizId, businessDate) on the stored evidence — the scheduled receipt\n * value of that identity and the business's manual-record collection. Pure. Returns null (no delivery known: send) or the code.\n */\nexport function decideManualRepeat({ receipt = null, records = null, tenantId, bizId, businessDate, nowMs }) {\n  if (!isTenantKey(tenantId) || !isBusinessKey(bizId) || !validDate(businessDate) || !Number.isSafeInteger(nowMs)) return \"delivery_history_unreadable\";\n  const codes = [scheduledEvidence(receipt, nowMs), ...manualEvidence(records, tenantId, bizId, businessDate)];\n  return MANUAL_POLICY_ORDER.find((c) => codes.includes(c)) ?? null;\n}\n\n/**\n * HR1 — the manual (owner-requested) Daily send with the hold's final boundary and a DURABLE attempt record (the evidence a\n"
+      },
+      {
+        "from": " * stop / drain needs; the manual send still has no receipt and is still not de-duplicated — P4 is not decided here).\n",
+        "to": " * stop / drain needs; the manual send still has no receipt: it never claims, changes or consumes the scheduled one).\n * DP1 — the 1.0 owner policies, all at the final boundary (G3), before the record and the hand-off, nothing sent on refusal:\n *   E4       the default gate is the SCHEDULED gate of this business date (readDailyDeliveryGate, read-only): a held Daily and a\n *            business date the hold refused (held_day / legacy_evidence_unresolved / held_day_unverifiable) are `held`.\n *   P4       the scheduled receipt of (daily_snapshot, tenant, business, business date) is read (bounded), and the manual record\n *            is created by ONE transaction on the business's record collection that first re-judges every record there\n *            (decideManualRepeat): an acceptance, a possible acceptance, an active claim or unreadable evidence of the exact\n *            identity refuses the send (`refused`, record not written); two concurrent manual sends cannot both create one.\n *            A scheduled claim made AFTER the receipt read is not excluded (the scheduled receipt is not shared; see DP1 docs).\n *   P7       nothing here reconciles: unknown / handing_off / sending evidence is read, never changed.\n"
+      },
+      {
+        "from": " * Returns { outcome: accepted | failed | unknown | held, code, attemptId, record, messageId? }; never throws for delivery problems.\n",
+        "to": " * Returns { outcome: accepted | failed | unknown | held | refused, code, attemptId, record, messageId? }; never throws for delivery\n * problems. `refused` (DP1 / P4) is always before the record and the hand-off: nothing was sent.\n"
+      },
+      {
+        "from": "  gate = () => readManualDeliveryGate(db), clock = () => Date.now(), newClaimId = () => randomUUID(),\n",
+        "to": "  gate = () => readDailyDeliveryGate(db, businessDate), clock = () => Date.now(), newClaimId = () => randomUUID(),\n"
+      },
+      {
+        "from": "    handedToProvider: false, claimLost: false, multipleHandoffs: false, info: null, error: null, held: null, recordFailed: false,\n",
+        "to": "    handedToProvider: false, claimLost: false, multipleHandoffs: false, info: null, error: null, held: null, recordFailed: false, refused: null,\n"
+      },
+      {
+        "from": "      if (!g.open) { ctx.held = g.code; const e = new Error(\"daily delivery held before transport\"); e.code = \"EDELIVERYHELD\"; throw e; }\n      let r;\n",
+        "to": "      if (!g.open) { ctx.held = g.code; const e = new Error(\"daily delivery held before transport\"); e.code = \"EDELIVERYHELD\"; throw e; }\n      const refuse = (code) => { ctx.refused = code; const e = new Error(\"manual daily refused by delivery policy\"); e.code = \"EDELIVERYPOLICY\"; throw e; };\n      // DP1 (P4): the scheduled receipt of the exact identity; an unreadable or timed-out store refuses (nothing is known)\n      const rcptPath = receiptPath(DAILY_SNAPSHOT_KIND, tenantId, bizId, businessDate);\n      if (rcptPath === null) refuse(\"delivery_history_unreadable\");\n      const receiptRead = await readBounded(db, rcptPath, HOLD_READ_TIMEOUT_MS);\n      if (!receiptRead.ok) refuse(\"delivery_history_unavailable\");\n      const receipt = receiptRead.value === undefined ? null : receiptRead.value;\n      let r;\n"
+      },
+      {
+        "from": "        r = await transact(db, path, (cur) => (cur !== null ? { next: undefined, result: false } : { result: true, next: {\n",
+        "to": "        r = await transact(db, `${MANUAL_ATTEMPT_ROOT}/${tenantId}/${bizId}`, (cur) => {\n          const code = decideManualRepeat({ receipt, records: cur, tenantId, bizId, businessDate, nowMs: clock() });\n          if (code !== null) return { next: undefined, result: code };\n          if (Object.prototype.hasOwnProperty.call(cur ?? {}, attemptId)) return { next: undefined, result: false };\n          return { result: true, next: { ...(cur ?? {}), [attemptId]: {\n"
+      },
+      {
+        "from": "          recipientSelection: bounded(recipientSelection, /^[a-z_]{1,40}$/) } }));\n",
+        "to": "          recipientSelection: bounded(recipientSelection, /^[a-z_]{1,40}$/) } } };\n        });\n"
+      },
+      {
+        "from": "      } catch { r = null; }\n      if (!r || !r.committed || r.result !== true) { ctx.recordFailed = true; const e = new Error(\"manual attempt record unavailable\"); e.code = \"EATTEMPTRECORD\"; throw e; }\n",
+        "to": "      } catch { r = null; }\n      if (r && r.committed && typeof r.result === \"string\") refuse(r.result);\n      if (!r || !r.committed || r.result !== true) { ctx.recordFailed = true; const e = new Error(\"manual attempt record unavailable\"); e.code = \"EATTEMPTRECORD\"; throw e; }\n"
+      },
+      {
+        "from": "  try { await attemptStore.run(ctx, send); } catch (err) { threw = true; thrown = err; }\n  const c = ctx.recordFailed && !ctx.handedToProvider ? { outcome: \"failed\", code: \"manual_record_unavailable\" } : attemptOutcome(ctx, threw, thrown, recipient);\n",
+        "to": "  try { await attemptStore.run(ctx, send); } catch (err) { threw = true; thrown = err; }\n  if (ctx.refused !== null && !ctx.handedToProvider) return { outcome: \"refused\", code: ctx.refused, attemptId, record: \"not_written\" };\n  const c = ctx.recordFailed && !ctx.handedToProvider ? { outcome: \"failed\", code: \"manual_record_unavailable\" } : attemptOutcome(ctx, threw, thrown, recipient);\n"
+      }
+    ],
+    "test/delivery/daily-email-delivery.test.mjs": [
+      {
+        "from": "//   DE-15  manual owner send: classified outcome, not de-duplicated against the schedule; the response names no recipient (R1)\n",
+        "to": "//   DE-15  manual owner send: classified outcome; the response names no recipient (R1); DP1 (owner decision P4, 2026-10-17): no\n//          manual repeat of a Daily the schedule already delivered for the same tenant / business / business date\n"
+      },
+      {
+        "from": "test(\"DE-15 the manual owner send: classified outcome, no false success, not de-duplicated against the schedule\", async () => {\n",
+        "to": "test(\"DE-15 the manual owner send: classified outcome, no false success; no manual repeat of a scheduled delivery (DP1 / P4)\", async () => {\n"
+      },
+      {
+        "from": "  const m1 = await at(AT, () => runManual(route)), m2 = await at(AT, () => runManual(route));\n",
+        "to": "  // DP1 (owner decision P4, 2026-10-17; T-DP1-TEST-EXPECTATIONS): the schedule delivered this exact (tenant, business, business\n  // date) Daily, so both explicit owner requests are refused before the provider; the receipt is untouched (read, never changed)\n  const r1 = await at(AT, () => runManual(route)), r2 = await at(AT, () => runManual(route));\n  assert.deepEqual([r1.statusCode, r1.body.code, r2.statusCode, r2.body.code], [409, \"manual_repeat_not_permitted\", 409, \"manual_repeat_not_permitted\"]);\n  assert.equal(smtp.calls.length, 3, \"3 scheduled; the manual repeats reach no provider\");\n  assert.equal(receipt(T, B).attempt, 1, \"the schedule receipt is untouched by manual sends\");\n  // a first-time manual send (no delivery of this identity): the classified outcome and R1's response shape\n  seedWorld(); smtp = installSmtp([SMTP.accept()]);\n  const m1 = await at(AT, () => runManual(route));\n"
+      },
+      {
+        "from": "  assert.equal(m2.statusCode, 200); assert.equal(smtp.calls.length, 5, \"3 scheduled + 2 explicit owner requests\");\n  assert.match(smtp.calls[3].messageIdHeader, /^<manual\\.[0-9a-f-]{36}@delivery\\.marjin\\.app>$/);\n  assert.equal(receipt(T, B).attempt, 1, \"the schedule receipt is untouched by manual sends\");\n  smtp = installSmtp([SMTP.rejectRecipient()]);\n",
+        "to": "  assert.match(smtp.calls[0].messageIdHeader, /^<manual\\.[0-9a-f-]{36}@delivery\\.marjin\\.app>$/);\n  assert.equal(receipt(T, B), null, \"a manual send writes no schedule receipt\");\n  seedWorld(); smtp = installSmtp([SMTP.rejectRecipient()]);\n"
+      },
+      {
+        "from": "  smtp = installSmtp([SMTP.closedAfterData()]);\n",
+        "to": "  seedWorld(); smtp = installSmtp([SMTP.closedAfterData()]);\n"
+      }
+    ],
+    "test/delivery/hr1-daily-hold.test.mjs": [
+      {
+        "from": "//   HR-07  release sends no held day automatically (held_day); the next day is delivered; the manual route remains available\n",
+        "to": "//   HR-07  release sends no held day automatically (held_day); the next day is delivered; DP1 (owner decisions E4 / P4,\n//          2026-10-17): no manual delivery of the held day, no manual repeat of the delivered next day\n"
+      },
+      {
+        "from": "test(\"HR-07 release sends no held day automatically; the next day is delivered; a manual send after release is the owner's catch-up\", async () => {\n",
+        "to": "test(\"HR-07 release sends no held day automatically; the next day is delivered; no manual catch-up or repeat after release (DP1)\", async () => {\n"
+      },
+      {
+        "from": "    // a manual send is the owner's explicit choice (not automatic) and is allowed after release\n",
+        "to": "    // DP1 (owner decision P4, 2026-10-17; T-DP1-TEST-EXPECTATIONS): the next day's Daily was delivered — no manual repeat\n"
+      },
+      {
+        "from": "    assert.equal(m.statusCode, 200);\n",
+        "to": "    assert.deepEqual([m.statusCode, m.body.code], [409, \"manual_repeat_not_permitted\"]);\n"
+      },
+      {
+        "from": "  } finally { setNow(DAY); }\n});\n",
+        "to": "  } finally { setNow(DAY); }\n  // DP1 (owner decision E4): the held day is never delivered deliberately — the manual send is refused, nothing is sent\n  const h = await manual();\n  assert.deepEqual([h.statusCode, h.body.code], [409, \"held_day\"]);\n  assert.equal(smtp.calls.length, 3, \"only the next day's scheduled messages\");\n});\n"
+      }
+    ],
+    "test/emulator/hr1-daily-hold-emulator.mjs": [
+      {
+        "from": "  const r = await E.deliverManualDaily({ db, tenantId: \"tA\", bizId: \"bA\", businessDate: D, recipient: TO, recipientSelection: \"owner\", actorRole: \"owner\", send });\n",
+        "to": "  // DP1 (owner decision E4, 2026-10-17; T-DP1-TEST-EXPECTATIONS): D was refused by the hold in HRE-02, so it is never delivered\n  // deliberately; the record-before-hand-off contract is exercised on a business date the hold did not refuse\n  const e4 = await E.deliverManualDaily({ db, tenantId: \"tA\", bizId: \"bA\", businessDate: D, recipient: TO, send });\n  assert.deepEqual([e4.outcome, e4.code, e4.record, calls], [\"held\", \"held_day\", \"not_written\", 0]);\n  const M = \"2026-09-10\";\n  const r = await E.deliverManualDaily({ db, tenantId: \"tA\", bizId: \"bA\", businessDate: M, recipient: TO, recipientSelection: \"owner\", actorRole: \"owner\", send });\n"
+      },
+      {
+        "from": "  const h = await E.deliverManualDaily({ db, tenantId: \"tA\", bizId: \"bA\", businessDate: D, recipient: TO, send });\n",
+        "to": "  const h = await E.deliverManualDaily({ db, tenantId: \"tA\", bizId: \"bA\", businessDate: M, recipient: TO, send });\n"
+      }
+    ],
+    "test/finance/b2-guard-mutations.test.mjs": [
+      {
+        "from": "import { isHR3S3Tree, HR3S3_PINS } from \"../support/hr3-s3-daily-hold.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"../support/hr3-s2-daily-hold.mjs\";\n",
+        "to": "import { isHR3S3Tree, HR3S3_PINS } from \"../support/hr3-s3-daily-hold.mjs\";\nimport { isDP1Tree, DP1_PINS } from \"../support/dp1-daily-policy.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"../support/hr3-s2-daily-hold.mjs\";\n"
+      },
+      {
+        "from": "      ...(i1 && isHR3S2Tree(root) ? HR3S2_PINS : {}), ...(i1 && isHR3S3Tree(root) ? HR3S3_PINS : {}) } : {};\n",
+        "to": "      ...(i1 && isHR3S2Tree(root) ? HR3S2_PINS : {}), ...(i1 && isHR3S3Tree(root) ? HR3S3_PINS : {}),\n      // DP1 (T-DP1-LAYERING): on a DP1 tree the Daily route and the receipt module are held to their literal DP1 pins\n      ...(i1 && isDP1Tree(root) ? DP1_PINS : {}) } : {};\n"
+      }
+    ],
+    "test/finance/b2-snapshot.test.mjs": [
+      {
+        "from": "import { gitBlobId } from \"../support/m1-r1-remediation.mjs\";\n\n",
+        "to": "import { gitBlobId } from \"../support/m1-r1-remediation.mjs\";\nimport { DP1_PINS, isDP1Tree, deriveDP1 } from \"../support/dp1-daily-policy.mjs\";\n\n"
+      },
+      {
+        "from": "    const want = s3 ? HR3S3_PINS[RUN] : isHR2Tree(REPO) ? HR2_PINS[RUN] : isHR1Tree(REPO) ? HR1_PINS[RUN] : i1 ? I1_PINS[RUN] : isDE1Tree(REPO) ? de1EffectivePins(REPO)[RUN] : gitIn(REPO, [\"rev-parse\", `${P0}:${RUN}`]).stdout.trim();\n",
+        "to": "    // DP1 (T-DP1-B2-T14): on a DP1 tree the route is held to its literal DP1 pin (re-derived from the literal OT4 = S3 bytes by\n    // recorded exact edits; the executable delta is the P4 / E4 refusal mapping only — DP1G-03); the S3 statement below is\n    // judged on the literal S3 object.\n    const dp1 = isDP1Tree(REPO);\n    const want = dp1 ? DP1_PINS[RUN] : s3 ? HR3S3_PINS[RUN] : isHR2Tree(REPO) ? HR2_PINS[RUN] : isHR1Tree(REPO) ? HR1_PINS[RUN] : i1 ? I1_PINS[RUN] : isDE1Tree(REPO) ? de1EffectivePins(REPO)[RUN] : gitIn(REPO, [\"rev-parse\", `${P0}:${RUN}`]).stdout.trim();\n"
+      },
+      {
+        "from": "      assert.equal(gitBlobId(derived.bytes), want, \"S3 route re-derived from literal S2\");\n      assert.equal(gitIn(REPO, [\"rev-parse\", `:${RUN}`]).stdout.trim(), want, \"index route = exact S3 pin\");\n",
+        "to": "      assert.equal(gitBlobId(derived.bytes), HR3S3_PINS[RUN], \"S3 route re-derived from literal S2\");\n      if (!dp1) assert.equal(gitIn(REPO, [\"rev-parse\", `:${RUN}`]).stdout.trim(), want, \"index route = exact S3 pin\");\n      const s3src = dp1 ? gitIn(REPO, [\"cat-file\", \"blob\", `7fa1b6e130dd0cdd24e02657d69a073e93a3f767:${RUN}`]).stdout : src;\n"
+      },
+      {
+        "from": "      assert.equal(executable(src), executable(parent.stdout), \"S3 changes comment-only lines, never route code\");\n",
+        "to": "      assert.equal(executable(s3src), executable(parent.stdout), \"S3 changes comment-only lines, never route code\");\n    }\n    if (dp1) {\n      const derived = deriveDP1(REPO, RUN); assert.ok(derived.ok, derived.reason);\n      assert.equal(gitBlobId(derived.bytes), want, \"DP1 route re-derived from literal OT4\");\n      assert.equal(gitIn(REPO, [\"rev-parse\", `:${RUN}`]).stdout.trim(), want, \"index route = exact DP1 pin\");\n"
+      }
+    ],
+    "test/finance/hr3-ot4-daily-hold-guard.test.mjs": [
+      {
+        "from": "const SKIP = !isHR3OT4Tree(REPO) && 'not an HR3 OT4 successor';\nconst S3 = '7fa1b6e130dd0cdd24e02657d69a073e93a3f767';\n",
+        "to": "const SKIP = !isHR3OT4Tree(REPO) && 'not an HR3 OT4 successor';\n// DP1 (T-DP1-LAYERING): on a successor of OT4 this guard judges the literal, immutable OT4 object; HEAD / index / checkout /\n// overlay move to the successor's own guard (the OT3-on-OT4 pattern one layer up).\nconst OT4 = 'f34eec92aed4851c2da8a8dfd8f1f353b1d582d7';\nconst LAYERED = gitIn(REPO, ['merge-base', '--is-ancestor', OT4, 'HEAD']).status === 0 && gitIn(REPO, ['rev-parse', 'HEAD']).stdout.trim() !== OT4;\nconst SOURCE = LAYERED ? OT4 : 'HEAD';\nconst S3 = '7fa1b6e130dd0cdd24e02657d69a073e93a3f767';\n"
+      },
+      {
+        "from": "  assert.deepEqual(git(['rev-list', '--parents', '-n1', 'HEAD']).split(' ').slice(1), [HR3OT4_PARENT]);\n",
+        "to": "  assert.deepEqual(git(['rev-list', '--parents', '-n1', SOURCE]).split(' ').slice(1), [HR3OT4_PARENT]);\n"
+      },
+      {
+        "from": "  assert.deepEqual(names(['diff', '--name-only', HR3OT4_PARENT, 'HEAD', '--']).sort(), [...HR3OT4_SCOPE, RECORD].sort());\n",
+        "to": "  assert.deepEqual(names(['diff', '--name-only', HR3OT4_PARENT, SOURCE, '--']).sort(), [...HR3OT4_SCOPE, RECORD].sort());\n"
+      },
+      {
+        "from": "  for (const args of [['diff', '--cached', '--name-only', 'HEAD', '--'], ['diff', '--name-only', 'HEAD', '--'],\n",
+        "to": "  if (!LAYERED) for (const args of [['diff', '--cached', '--name-only', 'HEAD', '--'], ['diff', '--name-only', 'HEAD', '--'],\n"
+      },
+      {
+        "from": "    assert.equal(git(['rev-parse', `HEAD:${f}`]), HR3OT4_PINS[f], f + ' HEAD');\n",
+        "to": "    assert.equal(git(['rev-parse', `${SOURCE}:${f}`]), HR3OT4_PINS[f], f + ' HEAD');\n    if (LAYERED) assert.equal(m1EffectivePins(REPO, { withDP1: false })[f], HR3OT4_PINS[f], f + ' overlay without the successor layer');\n    else {\n"
+      },
+      {
+        "from": "    assert.equal(m1EffectivePins(REPO)[f], HR3OT4_PINS[f], f + ' overlay');\n    if (HR3OT3_PINS[f]) assert.equal(m1EffectivePins(REPO, { withHR3OT4: false })[f], HR3OT3_PINS[f], f + ' overlay without this layer is OT3');\n",
+        "to": "    assert.equal(m1EffectivePins(REPO)[f], HR3OT4_PINS[f], f + ' overlay');\n    }\n    if (HR3OT3_PINS[f]) assert.equal(m1EffectivePins(REPO, { withHR3OT4: false })[f], HR3OT3_PINS[f], f + ' overlay without this layer is OT3');\n"
+      },
+      {
+        "from": "  const ot3guard = readFileSync(join(REPO, 'test/finance/hr3-ot3-daily-hold-guard.test.mjs'), 'utf8');\n",
+        "to": "  const ot3guard = LAYERED ? gitIn(REPO, ['cat-file', 'blob', `${SOURCE}:test/finance/hr3-ot3-daily-hold-guard.test.mjs`]).stdout : readFileSync(join(REPO, 'test/finance/hr3-ot3-daily-hold-guard.test.mjs'), 'utf8');\n"
+      },
+      {
+        "from": "    assert.equal(git(['rev-parse', `HEAD:${f}`]), git(['rev-parse', `${HR3OT4_PARENT}:${f}`]), f + ' is OT3 bytes');\n",
+        "to": "    assert.equal(git(['rev-parse', `${SOURCE}:${f}`]), git(['rev-parse', `${HR3OT4_PARENT}:${f}`]), f + ' is OT3 bytes');\n"
+      },
+      {
+        "from": "    assert.equal(git(['rev-parse', `HEAD:${f}`]), git(['rev-parse', `${S3}:${f}`]), f + ' is S3 bytes');\n  assert.deepEqual(names(['diff', '--name-only', HR3OT4_PARENT, 'HEAD', '--', 'src', 'fincore', 'lib', 'api', 'scripts', 'migrations']), []);\n",
+        "to": "    assert.equal(git(['rev-parse', `${SOURCE}:${f}`]), git(['rev-parse', `${S3}:${f}`]), f + ' is S3 bytes');\n  assert.deepEqual(names(['diff', '--name-only', HR3OT4_PARENT, SOURCE, '--', 'src', 'fincore', 'lib', 'api', 'scripts', 'migrations']), []);\n"
+      },
+      {
+        "from": "  const before = new Set(code(parentBlob(TOOL))), after = new Set(code(readFileSync(join(REPO, TOOL), 'utf8')));\n",
+        "to": "  const before = new Set(code(parentBlob(TOOL))), after = new Set(code(LAYERED ? gitIn(REPO, ['cat-file', 'blob', `${SOURCE}:${TOOL}`]).stdout : readFileSync(join(REPO, TOOL), 'utf8')));\n"
+      }
+    ],
+    "test/support/m1-r1-remediation.mjs": [
+      {
+        "from": "import { isHR3OT4Tree, HR3OT4_PINS } from \"./hr3-ot4-daily-hold.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"./hr3-s2-daily-hold.mjs\";\n",
+        "to": "import { isHR3OT4Tree, HR3OT4_PINS } from \"./hr3-ot4-daily-hold.mjs\";\nimport { isDP1Tree, DP1_PINS } from \"./dp1-daily-policy.mjs\";\nimport { isHR3S2Tree, HR3S2_PINS } from \"./hr3-s2-daily-hold.mjs\";\n"
+      },
+      {
+        "from": "  withHR1 = withI7, withHR2 = withHR1, withHR3 = withHR2, withHR3S1 = withHR3, withHR3S2 = withHR3S1, withHR3S3 = withHR3S2, withHR3OT1 = withHR3S3, withHR3OT2 = withHR3OT1, withHR3OT3 = withHR3OT2, withHR3OT4 = withHR3OT3 } = {}) {\n",
+        "to": "  withHR1 = withI7, withHR2 = withHR1, withHR3 = withHR2, withHR3S1 = withHR3, withHR3S2 = withHR3S1, withHR3S3 = withHR3S2, withHR3OT1 = withHR3S3, withHR3OT2 = withHR3OT1, withHR3OT3 = withHR3OT2, withHR3OT4 = withHR3OT3, withDP1 = withHR3OT4 } = {}) {\n"
+      },
+      {
+        "from": "    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && withHR3OT3 && withHR3OT4 && isHR3OT4Tree(repo) ? HR3OT4_PINS : {}) } : {};   // each successor overlays only its own protected files\n",
+        "to": "    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && withHR3OT3 && withHR3OT4 && isHR3OT4Tree(repo) ? HR3OT4_PINS : {}),\n    ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && withHR3S1 && withHR3S2 && withHR3S3 && withHR3OT1 && withHR3OT2 && withHR3OT3 && withHR3OT4 && withDP1 && isDP1Tree(repo) ? DP1_PINS : {}) } : {};   // each successor overlays only its own protected files\n"
+      }
+    ]
+  },
+  "pins": {
+    "api/daily-snapshot/run.ts": "cae8e91611efd309556503a920da6d25623ee1cb",
+    "lib/emailDelivery.d.ts": "b4cdfa68404795290b3b17c0c8e97c527aa62a2b",
+    "lib/emailDelivery.js": "ee4ac2088feaec1e5ef5fa2316cbd1417c716f70",
+    "test/delivery/daily-email-delivery.test.mjs": "40c3bee556f6b25af982da524df1fd5c355d035f",
+    "test/delivery/dp1-manual-delivery-policy.test.mjs": "96be362b4db3d08d74065e4eeb0fa27e90686239",
+    "test/delivery/hr1-daily-hold.test.mjs": "47911c16184520dc6c40e47a97f0a2cd80004fd8",
+    "test/emulator/dp1-manual-policy-emulator.mjs": "f4d8a7527e013b4e32699e49f4ac1d088adaedc2",
+    "test/emulator/hr1-daily-hold-emulator.mjs": "d4cc2efc35a0fdaa5496cf564da15fe20feebee8",
+    "test/finance/b2-guard-mutations.test.mjs": "d21a884fd5a3a3b0a1bbb5d51bb26b678cf49668",
+    "test/finance/b2-snapshot.test.mjs": "61d1af151d20799dfc7613e6c8f111c28c4f5f1e",
+    "test/finance/dp1-daily-policy-guard.test.mjs": "f7c16d7c799ab28868f92a1eb847db16845e46a7",
+    "test/finance/hr3-ot4-daily-hold-guard.test.mjs": "2119589a501afb9a06c16ea793bf471214f9ac9d",
+    "test/support/dp1-daily-policy.mjs": "9edd0ab239782572c2b8a4a72634869f6fcb0b95",
+    "test/support/m1-r1-remediation.mjs": "c240fd88e2a969c3c0f3a1023240b5382756f547"
+  }
+}
