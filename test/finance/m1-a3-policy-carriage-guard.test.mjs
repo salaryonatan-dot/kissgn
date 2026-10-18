@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { REPO } from '../support/fincore-load.mjs';
-import { verifyA1Head, isA3Tree, a3PolicyPins, a1Blob, A3_PARENT, A3_SOURCE, A3_SCOPE, A3_RUNTIME, A3_EDITED, A3_POLICY_PIN_FILES } from '../support/m1-a1-inspection.mjs';
+import { verifyA1Head, isA3Tree, a3PolicyPins, a1Blob, A3_PARENT, A3_SOURCE, A3_SCOPE, A3_RUNTIME, A3_EDITED, A3_POLICY_PIN_FILES, isA3T1Tree, A3T1_PARENT } from '../support/m1-a1-inspection.mjs';
 import { m1EffectivePins } from '../support/m1-r1-remediation.mjs';
 import { isDP1Tree, DP1_PARENT, DP1_PINS } from '../support/dp1-daily-policy.mjs';
 import { isDP2Tree } from '../support/dp2-daily-policy.mjs';
@@ -36,8 +36,10 @@ const lines = (s) => s.split('\n').filter(Boolean).sort();
 test('A3G-01 identity: sole parent M1-A2, exact A3 scope, A1/A2 record holds, no DP ancestry', () => {
   assert.equal(A3_PARENT, A2); assert.deepEqual({ ...A3_SOURCE }, { dp4: DP4 }); assert.equal(A3_SCOPE.length, 35);
   assert.ok(isA3Tree(REPO)); assert.equal(verifyA1Head(REPO).ok, true);
-  assert.deepEqual(git('rev-list', '--parents', '-n1', 'HEAD').split(' ').slice(1), [A2], 'exact sole parent');
-  assert.deepEqual(lines(git('diff', '--name-only', A2, 'HEAD', '--')), [...A3_SCOPE], 'exact A3 delta');
+  // A3-T1 (T-A3T1-A3G): on the test-only successor these A3 statements are judged on the fixed A3 commit object; A3T1G-* holds HEAD.
+  const A3C = isA3T1Tree(REPO) ? A3T1_PARENT : 'HEAD';
+  assert.deepEqual(git('rev-list', '--parents', '-n1', A3C).split(' ').slice(1), [A2], 'exact sole parent');
+  assert.deepEqual(lines(git('diff', '--name-only', A2, A3C, '--')), [...A3_SCOPE], 'exact A3 delta');
   // DP1's predicate recognizes OT4 descendants, not descendants of the DP1 candidate.
   // Preserve that legacy behavior. Pin-provider selection is tested separately below.
   assert.equal(DP1_PARENT, 'f34eec92aed4851c2da8a8dfd8f1f353b1d582d7');
@@ -73,7 +75,9 @@ test('A3G-03 closed provenance partition of the A3 scope', () => {
 test('A3G-04 independent literal pin of the holder module', () => {
   const f = 'test/support/m1-a1-inspection.mjs';
   assert.match(HOLDER_PIN, /^[a-f0-9]{40}$/);
-  assert.equal(a1Blob(readFileSync(join(REPO, f))), HOLDER_PIN); assert.equal(git('rev-parse', 'HEAD:' + f), HOLDER_PIN); assert.equal(git('rev-parse', ':' + f), HOLDER_PIN);
+  // A3-T1 (T-A3T1-A3G): the A3 holder module is judged on the fixed A3 object; the successor's holder is pinned literally by A3T1G-04.
+  if (isA3T1Tree(REPO)) assert.equal(git('rev-parse', A3T1_PARENT + ':' + f), HOLDER_PIN);
+  else { assert.equal(a1Blob(readFileSync(join(REPO, f))), HOLDER_PIN); assert.equal(git('rev-parse', 'HEAD:' + f), HOLDER_PIN); assert.equal(git('rev-parse', ':' + f), HOLDER_PIN); }
 });
 
 test('A3G-05 A3 policy pins replace DP layering for exactly the DP pin-table file set', () => {

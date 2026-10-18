@@ -21,6 +21,10 @@ export const A3_RUNTIME = Object.freeze(["api/daily-snapshot/run.ts", "lib/email
 export const A3_SCOPE = Object.freeze(["api/daily-snapshot/run.ts", "lib/emailDelivery.d.ts", "lib/emailDelivery.js", "test/delivery/daily-email-delivery.test.mjs", "test/delivery/dp1-manual-delivery-policy.test.mjs", "test/delivery/dp2-shared-admission.test.mjs", "test/delivery/dp3-evidence-validation.test.mjs", "test/delivery/dp4-legacy-date-scope.test.mjs", "test/delivery/hr1-daily-hold.test.mjs", "test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs", "test/emulator/dp1-manual-policy-emulator.mjs", "test/emulator/dp2-admission-worker.mjs", "test/emulator/dp2-shared-admission-emulator.mjs", "test/emulator/dp3-evidence-emulator.mjs", "test/emulator/hr1-daily-hold-emulator.mjs", "test/finance/b2-guard-mutations.test.mjs", "test/finance/b2-snapshot.test.mjs", "test/finance/dp1-daily-policy-guard.test.mjs", "test/finance/dp2-daily-policy-guard.test.mjs", "test/finance/dp3-daily-policy-guard.test.mjs", "test/finance/dp4-daily-policy-guard.test.mjs", "test/finance/m1-a1-inspection-guard.test.mjs", "test/finance/m1-a3-policy-carriage-guard.test.mjs", "test/support/dp1-daily-policy.json", "test/support/dp1-daily-policy.mjs", "test/support/dp2-daily-policy.json", "test/support/dp2-daily-policy.mjs", "test/support/dp3-daily-policy.json", "test/support/dp3-daily-policy.mjs", "test/support/dp4-daily-policy.json", "test/support/dp4-daily-policy.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs", "test/support/m1-r1-remediation.mjs", "tools/daily-delivery/hold.mjs"]);
 export const A3_EDITED = Object.freeze(["test/finance/b2-guard-mutations.test.mjs", "test/finance/b2-snapshot.test.mjs", "test/finance/m1-a1-inspection-guard.test.mjs", "test/support/m1-r1-remediation.mjs"]);
 export const A3_POLICY_PIN_FILES = Object.freeze(["api/daily-snapshot/run.ts", "lib/emailDelivery.d.ts", "lib/emailDelivery.js", "test/delivery/daily-email-delivery.test.mjs", "test/delivery/dp1-manual-delivery-policy.test.mjs", "test/delivery/dp2-shared-admission.test.mjs", "test/delivery/dp3-evidence-validation.test.mjs", "test/delivery/dp4-legacy-date-scope.test.mjs", "test/delivery/hr1-daily-hold.test.mjs", "test/delivery/hr3-ot1-drain-evidence-store-shape.test.mjs", "test/emulator/dp1-manual-policy-emulator.mjs", "test/emulator/dp2-admission-worker.mjs", "test/emulator/dp2-shared-admission-emulator.mjs", "test/emulator/dp3-evidence-emulator.mjs", "test/emulator/hr1-daily-hold-emulator.mjs", "test/finance/b2-guard-mutations.test.mjs", "test/finance/b2-snapshot.test.mjs", "test/finance/dp1-daily-policy-guard.test.mjs", "test/finance/dp2-daily-policy-guard.test.mjs", "test/finance/dp3-daily-policy-guard.test.mjs", "test/finance/dp4-daily-policy-guard.test.mjs", "test/finance/hr3-ot4-daily-hold-guard.test.mjs", "test/support/dp1-daily-policy.mjs", "test/support/dp2-daily-policy.mjs", "test/support/dp3-daily-policy.mjs", "test/support/dp4-daily-policy.mjs", "test/support/m1-r1-remediation.mjs", "tools/daily-delivery/hold.mjs"]);
+// M1-A3-T1: test-only successor of accepted A3 (PROPOSED). No runtime, Rules, release-pin, dependency or lockfile change.
+export const A3T1_PARENT = '2dae86d4c8362212cd7633f05156a257adca7419';
+export const A3T1_SCOPE = Object.freeze(["test/emulator/de1-r1-receipt-emulator.mjs", "test/emulator/de1-r2-receipt-emulator.mjs", "test/emulator/dp4-legacy-date-emulator.mjs", "test/finance/m1-a3-policy-carriage-guard.test.mjs", "test/finance/m1-a3t1-test-successor-guard.test.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs"]);
+export const A3T1_EDITED = Object.freeze(["test/emulator/de1-r1-receipt-emulator.mjs", "test/emulator/de1-r2-receipt-emulator.mjs", "test/finance/m1-a3-policy-carriage-guard.test.mjs", "test/support/m1-a1-inspection.mjs"]);
 export const A1_RECORD = 'test/support/m1-a1-inspection.json';
 const MODULE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const git = (root,args) => spawnSync('git',['-C',root,...args],{encoding:'utf8',timeout:30000,maxBuffer:64*1024*1024});
@@ -36,6 +40,11 @@ export function isA3Tree(root) {
   try { const r=load(root); return isA1Tree(root) && !!r.successor && r.successor.parent===A3_PARENT && JSON.stringify(r.successor.source)===JSON.stringify(A3_SOURCE); }
   catch { return false; }
 }
+// A3-T1 predicate: the A3 record, extended by the exact test-only successor entry.
+export function isA3T1Tree(root) {
+  try { const r=load(root); return isA3Tree(root) && !!r.testSuccessor && r.testSuccessor.parent===A3T1_PARENT; }
+  catch { return false; }
+}
 // A3-local policy pins: exactly the DP1..DP4 pin-table file set, valued from the A3 record (held by verifyA1Head and A3G-*).
 export function a3PolicyPins(root) {
  if(!isA3Tree(root))return {};
@@ -49,7 +58,8 @@ export function verifyA1Head(root=MODULE_ROOT) {
   const r=load(root), head=text(root,['rev-parse','HEAD']);
   // This bounded successor changes only the four authorized consumers and the existing joint-holder support.
   if(r.successor) assert.ok(r.carriage,'A3 extends the recorded A2 carriage');
-  const expectedParent=r.successor ? A3_PARENT : r.carriage ? A2_PARENT : A1_PARENT;
+  if(r.testSuccessor) assert.ok(r.successor,'A3-T1 extends the recorded A3 successor');
+  const expectedParent=r.testSuccessor ? A3T1_PARENT : r.successor ? A3_PARENT : r.carriage ? A2_PARENT : A1_PARENT;
   if(r.carriage) {
     assert.deepEqual(r.carriage,{parent:A2_PARENT,scope:[...A2_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'},'fixed A2 carriage, never arbitrary later ancestry');
     assert.deepEqual(text(root,['diff','--name-only',A2_PARENT,r.successor?A3_PARENT:'HEAD','--']).split('\n').filter(Boolean).sort(),[...A2_SCOPE],'exact authorized successor delta');
@@ -57,10 +67,17 @@ export function verifyA1Head(root=MODULE_ROOT) {
   if(r.successor) {
     const {edits,...identity}=r.successor;
     assert.deepEqual(identity,{parent:A3_PARENT,source:{...A3_SOURCE},scope:[...A3_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'},'fixed A3 successor, never arbitrary later ancestry');
-    assert.deepEqual(text(root,['diff','--name-only',A3_PARENT,'HEAD','--']).split('\n').filter(Boolean).sort(),[...A3_SCOPE],'exact authorized A3 delta');
+    assert.deepEqual(text(root,['diff','--name-only',A3_PARENT,r.testSuccessor?A3T1_PARENT:'HEAD','--']).split('\n').filter(Boolean).sort(),[...A3_SCOPE],'exact authorized A3 delta');
     for(let i=0;i<A3_DP_CHAIN.length-1;i++) assert.deepEqual(text(root,['rev-list','--parents','-n1',A3_DP_CHAIN[i]]).split(' '),[A3_DP_CHAIN[i],A3_DP_CHAIN[i+1]],'literal DP provenance chain');
     assert.equal(git(root,['merge-base','--is-ancestor',A3_SOURCE.dp4,'HEAD']).status,1,'DP4 is a provenance reference, never an ancestor');
     assert.deepEqual(Object.keys(edits).sort(),[...A3_EDITED],'fixed A3 recorded-edit set');
+  }
+  if(r.testSuccessor) {
+    const {edits,...identity}=r.testSuccessor;
+    assert.deepEqual(identity,{parent:A3T1_PARENT,kind:'test_only',scope:[...A3T1_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'},'fixed A3-T1 test-only successor, never arbitrary later ancestry');
+    assert.deepEqual(text(root,['diff','--name-only',A3T1_PARENT,'HEAD','--']).split('\n').filter(Boolean).sort(),[...A3T1_SCOPE],'exact authorized A3-T1 delta');
+    assert.equal(text(root,['diff','--name-only',A3T1_PARENT,'HEAD','--','.',':!test']),'','A3-T1 changes no file outside test/');
+    assert.deepEqual(Object.keys(edits).sort(),[...A3T1_EDITED],'fixed A3-T1 recorded-edit set');
   }
   assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,expectedParent],'exact sole inspection parent');
   for(const sha of Object.values(A1_SOURCES)) assert.equal(text(root,['cat-file','-t',sha]),'commit','source object required');
@@ -96,6 +113,12 @@ export function verifyA1Head(root=MODULE_ROOT) {
     let s=spawnSync('git',['-C',root,'show',base+':'+file],{encoding:'utf8',timeout:30000,maxBuffer:32*1024*1024}).stdout;
     for(const e of edits){assert.ok(e.from && s.split(e.from).length===2,file+' unique A3 edit');s=s.replace(e.from,()=>e.to);}
     assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' exact A3 derivation');
+  }
+  if(r.testSuccessor) for(const [file,{base,edits}] of Object.entries(r.testSuccessor.edits)) {
+    assert.equal(base,A3T1_PARENT,file+' fixed A3-T1 derivation base');
+    let s=spawnSync('git',['-C',root,'show',base+':'+file],{encoding:'utf8',timeout:30000,maxBuffer:32*1024*1024}).stdout;
+    for(const e of edits){assert.ok(e.from && s.split(e.from).length===2,file+' unique A3-T1 edit');s=s.replace(e.from,()=>e.to);}
+    assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' exact A3-T1 derivation');
   }
   return {ok:true,head,files:Object.keys(tree).length};
 }

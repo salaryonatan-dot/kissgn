@@ -52,15 +52,17 @@ function fakeSend(counter, { gate, info, error } = {}) {
   };
 }
 /** a db whose transactions on `path` go through the real SDK, then fault as `fault(stateBefore)` decides */
+// A3-T1 (test only, F-1): every other Reference member (once / get / child / ...) is the REAL Admin SDK reference, so the
+// reads the DP routes now make (readBounded) reach the store unchanged; only `transaction` is wrapped and faulted, as before.
 function faulty(db, fault) {
-  return { ref: (p) => { const r = db.ref(p); return { transaction: async (fn) => {
+  return { ref: (p) => { const r = db.ref(p); return Object.assign(Object.create(r), { transaction: async (fn) => {
     const before = (await db.ref(p).once("value")).val();
     const f = fault(before && before.state);
     if (f === "throw_before") throw new Error("transaction failed");
     const out = await r.transaction(fn);
     if (f === "throw_after") throw new Error("acknowledgement lost");
     return out;
-  } }; } };
+  } }); } };
 }
 
 await dbA.ref("/").set(null);

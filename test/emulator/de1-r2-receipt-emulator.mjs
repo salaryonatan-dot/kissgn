@@ -120,11 +120,12 @@ await check("R2E5 controls: a definite refusal is final; a 4xx deferral is retri
 await check("R2E6 a failure confirmed before the provider call: failed/claim_lost, zero calls; the next instance sends it", async () => {
   const c = { n: 0 }, send = provider(c, [ok]);
   let refuse = true;
-  const faulty = { ref: (p) => { const r = dbA.ref(p); return { transaction: async (fn) => {
+  // A3-T1 (test only, F-1): reads go through the real reference; only the claimed -> sending transaction is faulted, as before
+  const faulty = { ref: (p) => { const r = dbA.ref(p); return Object.assign(Object.create(r), { transaction: async (fn) => {
     const before = (await dbA.ref(p).once("value")).val();
     if (refuse && before && before.state === "claimed") { refuse = false; throw new Error("transaction failed"); }
     return r.transaction(fn);
-  } }; } };
+  } }); } };
   const r1 = await deliverWithReceipt({ ...base, db: faulty, businessDate: "2026-11-09", clock: () => T0, send });
   assert.deepEqual([r1.outcome, r1.code, r1.retryable], ["failed", "claim_lost", true]);
   assert.equal(c.n, 0, "the provider was never called");
