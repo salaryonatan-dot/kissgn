@@ -18,6 +18,7 @@
     "src/analytics/dailyBuilder.ts",
     "src/utils/dates.ts",
     "test/analytics/dt-o1-calendar-date.test.mjs",
+    "test/analytics/entries-reader-d1-downstream.test.mjs",
     "test/analytics/entries-reader-decimal-aggregation.test.mjs",
     "test/delivery/daily-email-delivery.test.mjs",
     "test/delivery/dp1-manual-delivery-policy.test.mjs",
@@ -38,6 +39,7 @@
     "test/emulator/dp3-evidence-emulator.mjs",
     "test/emulator/dp4-legacy-date-emulator.mjs",
     "test/emulator/hr1-daily-hold-emulator.mjs",
+    "test/emulator/server-readers-matrix.mjs",
     "test/finance/adb06-builder-layer-guard.test.mjs",
     "test/finance/b1-downstream-compat.test.mjs",
     "test/finance/b2-guard-mutations.test.mjs",
@@ -69,10 +71,12 @@
     "test/finance/m1-a3t1-test-successor-guard.test.mjs",
     "test/finance/m1-node22-runtime-guard.test.mjs",
     "test/finance/m1-pbn-fixture-carriage-guard.test.mjs",
+    "test/finance/pbn-sfd-composition-guard.test.mjs",
     "test/finance/rf1-rules-gate-guard.test.mjs",
     "test/finance/rf2-rules-gate-guard.test.mjs",
     "test/finance/rf3-rules-gate-guard.test.mjs",
     "test/finance/s0-guard-server-reader-mutations.test.mjs",
+    "test/finance/sr11-d1-clock-guard.test.mjs",
     "test/security/biz-access.test.mjs",
     "test/security/checklist-cold-cache.test.mjs",
     "test/security/checklist-concurrency.test.mjs",
@@ -103,6 +107,7 @@
     "test/support/dp4-daily-policy.mjs",
     "test/support/dt-o1-runtime.json",
     "test/support/dt-o1-runtime.mjs",
+    "test/support/israel-scenario-clock.mjs",
     "test/support/m1-a1-inspection.json",
     "test/support/m1-a1-inspection.mjs",
     "test/support/m1-r1-remediation.mjs",
@@ -127,6 +132,7 @@
     "src/analytics/dailyBuilder.ts",
     "src/utils/dates.ts",
     "test/analytics/dt-o1-calendar-date.test.mjs",
+    "test/analytics/entries-reader-d1-downstream.test.mjs",
     "test/analytics/entries-reader-decimal-aggregation.test.mjs",
     "test/delivery/daily-email-delivery.test.mjs",
     "test/delivery/dp1-manual-delivery-policy.test.mjs",
@@ -147,6 +153,7 @@
     "test/emulator/dp3-evidence-emulator.mjs",
     "test/emulator/dp4-legacy-date-emulator.mjs",
     "test/emulator/hr1-daily-hold-emulator.mjs",
+    "test/emulator/server-readers-matrix.mjs",
     "test/finance/adb06-builder-layer-guard.test.mjs",
     "test/finance/b1-downstream-compat.test.mjs",
     "test/finance/b2-guard-mutations.test.mjs",
@@ -178,10 +185,12 @@
     "test/finance/m1-a3t1-test-successor-guard.test.mjs",
     "test/finance/m1-node22-runtime-guard.test.mjs",
     "test/finance/m1-pbn-fixture-carriage-guard.test.mjs",
+    "test/finance/pbn-sfd-composition-guard.test.mjs",
     "test/finance/rf1-rules-gate-guard.test.mjs",
     "test/finance/rf2-rules-gate-guard.test.mjs",
     "test/finance/rf3-rules-gate-guard.test.mjs",
     "test/finance/s0-guard-server-reader-mutations.test.mjs",
+    "test/finance/sr11-d1-clock-guard.test.mjs",
     "test/security/biz-access.test.mjs",
     "test/security/checklist-cold-cache.test.mjs",
     "test/security/checklist-concurrency.test.mjs",
@@ -213,6 +222,7 @@
     "test/support/dt-o1-runtime.json",
     "test/support/dt-o1-runtime.mjs",
     "test/support/hr3-ot4-daily-hold.mjs",
+    "test/support/israel-scenario-clock.mjs",
     "test/support/m1-a1-inspection.json",
     "test/support/m1-a1-inspection.mjs",
     "test/support/m1-r1-remediation.mjs",
@@ -231,7 +241,7 @@
     "CREATED_FILES_SUMMARY.txt": "18c51ed9c5e2ad0959d88813d03b11678a7ba1db",
     "SECURITY.md": "264c3b0f2cdb5fc1f425d74de7dc6fed071d6ddf",
     "admin.js": "f5174f36a756d1baa2922422f1a59a2f6a00d517",
-    "api \u05dc\u05d1\u05d9\u05e0\u05d4 \u05de\u05dc\u05d0\u05db\u05d5\u05ea\u05d9\u05ea.png": "05fec46bda883c3acfb4da2e963f6e30feafa942",
+    "api לבינה מלאכותית.png": "05fec46bda883c3acfb4da2e963f6e30feafa942",
     "api/admin.js": "c28d7d9c6bf293817bcca7807ddad163e68f3d9c",
     "api/agent/ask.ts": "15141c558cd16817c4c2cb42f44f81fa297e81e6",
     "api/ai-chat.js": "1387ea3b2de412fa57d0c305d106d7e99d1530f1",
@@ -832,7 +842,7 @@
     "test/analytics/dt-o1-calendar-date.test.mjs": "61b6894f4c6c139f9e58857a3c34e6e32b67ccf0",
     "test/analytics/entries-reader-checkers.test.mjs": "88a1aff2aa99b289516f772bd0035192a80bc76a",
     "test/analytics/entries-reader-client-parity.test.mjs": "002f3d6dd667d6fba80219a2dfe882cdd5ebc30f",
-    "test/analytics/entries-reader-d1-downstream.test.mjs": "e2bd46c5e7c1bef120d80718a8f779f73b8d9737",
+    "test/analytics/entries-reader-d1-downstream.test.mjs": "a108314318ee75b6c387d084c1cf3686ae7881fb",
     "test/analytics/entries-reader-dailybuilder.test.mjs": "85ab4168b994ff2630ac4d50f28dab105490690b",
     "test/analytics/entries-reader-decimal-aggregation.test.mjs": "b611191b31cb1293e9dbffeb25dbce6308497fbe",
     "test/analytics/entries-reader-exceptions.test.mjs": "c04feca5eac55ecd0da3e06908e5bec8986178ca",
@@ -944,7 +954,7 @@
     "test/emulator/rc-closure-snapshot-e2e.mjs": "637ded60e45cd2f0c8aac7bd7c8c1c69e223da91",
     "test/emulator/rtdb-authorization-matrix.mjs": "8f4694c69f2bfd6c99a40288da647c97941d4dff",
     "test/emulator/safety.test.mjs": "35823d81785471b5ad06327266c4c7f6e4130e81",
-    "test/emulator/server-readers-matrix.mjs": "ae28d3d4b25231b50218f39bdf6d560e8fe9d5a1",
+    "test/emulator/server-readers-matrix.mjs": "86ef6a393d7359c9ee2121167d04fbeb14eb9e1d",
     "test/emulator/storage-policy-parity.mjs": "c15bc525d806ef5fe52f87e71d7f30c30ba1b819",
     "test/emulator/storage-v2-matrix.mjs": "c55dc7bf87d5ef6841841405b9be3b29ae7e94d3",
     "test/emulator/storage-v2-rules-guard-mutations.mjs": "887650ca12e655e0e72281d975686fd5d39c367b",
@@ -1089,7 +1099,7 @@
     "test/finance/m1-integration-contracts.test.mjs": "ab6e613c1a9fc38a9d10eb3135b268b3e9620bc7",
     "test/finance/m1-integration-guard.test.mjs": "2692fdb56aa0e8b05eb8fa4cb2b0c387060dd10d",
     "test/finance/m1-node22-runtime-guard.test.mjs": "68ae5de5b530dc9c9f43439addaab766c61f0263",
-    "test/finance/m1-pbn-fixture-carriage-guard.test.mjs": "993cc834c92124c8649f3f4640dcd30f6515d564",
+    "test/finance/m1-pbn-fixture-carriage-guard.test.mjs": "2871082a0aac3415b7ab2114c6dbed29fa2bd796",
     "test/finance/m1-r1-guard.test.mjs": "8243932dda304c0d2a2611991da46d0adec9a7b6",
     "test/finance/m1-r1-page-credit-binding.test.mjs": "c878af4075cf77848ccfac7fd740b023cbed8461",
     "test/finance/m1-r1-registry.test.mjs": "9ece4761aeb4d6c644c853f002e7d1b35d3fd6ba",
@@ -1117,12 +1127,14 @@
     "test/finance/p1-r7-lineage-completeness.test.mjs": "dc155bc9b38a805254f53ed1bd4c54eb2bc4f14c",
     "test/finance/p1-supplier-credits-core.test.mjs": "4fa9297f6c5259c7a4eaa4516c8d196de0ea76e5",
     "test/finance/p1-supplier-credits-server.test.mjs": "9c6d957aea0d9e9aba267c9ec90b958bf7e39182",
+    "test/finance/pbn-sfd-composition-guard.test.mjs": "2ff6b06679798a8cb1f253e14e29d7290d79b77f",
     "test/finance/r2-red-probes.test.mjs": "68ecb247b2c8d77f2f9c90dd55c0cd694574d388",
     "test/finance/rc-closure-snapshot-integration.test.mjs": "4a50cab5fb4c8074b126cb9910dc9fc66a3fe2f6",
     "test/finance/rf1-rules-gate-guard.test.mjs": "e401dba0d910e18d433d7baaedb6dac290e6cf20",
     "test/finance/rf2-rules-gate-guard.test.mjs": "1ae7d1ccd4253eb16dc82cb2d6d1b7eec20853f6",
     "test/finance/rf3-rules-gate-guard.test.mjs": "943b52bfe79067a6ae1e91c8a31edb5369fcf80e",
     "test/finance/s0-guard-server-reader-mutations.test.mjs": "aa5292108ba59448bc6f254e86ace347b6fcdfbc",
+    "test/finance/sr11-d1-clock-guard.test.mjs": "90666fa9d8197c2367db4c96e105d37fbffc067e",
     "test/finance/vat-invariant.test.mjs": "450a415096aef2ca8e8f9b83a84ff0f987b8a810",
     "test/forecast/revenue-forecast-p0.test.mjs": "6340ac27a843f2ca23bbb78c4f0ab7c8c6591bff",
     "test/forecast/revenue-forecast-ui.test.mjs": "0e34f3981fc6f49f99eb99e2fde75525e9055e5d",
@@ -1286,7 +1298,8 @@
     "test/support/i6-integration.mjs": "570683092a17411ce337ca2ff7e9ec7f121ed23a",
     "test/support/i7-integration.json": "3d069d769b5e407515c20cad053674a977152dd3",
     "test/support/i7-integration.mjs": "a52695329d06627d41d49e467f8090cd282453fc",
-    "test/support/m1-a1-inspection.mjs": "e9bb1b01200e30970f3bad9aaa1416816016828d",
+    "test/support/israel-scenario-clock.mjs": "fb7bd1071b8ff760289a27e1e0aa5594c58e5869",
+    "test/support/m1-a1-inspection.mjs": "cf0316550e62dab6945436bbf8db77f981e99f9b",
     "test/support/m1-derivation.mjs": "5ee45583bf800bd4d9551cd76ec5662827e6c01b",
     "test/support/m1-index-scope.mjs": "7f82aa1b534598cd4d87ae3b75394281598d2ac2",
     "test/support/m1-integration-pin.mjs": "b98d35b0fd76ca482ff2a2c888ef2e69ed90c6c3",
@@ -1468,7 +1481,9 @@
     "test/finance/m1-a1-inspection-guard.test.mjs": "0c70b41209ed2388e1cd2dea911657ab7e620b2a",
     "test/finance/m1-a3-policy-carriage-guard.test.mjs": "0c70b41209ed2388e1cd2dea911657ab7e620b2a",
     "test/finance/m1-a3t1-test-successor-guard.test.mjs": "0c70b41209ed2388e1cd2dea911657ab7e620b2a",
-    "test/finance/m1-node22-runtime-guard.test.mjs": "e9d9566c1fb1802cef158c05991d7d47d8c9182f"
+    "test/finance/m1-node22-runtime-guard.test.mjs": "e9d9566c1fb1802cef158c05991d7d47d8c9182f",
+    "test/finance/m1-pbn-fixture-carriage-guard.test.mjs": "d963532287f5390df9baef5c7a18a109400233b8",
+    "test/finance/sr11-d1-clock-guard.test.mjs": "31fb9c43505c253ce2dc8a195fc7b9b16efe4dc1"
   },
   "exclusions": {
     "pbd": "7ae41336b7c2f02b953b9267768b90f97e39278f",
@@ -1942,6 +1957,72 @@
           {
             "from": "  if(text(root,['rev-parse','HEAD^'])!==N22_PARENT)return {ok:false,reason:'node22_parent'};",
             "to": "  // PBN: the N22 layer stays bound to the exact N22 commit; PBN's own exact identity and parent are required on its child.\n  const pbn=load(root).pbnSuccessor;\n  if(pbn) {\n   const {edits:pe,...pid}=pbn;\n   if(JSON.stringify(pid)!==JSON.stringify({parent:PBN_PARENT,kind:'pbd_fixture_test_carriage',source:{...PBN_SOURCE},fixture:{path:PBN_FIXTURE,pin:PBN_FIXTURE_PIN},scope:[...PBN_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'}))return {ok:false,reason:'pbn_layer_identity'};\n   if(text(root,['rev-parse','HEAD^'])!==PBN_PARENT)return {ok:false,reason:'pbn_parent'};\n  }\n  if(text(root,['rev-parse',(pbn?PBN_PARENT:'HEAD')+'^'])!==N22_PARENT)return {ok:false,reason:'node22_parent'};"
+          }
+        ]
+      }
+    }
+  },
+  "fixtureComposition": {
+    "parent": "d963532287f5390df9baef5c7a18a109400233b8",
+    "source": "31fb9c43505c253ce2dc8a195fc7b9b16efe4dc1",
+    "kind": "pbn_sfd_test_composition",
+    "scope": [
+      "test/analytics/entries-reader-d1-downstream.test.mjs",
+      "test/emulator/server-readers-matrix.mjs",
+      "test/finance/m1-pbn-fixture-carriage-guard.test.mjs",
+      "test/finance/pbn-sfd-composition-guard.test.mjs",
+      "test/finance/sr11-d1-clock-guard.test.mjs",
+      "test/support/israel-scenario-clock.mjs",
+      "test/support/m1-a1-inspection.json",
+      "test/support/m1-a1-inspection.mjs"
+    ],
+    "transfers": [
+      "test/analytics/entries-reader-d1-downstream.test.mjs",
+      "test/emulator/server-readers-matrix.mjs",
+      "test/support/israel-scenario-clock.mjs"
+    ],
+    "status": "PROPOSED_FOR_INDEPENDENT_REVIEW",
+    "edits": {
+      "test/finance/m1-pbn-fixture-carriage-guard.test.mjs": {
+        "base": "d963532287f5390df9baef5c7a18a109400233b8",
+        "edits": [
+          {
+            "from": "import { test } from 'node:test';\n",
+            "to": "import { historicalTest } from \"../support/m1-a1-inspection.mjs\";\nconst test = historicalTest(new URL(\"../../\", import.meta.url), \"d963532287f5390df9baef5c7a18a109400233b8\", \"test/finance/m1-pbn-fixture-carriage-guard.test.mjs\");\n"
+          }
+        ]
+      },
+      "test/finance/sr11-d1-clock-guard.test.mjs": {
+        "base": "31fb9c43505c253ce2dc8a195fc7b9b16efe4dc1",
+        "edits": [
+          {
+            "from": "import { test } from 'node:test';\n",
+            "to": "import { historicalTest } from \"../support/m1-a1-inspection.mjs\";\nconst test = historicalTest(new URL(\"../../\", import.meta.url), \"31fb9c43505c253ce2dc8a195fc7b9b16efe4dc1\", \"test/finance/sr11-d1-clock-guard.test.mjs\");\n"
+          }
+        ]
+      },
+      "test/support/m1-a1-inspection.mjs": {
+        "base": "d963532287f5390df9baef5c7a18a109400233b8",
+        "edits": [
+          {
+            "from": "export const A1_RECORD = 'test/support/m1-a1-inspection.json';",
+            "to": "// Deliberate PBN + accepted SR-11/D1 test composition. Both source commits remain literal proofs.\nexport const COMPOSE_PARENT = \"d963532287f5390df9baef5c7a18a109400233b8\";\nexport const COMPOSE_SOURCE = \"31fb9c43505c253ce2dc8a195fc7b9b16efe4dc1\";\nexport const COMPOSE_SCOPE = Object.freeze([\"test/analytics/entries-reader-d1-downstream.test.mjs\", \"test/emulator/server-readers-matrix.mjs\", \"test/finance/m1-pbn-fixture-carriage-guard.test.mjs\", \"test/finance/pbn-sfd-composition-guard.test.mjs\", \"test/finance/sr11-d1-clock-guard.test.mjs\", \"test/support/israel-scenario-clock.mjs\", \"test/support/m1-a1-inspection.json\", \"test/support/m1-a1-inspection.mjs\"]);\nexport const COMPOSE_TRANSFERS = Object.freeze([\"test/analytics/entries-reader-d1-downstream.test.mjs\", \"test/emulator/server-readers-matrix.mjs\", \"test/support/israel-scenario-clock.mjs\"]);\nexport const COMPOSE_EDITED = Object.freeze([\"test/finance/m1-pbn-fixture-carriage-guard.test.mjs\", \"test/finance/sr11-d1-clock-guard.test.mjs\", \"test/support/m1-a1-inspection.mjs\"]);\nexport const SFD_PARENT = \"e9d9566c1fb1802cef158c05991d7d47d8c9182f\";\nexport const SFD_SCOPE = Object.freeze([\"test/analytics/entries-reader-d1-downstream.test.mjs\", \"test/emulator/server-readers-matrix.mjs\", \"test/finance/m1-node22-runtime-guard.test.mjs\", \"test/finance/sr11-d1-clock-guard.test.mjs\", \"test/support/israel-scenario-clock.mjs\", \"test/support/m1-a1-inspection.json\", \"test/support/m1-a1-inspection.mjs\"]);\nexport const SFD_EDITED = Object.freeze([\"test/analytics/entries-reader-d1-downstream.test.mjs\", \"test/emulator/server-readers-matrix.mjs\", \"test/finance/m1-node22-runtime-guard.test.mjs\", \"test/support/m1-a1-inspection.mjs\"]);\nexport const A1_RECORD = 'test/support/m1-a1-inspection.json';"
+          },
+          {
+            "from": "  const r=load(root), head=text(root,['rev-parse','HEAD']);",
+            "to": "  const r=load(root), head=text(root,['rev-parse','HEAD']);\n  if(r.fixtureComposition) return verifyComposedFixtures(root,r,head);"
+          },
+          {
+            "from": "// Run the unchanged assertions in an isolated literal source view.",
+            "to": "// New current-head proof. Historical PBN/SFD/N22 holders and assertions stay literal.\nconst compositionProofs=new Set();\nfunction compositionIdentity() { return {parent:COMPOSE_PARENT,source:COMPOSE_SOURCE,kind:'pbn_sfd_test_composition',scope:[...COMPOSE_SCOPE],transfers:[...COMPOSE_TRANSFERS],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'}; }\nfunction verifyComposedFixtures(root,r,head) {\n const {edits,...identity}=r.fixtureComposition;\n assert.deepEqual(identity,compositionIdentity(),'fixed composition identity');\n assert.deepEqual(Object.keys(edits).sort(),[...COMPOSE_EDITED],'closed composition edit set');\n assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,COMPOSE_PARENT],'exact composition sole parent');\n const names=args=>text(root,args).split('\\n').filter(Boolean).sort();\n for(const args of [['diff','--name-only',COMPOSE_PARENT,'HEAD','--'],['diff','--name-only','--cached',COMPOSE_PARENT,'--'],['diff','--name-only',COMPOSE_PARENT,'--']]) assert.deepEqual(names(args),[...COMPOSE_SCOPE],'exact composition HEAD/index/checkout scope');\n assert.deepEqual(untrackedPaths(root),[],'no ignored/opaque untracked bypass');\n const prior=JSON.parse(git(root,['show',COMPOSE_PARENT+':'+A1_RECORD]).stdout);\n for(const key of Object.keys(prior))if(!['treePins','scope','allowedScope','historicalGuards'].includes(key))assert.deepEqual(r[key],prior[key],key+' prior record exact');\n assert.deepEqual(Object.keys(r).sort(),[...Object.keys(prior),'fixtureComposition'].sort(),'no hidden composition metadata');\n assert.deepEqual(r.scope,[...new Set([...prior.scope,...COMPOSE_SCOPE])].sort());\n assert.deepEqual(r.allowedScope,[...new Set([...prior.allowedScope,...r.scope])].sort());\n assert.deepEqual(r.historicalGuards,{...prior.historicalGuards,'test/finance/m1-pbn-fixture-carriage-guard.test.mjs':COMPOSE_PARENT,'test/finance/sr11-d1-clock-guard.test.mjs':COMPOSE_SOURCE});\n const tree={};for(const row of text(root,['ls-tree','-r','-z','HEAD']).split('\\0').filter(Boolean)){const m=/^(\\d+) blob ([a-f0-9]{40})\\t([\\s\\S]+)$/.exec(row);assert.ok(m,row);assert.notEqual(m[1],'120000');tree[m[3]]=m[2];}\n delete tree[A1_RECORD];assert.deepEqual(tree,r.treePins,'complete current tree pins');\n const index={};for(const row of text(root,['ls-files','--stage','-z']).split('\\0').filter(Boolean)){const m=/^\\d+ ([a-f0-9]{40}) 0\\t([\\s\\S]+)$/.exec(row);assert.ok(m,'unmerged index');index[m[2]]=m[1];}\n for(const [f,pin] of Object.entries(tree)){assert.equal(index[f],pin,f+' index');assert.equal(a1Blob(readFileSync(join(root,f))),pin,f+' checkout');}\n assert.equal(index[A1_RECORD],text(root,['rev-parse','HEAD:'+A1_RECORD]));assert.equal(a1Blob(readFileSync(join(root,A1_RECORD))),index[A1_RECORD]);\n for(const f of COMPOSE_TRANSFERS)assert.equal(tree[f],text(root,['rev-parse',COMPOSE_SOURCE+':'+f]),f+' exact accepted SFD transfer');\n assert.equal(tree[PBN_FIXTURE],PBN_FIXTURE_PIN,'accepted PBD fixture unchanged');\n for(const [f,{base,edits:changes}] of Object.entries(edits)){\n  assert.equal(base,f==='test/finance/sr11-d1-clock-guard.test.mjs'?COMPOSE_SOURCE:COMPOSE_PARENT,'fixed derivation source');\n  let bytes=git(root,['show',base+':'+f]).stdout;\n  for(const e of changes){assert.ok(e.from&&bytes.split(e.from).length===2,f+' unique composition anchor');bytes=bytes.replace(e.from,()=>e.to);}\n  assert.equal(a1Blob(Buffer.from(bytes)),tree[f],f+' exact composition derivation');\n }\n for(const sha of [COMPOSE_PARENT,COMPOSE_SOURCE])if(!compositionProofs.has(sha)){\n  const view=sourceView(root,sha),env={...process.env};delete env.NODE_TEST_CONTEXT;\n  const code='import {verifyA1Head} from '+JSON.stringify(new URL('test/support/m1-a1-inspection.mjs','file://'+view+'/').href)+';verifyA1Head('+JSON.stringify(view)+');';\n  const p=spawnSync(process.execPath,['--input-type=module','-e',code],{env,encoding:'utf8',timeout:180000,maxBuffer:64*1024*1024});\n  assert.equal(p.status,0,'literal accepted holder proof '+sha+'\\n'+p.stdout+'\\n'+p.stderr);compositionProofs.add(sha);\n }\n return {ok:true,head,files:Object.keys(tree).length};\n}\n\n// Run the unchanged assertions in an isolated literal source view."
+          },
+          {
+            "from": "  const pbn=load(root).pbnSuccessor;",
+            "to": "  const composition=load(root).fixtureComposition;\n  if(composition){\n   const {edits:ce,...cid}=composition;\n   if(JSON.stringify(cid)!==JSON.stringify(compositionIdentity()))return {ok:false,reason:'composition_identity'};\n   if(text(root,['rev-list','--parents','-n1','HEAD']).split(' ').slice(1).join(' ')!==COMPOSE_PARENT)return {ok:false,reason:'composition_parent'};\n   if(text(root,['diff','--name-only',COMPOSE_PARENT,'HEAD','--']).split('\\n').filter(Boolean).sort().join('\\0')!==[...COMPOSE_SCOPE].join('\\0'))return {ok:false,reason:'composition_scope'};\n  }\n  const pbn=load(root).pbnSuccessor;"
+          },
+          {
+            "from": "   if(text(root,['rev-parse','HEAD^'])!==PBN_PARENT)return {ok:false,reason:'pbn_parent'};",
+            "to": "   if(text(root,['rev-parse',(composition?COMPOSE_PARENT:'HEAD')+'^'])!==PBN_PARENT)return {ok:false,reason:'pbn_parent'};"
           }
         ]
       }

@@ -8,7 +8,8 @@
 //   PBNG-05  the N22 guard is adapted only by the existing literal-history import line
 //   PBNG-06  N22's exact configuration projection still projects only the two package files on this child
 //   PBNG-07  tamper controls in disposable shared clones
-import { test } from 'node:test';
+import { historicalTest } from "../support/m1-a1-inspection.mjs";
+const test = historicalTest(new URL("../../", import.meta.url), "d963532287f5390df9baef5c7a18a109400233b8", "test/finance/m1-pbn-fixture-carriage-guard.test.mjs");
 import assert from 'node:assert/strict';
 import { readFileSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

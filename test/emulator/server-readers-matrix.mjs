@@ -29,6 +29,7 @@
 // repository glob. Host run: see test/emulator/README.md.
 
 import admin from "firebase-admin";
+import { withIsraelScenario } from "../support/israel-scenario-clock.mjs";
 import { readFileSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
@@ -310,7 +311,7 @@ async function main() {
 
   // ══ 11. D1 DOWNSTREAM (R1 / Codex SR-F1) — actual proactive flow, order/UUID independent ══
   await run("SR-11", "d1-downstream", "duplicate 'yesterday' (100 + 500) in legacy [A,B] / [B,A] and V2 keyed both ways: runForBiz persists the SAME insight (currentValue 600) and digest; pre-fix repo would have chosen by order", async () => {
-    const dayBefore = (n) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+    return withIsraelScenario(async ({ dayBefore }) => {
     const y = dayBefore(1);
     const hist = Array.from({ length: 20 }, (_, i) => ({ id: `22222222-2222-4222-8222-${String(i + 2).padStart(12, "0")}`, date: dayBefore(i + 2), sales: 1000, deliveries: 0, other_income: 0, payroll: 100, supplier_payments: { s1: 300 } }));
     const mk = (idA, idB) => ({ A: { id: idA, date: y, sales: 100, deliveries: 0, other_income: 0, payroll: 20, supplier_payments: { s1: 30 } }, B: { id: idB, date: y, sales: 500, deliveries: 0, other_income: 0, payroll: 40, supplier_payments: { s1: 70 } } });
@@ -334,6 +335,7 @@ async function main() {
     const ins = Object.values(snaps[0][1].insights || {}).find((i) => i.type === "revenue_underperformance");
     expect(ins && ins.currentValue === 600, "insight persisted from the AGGREGATED day (600), not from row A or B");
     return `8 representations → identical insight (currentValue 600) + digest`;
+    });
   });
 
   // ══ 12. DECIMAL DETERMINISM (R2 / Codex counterexample) — real RTDB, real proactive flow ══

@@ -15,6 +15,7 @@
 // (the last completed day); labor = `payroll` (+ global) and `hourly_payroll` is never
 // counted (VD-31); ratios are ratios of exact totals (VD-19, 10 dp legacy conversion).
 import { test } from "node:test";
+import { withIsraelScenario } from "../support/israel-scenario-clock.mjs";
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -94,6 +95,11 @@ test("dailyMetricsRepo: exactly one record per business date; duplicates aggrega
 });
 
 test("detector: identical FINAL result for every representation (A=100, B=500 on the most recent day)", async () => {
+  return withIsraelScenario(async ({ today, dayBefore, nowIso }) => {
+  const past = n => Array.from({ length: n }, (_, i) => ({ id: `22222222-2222-4222-8222-${String(i + 1).padStart(12, "0")}`, date: dayBefore(i + 2), sales: 1000, deliveries: 0, other_income: 0, payroll: 100, supplier_payments: { s1: 300 } }));
+  const lastDay = dayBefore(1);
+  const plan = { intent: "anomaly_detection", metrics: ["daily", "labor", "purchases"], dimensions: [], filters: {}, timeRange: { start: dayBefore(28), end: today }, requiresBaseline: true, requiresComparison: false, requiresAnomalyDetection: true };
+  const ctx = { tenantId: T, bizId: B, timezone: "Asia/Jerusalem", locale: "he", nowIso, userQuestion: "proactive" };
   const history = past(15);
   const { A, B: Bv } = dup(lastDay, 100, 500);
   const results = {};
@@ -109,6 +115,7 @@ test("detector: identical FINAL result for every representation (A=100, B=500 on
   assert.ok(r && r.type === "revenue_underperformance", "the aggregated day underperforms the baseline");
   assert.equal(r.currentValue, 600, "currentValue is the sum of both rows — never 100 or 500");
   assert.equal(r.periodEnd, lastDay);
+  });
 });
 
 test("detector: the Codex reproduction (1 vs 1000 on the same day) — no representation can flip the verdict", async () => {
@@ -128,6 +135,8 @@ test("detector: the Codex reproduction (1 vs 1000 on the same day) — no repres
 });
 
 test("actual proactive flow (runForBiz): identical persisted insight and digest across legacy/V2 and both orders", async () => {
+  return withIsraelScenario(async ({ dayBefore }) => {
+  const past = n => Array.from({ length: n }, (_, i) => ({ id: `22222222-2222-4222-8222-${String(i + 1).padStart(12, "0")}`, date: dayBefore(i + 2), sales: 1000, deliveries: 0, other_income: 0, payroll: 100, supplier_payments: { s1: 300 } }));
   const history = past(20);
   const { A, B: Bv } = dup(dayBefore(1), 100, 500);   // "yesterday" is the duplicate day (its only rows)
   const snapshots = {};
@@ -145,6 +154,7 @@ test("actual proactive flow (runForBiz): identical persisted insight and digest 
   const ru = ins.find((i) => i.type === "revenue_underperformance");
   assert.ok(ru, "the aggregated 600 day is detected once");
   assert.equal(ru.currentValue, 600);
+  });
 });
 
 test("NEGATIVE CONTROL — the PRE-FIX repository emits order-dependent duplicate dates; the current detector refuses them", async () => {
