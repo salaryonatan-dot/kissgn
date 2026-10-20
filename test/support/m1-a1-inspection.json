@@ -18,6 +18,7 @@
     "src/analytics/dailyBuilder.ts",
     "src/utils/dates.ts",
     "test/analytics/dt-o1-calendar-date.test.mjs",
+    "test/analytics/entries-reader-decimal-aggregation.test.mjs",
     "test/delivery/daily-email-delivery.test.mjs",
     "test/delivery/dp1-manual-delivery-policy.test.mjs",
     "test/delivery/dp2-shared-admission.test.mjs",
@@ -67,6 +68,7 @@
     "test/finance/m1-a3-policy-carriage-guard.test.mjs",
     "test/finance/m1-a3t1-test-successor-guard.test.mjs",
     "test/finance/m1-node22-runtime-guard.test.mjs",
+    "test/finance/m1-pbn-fixture-carriage-guard.test.mjs",
     "test/finance/rf1-rules-gate-guard.test.mjs",
     "test/finance/rf2-rules-gate-guard.test.mjs",
     "test/finance/rf3-rules-gate-guard.test.mjs",
@@ -125,6 +127,7 @@
     "src/analytics/dailyBuilder.ts",
     "src/utils/dates.ts",
     "test/analytics/dt-o1-calendar-date.test.mjs",
+    "test/analytics/entries-reader-decimal-aggregation.test.mjs",
     "test/delivery/daily-email-delivery.test.mjs",
     "test/delivery/dp1-manual-delivery-policy.test.mjs",
     "test/delivery/dp2-shared-admission.test.mjs",
@@ -174,6 +177,7 @@
     "test/finance/m1-a3-policy-carriage-guard.test.mjs",
     "test/finance/m1-a3t1-test-successor-guard.test.mjs",
     "test/finance/m1-node22-runtime-guard.test.mjs",
+    "test/finance/m1-pbn-fixture-carriage-guard.test.mjs",
     "test/finance/rf1-rules-gate-guard.test.mjs",
     "test/finance/rf2-rules-gate-guard.test.mjs",
     "test/finance/rf3-rules-gate-guard.test.mjs",
@@ -830,7 +834,7 @@
     "test/analytics/entries-reader-client-parity.test.mjs": "002f3d6dd667d6fba80219a2dfe882cdd5ebc30f",
     "test/analytics/entries-reader-d1-downstream.test.mjs": "e2bd46c5e7c1bef120d80718a8f779f73b8d9737",
     "test/analytics/entries-reader-dailybuilder.test.mjs": "85ab4168b994ff2630ac4d50f28dab105490690b",
-    "test/analytics/entries-reader-decimal-aggregation.test.mjs": "f22047cd79f8ce5e7c71b5d42b7200372529b083",
+    "test/analytics/entries-reader-decimal-aggregation.test.mjs": "b611191b31cb1293e9dbffeb25dbce6308497fbe",
     "test/analytics/entries-reader-exceptions.test.mjs": "c04feca5eac55ecd0da3e06908e5bec8986178ca",
     "test/analytics/entries-reader-repos.test.mjs": "bcf9d79a69a555d16074beea98fe15a26ada1b9d",
     "test/analytics/entries-reader-snapshot.test.mjs": "b32647f67bc5c6d064fba00a30fd63776a9fbf3e",
@@ -1084,7 +1088,8 @@
     "test/finance/m1-a3t1-test-successor-guard.test.mjs": "43297a6c48a9bd7d5209d145d390d50cf89947bf",
     "test/finance/m1-integration-contracts.test.mjs": "ab6e613c1a9fc38a9d10eb3135b268b3e9620bc7",
     "test/finance/m1-integration-guard.test.mjs": "2692fdb56aa0e8b05eb8fa4cb2b0c387060dd10d",
-    "test/finance/m1-node22-runtime-guard.test.mjs": "cba8f9a2be07d05b56e876a76eb909a64220566c",
+    "test/finance/m1-node22-runtime-guard.test.mjs": "68ae5de5b530dc9c9f43439addaab766c61f0263",
+    "test/finance/m1-pbn-fixture-carriage-guard.test.mjs": "993cc834c92124c8649f3f4640dcd30f6515d564",
     "test/finance/m1-r1-guard.test.mjs": "8243932dda304c0d2a2611991da46d0adec9a7b6",
     "test/finance/m1-r1-page-credit-binding.test.mjs": "c878af4075cf77848ccfac7fd740b023cbed8461",
     "test/finance/m1-r1-registry.test.mjs": "9ece4761aeb4d6c644c853f002e7d1b35d3fd6ba",
@@ -1281,7 +1286,7 @@
     "test/support/i6-integration.mjs": "570683092a17411ce337ca2ff7e9ec7f121ed23a",
     "test/support/i7-integration.json": "3d069d769b5e407515c20cad053674a977152dd3",
     "test/support/i7-integration.mjs": "a52695329d06627d41d49e467f8090cd282453fc",
-    "test/support/m1-a1-inspection.mjs": "6b4ac21e72493002140382dbe026952dee86dbfd",
+    "test/support/m1-a1-inspection.mjs": "e9bb1b01200e30970f3bad9aaa1416816016828d",
     "test/support/m1-derivation.mjs": "5ee45583bf800bd4d9551cd76ec5662827e6c01b",
     "test/support/m1-index-scope.mjs": "7f82aa1b534598cd4d87ae3b75394281598d2ac2",
     "test/support/m1-integration-pin.mjs": "b98d35b0fd76ca482ff2a2c888ef2e69ed90c6c3",
@@ -1462,7 +1467,8 @@
     "test/finance/dp4-daily-policy-guard.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
     "test/finance/m1-a1-inspection-guard.test.mjs": "0c70b41209ed2388e1cd2dea911657ab7e620b2a",
     "test/finance/m1-a3-policy-carriage-guard.test.mjs": "0c70b41209ed2388e1cd2dea911657ab7e620b2a",
-    "test/finance/m1-a3t1-test-successor-guard.test.mjs": "0c70b41209ed2388e1cd2dea911657ab7e620b2a"
+    "test/finance/m1-a3t1-test-successor-guard.test.mjs": "0c70b41209ed2388e1cd2dea911657ab7e620b2a",
+    "test/finance/m1-node22-runtime-guard.test.mjs": "e9d9566c1fb1802cef158c05991d7d47d8c9182f"
   },
   "exclusions": {
     "pbd": "7ae41336b7c2f02b953b9267768b90f97e39278f",
@@ -1858,6 +1864,84 @@
           {
             "from": "  const provenancePin=file=>r.node22Successor ? text(root,['rev-parse',N22_PARENT+':'+file]) : tree[file];",
             "to": "  const provenancePins=r.node22Successor ? Object.fromEntries(text(root,['ls-tree','-r','-z',N22_PARENT]).split('\\0').filter(Boolean).map(row=>{const m=/^\\d+ blob ([a-f0-9]{40})\\t([\\s\\S]+)$/.exec(row);assert.ok(m,row);return [m[2],m[1]];})) : tree;\n  const provenancePin=file=>provenancePins[file];"
+          }
+        ]
+      }
+    }
+  },
+  "pbnSuccessor": {
+    "parent": "e9d9566c1fb1802cef158c05991d7d47d8c9182f",
+    "kind": "pbd_fixture_test_carriage",
+    "source": {
+      "fixture": "9550569f0bdc9b6a1ff88e3ff95cc3253285291c",
+      "carriage": "7ae41336b7c2f02b953b9267768b90f97e39278f",
+      "uc2": "46e17525e88af9da357b72c5624fe5bfdc0608ce"
+    },
+    "fixture": {
+      "path": "test/analytics/entries-reader-decimal-aggregation.test.mjs",
+      "pin": "b611191b31cb1293e9dbffeb25dbce6308497fbe"
+    },
+    "scope": [
+      "test/analytics/entries-reader-decimal-aggregation.test.mjs",
+      "test/finance/m1-node22-runtime-guard.test.mjs",
+      "test/finance/m1-pbn-fixture-carriage-guard.test.mjs",
+      "test/support/m1-a1-inspection.json",
+      "test/support/m1-a1-inspection.mjs"
+    ],
+    "status": "PROPOSED_FOR_INDEPENDENT_REVIEW",
+    "edits": {
+      "test/analytics/entries-reader-decimal-aggregation.test.mjs": {
+        "base": "e9d9566c1fb1802cef158c05991d7d47d8c9182f",
+        "edits": [
+          {
+            "from": "test(\"positive persistence control: a genuine underperformance (600 vs ~1000 history) persists ONE identical insight and digest across representations\", async () => {\n  const hist = Array.from({ length: 20 }, (_, i) => rowOf(uuidN(300 + i), dayBefore(i + 2), { sales: 1000 }));\n  const snaps = [];\n  for (const ids of [IDS, IDS.slice().reverse()]) {\n    const rows = [100, 200, 300].map((v, i) => rowOf(ids[i], Y, { sales: v }));\n    for (const node of [legacyNode([...hist, ...rows]), legacyNode([...rows.slice().reverse(), ...hist]), v2Node([...hist, ...rows]), v2Node([...rows.slice().reverse(), ...hist])]) {\n      const db = await seed(node);\n      const result = await PJ.runForBiz(T, B);\n      const insights = db.read(`tenants/${T}/proactive_insights/${B}`) || {};\n      const ru = Object.values(insights).find((i) => i.type === \"revenue_underperformance\");\n      assert.ok(ru && ru.currentValue === 600, \"real persisted insight with currentValue 600\");\n      const digests = db.read(`tenants/${T}/proactive_digests/${B}`);\n      assert.ok(digests && Object.values(digests.daily)[0].totalDetected >= 1, \"non-empty digest\");\n      snaps.push(stripTime({ result, insights, digests }));\n    }\n  }\n  for (const s of snaps) assert.deepEqual(s, snaps[0]);\n});\n\n",
+            "to": "test(\"positive persistence control: a genuine underperformance (600 vs ~1000 history) persists ONE identical insight and digest across representations\", async (t) => {\n  // UC2-P-01: literal Israel-calendar expectations, independent of the production helper.\n  // Freeze the SAME instant for fixture construction and every asynchronous job call.\n  // Module-load Y is deliberately not used here: this row may execute days after load.\n  const clocks = [\n    [\"2026-10-14T20:59:59.999Z\", \"2026-10-13\"], // IDT: 1 ms before Israel midnight\n    [\"2026-10-14T21:00:00.000Z\", \"2026-10-14\"],\n    [\"2026-10-14T23:59:59.999Z\", \"2026-10-14\"], // 1 ms before UTC midnight\n    [\"2026-10-15T00:00:00.000Z\", \"2026-10-14\"],\n    [\"2027-01-14T21:59:59.999Z\", \"2027-01-13\"], // IST: 1 ms before Israel midnight\n    [\"2027-01-14T22:00:00.000Z\", \"2027-01-14\"],\n    [\"2027-01-14T23:59:59.999Z\", \"2027-01-14\"],\n    [\"2027-01-15T00:00:00.000Z\", \"2027-01-14\"],\n    [\"2026-09-30T20:59:59.999Z\", \"2026-09-29\"], // summer month rollover\n    [\"2026-09-30T21:00:00.000Z\", \"2026-09-30\"],\n    [\"2026-12-31T21:59:59.999Z\", \"2026-12-30\"], // winter year rollover\n    [\"2026-12-31T22:00:00.000Z\", \"2026-12-31\"],\n    [\"2027-01-01T00:00:00.000Z\", \"2026-12-31\"],\n    [\"2027-02-28T22:00:00.000Z\", \"2027-02-28\"],\n    [\"2028-02-29T22:00:00.000Z\", \"2028-02-29\"], // leap-day calendar history\n    [\"2027-03-25T23:59:59.999Z\", \"2027-03-25\"], // Israel spring offset change\n    [\"2027-03-26T00:00:00.000Z\", \"2027-03-25\"],\n    [\"2027-03-26T21:00:00.000Z\", \"2027-03-26\"],\n    [\"2026-10-24T22:59:59.999Z\", \"2026-10-24\"], // Israel autumn offset change\n    [\"2026-10-24T23:00:00.000Z\", \"2026-10-24\"],\n    [\"2026-10-25T22:00:00.000Z\", \"2026-10-25\"],\n  ];\n  for (const [instant, yesterday] of clocks) await t.test(`${instant}: yesterday ${yesterday}`, async () => {\n    const HostDate = globalThis.Date, nowMs = HostDate.parse(instant);\n    class FixtureDate extends HostDate {\n      constructor(...args) { if (args.length === 0) super(nowMs); else super(...args); }\n      static now() { return nowMs; }\n    }\n    globalThis.Date = FixtureDate;\n    try {\n      // UTC midnight represents a calendar label here, not an Israel instant minus 24 hours.\n      const beforeYesterday = (n) => new HostDate(HostDate.parse(`${yesterday}T00:00:00Z`) - n * 86400000).toISOString().slice(0, 10);\n      const hist = Array.from({ length: 20 }, (_, i) => rowOf(uuidN(300 + i), beforeYesterday(i + 1), { sales: 1000 }));\n      const snaps = [];\n      for (const ids of [IDS, IDS.slice().reverse()]) {\n        const rows = [100, 200, 300].map((v, i) => rowOf(ids[i], yesterday, { sales: v }));\n        for (const node of [legacyNode([...hist, ...rows]), legacyNode([...rows.slice().reverse(), ...hist]), v2Node([...hist, ...rows]), v2Node([...rows.slice().reverse(), ...hist])]) {\n          const db = await seed(node);\n          const result = await PJ.runForBiz(T, B);\n          const insights = db.read(`tenants/${T}/proactive_insights/${B}`) || {};\n          const ru = Object.values(insights).find((i) => i.type === \"revenue_underperformance\");\n          assert.ok(ru && ru.currentValue === 600, \"real persisted insight with currentValue 600\");\n          assert.deepEqual([ru.periodEnd, ru.baselineValue], [yesterday, 1000], \"the intended completed business date and independent history\");\n          assert.equal(Object.values(insights).filter((i) => i.type === \"revenue_underperformance\").length, 1, \"one persisted revenue-underperformance insight\");\n          const digests = db.read(`tenants/${T}/proactive_digests/${B}`);\n          assert.ok(digests && Object.values(digests.daily)[0].totalDetected >= 1, \"non-empty digest\");\n          snaps.push(stripTime({ result, insights, digests }));\n        }\n      }\n      for (const s of snaps) assert.deepEqual(s, snaps[0]);\n    } finally { globalThis.Date = HostDate; }\n    assert.equal(globalThis.Date, HostDate, \"restore the caller's clock after the asynchronous persistence checks\");\n  });\n});\n\n"
+          }
+        ]
+      },
+      "test/finance/m1-node22-runtime-guard.test.mjs": {
+        "base": "e9d9566c1fb1802cef158c05991d7d47d8c9182f",
+        "edits": [
+          {
+            "from": "import { test } from 'node:test';\nimport assert from 'node:assert/strict';",
+            "to": "import { historicalTest } from \"../support/m1-a1-inspection.mjs\";\nconst test = historicalTest(new URL(\"../../\", import.meta.url), \"e9d9566c1fb1802cef158c05991d7d47d8c9182f\", \"test/finance/m1-node22-runtime-guard.test.mjs\");\nimport assert from 'node:assert/strict';"
+          }
+        ]
+      },
+      "test/support/m1-a1-inspection.mjs": {
+        "base": "e9d9566c1fb1802cef158c05991d7d47d8c9182f",
+        "edits": [
+          {
+            "from": "export const A1_RECORD = 'test/support/m1-a1-inspection.json';",
+            "to": "// PBN: the accepted PBD fixture row (UC2-P-01, T-PBD-ROW/T-PBD-ASSERT) carried onto exact N22. Test-only; no UC2 ancestry,\n// UC2 runtime or UC2-bound carriage. The accepted source commits are provenance data only, never required objects.\nexport const PBN_PARENT = \"e9d9566c1fb1802cef158c05991d7d47d8c9182f\";\nexport const PBN_FIXTURE = \"test/analytics/entries-reader-decimal-aggregation.test.mjs\";\nexport const PBN_FIXTURE_PIN = \"b611191b31cb1293e9dbffeb25dbce6308497fbe\";\nexport const PBN_SOURCE = Object.freeze({ fixture:\"9550569f0bdc9b6a1ff88e3ff95cc3253285291c\", carriage:\"7ae41336b7c2f02b953b9267768b90f97e39278f\", uc2:\"46e17525e88af9da357b72c5624fe5bfdc0608ce\" });\nexport const PBN_SCOPE = Object.freeze([\"test/analytics/entries-reader-decimal-aggregation.test.mjs\", \"test/finance/m1-node22-runtime-guard.test.mjs\", \"test/finance/m1-pbn-fixture-carriage-guard.test.mjs\", \"test/support/m1-a1-inspection.json\", \"test/support/m1-a1-inspection.mjs\"]);\nexport const PBN_EDITED = Object.freeze([\"test/analytics/entries-reader-decimal-aggregation.test.mjs\", \"test/finance/m1-node22-runtime-guard.test.mjs\", \"test/support/m1-a1-inspection.mjs\"]);\nexport const A1_RECORD = 'test/support/m1-a1-inspection.json';"
+          },
+          {
+            "from": "  if(r.node22Successor) assert.ok(r.testSuccessor,'N22 extends the recorded T1 successor');",
+            "to": "  if(r.node22Successor) assert.ok(r.testSuccessor,'N22 extends the recorded T1 successor');\n  if(r.pbnSuccessor) assert.ok(r.node22Successor,'PBN extends the recorded N22 successor');"
+          },
+          {
+            "from": "  const expectedParent=r.node22Successor ? N22_PARENT :",
+            "to": "  const expectedParent=r.pbnSuccessor ? PBN_PARENT : r.node22Successor ? N22_PARENT :"
+          },
+          {
+            "from": "text(root,['diff','--name-only',N22_PARENT,'HEAD','--'])",
+            "to": "text(root,['diff','--name-only',N22_PARENT,r.pbnSuccessor?PBN_PARENT:'HEAD','--'])"
+          },
+          {
+            "from": "  assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,expectedParent],'exact sole inspection parent');",
+            "to": "  if(r.pbnSuccessor) {\n    const {edits,...identity}=r.pbnSuccessor;\n    assert.deepEqual(identity,{parent:PBN_PARENT,kind:'pbd_fixture_test_carriage',source:{...PBN_SOURCE},fixture:{path:PBN_FIXTURE,pin:PBN_FIXTURE_PIN},scope:[...PBN_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'},'fixed PBN carriage, never arbitrary later ancestry');\n    assert.deepEqual(text(root,['diff','--name-only',PBN_PARENT,'HEAD','--']).split('\\n').filter(Boolean).sort(),[...PBN_SCOPE],'exact PBN scope');\n    assert.equal(text(root,['diff','--name-only',PBN_PARENT,'HEAD','--','.',':!test']),'','PBN changes no file outside test/');\n    assert.deepEqual(Object.keys(edits).sort(),[...PBN_EDITED],'exact PBN recorded-edit set');\n    for(const sha of Object.values(PBN_SOURCE)) assert.notEqual(git(root,['merge-base','--is-ancestor',sha,'HEAD']).status,0,'PBD/UC2 sources are provenance only, never ancestors');\n  }\n  assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,expectedParent],'exact sole inspection parent');"
+          },
+          {
+            "from": "    assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' exact N22 derivation');\n  }\n",
+            "to": "    assert.equal(a1Blob(Buffer.from(s)),n22Pin(file),file+' exact N22 derivation');\n  }\n  if(r.pbnSuccessor) for(const [file,{base,edits}] of Object.entries(r.pbnSuccessor.edits)) {\n    assert.equal(base,PBN_PARENT,file+' fixed PBN derivation base');\n    let s=spawnSync('git',['-C',root,'show',base+':'+file],{encoding:'utf8',timeout:30000,maxBuffer:32*1024*1024}).stdout;\n    for(const e of edits){assert.ok(e.from && s.split(e.from).length===2,file+' unique PBN edit');s=s.replace(e.from,()=>e.to);}\n    assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' exact PBN derivation');\n  }\n  if(r.pbnSuccessor) assert.equal(tree[PBN_FIXTURE],PBN_FIXTURE_PIN,'the accepted PBD fixture bytes');\n"
+          },
+          {
+            "from": "  const provenancePin=file=>provenancePins[file];",
+            "to": "  const provenancePin=file=>provenancePins[file];\n  // PBN: N22's own derivation remains evaluated against the exact N22 commit; PBN's derivation holds the current blobs.\n  const n22Pins=r.pbnSuccessor ? Object.fromEntries(text(root,['ls-tree','-r','-z',PBN_PARENT]).split('\\0').filter(Boolean).map(row=>{const m=/^\\d+ blob ([a-f0-9]{40})\\t([\\s\\S]+)$/.exec(row);assert.ok(m,row);return [m[2],m[1]];})) : tree;\n  const n22Pin=file=>n22Pins[file];"
+          },
+          {
+            "from": "  if(text(root,['rev-parse','HEAD^'])!==N22_PARENT)return {ok:false,reason:'node22_parent'};",
+            "to": "  // PBN: the N22 layer stays bound to the exact N22 commit; PBN's own exact identity and parent are required on its child.\n  const pbn=load(root).pbnSuccessor;\n  if(pbn) {\n   const {edits:pe,...pid}=pbn;\n   if(JSON.stringify(pid)!==JSON.stringify({parent:PBN_PARENT,kind:'pbd_fixture_test_carriage',source:{...PBN_SOURCE},fixture:{path:PBN_FIXTURE,pin:PBN_FIXTURE_PIN},scope:[...PBN_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'}))return {ok:false,reason:'pbn_layer_identity'};\n   if(text(root,['rev-parse','HEAD^'])!==PBN_PARENT)return {ok:false,reason:'pbn_parent'};\n  }\n  if(text(root,['rev-parse',(pbn?PBN_PARENT:'HEAD')+'^'])!==N22_PARENT)return {ok:false,reason:'node22_parent'};"
           }
         ]
       }

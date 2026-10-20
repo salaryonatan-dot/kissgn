@@ -212,23 +212,64 @@ test("Codex counterexample (17×600, 812, 500, 500 + {100.1,200.2,300.3}): ident
   assert.deepEqual([digest.totalDetected, digest.totalSuppressed], [0, 0], "this exact fixture: nothing detected, nothing suppressed");
 });
 
-test("positive persistence control: a genuine underperformance (600 vs ~1000 history) persists ONE identical insight and digest across representations", async () => {
-  const hist = Array.from({ length: 20 }, (_, i) => rowOf(uuidN(300 + i), dayBefore(i + 2), { sales: 1000 }));
-  const snaps = [];
-  for (const ids of [IDS, IDS.slice().reverse()]) {
-    const rows = [100, 200, 300].map((v, i) => rowOf(ids[i], Y, { sales: v }));
-    for (const node of [legacyNode([...hist, ...rows]), legacyNode([...rows.slice().reverse(), ...hist]), v2Node([...hist, ...rows]), v2Node([...rows.slice().reverse(), ...hist])]) {
-      const db = await seed(node);
-      const result = await PJ.runForBiz(T, B);
-      const insights = db.read(`tenants/${T}/proactive_insights/${B}`) || {};
-      const ru = Object.values(insights).find((i) => i.type === "revenue_underperformance");
-      assert.ok(ru && ru.currentValue === 600, "real persisted insight with currentValue 600");
-      const digests = db.read(`tenants/${T}/proactive_digests/${B}`);
-      assert.ok(digests && Object.values(digests.daily)[0].totalDetected >= 1, "non-empty digest");
-      snaps.push(stripTime({ result, insights, digests }));
+test("positive persistence control: a genuine underperformance (600 vs ~1000 history) persists ONE identical insight and digest across representations", async (t) => {
+  // UC2-P-01: literal Israel-calendar expectations, independent of the production helper.
+  // Freeze the SAME instant for fixture construction and every asynchronous job call.
+  // Module-load Y is deliberately not used here: this row may execute days after load.
+  const clocks = [
+    ["2026-10-14T20:59:59.999Z", "2026-10-13"], // IDT: 1 ms before Israel midnight
+    ["2026-10-14T21:00:00.000Z", "2026-10-14"],
+    ["2026-10-14T23:59:59.999Z", "2026-10-14"], // 1 ms before UTC midnight
+    ["2026-10-15T00:00:00.000Z", "2026-10-14"],
+    ["2027-01-14T21:59:59.999Z", "2027-01-13"], // IST: 1 ms before Israel midnight
+    ["2027-01-14T22:00:00.000Z", "2027-01-14"],
+    ["2027-01-14T23:59:59.999Z", "2027-01-14"],
+    ["2027-01-15T00:00:00.000Z", "2027-01-14"],
+    ["2026-09-30T20:59:59.999Z", "2026-09-29"], // summer month rollover
+    ["2026-09-30T21:00:00.000Z", "2026-09-30"],
+    ["2026-12-31T21:59:59.999Z", "2026-12-30"], // winter year rollover
+    ["2026-12-31T22:00:00.000Z", "2026-12-31"],
+    ["2027-01-01T00:00:00.000Z", "2026-12-31"],
+    ["2027-02-28T22:00:00.000Z", "2027-02-28"],
+    ["2028-02-29T22:00:00.000Z", "2028-02-29"], // leap-day calendar history
+    ["2027-03-25T23:59:59.999Z", "2027-03-25"], // Israel spring offset change
+    ["2027-03-26T00:00:00.000Z", "2027-03-25"],
+    ["2027-03-26T21:00:00.000Z", "2027-03-26"],
+    ["2026-10-24T22:59:59.999Z", "2026-10-24"], // Israel autumn offset change
+    ["2026-10-24T23:00:00.000Z", "2026-10-24"],
+    ["2026-10-25T22:00:00.000Z", "2026-10-25"],
+  ];
+  for (const [instant, yesterday] of clocks) await t.test(`${instant}: yesterday ${yesterday}`, async () => {
+    const HostDate = globalThis.Date, nowMs = HostDate.parse(instant);
+    class FixtureDate extends HostDate {
+      constructor(...args) { if (args.length === 0) super(nowMs); else super(...args); }
+      static now() { return nowMs; }
     }
-  }
-  for (const s of snaps) assert.deepEqual(s, snaps[0]);
+    globalThis.Date = FixtureDate;
+    try {
+      // UTC midnight represents a calendar label here, not an Israel instant minus 24 hours.
+      const beforeYesterday = (n) => new HostDate(HostDate.parse(`${yesterday}T00:00:00Z`) - n * 86400000).toISOString().slice(0, 10);
+      const hist = Array.from({ length: 20 }, (_, i) => rowOf(uuidN(300 + i), beforeYesterday(i + 1), { sales: 1000 }));
+      const snaps = [];
+      for (const ids of [IDS, IDS.slice().reverse()]) {
+        const rows = [100, 200, 300].map((v, i) => rowOf(ids[i], yesterday, { sales: v }));
+        for (const node of [legacyNode([...hist, ...rows]), legacyNode([...rows.slice().reverse(), ...hist]), v2Node([...hist, ...rows]), v2Node([...rows.slice().reverse(), ...hist])]) {
+          const db = await seed(node);
+          const result = await PJ.runForBiz(T, B);
+          const insights = db.read(`tenants/${T}/proactive_insights/${B}`) || {};
+          const ru = Object.values(insights).find((i) => i.type === "revenue_underperformance");
+          assert.ok(ru && ru.currentValue === 600, "real persisted insight with currentValue 600");
+          assert.deepEqual([ru.periodEnd, ru.baselineValue], [yesterday, 1000], "the intended completed business date and independent history");
+          assert.equal(Object.values(insights).filter((i) => i.type === "revenue_underperformance").length, 1, "one persisted revenue-underperformance insight");
+          const digests = db.read(`tenants/${T}/proactive_digests/${B}`);
+          assert.ok(digests && Object.values(digests.daily)[0].totalDetected >= 1, "non-empty digest");
+          snaps.push(stripTime({ result, insights, digests }));
+        }
+      }
+      for (const s of snaps) assert.deepEqual(s, snaps[0]);
+    } finally { globalThis.Date = HostDate; }
+    assert.equal(globalThis.Date, HostDate, "restore the caller's clock after the asynchronous persistence checks");
+  });
 });
 
 test("NEGATIVE CONTROL — the parent (c46c2727) repository is order-dependent: 600.5999999999999 vs 600.6, intermediate overflow, and a flipped detector verdict", async () => {

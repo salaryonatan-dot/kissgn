@@ -29,6 +29,14 @@ export const A3T1_EDITED = Object.freeze(["test/emulator/de1-r1-receipt-emulator
 export const N22_PARENT = "0c70b41209ed2388e1cd2dea911657ab7e620b2a";
 export const N22_SCOPE = Object.freeze(["package-lock.json", "package.json", "test/finance/m1-a1-inspection-guard.test.mjs", "test/finance/m1-a3-policy-carriage-guard.test.mjs", "test/finance/m1-a3t1-test-successor-guard.test.mjs", "test/finance/m1-node22-runtime-guard.test.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs"]);
 export const N22_EDITED = Object.freeze(["package-lock.json", "package.json", "test/finance/m1-a1-inspection-guard.test.mjs", "test/finance/m1-a3-policy-carriage-guard.test.mjs", "test/finance/m1-a3t1-test-successor-guard.test.mjs", "test/support/m1-a1-inspection.mjs"]);
+// PBN: the accepted PBD fixture row (UC2-P-01, T-PBD-ROW/T-PBD-ASSERT) carried onto exact N22. Test-only; no UC2 ancestry,
+// UC2 runtime or UC2-bound carriage. The accepted source commits are provenance data only, never required objects.
+export const PBN_PARENT = "e9d9566c1fb1802cef158c05991d7d47d8c9182f";
+export const PBN_FIXTURE = "test/analytics/entries-reader-decimal-aggregation.test.mjs";
+export const PBN_FIXTURE_PIN = "b611191b31cb1293e9dbffeb25dbce6308497fbe";
+export const PBN_SOURCE = Object.freeze({ fixture:"9550569f0bdc9b6a1ff88e3ff95cc3253285291c", carriage:"7ae41336b7c2f02b953b9267768b90f97e39278f", uc2:"46e17525e88af9da357b72c5624fe5bfdc0608ce" });
+export const PBN_SCOPE = Object.freeze(["test/analytics/entries-reader-decimal-aggregation.test.mjs", "test/finance/m1-node22-runtime-guard.test.mjs", "test/finance/m1-pbn-fixture-carriage-guard.test.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs"]);
+export const PBN_EDITED = Object.freeze(["test/analytics/entries-reader-decimal-aggregation.test.mjs", "test/finance/m1-node22-runtime-guard.test.mjs", "test/support/m1-a1-inspection.mjs"]);
 export const A1_RECORD = 'test/support/m1-a1-inspection.json';
 const MODULE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const git = (root,args) => spawnSync('git',['-C',root,...args],{encoding:'utf8',timeout:30000,maxBuffer:64*1024*1024});
@@ -64,7 +72,8 @@ export function verifyA1Head(root=MODULE_ROOT) {
   if(r.successor) assert.ok(r.carriage,'A3 extends the recorded A2 carriage');
   if(r.testSuccessor) assert.ok(r.successor,'A3-T1 extends the recorded A3 successor');
   if(r.node22Successor) assert.ok(r.testSuccessor,'N22 extends the recorded T1 successor');
-  const expectedParent=r.node22Successor ? N22_PARENT : r.testSuccessor ? A3T1_PARENT : r.successor ? A3_PARENT : r.carriage ? A2_PARENT : A1_PARENT;
+  if(r.pbnSuccessor) assert.ok(r.node22Successor,'PBN extends the recorded N22 successor');
+  const expectedParent=r.pbnSuccessor ? PBN_PARENT : r.node22Successor ? N22_PARENT : r.testSuccessor ? A3T1_PARENT : r.successor ? A3_PARENT : r.carriage ? A2_PARENT : A1_PARENT;
   if(r.carriage) {
     assert.deepEqual(r.carriage,{parent:A2_PARENT,scope:[...A2_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'},'fixed A2 carriage, never arbitrary later ancestry');
     assert.deepEqual(text(root,['diff','--name-only',A2_PARENT,r.successor?A3_PARENT:'HEAD','--']).split('\n').filter(Boolean).sort(),[...A2_SCOPE],'exact authorized successor delta');
@@ -87,8 +96,16 @@ export function verifyA1Head(root=MODULE_ROOT) {
   if(r.node22Successor) {
     const {edits,...identity}=r.node22Successor;
     assert.deepEqual(identity,{parent:N22_PARENT,kind:'node22_configuration_only',scope:[...N22_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'},'fixed N22 successor, never arbitrary later ancestry');
-    assert.deepEqual(text(root,['diff','--name-only',N22_PARENT,'HEAD','--']).split('\n').filter(Boolean).sort(),[...N22_SCOPE],'exact N22 scope');
+    assert.deepEqual(text(root,['diff','--name-only',N22_PARENT,r.pbnSuccessor?PBN_PARENT:'HEAD','--']).split('\n').filter(Boolean).sort(),[...N22_SCOPE],'exact N22 scope');
     assert.deepEqual(Object.keys(edits).sort(),[...N22_EDITED],'exact N22 recorded-edit set');
+  }
+  if(r.pbnSuccessor) {
+    const {edits,...identity}=r.pbnSuccessor;
+    assert.deepEqual(identity,{parent:PBN_PARENT,kind:'pbd_fixture_test_carriage',source:{...PBN_SOURCE},fixture:{path:PBN_FIXTURE,pin:PBN_FIXTURE_PIN},scope:[...PBN_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'},'fixed PBN carriage, never arbitrary later ancestry');
+    assert.deepEqual(text(root,['diff','--name-only',PBN_PARENT,'HEAD','--']).split('\n').filter(Boolean).sort(),[...PBN_SCOPE],'exact PBN scope');
+    assert.equal(text(root,['diff','--name-only',PBN_PARENT,'HEAD','--','.',':!test']),'','PBN changes no file outside test/');
+    assert.deepEqual(Object.keys(edits).sort(),[...PBN_EDITED],'exact PBN recorded-edit set');
+    for(const sha of Object.values(PBN_SOURCE)) assert.notEqual(git(root,['merge-base','--is-ancestor',sha,'HEAD']).status,0,'PBD/UC2 sources are provenance only, never ancestors');
   }
   assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,expectedParent],'exact sole inspection parent');
   for(const sha of Object.values(A1_SOURCES)) assert.equal(text(root,['cat-file','-t',sha]),'commit','source object required');
@@ -111,6 +128,9 @@ export function verifyA1Head(root=MODULE_ROOT) {
   // Earlier contracts remain evaluated against exact accepted T1; N22's own derivation holds every changed current blob below.
   const provenancePins=r.node22Successor ? Object.fromEntries(text(root,['ls-tree','-r','-z',N22_PARENT]).split('\0').filter(Boolean).map(row=>{const m=/^\d+ blob ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);assert.ok(m,row);return [m[2],m[1]];})) : tree;
   const provenancePin=file=>provenancePins[file];
+  // PBN: N22's own derivation remains evaluated against the exact N22 commit; PBN's derivation holds the current blobs.
+  const n22Pins=r.pbnSuccessor ? Object.fromEntries(text(root,['ls-tree','-r','-z',PBN_PARENT]).split('\0').filter(Boolean).map(row=>{const m=/^\d+ blob ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);assert.ok(m,row);return [m[2],m[1]];})) : tree;
+  const n22Pin=file=>n22Pins[file];
   for(const [file,source] of Object.entries(r.verbatim)) assert.equal(provenancePin(file),text(root,['rev-parse',source+':'+file]),file+' attributed exact source');
   for(const [file,edits] of Object.entries(r.derivations)) {
     let s=spawnSync('git',['-C',root,'show',A1_PARENT+':'+file],{encoding:'utf8',timeout:30000,maxBuffer:32*1024*1024}).stdout;
@@ -138,8 +158,15 @@ export function verifyA1Head(root=MODULE_ROOT) {
     assert.equal(base,N22_PARENT,file+' fixed N22 derivation base');
     let s=spawnSync('git',['-C',root,'show',base+':'+file],{encoding:'utf8',timeout:30000,maxBuffer:32*1024*1024}).stdout;
     for(const e of edits){assert.ok(e.from && s.split(e.from).length===2,file+' unique N22 edit');s=s.replace(e.from,()=>e.to);}
-    assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' exact N22 derivation');
+    assert.equal(a1Blob(Buffer.from(s)),n22Pin(file),file+' exact N22 derivation');
   }
+  if(r.pbnSuccessor) for(const [file,{base,edits}] of Object.entries(r.pbnSuccessor.edits)) {
+    assert.equal(base,PBN_PARENT,file+' fixed PBN derivation base');
+    let s=spawnSync('git',['-C',root,'show',base+':'+file],{encoding:'utf8',timeout:30000,maxBuffer:32*1024*1024}).stdout;
+    for(const e of edits){assert.ok(e.from && s.split(e.from).length===2,file+' unique PBN edit');s=s.replace(e.from,()=>e.to);}
+    assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' exact PBN derivation');
+  }
+  if(r.pbnSuccessor) assert.equal(tree[PBN_FIXTURE],PBN_FIXTURE_PIN,'the accepted PBD fixture bytes');
   return {ok:true,head,files:Object.keys(tree).length};
 }
 
@@ -198,7 +225,14 @@ export function a1BackfillProjection(root, paths) {
  if(load(root).node22Successor) {
   const {edits,...identity}=load(root).node22Successor;
   if(JSON.stringify(identity)!==JSON.stringify({parent:N22_PARENT,kind:'node22_configuration_only',scope:[...N22_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'}))return {ok:false,reason:'node22_layer_identity'};
-  if(text(root,['rev-parse','HEAD^'])!==N22_PARENT)return {ok:false,reason:'node22_parent'};
+  // PBN: the N22 layer stays bound to the exact N22 commit; PBN's own exact identity and parent are required on its child.
+  const pbn=load(root).pbnSuccessor;
+  if(pbn) {
+   const {edits:pe,...pid}=pbn;
+   if(JSON.stringify(pid)!==JSON.stringify({parent:PBN_PARENT,kind:'pbd_fixture_test_carriage',source:{...PBN_SOURCE},fixture:{path:PBN_FIXTURE,pin:PBN_FIXTURE_PIN},scope:[...PBN_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'}))return {ok:false,reason:'pbn_layer_identity'};
+   if(text(root,['rev-parse','HEAD^'])!==PBN_PARENT)return {ok:false,reason:'pbn_parent'};
+  }
+  if(text(root,['rev-parse',(pbn?PBN_PARENT:'HEAD')+'^'])!==N22_PARENT)return {ok:false,reason:'node22_parent'};
   const pins={"package.json":"2a935d91920c71e6d1640871be54f1804f384830","package-lock.json":"c9704e950be93f24e2b0449fd0de427d0d6d4bec"};
   for(const [file,pin] of Object.entries(pins)) {
    let bytes;try{bytes=readFileSync(join(root,file));}catch{return {ok:false,reason:'node22_configuration_missing',detail:file};}

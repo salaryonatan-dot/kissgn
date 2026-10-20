@@ -1,5 +1,6 @@
 // N22: configuration-only successor of accepted T1. Author evidence; independent review required.
-import { test } from 'node:test';
+import { historicalTest } from "../support/m1-a1-inspection.mjs";
+const test = historicalTest(new URL("../../", import.meta.url), "e9d9566c1fb1802cef158c05991d7d47d8c9182f", "test/finance/m1-node22-runtime-guard.test.mjs");
 import assert from 'node:assert/strict';
 import { readFileSync, mkdtempSync, rmSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
