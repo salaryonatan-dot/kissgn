@@ -25,6 +25,10 @@ export const A3_POLICY_PIN_FILES = Object.freeze(["api/daily-snapshot/run.ts", "
 export const A3T1_PARENT = '2dae86d4c8362212cd7633f05156a257adca7419';
 export const A3T1_SCOPE = Object.freeze(["test/emulator/de1-r1-receipt-emulator.mjs", "test/emulator/de1-r2-receipt-emulator.mjs", "test/emulator/dp4-legacy-date-emulator.mjs", "test/finance/m1-a3-policy-carriage-guard.test.mjs", "test/finance/m1-a3t1-test-successor-guard.test.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs"]);
 export const A3T1_EDITED = Object.freeze(["test/emulator/de1-r1-receipt-emulator.mjs", "test/emulator/de1-r2-receipt-emulator.mjs", "test/finance/m1-a3-policy-carriage-guard.test.mjs", "test/support/m1-a1-inspection.mjs"]);
+// N22: exact configuration-only child of accepted T1; historical predicates stay unchanged.
+export const N22_PARENT = "0c70b41209ed2388e1cd2dea911657ab7e620b2a";
+export const N22_SCOPE = Object.freeze(["package-lock.json", "package.json", "test/finance/m1-a1-inspection-guard.test.mjs", "test/finance/m1-a3-policy-carriage-guard.test.mjs", "test/finance/m1-a3t1-test-successor-guard.test.mjs", "test/finance/m1-node22-runtime-guard.test.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs"]);
+export const N22_EDITED = Object.freeze(["package-lock.json", "package.json", "test/finance/m1-a1-inspection-guard.test.mjs", "test/finance/m1-a3-policy-carriage-guard.test.mjs", "test/finance/m1-a3t1-test-successor-guard.test.mjs", "test/support/m1-a1-inspection.mjs"]);
 export const A1_RECORD = 'test/support/m1-a1-inspection.json';
 const MODULE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const git = (root,args) => spawnSync('git',['-C',root,...args],{encoding:'utf8',timeout:30000,maxBuffer:64*1024*1024});
@@ -59,7 +63,8 @@ export function verifyA1Head(root=MODULE_ROOT) {
   // This bounded successor changes only the four authorized consumers and the existing joint-holder support.
   if(r.successor) assert.ok(r.carriage,'A3 extends the recorded A2 carriage');
   if(r.testSuccessor) assert.ok(r.successor,'A3-T1 extends the recorded A3 successor');
-  const expectedParent=r.testSuccessor ? A3T1_PARENT : r.successor ? A3_PARENT : r.carriage ? A2_PARENT : A1_PARENT;
+  if(r.node22Successor) assert.ok(r.testSuccessor,'N22 extends the recorded T1 successor');
+  const expectedParent=r.node22Successor ? N22_PARENT : r.testSuccessor ? A3T1_PARENT : r.successor ? A3_PARENT : r.carriage ? A2_PARENT : A1_PARENT;
   if(r.carriage) {
     assert.deepEqual(r.carriage,{parent:A2_PARENT,scope:[...A2_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'},'fixed A2 carriage, never arbitrary later ancestry');
     assert.deepEqual(text(root,['diff','--name-only',A2_PARENT,r.successor?A3_PARENT:'HEAD','--']).split('\n').filter(Boolean).sort(),[...A2_SCOPE],'exact authorized successor delta');
@@ -75,9 +80,15 @@ export function verifyA1Head(root=MODULE_ROOT) {
   if(r.testSuccessor) {
     const {edits,...identity}=r.testSuccessor;
     assert.deepEqual(identity,{parent:A3T1_PARENT,kind:'test_only',scope:[...A3T1_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'},'fixed A3-T1 test-only successor, never arbitrary later ancestry');
-    assert.deepEqual(text(root,['diff','--name-only',A3T1_PARENT,'HEAD','--']).split('\n').filter(Boolean).sort(),[...A3T1_SCOPE],'exact authorized A3-T1 delta');
-    assert.equal(text(root,['diff','--name-only',A3T1_PARENT,'HEAD','--','.',':!test']),'','A3-T1 changes no file outside test/');
+    assert.deepEqual(text(root,['diff','--name-only',A3T1_PARENT,r.node22Successor?N22_PARENT:'HEAD','--']).split('\n').filter(Boolean).sort(),[...A3T1_SCOPE],'exact authorized A3-T1 delta');
+    assert.equal(text(root,['diff','--name-only',A3T1_PARENT,r.node22Successor?N22_PARENT:'HEAD','--','.',':!test']),'','A3-T1 changes no file outside test/');
     assert.deepEqual(Object.keys(edits).sort(),[...A3T1_EDITED],'fixed A3-T1 recorded-edit set');
+  }
+  if(r.node22Successor) {
+    const {edits,...identity}=r.node22Successor;
+    assert.deepEqual(identity,{parent:N22_PARENT,kind:'node22_configuration_only',scope:[...N22_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'},'fixed N22 successor, never arbitrary later ancestry');
+    assert.deepEqual(text(root,['diff','--name-only',N22_PARENT,'HEAD','--']).split('\n').filter(Boolean).sort(),[...N22_SCOPE],'exact N22 scope');
+    assert.deepEqual(Object.keys(edits).sort(),[...N22_EDITED],'exact N22 recorded-edit set');
   }
   assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,expectedParent],'exact sole inspection parent');
   for(const sha of Object.values(A1_SOURCES)) assert.equal(text(root,['cat-file','-t',sha]),'commit','source object required');
@@ -97,28 +108,37 @@ export function verifyA1Head(root=MODULE_ROOT) {
   }
   assert.equal(text(root,['rev-parse','HEAD:'+A1_RECORD]),text(root,['rev-parse',':'+A1_RECORD]),'record index unchanged');
   assert.equal(a1Blob(readFileSync(join(root,A1_RECORD))),text(root,['rev-parse','HEAD:'+A1_RECORD]),'record working bytes unchanged');
-  for(const [file,source] of Object.entries(r.verbatim)) assert.equal(tree[file],text(root,['rev-parse',source+':'+file]),file+' attributed exact source');
+  // Earlier contracts remain evaluated against exact accepted T1; N22's own derivation holds every changed current blob below.
+  const provenancePins=r.node22Successor ? Object.fromEntries(text(root,['ls-tree','-r','-z',N22_PARENT]).split('\0').filter(Boolean).map(row=>{const m=/^\d+ blob ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);assert.ok(m,row);return [m[2],m[1]];})) : tree;
+  const provenancePin=file=>provenancePins[file];
+  for(const [file,source] of Object.entries(r.verbatim)) assert.equal(provenancePin(file),text(root,['rev-parse',source+':'+file]),file+' attributed exact source');
   for(const [file,edits] of Object.entries(r.derivations)) {
     let s=spawnSync('git',['-C',root,'show',A1_PARENT+':'+file],{encoding:'utf8',timeout:30000,maxBuffer:32*1024*1024}).stdout;
     for(const e of edits) { assert.ok(e.from && s.split(e.from).length===2,file+' unique edit anchor'); s=s.replace(e.from,()=>e.to); }
-    assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' recorded parent derivation');
+    assert.equal(a1Blob(Buffer.from(s)),provenancePin(file),file+' recorded parent derivation');
   }
   if(r.carriage) for(const [file,edits] of Object.entries(r.legacyEdits)) {
     let s=spawnSync('git',['-C',root,'show',A2_PARENT+':'+file],{encoding:'utf8',timeout:30000,maxBuffer:32*1024*1024}).stdout;
     for(const e of edits){assert.ok(e.from && s.split(e.from).length===2,file+' unique legacy edit');s=s.replace(e.from,()=>e.to);}
-    assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' exact authorized legacy derivation');
+    assert.equal(a1Blob(Buffer.from(s)),provenancePin(file),file+' exact authorized legacy derivation');
   }
   if(r.successor) for(const [file,{base,edits}] of Object.entries(r.successor.edits)) {
     assert.ok(base===A3_PARENT||base===A3_SOURCE.dp4,file+' fixed A3 derivation base');
     let s=spawnSync('git',['-C',root,'show',base+':'+file],{encoding:'utf8',timeout:30000,maxBuffer:32*1024*1024}).stdout;
     for(const e of edits){assert.ok(e.from && s.split(e.from).length===2,file+' unique A3 edit');s=s.replace(e.from,()=>e.to);}
-    assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' exact A3 derivation');
+    assert.equal(a1Blob(Buffer.from(s)),provenancePin(file),file+' exact A3 derivation');
   }
   if(r.testSuccessor) for(const [file,{base,edits}] of Object.entries(r.testSuccessor.edits)) {
     assert.equal(base,A3T1_PARENT,file+' fixed A3-T1 derivation base');
     let s=spawnSync('git',['-C',root,'show',base+':'+file],{encoding:'utf8',timeout:30000,maxBuffer:32*1024*1024}).stdout;
     for(const e of edits){assert.ok(e.from && s.split(e.from).length===2,file+' unique A3-T1 edit');s=s.replace(e.from,()=>e.to);}
-    assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' exact A3-T1 derivation');
+    assert.equal(a1Blob(Buffer.from(s)),provenancePin(file),file+' exact A3-T1 derivation');
+  }
+  if(r.node22Successor) for(const [file,{base,edits}] of Object.entries(r.node22Successor.edits)) {
+    assert.equal(base,N22_PARENT,file+' fixed N22 derivation base');
+    let s=spawnSync('git',['-C',root,'show',base+':'+file],{encoding:'utf8',timeout:30000,maxBuffer:32*1024*1024}).stdout;
+    for(const e of edits){assert.ok(e.from && s.split(e.from).length===2,file+' unique N22 edit');s=s.replace(e.from,()=>e.to);}
+    assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' exact N22 derivation');
   }
   return {ok:true,head,files:Object.keys(tree).length};
 }
@@ -172,6 +192,20 @@ export function a1BackfillProjection(root, paths) {
  let bytes;try{bytes=readFileSync(join(root,BF2_FILE));}catch{return {ok:false,reason:'script_missing'};}
  if(a1Blob(bytes)!==BF2_PIN)return {ok:false,reason:'script_content_mismatch'};
  if(text(root,['rev-parse','HEAD:'+BF2_FILE])!==BF2_PIN || text(root,['rev-parse',':'+BF2_FILE])!==BF2_PIN)return {ok:false,reason:'script_history_mismatch'};
+ // N22's two configuration files are a separate exact-content layer, never a widened
+ // reader allowlist. Both files must match HEAD, index and working bytes before either
+ // is projected; without this layer they remain protected in the reader verdict.
+ if(load(root).node22Successor) {
+  const {edits,...identity}=load(root).node22Successor;
+  if(JSON.stringify(identity)!==JSON.stringify({parent:N22_PARENT,kind:'node22_configuration_only',scope:[...N22_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'}))return {ok:false,reason:'node22_layer_identity'};
+  if(text(root,['rev-parse','HEAD^'])!==N22_PARENT)return {ok:false,reason:'node22_parent'};
+  const pins={"package.json":"2a935d91920c71e6d1640871be54f1804f384830","package-lock.json":"c9704e950be93f24e2b0449fd0de427d0d6d4bec"};
+  for(const [file,pin] of Object.entries(pins)) {
+   let bytes;try{bytes=readFileSync(join(root,file));}catch{return {ok:false,reason:'node22_configuration_missing',detail:file};}
+   if(a1Blob(bytes)!==pin||text(root,['rev-parse','HEAD:'+file])!==pin||text(root,['rev-parse',':'+file])!==pin)return {ok:false,reason:'node22_configuration_mismatch',detail:file};
+  }
+  return {ok:true,layered:true,layer:'A1-exact-BF3+N22',projected:all.filter(f=>f!==BF2_FILE&&!Object.hasOwn(pins,f))};
+ }
  return {ok:true,layered:true,layer:'A1-exact-BF3',projected:all.filter(f=>f!==BF2_FILE)};
 }
 

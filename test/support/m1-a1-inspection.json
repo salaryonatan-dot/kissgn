@@ -12,6 +12,8 @@
     "lib/emailDelivery.d.ts",
     "lib/emailDelivery.js",
     "lib/repositories/bizDataRepo.js",
+    "package-lock.json",
+    "package.json",
     "scripts/backfill-biz-access.mjs",
     "src/analytics/dailyBuilder.ts",
     "src/utils/dates.ts",
@@ -64,6 +66,7 @@
     "test/finance/m1-a1-inspection-guard.test.mjs",
     "test/finance/m1-a3-policy-carriage-guard.test.mjs",
     "test/finance/m1-a3t1-test-successor-guard.test.mjs",
+    "test/finance/m1-node22-runtime-guard.test.mjs",
     "test/finance/rf1-rules-gate-guard.test.mjs",
     "test/finance/rf2-rules-gate-guard.test.mjs",
     "test/finance/rf3-rules-gate-guard.test.mjs",
@@ -116,6 +119,8 @@
     "lib/emailDelivery.d.ts",
     "lib/emailDelivery.js",
     "lib/repositories/bizDataRepo.js",
+    "package-lock.json",
+    "package.json",
     "scripts/backfill-biz-access.mjs",
     "src/analytics/dailyBuilder.ts",
     "src/utils/dates.ts",
@@ -168,6 +173,7 @@
     "test/finance/m1-a1-inspection-guard.test.mjs",
     "test/finance/m1-a3-policy-carriage-guard.test.mjs",
     "test/finance/m1-a3t1-test-successor-guard.test.mjs",
+    "test/finance/m1-node22-runtime-guard.test.mjs",
     "test/finance/rf1-rules-gate-guard.test.mjs",
     "test/finance/rf2-rules-gate-guard.test.mjs",
     "test/finance/rf3-rules-gate-guard.test.mjs",
@@ -686,8 +692,8 @@
     "lib/verifyToken.d.ts": "6c97c228501481b1a575f59f10e0907577d0edef",
     "lib/verifyToken.js": "b1e8e5d22c9b98013ac5f111528365626247062a",
     "lib/whatsappMessages.js": "70404cb44ae2937b85cc207a727a26b1124bb6b9",
-    "package-lock.json": "3ece43bb81c05187b49ce29937560c0844c4bb71",
-    "package.json": "00d5cd8faec382d30a18138fd2ab39c50c98cc90",
+    "package-lock.json": "c9704e950be93f24e2b0449fd0de427d0d6d4bec",
+    "package.json": "2a935d91920c71e6d1640871be54f1804f384830",
     "scripts/backfill-biz-access.mjs": "25754ea6e7f81585b0d68101da5c51ebcff6de48",
     "scripts/init-owner-guard.mjs": "cdb230b09784e2efa7959a93668b5d90f17562c5",
     "src/agent/analysis/analyzeAnomaly.ts": "b1ee959b24e16e61c6d44539aa93715452a7360e",
@@ -1073,11 +1079,12 @@
     "test/finance/i7-parity.test.mjs": "512889fddf674f5aebb1dcb1f2be96e62288a831",
     "test/finance/i7-update-user-alignment.test.mjs": "7214b1e21389bfa2b57ed850e3a302c990870a03",
     "test/finance/m1-a1-carriage-regressions.test.mjs": "75f67439ee6be0a2d211360849d0197196b1189b",
-    "test/finance/m1-a1-inspection-guard.test.mjs": "86f7bcbbf20ad8f47756dc8eadc6b5bad6a5f961",
-    "test/finance/m1-a3-policy-carriage-guard.test.mjs": "1d4d9a9cbd08e0cfb84382b4642e6a539a15e709",
-    "test/finance/m1-a3t1-test-successor-guard.test.mjs": "7d0cc93e4ad0e8b39364f9474629f5fabe038d44",
+    "test/finance/m1-a1-inspection-guard.test.mjs": "3c9b383002d9cf04cc325911589130bfd03f8111",
+    "test/finance/m1-a3-policy-carriage-guard.test.mjs": "c7f70d61ae5c30cf11998e1f285dca0b6447a96b",
+    "test/finance/m1-a3t1-test-successor-guard.test.mjs": "43297a6c48a9bd7d5209d145d390d50cf89947bf",
     "test/finance/m1-integration-contracts.test.mjs": "ab6e613c1a9fc38a9d10eb3135b268b3e9620bc7",
     "test/finance/m1-integration-guard.test.mjs": "2692fdb56aa0e8b05eb8fa4cb2b0c387060dd10d",
+    "test/finance/m1-node22-runtime-guard.test.mjs": "cba8f9a2be07d05b56e876a76eb909a64220566c",
     "test/finance/m1-r1-guard.test.mjs": "8243932dda304c0d2a2611991da46d0adec9a7b6",
     "test/finance/m1-r1-page-credit-binding.test.mjs": "c878af4075cf77848ccfac7fd740b023cbed8461",
     "test/finance/m1-r1-registry.test.mjs": "9ece4761aeb4d6c644c853f002e7d1b35d3fd6ba",
@@ -1274,7 +1281,7 @@
     "test/support/i6-integration.mjs": "570683092a17411ce337ca2ff7e9ec7f121ed23a",
     "test/support/i7-integration.json": "3d069d769b5e407515c20cad053674a977152dd3",
     "test/support/i7-integration.mjs": "a52695329d06627d41d49e467f8090cd282453fc",
-    "test/support/m1-a1-inspection.mjs": "77a920c0db4fddb371e4789be08eb3a26cec2a76",
+    "test/support/m1-a1-inspection.mjs": "6b4ac21e72493002140382dbe026952dee86dbfd",
     "test/support/m1-derivation.mjs": "5ee45583bf800bd4d9551cd76ec5662827e6c01b",
     "test/support/m1-index-scope.mjs": "7f82aa1b534598cd4d87ae3b75394281598d2ac2",
     "test/support/m1-integration-pin.mjs": "b98d35b0fd76ca482ff2a2c888ef2e69ed90c6c3",
@@ -1452,7 +1459,10 @@
     "test/finance/dp1-daily-policy-guard.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
     "test/finance/dp2-daily-policy-guard.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
     "test/finance/dp3-daily-policy-guard.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
-    "test/finance/dp4-daily-policy-guard.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef"
+    "test/finance/dp4-daily-policy-guard.test.mjs": "079fe656779eb6f922d2e3bfe3a567a6a73545ef",
+    "test/finance/m1-a1-inspection-guard.test.mjs": "0c70b41209ed2388e1cd2dea911657ab7e620b2a",
+    "test/finance/m1-a3-policy-carriage-guard.test.mjs": "0c70b41209ed2388e1cd2dea911657ab7e620b2a",
+    "test/finance/m1-a3t1-test-successor-guard.test.mjs": "0c70b41209ed2388e1cd2dea911657ab7e620b2a"
   },
   "exclusions": {
     "pbd": "7ae41336b7c2f02b953b9267768b90f97e39278f",
@@ -1729,6 +1739,125 @@
           {
             "from": "  return {ok:true,head,files:Object.keys(tree).length};",
             "to": "  if(r.testSuccessor) for(const [file,{base,edits}] of Object.entries(r.testSuccessor.edits)) {\n    assert.equal(base,A3T1_PARENT,file+' fixed A3-T1 derivation base');\n    let s=spawnSync('git',['-C',root,'show',base+':'+file],{encoding:'utf8',timeout:30000,maxBuffer:32*1024*1024}).stdout;\n    for(const e of edits){assert.ok(e.from && s.split(e.from).length===2,file+' unique A3-T1 edit');s=s.replace(e.from,()=>e.to);}\n    assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' exact A3-T1 derivation');\n  }\n  return {ok:true,head,files:Object.keys(tree).length};"
+          }
+        ]
+      }
+    }
+  },
+  "node22Successor": {
+    "parent": "0c70b41209ed2388e1cd2dea911657ab7e620b2a",
+    "kind": "node22_configuration_only",
+    "scope": [
+      "package-lock.json",
+      "package.json",
+      "test/finance/m1-a1-inspection-guard.test.mjs",
+      "test/finance/m1-a3-policy-carriage-guard.test.mjs",
+      "test/finance/m1-a3t1-test-successor-guard.test.mjs",
+      "test/finance/m1-node22-runtime-guard.test.mjs",
+      "test/support/m1-a1-inspection.json",
+      "test/support/m1-a1-inspection.mjs"
+    ],
+    "status": "PROPOSED_FOR_INDEPENDENT_REVIEW",
+    "edits": {
+      "package-lock.json": {
+        "base": "0c70b41209ed2388e1cd2dea911657ab7e620b2a",
+        "edits": [
+          {
+            "from": "\"typescript\": \"^5.4.0\"\n      },\n      \"engines\": {\n        \"node\": \">=20\"\n      }",
+            "to": "\"typescript\": \"^5.4.0\"\n      },\n      \"engines\": {\n        \"node\": \"22.x\"\n      }"
+          }
+        ]
+      },
+      "package.json": {
+        "base": "0c70b41209ed2388e1cd2dea911657ab7e620b2a",
+        "edits": [
+          {
+            "from": "\"node\": \">=20\"",
+            "to": "\"node\": \"22.x\""
+          }
+        ]
+      },
+      "test/finance/m1-a1-inspection-guard.test.mjs": {
+        "base": "0c70b41209ed2388e1cd2dea911657ab7e620b2a",
+        "edits": [
+          {
+            "from": "import { test } from 'node:test';",
+            "to": "import { historicalTest } from \"../support/m1-a1-inspection.mjs\";\nconst test = historicalTest(new URL(\"../../\", import.meta.url), \"0c70b41209ed2388e1cd2dea911657ab7e620b2a\", \"test/finance/m1-a1-inspection-guard.test.mjs\");"
+          }
+        ]
+      },
+      "test/finance/m1-a3-policy-carriage-guard.test.mjs": {
+        "base": "0c70b41209ed2388e1cd2dea911657ab7e620b2a",
+        "edits": [
+          {
+            "from": "import { test } from 'node:test';",
+            "to": "import { historicalTest } from \"../support/m1-a1-inspection.mjs\";\nconst test = historicalTest(new URL(\"../../\", import.meta.url), \"0c70b41209ed2388e1cd2dea911657ab7e620b2a\", \"test/finance/m1-a3-policy-carriage-guard.test.mjs\");"
+          }
+        ]
+      },
+      "test/finance/m1-a3t1-test-successor-guard.test.mjs": {
+        "base": "0c70b41209ed2388e1cd2dea911657ab7e620b2a",
+        "edits": [
+          {
+            "from": "import { test } from 'node:test';",
+            "to": "import { historicalTest } from \"../support/m1-a1-inspection.mjs\";\nconst test = historicalTest(new URL(\"../../\", import.meta.url), \"0c70b41209ed2388e1cd2dea911657ab7e620b2a\", \"test/finance/m1-a3t1-test-successor-guard.test.mjs\");"
+          }
+        ]
+      },
+      "test/support/m1-a1-inspection.mjs": {
+        "base": "0c70b41209ed2388e1cd2dea911657ab7e620b2a",
+        "edits": [
+          {
+            "from": "export const A1_RECORD = 'test/support/m1-a1-inspection.json';",
+            "to": "// N22: exact configuration-only child of accepted T1; historical predicates stay unchanged.\nexport const N22_PARENT = \"0c70b41209ed2388e1cd2dea911657ab7e620b2a\";\nexport const N22_SCOPE = Object.freeze([\"package-lock.json\", \"package.json\", \"test/finance/m1-a1-inspection-guard.test.mjs\", \"test/finance/m1-a3-policy-carriage-guard.test.mjs\", \"test/finance/m1-a3t1-test-successor-guard.test.mjs\", \"test/finance/m1-node22-runtime-guard.test.mjs\", \"test/support/m1-a1-inspection.json\", \"test/support/m1-a1-inspection.mjs\"]);\nexport const N22_EDITED = Object.freeze([\"package-lock.json\", \"package.json\", \"test/finance/m1-a1-inspection-guard.test.mjs\", \"test/finance/m1-a3-policy-carriage-guard.test.mjs\", \"test/finance/m1-a3t1-test-successor-guard.test.mjs\", \"test/support/m1-a1-inspection.mjs\"]);\nexport const A1_RECORD = 'test/support/m1-a1-inspection.json';"
+          },
+          {
+            "from": "  const expectedParent=r.testSuccessor ? A3T1_PARENT : r.successor ? A3_PARENT : r.carriage ? A2_PARENT : A1_PARENT;",
+            "to": "  if(r.node22Successor) assert.ok(r.testSuccessor,'N22 extends the recorded T1 successor');\n  const expectedParent=r.node22Successor ? N22_PARENT : r.testSuccessor ? A3T1_PARENT : r.successor ? A3_PARENT : r.carriage ? A2_PARENT : A1_PARENT;"
+          },
+          {
+            "from": "text(root,['diff','--name-only',A3T1_PARENT,'HEAD','--'])",
+            "to": "text(root,['diff','--name-only',A3T1_PARENT,r.node22Successor?N22_PARENT:'HEAD','--'])"
+          },
+          {
+            "from": "text(root,['diff','--name-only',A3T1_PARENT,'HEAD','--','.',':!test'])",
+            "to": "text(root,['diff','--name-only',A3T1_PARENT,r.node22Successor?N22_PARENT:'HEAD','--','.',':!test'])"
+          },
+          {
+            "from": "  assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,expectedParent],'exact sole inspection parent');",
+            "to": "  if(r.node22Successor) {\n    const {edits,...identity}=r.node22Successor;\n    assert.deepEqual(identity,{parent:N22_PARENT,kind:'node22_configuration_only',scope:[...N22_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'},'fixed N22 successor, never arbitrary later ancestry');\n    assert.deepEqual(text(root,['diff','--name-only',N22_PARENT,'HEAD','--']).split('\\n').filter(Boolean).sort(),[...N22_SCOPE],'exact N22 scope');\n    assert.deepEqual(Object.keys(edits).sort(),[...N22_EDITED],'exact N22 recorded-edit set');\n  }\n  assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,expectedParent],'exact sole inspection parent');"
+          },
+          {
+            "from": "  for(const [file,source] of Object.entries(r.verbatim)) assert.equal(tree[file],text(root,['rev-parse',source+':'+file]),file+' attributed exact source');",
+            "to": "  // Earlier contracts remain evaluated against exact accepted T1; N22's own derivation holds every changed current blob below.\n  const provenancePin=file=>r.node22Successor ? text(root,['rev-parse',N22_PARENT+':'+file]) : tree[file];\n  for(const [file,source] of Object.entries(r.verbatim)) assert.equal(provenancePin(file),text(root,['rev-parse',source+':'+file]),file+' attributed exact source');"
+          },
+          {
+            "from": "assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' recorded parent derivation');",
+            "to": "assert.equal(a1Blob(Buffer.from(s)),provenancePin(file),file+' recorded parent derivation');"
+          },
+          {
+            "from": "assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' exact authorized legacy derivation');",
+            "to": "assert.equal(a1Blob(Buffer.from(s)),provenancePin(file),file+' exact authorized legacy derivation');"
+          },
+          {
+            "from": "assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' exact A3 derivation');",
+            "to": "assert.equal(a1Blob(Buffer.from(s)),provenancePin(file),file+' exact A3 derivation');"
+          },
+          {
+            "from": "assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' exact A3-T1 derivation');",
+            "to": "assert.equal(a1Blob(Buffer.from(s)),provenancePin(file),file+' exact A3-T1 derivation');"
+          },
+          {
+            "from": "  return {ok:true,head,files:Object.keys(tree).length};",
+            "to": "  if(r.node22Successor) for(const [file,{base,edits}] of Object.entries(r.node22Successor.edits)) {\n    assert.equal(base,N22_PARENT,file+' fixed N22 derivation base');\n    let s=spawnSync('git',['-C',root,'show',base+':'+file],{encoding:'utf8',timeout:30000,maxBuffer:32*1024*1024}).stdout;\n    for(const e of edits){assert.ok(e.from && s.split(e.from).length===2,file+' unique N22 edit');s=s.replace(e.from,()=>e.to);}\n    assert.equal(a1Blob(Buffer.from(s)),tree[file],file+' exact N22 derivation');\n  }\n  return {ok:true,head,files:Object.keys(tree).length};"
+          },
+          {
+            "from": " return {ok:true,layered:true,layer:'A1-exact-BF3',projected:all.filter(f=>f!==BF2_FILE)};",
+            "to": " // N22's two configuration files are a separate exact-content layer, never a widened\n // reader allowlist. Both files must match HEAD, index and working bytes before either\n // is projected; without this layer they remain protected in the reader verdict.\n if(load(root).node22Successor) {\n  const {edits,...identity}=load(root).node22Successor;\n  if(JSON.stringify(identity)!==JSON.stringify({parent:N22_PARENT,kind:'node22_configuration_only',scope:[...N22_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'}))return {ok:false,reason:'node22_layer_identity'};\n  if(text(root,['rev-parse','HEAD^'])!==N22_PARENT)return {ok:false,reason:'node22_parent'};\n  const pins={\"package.json\":\"2a935d91920c71e6d1640871be54f1804f384830\",\"package-lock.json\":\"c9704e950be93f24e2b0449fd0de427d0d6d4bec\"};\n  for(const [file,pin] of Object.entries(pins)) {\n   let bytes;try{bytes=readFileSync(join(root,file));}catch{return {ok:false,reason:'node22_configuration_missing',detail:file};}\n   if(a1Blob(bytes)!==pin||text(root,['rev-parse','HEAD:'+file])!==pin||text(root,['rev-parse',':'+file])!==pin)return {ok:false,reason:'node22_configuration_mismatch',detail:file};\n  }\n  return {ok:true,layered:true,layer:'A1-exact-BF3+N22',projected:all.filter(f=>f!==BF2_FILE&&!Object.hasOwn(pins,f))};\n }\n return {ok:true,layered:true,layer:'A1-exact-BF3',projected:all.filter(f=>f!==BF2_FILE)};"
+          },
+          {
+            "from": "  const provenancePin=file=>r.node22Successor ? text(root,['rev-parse',N22_PARENT+':'+file]) : tree[file];",
+            "to": "  const provenancePins=r.node22Successor ? Object.fromEntries(text(root,['ls-tree','-r','-z',N22_PARENT]).split('\\0').filter(Boolean).map(row=>{const m=/^\\d+ blob ([a-f0-9]{40})\\t([\\s\\S]+)$/.exec(row);assert.ok(m,row);return [m[2],m[1]];})) : tree;\n  const provenancePin=file=>provenancePins[file];"
           }
         ]
       }

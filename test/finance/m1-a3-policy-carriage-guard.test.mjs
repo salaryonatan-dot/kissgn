@@ -10,7 +10,8 @@
 //   A3G-05  A3 policy pins replace DP1..DP4 layering for exactly the DP pin-table file set, and reach the effective tables
 //   A3G-06  exclusions: PBD and UC2 are not ancestors
 //   A3G-07  tamper controls in disposable shared clones
-import { test } from 'node:test';
+import { historicalTest } from "../support/m1-a1-inspection.mjs";
+const test = historicalTest(new URL("../../", import.meta.url), "0c70b41209ed2388e1cd2dea911657ab7e620b2a", "test/finance/m1-a3-policy-carriage-guard.test.mjs");
 import assert from 'node:assert/strict';
 import { readFileSync, mkdtempSync, rmSync, appendFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

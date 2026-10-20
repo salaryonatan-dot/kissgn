@@ -1,4 +1,5 @@
-import { test } from 'node:test';
+import { historicalTest } from "../support/m1-a1-inspection.mjs";
+const test = historicalTest(new URL("../../", import.meta.url), "0c70b41209ed2388e1cd2dea911657ab7e620b2a", "test/finance/m1-a1-inspection-guard.test.mjs");
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
