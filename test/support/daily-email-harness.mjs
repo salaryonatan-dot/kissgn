@@ -143,6 +143,8 @@ export function releasedHoldRecord(at = 0) {
     v000000002: { action: "release", state: "released", version: 2, prevVersion: 1, actor: "fixture", reason: "fixture release", at } } };
 }
 export function seedWorld({ withSecondBiz = true, withSecondTenant = true, ownerEmail = "owner-a@example.test", tenantBOwner = "owner-b@example.test", users, hold = "released" } = {}) {
+  // Explicit deployment fixture, independent of ownerEmail/users/RTDB configuration. No production default.
+  process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify([[T,B,"owner-a@example.test"],[T,B2,"owner-a@example.test"],[T2,B3,"owner-b@example.test"]]);
   const db = makeDb();
   if (hold === "released") db.seed(HOLD_PATH, releasedHoldRecord());
   const days = ["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-05", "2026-09-06", "2026-09-07"];

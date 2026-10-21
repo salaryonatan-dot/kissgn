@@ -44,7 +44,8 @@ const NOTICES = D.DELIVERY_NOTICE_ROOT;
 const HE = D.MISSING_NAME_NOTICE_HE;
 const SECRET_NAME = "Secret Cafe", SECRET_ADDR = "private@example.test";
 const leaks = (l) => l.includes(SECRET_NAME) || l.includes(SECRET_ADDR) || l.includes("is not valid JSON");
-const seedTenant = (db, t, b, name) => {
+const seedTenant = (db, t, b, name, designate = true) => {
+  if (designate) process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify([...JSON.parse(process.env.MARJIN_DAILY_RECIPIENTS_JSON),[t,b,"owner-a@example.test"]]);
   db.seed(`tenants/${t}/biz:${b}:entries`, db.read(`tenants/${T}/biz:${B}:entries`));
   db.seed(`tenants/${t}/biz:${b}:config`, env({ businessName: name }));
   db.seed(`tenants/${t}/biz:${b}:fixed`, env([]));
@@ -145,7 +146,7 @@ test("DR5-04 a registry business id with a control character: never built, never
   // assertion is kept.
   for (const bad of ["biz\u0001c", "biz\u007fc", "b:c"]) {
     const db = seedWorld({ withSecondBiz: false, withSecondTenant: false }); const smtp = installSmtp([SMTP.accept()]);
-    seedTenant(db, T2, bad, "Ctrl Biz");
+    seedTenant(db, T2, bad, "Ctrl Biz", false); // malformed discovery fixture is deliberately NOT a deployment recipient mapping
     const { value: r, lines } = await captureConsole(() => cron());
     assert.equal(r.statusCode, 500, JSON.stringify(r.body));
     assert.equal(r.body.status, "completed_with_failures", JSON.stringify(bad));

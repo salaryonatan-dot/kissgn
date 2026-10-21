@@ -218,12 +218,12 @@ test("DP1-09 preserved: the first-time manual send, its response, its record; th
   seedWorld(); const smtp = installSmtp([SMTP.accept()]);
   const m = await manual();
   assert.equal(m.statusCode, 200, JSON.stringify(m.body));
-  assert.deepEqual([m.body.status, m.body.delivery], ["success", { outcome: "accepted", recipient: "owner" }]);
+  assert.deepEqual([m.body.status, m.body.delivery], ["success", { outcome: "accepted", recipient: "server_configured" }]);
   assert.deepEqual([m.body.snapshot.tenantId, m.body.snapshot.bizId, m.body.snapshot.date], [T, B, DATE]);
   assert.match(smtp.calls[0].messageIdHeader, /^<manual\.[0-9a-f-]{36}@delivery\.marjin\.app>$/);
   const [rec] = Object.values(records());
   assert.deepEqual([rec.v, rec.kind, rec.tenantId, rec.bizId, rec.businessDate, rec.state, rec.actorRole, rec.recipientSelection],
-    [E.MANUAL_ATTEMPT_VERSION, "daily_snapshot", T, B, DATE, "accepted", "owner", "owner"]);
+    [E.MANUAL_ATTEMPT_VERSION, "daily_snapshot", T, B, DATE, "accepted", "owner", "server_configured"]);
   assert.equal(receipt(), null, "the manual send writes no scheduled receipt");
   // after the manual send the scheduled path is unchanged: its own receipt decides (no new receipt state)
   const other = await manual(AT, { bizId: B2 });

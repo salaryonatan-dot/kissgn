@@ -37,7 +37,16 @@ export const PBN_FIXTURE_PIN = "b611191b31cb1293e9dbffeb25dbce6308497fbe";
 export const PBN_SOURCE = Object.freeze({ fixture:"9550569f0bdc9b6a1ff88e3ff95cc3253285291c", carriage:"7ae41336b7c2f02b953b9267768b90f97e39278f", uc2:"46e17525e88af9da357b72c5624fe5bfdc0608ce" });
 export const PBN_SCOPE = Object.freeze(["test/analytics/entries-reader-decimal-aggregation.test.mjs", "test/finance/m1-node22-runtime-guard.test.mjs", "test/finance/m1-pbn-fixture-carriage-guard.test.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs"]);
 export const PBN_EDITED = Object.freeze(["test/analytics/entries-reader-decimal-aggregation.test.mjs", "test/finance/m1-node22-runtime-guard.test.mjs", "test/support/m1-a1-inspection.mjs"]);
-// Deliberate PBN + accepted SR-11/D1 test composition. Both source commits remain literal proofs.
+export const SERVER_RECIPIENT_PARENT = "d963532287f5390df9baef5c7a18a109400233b8";
+export const SERVER_RECIPIENT_SCOPE = Object.freeze(["api/daily-snapshot/run.ts", "docs/production-readiness/daily-recipients-1.0.md", "docs/production-readiness/daily-recipients.example.json", "src/server/dailyRecipientConfig.ts", "test/delivery/daily-email-delivery.test.mjs", "test/delivery/daily-recipient-server-config.test.mjs", "test/delivery/de1-r1-remediation.test.mjs", "test/delivery/de1-r5-delivery.test.mjs", "test/delivery/de1-r6-provider-structure.test.mjs", "test/delivery/dp1-manual-delivery-policy.test.mjs", "test/delivery/dp2-shared-admission.test.mjs", "test/delivery/hr1-daily-hold.test.mjs", "test/delivery/i1-integration.test.mjs", "test/emulator/daily-recipient-server-config-emulator.mjs", "test/finance/b2-snapshot.test.mjs", "test/finance/daily-recipient-server-config-guard.test.mjs", "test/finance/m1-pbn-fixture-carriage-guard.test.mjs", "test/support/daily-email-harness.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs"]);
+export const SERVER_RECIPIENT_TEST_PARENT = "5ebf2b62497790035de29d2355d2b71729067b29";
+export const SERVER_RECIPIENT_TEST_SCOPE = Object.freeze(["test/emulator/daily-recipient-server-config-emulator.mjs", "test/finance/daily-recipient-server-config-guard.test.mjs", "test/finance/daily-recipient-server-config-t1-guard.test.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs"]);
+
+// Local composition: accepted sources are literal proofs, never additional parents.
+export const COMBINED_PARENT = "dffe0d60f36ddca2b8f7370b10ac1e0c24d5f175";
+export const COMBINED_SOURCE = "c509ba66d40cd6e09051d7adc08735a0ad9b66b5";
+export const COMBINED_SCOPE = Object.freeze(["api/daily-snapshot/run.ts", "docs/production-readiness/daily-recipients-1.0.md", "docs/production-readiness/daily-recipients.example.json", "src/server/dailyRecipientConfig.ts", "test/delivery/daily-email-delivery.test.mjs", "test/delivery/daily-recipient-server-config.test.mjs", "test/delivery/de1-r1-remediation.test.mjs", "test/delivery/de1-r5-delivery.test.mjs", "test/delivery/de1-r6-provider-structure.test.mjs", "test/delivery/dp1-manual-delivery-policy.test.mjs", "test/delivery/dp2-shared-admission.test.mjs", "test/delivery/hr1-daily-hold.test.mjs", "test/delivery/i1-integration.test.mjs", "test/emulator/daily-recipient-server-config-emulator.mjs", "test/finance/b2-snapshot.test.mjs", "test/finance/daily-recipient-server-config-guard.test.mjs", "test/finance/daily-recipient-server-config-t1-guard.test.mjs", "test/finance/marjin-1.0-composition-guard.test.mjs", "test/finance/pbn-sfd-composition-guard.test.mjs", "test/support/daily-email-harness.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs"]);
+export const COMBINED_TRANSFERS = Object.freeze(["api/daily-snapshot/run.ts", "docs/production-readiness/daily-recipients-1.0.md", "docs/production-readiness/daily-recipients.example.json", "src/server/dailyRecipientConfig.ts", "test/delivery/daily-email-delivery.test.mjs", "test/delivery/daily-recipient-server-config.test.mjs", "test/delivery/de1-r1-remediation.test.mjs", "test/delivery/de1-r5-delivery.test.mjs", "test/delivery/de1-r6-provider-structure.test.mjs", "test/delivery/dp1-manual-delivery-policy.test.mjs", "test/delivery/dp2-shared-admission.test.mjs", "test/delivery/hr1-daily-hold.test.mjs", "test/delivery/i1-integration.test.mjs", "test/emulator/daily-recipient-server-config-emulator.mjs", "test/finance/b2-snapshot.test.mjs", "test/finance/daily-recipient-server-config-guard.test.mjs", "test/support/daily-email-harness.mjs"]);
 export const COMPOSE_PARENT = "d963532287f5390df9baef5c7a18a109400233b8";
 export const COMPOSE_SOURCE = "31fb9c43505c253ce2dc8a195fc7b9b16efe4dc1";
 export const COMPOSE_SCOPE = Object.freeze(["test/analytics/entries-reader-d1-downstream.test.mjs", "test/emulator/server-readers-matrix.mjs", "test/finance/m1-pbn-fixture-carriage-guard.test.mjs", "test/finance/pbn-sfd-composition-guard.test.mjs", "test/finance/sr11-d1-clock-guard.test.mjs", "test/support/israel-scenario-clock.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs"]);
@@ -77,7 +86,9 @@ export function a3PolicyPins(root) {
 export function verifyA1Head(root=MODULE_ROOT) {
   assert.ok(isA1Tree(root),'explicit A1 record and fixed source references required');
   const r=load(root), head=text(root,['rev-parse','HEAD']);
-  if(r.fixtureComposition) return verifyComposedFixtures(root,r,head);
+  if(r.localComposition)return verifyLocalComposition(root,r,head);
+  if(r.serverRecipientTestSuccessor)return verifyServerRecipientTestHead(root,r,head);
+  if(r.serverRecipientSuccessor)return verifyServerRecipientHead(root,r,head);
   // This bounded successor changes only the four authorized consumers and the existing joint-holder support.
   if(r.successor) assert.ok(r.carriage,'A3 extends the recorded A2 carriage');
   if(r.testSuccessor) assert.ok(r.successor,'A3-T1 extends the recorded A3 successor');
@@ -180,41 +191,98 @@ export function verifyA1Head(root=MODULE_ROOT) {
   return {ok:true,head,files:Object.keys(tree).length};
 }
 
-// New current-head proof. Historical PBN/SFD/N22 holders and assertions stay literal.
-const compositionProofs=new Set();
-function compositionIdentity() { return {parent:COMPOSE_PARENT,source:COMPOSE_SOURCE,kind:'pbn_sfd_test_composition',scope:[...COMPOSE_SCOPE],transfers:[...COMPOSE_TRANSFERS],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'}; }
-function verifyComposedFixtures(root,r,head) {
- const {edits,...identity}=r.fixtureComposition;
- assert.deepEqual(identity,compositionIdentity(),'fixed composition identity');
- assert.deepEqual(Object.keys(edits).sort(),[...COMPOSE_EDITED],'closed composition edit set');
- assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,COMPOSE_PARENT],'exact composition sole parent');
+// Explicit recipient policy layer: exact PBN parent and complete current coverage; source history stays literal.
+// T1 test-only layer: exact 5ebf parent; complete protected bytes and literal source proof.
+let serverRecipientTestParentProven=false;
+function verifyServerRecipientTestHead(root,r,head) {
+ const {edits,...identity}=r.serverRecipientTestSuccessor;
+ assert.deepEqual(identity,{parent:SERVER_RECIPIENT_TEST_PARENT,kind:'server_recipient_probe_t1_only',scope:[...SERVER_RECIPIENT_TEST_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'});
+ assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,SERVER_RECIPIENT_TEST_PARENT],'exact T1 sole parent');
  const names=args=>text(root,args).split('\n').filter(Boolean).sort();
- for(const args of [['diff','--name-only',COMPOSE_PARENT,'HEAD','--'],['diff','--name-only','--cached',COMPOSE_PARENT,'--'],['diff','--name-only',COMPOSE_PARENT,'--']]) assert.deepEqual(names(args),[...COMPOSE_SCOPE],'exact composition HEAD/index/checkout scope');
- assert.deepEqual(untrackedPaths(root),[],'no ignored/opaque untracked bypass');
- const prior=JSON.parse(git(root,['show',COMPOSE_PARENT+':'+A1_RECORD]).stdout);
- for(const key of Object.keys(prior))if(!['treePins','scope','allowedScope','historicalGuards'].includes(key))assert.deepEqual(r[key],prior[key],key+' prior record exact');
- assert.deepEqual(Object.keys(r).sort(),[...Object.keys(prior),'fixtureComposition'].sort(),'no hidden composition metadata');
- assert.deepEqual(r.scope,[...new Set([...prior.scope,...COMPOSE_SCOPE])].sort());
- assert.deepEqual(r.allowedScope,[...new Set([...prior.allowedScope,...r.scope])].sort());
- assert.deepEqual(r.historicalGuards,{...prior.historicalGuards,'test/finance/m1-pbn-fixture-carriage-guard.test.mjs':COMPOSE_PARENT,'test/finance/sr11-d1-clock-guard.test.mjs':COMPOSE_SOURCE});
+ for(const args of [['diff','--name-only',SERVER_RECIPIENT_TEST_PARENT,'HEAD','--'],['diff','--name-only','--cached',SERVER_RECIPIENT_TEST_PARENT,'--'],['diff','--name-only',SERVER_RECIPIENT_TEST_PARENT,'--']])assert.deepEqual(names(args),[...SERVER_RECIPIENT_TEST_SCOPE],'exact T1 HEAD/index/checkout scope');
+ assert.deepEqual(untrackedPaths(root),[],'untracked paths');
+ const prior=JSON.parse(git(root,['show',SERVER_RECIPIENT_TEST_PARENT+':'+A1_RECORD]).stdout);
+ for(const key of Object.keys(prior))if(!['treePins','scope','allowedScope','historicalGuards'].includes(key))assert.deepEqual(r[key],prior[key],key+' prior exact');
+ assert.deepEqual(Object.keys(r).sort(),[...Object.keys(prior),'serverRecipientTestSuccessor'].sort());
+ assert.deepEqual(r.scope,[...new Set([...prior.scope,...SERVER_RECIPIENT_TEST_SCOPE])].sort());assert.deepEqual(r.allowedScope,[...new Set([...prior.allowedScope,...r.scope])].sort());
+ assert.deepEqual(r.historicalGuards,{...prior.historicalGuards,'test/finance/daily-recipient-server-config-guard.test.mjs':SERVER_RECIPIENT_TEST_PARENT});
+ const tree={};for(const row of text(root,['ls-tree','-r','-z','HEAD']).split('\0').filter(Boolean)){const m=/^(\d+) blob ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);assert.ok(m,row);assert.notEqual(m[1],'120000');tree[m[3]]=m[2];}
+ delete tree[A1_RECORD];assert.deepEqual(tree,r.treePins,'complete T1 tree');
+ const index={};for(const row of text(root,['ls-files','--stage','-z']).split('\0').filter(Boolean)){const m=/^\d+ ([a-f0-9]{40}) 0\t([\s\S]+)$/.exec(row);assert.ok(m);index[m[2]]=m[1];}
+ for(const [f,pin]of Object.entries(tree)){assert.equal(index[f],pin,f+' index');assert.equal(a1Blob(readFileSync(join(root,f))),pin,f+' checkout');}
+ assert.equal(index[A1_RECORD],text(root,['rev-parse','HEAD:'+A1_RECORD]));assert.equal(a1Blob(readFileSync(join(root,A1_RECORD))),index[A1_RECORD]);
+ const added=['test/finance/daily-recipient-server-config-t1-guard.test.mjs'];
+ assert.deepEqual(Object.keys(edits).sort(),SERVER_RECIPIENT_TEST_SCOPE.filter(f=>f!==A1_RECORD&&!added.includes(f)),'closed T1 derivation set');
+ for(const [f,changes]of Object.entries(edits)){let bytes=git(root,['show',SERVER_RECIPIENT_TEST_PARENT+':'+f]).stdout;for(const e of changes){assert.ok(e.from&&bytes.split(e.from).length===2,f+' unique anchor');bytes=bytes.replace(e.from,()=>e.to);}assert.equal(a1Blob(Buffer.from(bytes)),tree[f],f+' exact T1 derivation');}
+ for(const [f,pin]of Object.entries(prior.treePins))if(!SERVER_RECIPIENT_TEST_SCOPE.includes(f))assert.equal(tree[f],pin,f+' protected prior');
+ if(!serverRecipientTestParentProven){const view=sourceView(root,SERVER_RECIPIENT_TEST_PARENT),env={...process.env};delete env.NODE_TEST_CONTEXT;const code='import {verifyA1Head} from '+JSON.stringify(new URL('test/support/m1-a1-inspection.mjs','file://'+view+'/').href)+';verifyA1Head('+JSON.stringify(view)+');';const p=spawnSync(process.execPath,['--input-type=module','-e',code],{env,encoding:'utf8',timeout:180000,maxBuffer:64*1024*1024});assert.equal(p.status,0,'literal 5ebf/PBN/N22 proof\n'+p.stdout+'\n'+p.stderr);serverRecipientTestParentProven=true;}
+ return {ok:true,head,files:Object.keys(tree).length};
+}
+
+let serverRecipientParentProven=false;
+function verifyServerRecipientHead(root,r,head) {
+ const {edits,...identity}=r.serverRecipientSuccessor;
+ assert.deepEqual(identity,{parent:SERVER_RECIPIENT_PARENT,kind:'server_only_daily_recipient',scope:[...SERVER_RECIPIENT_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'});
+ assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,SERVER_RECIPIENT_PARENT],'exact recipient sole parent');
+ const names=args=>text(root,args).split('\n').filter(Boolean).sort();
+ for(const args of [['diff','--name-only',SERVER_RECIPIENT_PARENT,'HEAD','--'],['diff','--name-only','--cached',SERVER_RECIPIENT_PARENT,'--'],['diff','--name-only',SERVER_RECIPIENT_PARENT,'--']])assert.deepEqual(names(args),[...SERVER_RECIPIENT_SCOPE],'exact recipient HEAD/index/checkout scope');
+ assert.deepEqual(untrackedPaths(root),[],'untracked paths');
+ const prior=JSON.parse(git(root,['show',SERVER_RECIPIENT_PARENT+':'+A1_RECORD]).stdout);
+ for(const key of Object.keys(prior))if(!['treePins','scope','allowedScope','historicalGuards'].includes(key))assert.deepEqual(r[key],prior[key],key+' prior exact');
+ assert.deepEqual(Object.keys(r).sort(),[...Object.keys(prior),'serverRecipientSuccessor'].sort());
+ assert.deepEqual(r.scope,[...new Set([...prior.scope,...SERVER_RECIPIENT_SCOPE])].sort());assert.deepEqual(r.allowedScope,[...new Set([...prior.allowedScope,...r.scope])].sort());
+ assert.deepEqual(r.historicalGuards,{...prior.historicalGuards,'test/finance/m1-pbn-fixture-carriage-guard.test.mjs':SERVER_RECIPIENT_PARENT});
+ const tree={};for(const row of text(root,['ls-tree','-r','-z','HEAD']).split('\0').filter(Boolean)){const m=/^(\d+) blob ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);assert.ok(m,row);assert.notEqual(m[1],'120000');tree[m[3]]=m[2];}
+ delete tree[A1_RECORD];assert.deepEqual(tree,r.treePins,'complete recipient tree');
+ const index={};for(const row of text(root,['ls-files','--stage','-z']).split('\0').filter(Boolean)){const m=/^\d+ ([a-f0-9]{40}) 0\t([\s\S]+)$/.exec(row);assert.ok(m);index[m[2]]=m[1];}
+ for(const [f,pin]of Object.entries(tree)){assert.equal(index[f],pin,f+' index');assert.equal(a1Blob(readFileSync(join(root,f))),pin,f+' checkout');}
+ assert.equal(index[A1_RECORD],text(root,['rev-parse','HEAD:'+A1_RECORD]));assert.equal(a1Blob(readFileSync(join(root,A1_RECORD))),index[A1_RECORD]);
+ const added=["src/server/dailyRecipientConfig.ts", "docs/production-readiness/daily-recipients.example.json", "docs/production-readiness/daily-recipients-1.0.md", "test/delivery/daily-recipient-server-config.test.mjs", "test/emulator/daily-recipient-server-config-emulator.mjs", "test/finance/daily-recipient-server-config-guard.test.mjs"];
+ assert.deepEqual(Object.keys(edits).sort(),SERVER_RECIPIENT_SCOPE.filter(f=>f!==A1_RECORD&&!added.includes(f)),'closed recorded derivation set');
+ for(const [f,changes]of Object.entries(edits)){let bytes=git(root,['show',SERVER_RECIPIENT_PARENT+':'+f]).stdout;for(const e of changes){assert.ok(e.from&&bytes.split(e.from).length===2,f+' unique anchor');bytes=bytes.replace(e.from,()=>e.to);}assert.equal(a1Blob(Buffer.from(bytes)),tree[f],f+' exact recipient derivation');}
+ for(const [f,pin]of Object.entries(prior.treePins))if(!SERVER_RECIPIENT_SCOPE.includes(f))assert.equal(tree[f],pin,f+' protected prior');
+ assert.equal(tree[PBN_FIXTURE],PBN_FIXTURE_PIN);
+ if(!serverRecipientParentProven){const view=sourceView(root,SERVER_RECIPIENT_PARENT),env={...process.env};delete env.NODE_TEST_CONTEXT;const code='import {verifyA1Head} from '+JSON.stringify(new URL('test/support/m1-a1-inspection.mjs','file://'+view+'/').href)+';verifyA1Head('+JSON.stringify(view)+');';const p=spawnSync(process.execPath,['--input-type=module','-e',code],{env,encoding:'utf8',timeout:180000,maxBuffer:64*1024*1024});assert.equal(p.status,0,'literal PBN/N22 proof\n'+p.stdout+'\n'+p.stderr);serverRecipientParentProven=true;}
+ return {ok:true,head,files:Object.keys(tree).length};
+}
+export function serverRecipientPolicyPins(root) { const r=load(root);return r.serverRecipientSuccessor?{'api/daily-snapshot/run.ts':r.treePins['api/daily-snapshot/run.ts']}:{}; }
+
+// Closed current proof; every historical predicate and source holder remains literal.
+const localProofs=new Set();
+function verifyLocalComposition(root,r,head) {
+ const {edits,...identity}=r.localComposition;
+ assert.deepEqual(identity,{parent:COMBINED_PARENT,source:COMBINED_SOURCE,kind:'marjin_1_0_local_composition',scope:[...COMBINED_SCOPE],transfers:[...COMBINED_TRANSFERS],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'});
+ assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,COMBINED_PARENT],'exact combined sole parent');
+ const names=args=>text(root,args).split('\n').filter(Boolean).sort();
+ for(const args of [['diff','--name-only',COMBINED_PARENT,'HEAD','--'],['diff','--name-only','--cached',COMBINED_PARENT,'--'],['diff','--name-only',COMBINED_PARENT,'--']])assert.deepEqual(names(args),[...COMBINED_SCOPE],'exact combined scope');
+ assert.deepEqual(untrackedPaths(root),[],'no untracked bypass');
+ const parent=JSON.parse(git(root,['show',COMBINED_PARENT+':'+A1_RECORD]).stdout),source=JSON.parse(git(root,['show',COMBINED_SOURCE+':'+A1_RECORD]).stdout);
+ const cumulative=['treePins','scope','allowedScope','historicalGuards'];
+ for(const prior of [parent,source])for(const k of Object.keys(prior))if(!cumulative.includes(k))assert.deepEqual(r[k],prior[k],k+' preserved source record');
+ assert.deepEqual(Object.keys(r).sort(),[...new Set([...Object.keys(parent),...Object.keys(source),'localComposition'])].sort(),'closed record fields');
+ assert.deepEqual(r.scope,[...new Set([...parent.scope,...source.scope,...COMBINED_SCOPE])].sort());
+ assert.deepEqual(r.allowedScope,[...new Set([...parent.allowedScope,...source.allowedScope,...r.scope])].sort());
+ assert.deepEqual(r.historicalGuards,{...parent.historicalGuards,...source.historicalGuards,'test/finance/pbn-sfd-composition-guard.test.mjs':COMBINED_PARENT,'test/finance/daily-recipient-server-config-t1-guard.test.mjs':COMBINED_SOURCE});
  const tree={};for(const row of text(root,['ls-tree','-r','-z','HEAD']).split('\0').filter(Boolean)){const m=/^(\d+) blob ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);assert.ok(m,row);assert.notEqual(m[1],'120000');tree[m[3]]=m[2];}
  delete tree[A1_RECORD];assert.deepEqual(tree,r.treePins,'complete current tree pins');
  const index={};for(const row of text(root,['ls-files','--stage','-z']).split('\0').filter(Boolean)){const m=/^\d+ ([a-f0-9]{40}) 0\t([\s\S]+)$/.exec(row);assert.ok(m,'unmerged index');index[m[2]]=m[1];}
- for(const [f,pin] of Object.entries(tree)){assert.equal(index[f],pin,f+' index');assert.equal(a1Blob(readFileSync(join(root,f))),pin,f+' checkout');}
+ assert.deepEqual(Object.keys(index).sort(),[...Object.keys(tree),A1_RECORD].sort());
+ for(const [f,pin]of Object.entries(tree)){assert.equal(index[f],pin,f+' index');assert.equal(a1Blob(readFileSync(join(root,f))),pin,f+' checkout');}
  assert.equal(index[A1_RECORD],text(root,['rev-parse','HEAD:'+A1_RECORD]));assert.equal(a1Blob(readFileSync(join(root,A1_RECORD))),index[A1_RECORD]);
- for(const f of COMPOSE_TRANSFERS)assert.equal(tree[f],text(root,['rev-parse',COMPOSE_SOURCE+':'+f]),f+' exact accepted SFD transfer');
- assert.equal(tree[PBN_FIXTURE],PBN_FIXTURE_PIN,'accepted PBD fixture unchanged');
- for(const [f,{base,edits:changes}] of Object.entries(edits)){
-  assert.equal(base,f==='test/finance/sr11-d1-clock-guard.test.mjs'?COMPOSE_SOURCE:COMPOSE_PARENT,'fixed derivation source');
-  let bytes=git(root,['show',base+':'+f]).stdout;
-  for(const e of changes){assert.ok(e.from&&bytes.split(e.from).length===2,f+' unique composition anchor');bytes=bytes.replace(e.from,()=>e.to);}
-  assert.equal(a1Blob(Buffer.from(bytes)),tree[f],f+' exact composition derivation');
+ for(const [f,pin]of Object.entries(parent.treePins))if(!COMBINED_SCOPE.includes(f))assert.equal(tree[f],pin,f+' protected parent');
+ for(const f of COMBINED_TRANSFERS)assert.equal(tree[f],source.treePins[f],f+' exact recipient transfer');
+ assert.deepEqual(Object.keys(edits).sort(),['test/finance/daily-recipient-server-config-t1-guard.test.mjs','test/finance/pbn-sfd-composition-guard.test.mjs','test/support/m1-a1-inspection.mjs']);
+ for(const [f,{base,edits:changes}]of Object.entries(edits)){
+  assert.equal(base,f==='test/finance/pbn-sfd-composition-guard.test.mjs'?COMBINED_PARENT:COMBINED_SOURCE);
+  let b=git(root,['show',base+':'+f]).stdout;
+  for(const e of changes){assert.ok(e.from&&b.split(e.from).length===2,f+' unique anchor');b=b.replace(e.from,()=>e.to);}
+  assert.equal(a1Blob(Buffer.from(b)),tree[f],f+' exact composition derivation');
  }
- for(const sha of [COMPOSE_PARENT,COMPOSE_SOURCE])if(!compositionProofs.has(sha)){
+ for(const sha of [COMBINED_PARENT,COMBINED_SOURCE])if(!localProofs.has(sha)){
   const view=sourceView(root,sha),env={...process.env};delete env.NODE_TEST_CONTEXT;
   const code='import {verifyA1Head} from '+JSON.stringify(new URL('test/support/m1-a1-inspection.mjs','file://'+view+'/').href)+';verifyA1Head('+JSON.stringify(view)+');';
   const p=spawnSync(process.execPath,['--input-type=module','-e',code],{env,encoding:'utf8',timeout:180000,maxBuffer:64*1024*1024});
-  assert.equal(p.status,0,'literal accepted holder proof '+sha+'\n'+p.stdout+'\n'+p.stderr);compositionProofs.add(sha);
+  assert.equal(p.status,0,'literal accepted holder '+sha+'\n'+p.stdout+'\n'+p.stderr);localProofs.add(sha);
  }
  return {ok:true,head,files:Object.keys(tree).length};
 }
@@ -275,18 +343,30 @@ export function a1BackfillProjection(root, paths) {
   const {edits,...identity}=load(root).node22Successor;
   if(JSON.stringify(identity)!==JSON.stringify({parent:N22_PARENT,kind:'node22_configuration_only',scope:[...N22_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'}))return {ok:false,reason:'node22_layer_identity'};
   // PBN: the N22 layer stays bound to the exact N22 commit; PBN's own exact identity and parent are required on its child.
-  const composition=load(root).fixtureComposition;
-  if(composition){
-   const {edits:ce,...cid}=composition;
-   if(JSON.stringify(cid)!==JSON.stringify(compositionIdentity()))return {ok:false,reason:'composition_identity'};
-   if(text(root,['rev-list','--parents','-n1','HEAD']).split(' ').slice(1).join(' ')!==COMPOSE_PARENT)return {ok:false,reason:'composition_parent'};
-   if(text(root,['diff','--name-only',COMPOSE_PARENT,'HEAD','--']).split('\n').filter(Boolean).sort().join('\0')!==[...COMPOSE_SCOPE].join('\0'))return {ok:false,reason:'composition_scope'};
+  const combined=load(root).localComposition;
+  if(combined){
+   if(text(root,['rev-parse','HEAD^'])!==COMBINED_PARENT)return {ok:false,reason:'local_composition_parent'};
+   verifyA1Head(root);
+  }
+  const probeHead=combined?COMBINED_SOURCE:'HEAD';
+  const probe=load(root).serverRecipientTestSuccessor;
+  if(probe){
+   if(probe.parent!==SERVER_RECIPIENT_TEST_PARENT||probe.kind!=='server_recipient_probe_t1_only'||JSON.stringify(probe.scope)!==JSON.stringify([...SERVER_RECIPIENT_TEST_SCOPE]))return {ok:false,reason:'recipient_test_identity'};
+   if(text(root,['rev-parse',probeHead+'^'])!==SERVER_RECIPIENT_TEST_PARENT)return {ok:false,reason:'recipient_test_parent'};
+   if(text(root,['diff','--name-only',SERVER_RECIPIENT_TEST_PARENT,probeHead,'--']).split('\n').filter(Boolean).sort().join('\0')!==[...SERVER_RECIPIENT_TEST_SCOPE].join('\0'))return {ok:false,reason:'recipient_test_scope'};
+  }
+  const recipientHead=probe?SERVER_RECIPIENT_TEST_PARENT:'HEAD';
+  const recipient=load(root).serverRecipientSuccessor;
+  if(recipient){
+   if(recipient.parent!==SERVER_RECIPIENT_PARENT||recipient.kind!=="server_only_daily_recipient"||JSON.stringify(recipient.scope)!==JSON.stringify([...SERVER_RECIPIENT_SCOPE]))return {ok:false,reason:"recipient_layer_identity"};
+   if(text(root,["rev-parse",recipientHead+"^"])!==SERVER_RECIPIENT_PARENT)return {ok:false,reason:"recipient_parent"};
+   if(text(root,["diff","--name-only",SERVER_RECIPIENT_PARENT,recipientHead,"--"]).split("\n").filter(Boolean).sort().join("\0")!==[...SERVER_RECIPIENT_SCOPE].join("\0"))return {ok:false,reason:"recipient_scope"};
   }
   const pbn=load(root).pbnSuccessor;
   if(pbn) {
    const {edits:pe,...pid}=pbn;
    if(JSON.stringify(pid)!==JSON.stringify({parent:PBN_PARENT,kind:'pbd_fixture_test_carriage',source:{...PBN_SOURCE},fixture:{path:PBN_FIXTURE,pin:PBN_FIXTURE_PIN},scope:[...PBN_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'}))return {ok:false,reason:'pbn_layer_identity'};
-   if(text(root,['rev-parse',(composition?COMPOSE_PARENT:'HEAD')+'^'])!==PBN_PARENT)return {ok:false,reason:'pbn_parent'};
+   if(text(root,['rev-parse',(recipient?SERVER_RECIPIENT_PARENT:'HEAD')+'^'])!==PBN_PARENT)return {ok:false,reason:'pbn_parent'};
   }
   if(text(root,['rev-parse',(pbn?PBN_PARENT:'HEAD')+'^'])!==N22_PARENT)return {ok:false,reason:'node22_parent'};
   const pins={"package.json":"2a935d91920c71e6d1640871be54f1804f384830","package-lock.json":"c9704e950be93f24e2b0449fd0de427d0d6d4bec"};

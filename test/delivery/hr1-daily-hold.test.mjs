@@ -317,7 +317,7 @@ test("HR-08 manual send: G2 / G3 holds, the durable attempt record before the ha
     const res = await manual();
     assert.equal(res.statusCode, status); assert.equal(smtp.calls.length, 1);
     const [rec] = manualRecords(db);
-    assert.deepEqual([rec.v, rec.state, rec.code ?? null, rec.kind, rec.tenantId, rec.bizId, rec.businessDate, rec.actorRole, rec.recipientSelection], [E.MANUAL_ATTEMPT_VERSION, state, code, "daily_snapshot", T, B, D, "owner", "owner"]);
+    assert.deepEqual([rec.v, rec.state, rec.code ?? null, rec.kind, rec.tenantId, rec.bizId, rec.businessDate, rec.actorRole, rec.recipientSelection], [E.MANUAL_ATTEMPT_VERSION, state, code, "daily_snapshot", T, B, D, "owner", "server_configured"]);
     assert.equal(rec.messageIdHeader, smtp.calls[0].messageIdHeader, "the record names the Message-ID that was handed over");
     assert.ok(!JSON.stringify(rec).includes("owner-a@example.test"), "no recipient address in the record");
   }

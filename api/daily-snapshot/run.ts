@@ -1,5 +1,7 @@
 import { VercelRequest, VercelResponse } from "@vercel/node";
 import { getDb } from "../../src/firebase/admin.js";
+import { resolveDailyRecipient } from "../../src/server/dailyRecipientConfig.js";
+import type { RecipientSelection } from "../../src/server/dailyRecipientConfig.js";
 import { buildSnapshotForBiz, buildSnapshotRun } from "../../src/snapshot/snapshotBuilder.js";
 import { sendSnapshotEmail } from "../../src/snapshot/snapshotEmail.js";
 import { requireCron, requireBizContext } from "../../lib/securityContext.js";
@@ -18,88 +20,8 @@ function setCorsHeaders(req: VercelRequest, res: VercelResponse): void {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 }
 
-// Recipient resolution — the SAME selection as before (owner / super_owner with a real address, else the first user with a
-// real address; never a @temp.marjin.app placeholder). Daily e-mail reliability: a failed READ is no longer reported as
-// "no owner e-mail" — it is `recipient_unavailable` (transient), distinct from `no_recipient` (nothing to send to).
-//
-// R1 (review finding D3): ABSENCE is distinguished from DAMAGE.
-//   no_recipient            the list is absent or holds no user with a usable address (the legitimate empty cases)
-//   recipient_unavailable   the list could not be read (transient)
-//   recipient_data_invalid  the list is present but not a supported representation, or one of its users is malformed
-//                           (a non-object element, or a role / email of the wrong type) — never treated as "empty"
-//   recipient_invalid       the user the policy SELECTS has an address that is not a single well-formed mailbox; the run
-//                           never moves on to another user (that would widen the fallback)
-// Supported representations are those of the canonical server parser (lib/bizAccess.js parseAppUsers): an array, a JSON
-// array string, or the runtime envelope {_v: "<JSON array>"}; a bare null element (an RTDB hole) carries no user. The
-// selection predicates themselves are unchanged; validation only turns a would-be send into a visible failure. Whether a
-// non-owner may receive the report at all is an owner decision (review C3), not changed here.
-type RecipientCode = "no_recipient" | "recipient_unavailable" | "recipient_data_invalid" | "recipient_invalid";
-type RecipientSelection = "owner" | "first_user_with_email";
-type RecipientResult = { ok: true; email: string; selection: RecipientSelection } | { ok: false; code: RecipientCode };
-type UserRecord = { role?: string; email?: string };
-const TEMP_ADDRESS_SUFFIX = "@temp.marjin.app";
-const MAILBOX = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
-/** One plain mailbox (no display name, list, comment, whitespace or control character), at most 254 characters. */
-function isSingleMailbox(x: string): boolean { return x.length <= 254 && MAILBOX.test(x); }
-/** The stored list with the canonical server semantics: absent ⇒ empty; anything unsupported ⇒ malformed (never empty). */
-function decodeUserList(raw: unknown): unknown[] | null {
-  if (raw === null || raw === undefined) return [];
-  if (Array.isArray(raw)) return raw;
-  let json: string;
-  if (typeof raw === "object" && typeof (raw as { _v?: unknown })._v === "string") json = (raw as { _v: string })._v;
-  else if (typeof raw === "string") json = raw;
-  else return null;
-  let parsed: unknown;
-  try { parsed = JSON.parse(json); } catch { return null; }
-  return Array.isArray(parsed) ? parsed : null;
-}
-/** One stored user: null for a hole, undefined when malformed. */
-function readUser(u: unknown): UserRecord | null | undefined {
-  if (u === null || u === undefined) return null;
-  if (typeof u !== "object" || Array.isArray(u)) return undefined;
-  const role = (u as { role?: unknown }).role, email = (u as { email?: unknown }).email;
-  if (role !== undefined && role !== null && typeof role !== "string") return undefined;
-  if (email !== undefined && email !== null && typeof email !== "string") return undefined;
-  return { role: typeof role === "string" ? role : undefined, email: typeof email === "string" ? email : undefined };
-}
-async function resolveOwnerRecipient(tenantId: string): Promise<RecipientResult> {
-  const db = getDb();
-
-  let usersData: unknown;
-  try {
-    const usersSnap = await db.ref(`tenants/${tenantId}/app/users`).once("value");
-    usersData = usersSnap.val();
-  } catch {
-    // the error object is untrusted (its code / message may carry anything): a fixed code only (D4)
-    console.error(`[daily-snapshot] recipient read failed for tenant ${tenantId} (recipient_unavailable)`);
-    return { ok: false, code: "recipient_unavailable" };
-  }
-
-  const list = decodeUserList(usersData);
-  if (list === null) return { ok: false, code: "recipient_data_invalid" };
-  const users: Array<UserRecord | null> = [];
-  for (const element of list) {
-    const u = readUser(element);
-    if (u === undefined) return { ok: false, code: "recipient_data_invalid" };
-    users.push(u);
-  }
-  const pick = (email: string, selection: RecipientSelection): RecipientResult =>
-    isSingleMailbox(email) ? { ok: true, email, selection } : { ok: false, code: "recipient_invalid" };
-
-  // Find owner or super_owner
-  const owner = users.find((u) => u && (u.role === "owner" || u.role === "super_owner"));
-  if (owner && owner.email && !owner.email.endsWith(TEMP_ADDRESS_SUFFIX)) {
-    return pick(owner.email, "owner");
-  }
-
-  // Fallback to first user with email
-  const firstWithEmail = users.find((u) => u && u.email && !u.email.endsWith(TEMP_ADDRESS_SUFFIX));
-  if (firstWithEmail && firstWithEmail.email) {
-    return pick(firstWithEmail.email, "first_user_with_email");
-  }
-
-  return { ok: false, code: "no_recipient" };
-}
+// Owner scope amendment 2026-10-20 17:31 Asia/Jerusalem: recipient eligibility comes ONLY from server deployment configuration.
+// Resolution precedes receipt/manual/admission work. No RTDB recipient or user fallback.
 
 // Run outcome (R1, review finding D1). Every row settles into exactly one class:
 //   delivered   provider acceptance is DURABLY RECORDED: accepted with the receipt recorded, or already_accepted
@@ -361,10 +283,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           continue;
         }
 
-        const recipient = await resolveOwnerRecipient(snapshot.tenantId);
+        const recipient = await resolveDailyRecipient(snapshot.tenantId, snapshot.bizId);
         if (!recipient.ok) {
           console.warn(`[daily-snapshot] no deliverable recipient for ${snapshot.tenantId}:${snapshot.bizId} (${recipient.code})`);
-          results.push({ ...base, outcome: "failed", code: recipient.code, settlement: "failed" });
+          results.push({ ...base, outcome: "failed", code: recipient.code, settlement: "failed", receipt: "not_written" });
           continue;
         }
 
@@ -503,12 +425,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // the registry's own name is the one the owner sees in the message — never the builder's placeholder
       snapshot = { ...snapshot, bizName: target.name };
 
-      const recipient = await resolveOwnerRecipient(tenantId);
+      const recipient = await resolveDailyRecipient(tenantId, bizId);
 
       if (!recipient.ok) {
-        if (recipient.code === "no_recipient") return res.status(404).json({ error: "No owner email found for this tenant" });
-        if (recipient.code === "recipient_unavailable") return res.status(503).json({ error: "Owner email temporarily unavailable", code: recipient.code });
-        return res.status(422).json({ error: "Owner email record invalid", code: recipient.code });
+        if (recipient.code === "no_recipient") return res.status(404).json({ error: "Daily recipient not configured for this business; contact the deployment operator", code: recipient.code });
+        if (recipient.code === "recipient_unavailable") return res.status(503).json({ error: "Server Daily recipient configuration unavailable; email not sent; contact the deployment operator", code: recipient.code });
+        return res.status(422).json({ error: "Server Daily recipient configuration invalid or ambiguous; email not sent; contact the deployment operator", code: recipient.code });
       }
       const ownerEmail = recipient.email;
 

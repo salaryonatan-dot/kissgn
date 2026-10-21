@@ -200,7 +200,7 @@ test("DP2-08 preserved: first-time delivery on both routes, scheduled de-duplica
   assert.deepEqual([dup.statusCode, dup.body.alreadyAcceptedCount, smtp.calls.length], [200, 3, 3]);
   one(); smtp = installSmtp([SMTP.accept()]);
   const m = await manual();
-  assert.deepEqual([m.statusCode, m.body.delivery], [200, { outcome: "accepted", recipient: "owner" }]);
+  assert.deepEqual([m.statusCode, m.body.delivery], [200, { outcome: "accepted", recipient: "server_configured" }]);
   assert.equal(receipt(), null, "a manual send writes no scheduled receipt");
   assert.deepEqual([admission().state, admission().route, Object.values(records())[0].state], ["accepted", "manual", "accepted"]);
   // E4: a refused business date is refused on both routes before any admission

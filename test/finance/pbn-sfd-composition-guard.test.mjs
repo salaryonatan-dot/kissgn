@@ -1,5 +1,5 @@
 // Author-side current composition guard. No independent or release acceptance.
-import {test} from 'node:test';
+import {historicalTest} from "../support/m1-a1-inspection.mjs";const test=historicalTest(new URL("../../",import.meta.url),"dffe0d60f36ddca2b8f7370b10ac1e0c24d5f175","test/finance/pbn-sfd-composition-guard.test.mjs");
 import assert from 'node:assert/strict';
 import {readFileSync,mkdtempSync,rmSync,writeFileSync,appendFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';

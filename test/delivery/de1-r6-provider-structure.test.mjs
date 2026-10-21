@@ -94,6 +94,7 @@ test("DR6-03 controls: the adapter's own shape, a consistent refusal, R4's empty
   // R5: a `:` tenant is delivered with its own receipt; a nameless business is refused on the manual path before any send
   const db = seedWorld({ withSecondBiz: false, withSecondTenant: false }); smtp = installSmtp([SMTP.accept()]);
   for (const [k, v] of [["entries", db.read(`tenants/${T}/biz:${B}:entries`)], ["config", { _v: JSON.stringify({ businessName: "Colon" }) }], ["fixed", { _v: "[]" }]]) db.seed(`tenants/acme:il/biz:bizX:${k}`, v);
+  process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify([...JSON.parse(process.env.MARJIN_DAILY_RECIPIENTS_JSON),["acme:il","bizX","owner-a@example.test"]]);
   db.seed("tenants/acme:il/app/business", { _v: JSON.stringify([{ id: "bizX", name: "Colon" }]) }); db.seed("tenants/acme:il/app/users", db.read(`tenants/${T}/app/users`));
   r = await cron();
   assert.deepEqual([r.statusCode, r.body.results.length, db.read(`${RECEIPTS}/acme:il/bizX/${DATE}`).state], [200, 2, "accepted"]);

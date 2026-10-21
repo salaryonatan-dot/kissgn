@@ -55,6 +55,7 @@ async function post(r, body, { uid = "u_owner_a", email = "owner-a@example.test"
   return res;
 }
 const seedTenant = (db, t, b, name) => {
+  process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify([...JSON.parse(process.env.MARJIN_DAILY_RECIPIENTS_JSON),[t,b,"owner-a@example.test"]]);
   db.seed(`tenants/${t}/biz:${b}:entries`, db.read(`tenants/${T}/biz:${B}:entries`));
   db.seed(`tenants/${t}/biz:${b}:config`, env({ businessName: name }));
   db.seed(`tenants/${t}/biz:${b}:fixed`, env([]));

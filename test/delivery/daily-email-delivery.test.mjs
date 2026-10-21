@@ -85,14 +85,15 @@ test("DE-04 failures before sending: nothing reaches the provider, the failure i
   assert.deepEqual([receipt(T, B).state, receipt(T, B).retryable, receipt(T, B).attempt], ["failed", true, 1]);
   const r2 = await at(AT, () => runCron(fresh.route));   // configured again (runCron sets the variables)
   assert.equal(r2.statusCode, 200); assert.equal(smtp.calls.length, 1); assert.deepEqual([receipt(T, B).state, receipt(T, B).attempt], ["accepted", 2]);
-  // (b) the recipient cannot be read: transient, not "no owner"; no claim, no send
+  // (b) the server recipient configuration is unavailable: no claim, no send
   let db = seedWorld({ withSecondBiz: false, withSecondTenant: false }); smtp = installSmtp([SMTP.accept()]);
-  const ref = db.ref; db.ref = (p, q) => { const r = ref(p, q); return p.endsWith("/app/users") ? { ...r, once: async () => { throw Object.assign(new Error("unavailable"), { code: "unavailable" }); } } : r; };
+  delete process.env.MARJIN_DAILY_RECIPIENTS_JSON; // deployment configuration unavailable, not a user-list read
   let r = await cron();
   assert.equal(r.statusCode, 500); assert.deepEqual([r.body.results[0].outcome, r.body.results[0].code], ["failed", "recipient_unavailable"]);
   assert.equal(smtp.calls.length, 0); assert.equal(receipt(T, B), null);
-  // (c) no deliverable recipient (only placeholder addresses)
+  // (c) no explicitly configured recipient; user/placeholder records grant no eligibility
   seedWorld({ withSecondBiz: false, withSecondTenant: false, users: [{ id: 1, email: "x@temp.marjin.app", role: "owner" }] }); smtp = installSmtp([SMTP.accept()]);
+  process.env.MARJIN_DAILY_RECIPIENTS_JSON = "[]";
   r = await cron();
   assert.equal(r.statusCode, 500); assert.equal(r.body.results[0].code, "no_recipient"); assert.equal(smtp.calls.length, 0);
   // (d) the receipt store is down: fail closed — no claim means no send (a duplicate could not be prevented)
@@ -207,6 +208,7 @@ test("DE-12 tenant / business isolation: the same business id in two tenants has
   // tenant B also owns a business with id bizA
   const env = (v) => ({ _v: JSON.stringify(v) });
   db.seed(`tenants/${T2}/app/business`, env([{ id: B3, name: "מסעדה ג" }, { id: B, name: "מסעדה ד" }]));
+  process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify([...JSON.parse(process.env.MARJIN_DAILY_RECIPIENTS_JSON),[T2,B,"owner-b@example.test"]]);
   db.seed(`tenants/${T2}/biz:${B}:entries`, db.read(`tenants/${T}/biz:${B}:entries`)); db.seed(`tenants/${T2}/biz:${B}:config`, env({})); db.seed(`tenants/${T2}/biz:${B}:fixed`, env([]));
   const smtp = installSmtp([SMTP.accept()]);
   await cron();
@@ -258,7 +260,7 @@ test("DE-15 the manual owner send: classified outcome, no false success; no manu
   const m1 = await at(AT, () => runManual(route));
   assert.equal(m1.statusCode, 200); assert.equal(m1.body.status, "success");
   // R1 (D2): the response names only the selection policy — no address, no hash
-  assert.deepEqual(m1.body.delivery, { outcome: "accepted", recipient: "owner" }); assert.equal("emailSentTo" in m1.body, false);
+  assert.deepEqual(m1.body.delivery, { outcome: "accepted", recipient: "server_configured" }); assert.equal("emailSentTo" in m1.body, false);
   assert.ok(!/@|rcpt:|[0-9a-f]{12}/.test(JSON.stringify(m1.body.delivery)), JSON.stringify(m1.body));
   assert.match(smtp.calls[0].messageIdHeader, /^<manual\.[0-9a-f-]{36}@delivery\.marjin\.app>$/);
   assert.equal(receipt(T, B), null, "a manual send writes no schedule receipt");
