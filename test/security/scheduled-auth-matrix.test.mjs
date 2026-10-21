@@ -100,6 +100,11 @@ function build(route) {
   // DE1 R5 (delivery owner decisions): the receipt module composes the REAL shared registry predicate (dependency-free)
   if (existsSync(join(REPO, "lib", "businessRegistry.js"))) copyFileSync(join(REPO, "lib", "businessRegistry.js"), join(dir, "lib", "businessRegistry.js"));
   for (const [rel, c] of Object.entries({ ...COMMON, ...route.stubs })) put(rel, c);
+  // Compile the real server recipient resolver with the real Daily route.
+  if (route.src === "api/daily-snapshot/run.ts") {
+    mkdirSync(join(dir, "src/server"), { recursive: true });
+    copyFileSync(join(REPO, "src/server/dailyRecipientConfig.ts"), join(dir, "src/server/dailyRecipientConfig.ts"));
+  }
   const routeAbs = join(dir, route.src);
   mkdirSync(dirname(routeAbs), { recursive: true });
   copyFileSync(join(REPO, route.src), routeAbs);
@@ -130,6 +135,7 @@ function mkRes() {
 const RELEASED_HOLD = { schema: 1, state: "released", version: 2, log: { v000000001: { action: "init", state: "held", version: 1, prevVersion: 0, actor: "fixture", reason: "fixture bootstrap", at: 0 }, v000000002: { action: "release", state: "released", version: 2, prevVersion: 1, actor: "fixture", reason: "fixture release", at: 0 } } };
 // User identity stub: a VALID owner Firebase token (to prove user auth never opens machine paths).
 function setH(o = {}) {
+  process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify([["t1", "b1", "owner@example.test"]]);
   // HR3 test-contract transition (pending review): one seeded state for reads AND inventory transactions.
   // Original authorization assertions remain; the existing zero-side-effect oracle now also covers hold writes.
   const tx = new Map([["delivery_control/daily_snapshot", structuredClone(RELEASED_HOLD)]]);

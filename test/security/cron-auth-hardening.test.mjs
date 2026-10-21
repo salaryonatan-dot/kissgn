@@ -54,6 +54,11 @@ function build(routeRel, outRel, extraStubs) {
   mk("lib/adminSdk.js", STUB_ADMINSDK);
   for (const [rel, content] of Object.entries(extraStubs)) mk(rel, content);
   // route under test
+  // Compile the real server recipient resolver with the real Daily route.
+  if (routeRel === "api/daily-snapshot/run.ts") {
+    mkdirSync(join(dir, "src/server"), { recursive: true });
+    copyFileSync(join(REPO, "src/server/dailyRecipientConfig.ts"), join(dir, "src/server/dailyRecipientConfig.ts"));
+  }
   const routeAbs = join(dir, routeRel);
   mkdirSync(dirname(routeAbs), { recursive: true });
   copyFileSync(join(REPO, routeRel), routeAbs);
@@ -103,6 +108,7 @@ function mkDb(state) {
 }
 
 function setH(o = {}) {
+  process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify([["t1", "b1", "owner@example.test"]]);
   const calls = [];
   const state = {
     bizAccessVal: o.bizAccessVal !== undefined ? o.bizAccessVal : true,

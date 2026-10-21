@@ -55,6 +55,10 @@ export const COMPOSE_EDITED = Object.freeze(["test/finance/m1-pbn-fixture-carria
 export const SFD_PARENT = "e9d9566c1fb1802cef158c05991d7d47d8c9182f";
 export const SFD_SCOPE = Object.freeze(["test/analytics/entries-reader-d1-downstream.test.mjs", "test/emulator/server-readers-matrix.mjs", "test/finance/m1-node22-runtime-guard.test.mjs", "test/finance/sr11-d1-clock-guard.test.mjs", "test/support/israel-scenario-clock.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs"]);
 export const SFD_EDITED = Object.freeze(["test/analytics/entries-reader-d1-downstream.test.mjs", "test/emulator/server-readers-matrix.mjs", "test/finance/m1-node22-runtime-guard.test.mjs", "test/support/m1-a1-inspection.mjs"]);
+// IV-F1/F2/F3: closed test-only correction; independent review remains pending.
+export const IV_PARENT = "24a8ccc4da38cdc39373742df38e4df4ff365385";
+export const IV_SCOPE = Object.freeze(["test/acceptance/builder-delivery-acceptance.test.mjs", "test/finance/marjin-1.0-composition-guard.test.mjs", "test/finance/marjin-1.0-iv-correction-guard.test.mjs", "test/security/cron-auth-hardening.test.mjs", "test/security/scheduled-auth-matrix.test.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs"]);
+export const IV_GUARD = "test/finance/marjin-1.0-iv-correction-guard.test.mjs";
 export const A1_RECORD = 'test/support/m1-a1-inspection.json';
 const MODULE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const git = (root,args) => spawnSync('git',['-C',root,...args],{encoding:'utf8',timeout:30000,maxBuffer:64*1024*1024});
@@ -86,6 +90,7 @@ export function a3PolicyPins(root) {
 export function verifyA1Head(root=MODULE_ROOT) {
   assert.ok(isA1Tree(root),'explicit A1 record and fixed source references required');
   const r=load(root), head=text(root,['rev-parse','HEAD']);
+  if(r.integrationCorrection)return verifyIntegrationCorrection(root,r,head);
   if(r.localComposition)return verifyLocalComposition(root,r,head);
   if(r.serverRecipientTestSuccessor)return verifyServerRecipientTestHead(root,r,head);
   if(r.serverRecipientSuccessor)return verifyServerRecipientHead(root,r,head);
@@ -287,6 +292,58 @@ function verifyLocalComposition(root,r,head) {
  return {ok:true,head,files:Object.keys(tree).length};
 }
 
+// Full current holder: exact sole parent, closed scope, complete HEAD/index/checkout
+// content and unique derivations. Projection below does not replace this proof.
+let ivParentProven=false;
+function verifyIntegrationCorrection(root,r,head) {
+ const {edits,...identity}=r.integrationCorrection;
+ assert.deepEqual(identity,{parent:IV_PARENT,kind:'iv_f1_f2_f3_test_correction',scope:[...IV_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'});
+ assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,IV_PARENT],'exact IV sole parent');
+ for(const args of [['diff','--name-only',IV_PARENT,'HEAD','--'],['diff','--name-only','--cached',IV_PARENT,'--'],['diff','--name-only',IV_PARENT,'--']])assert.deepEqual(text(root,args).split('\n').filter(Boolean).sort(),[...IV_SCOPE],'exact IV scope');
+ assert.deepEqual(untrackedPaths(root),[],'no untracked bypass');
+ const prior=JSON.parse(git(root,['show',IV_PARENT+':'+A1_RECORD]).stdout);
+ for(const k of Object.keys(prior))if(!['treePins','scope','allowedScope','historicalGuards'].includes(k))assert.deepEqual(r[k],prior[k],k+' prior exact');
+ assert.deepEqual(Object.keys(r).sort(),[...Object.keys(prior),'integrationCorrection'].sort(),'closed IV record');
+ assert.deepEqual(r.scope,[...new Set([...prior.scope,...IV_SCOPE])].sort());
+ assert.deepEqual(r.allowedScope,[...new Set([...prior.allowedScope,...r.scope])].sort());
+ assert.deepEqual(r.historicalGuards,{...prior.historicalGuards,'test/finance/marjin-1.0-composition-guard.test.mjs':IV_PARENT});
+ const tree={};for(const row of text(root,['ls-tree','-r','-z','HEAD']).split('\0').filter(Boolean)){const m=/^(\d+) blob ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);assert.ok(m,row);assert.notEqual(m[1],'120000');tree[m[3]]=m[2];}
+ delete tree[A1_RECORD];assert.deepEqual(tree,r.treePins,'complete IV tree');
+ const index={};for(const row of text(root,['ls-files','--stage','-z']).split('\0').filter(Boolean)){const m=/^\d+ ([a-f0-9]{40}) 0\t([\s\S]+)$/.exec(row);assert.ok(m,'unmerged index');index[m[2]]=m[1];}
+ assert.deepEqual(Object.keys(index).sort(),[...Object.keys(tree),A1_RECORD].sort());
+ for(const [f,pin]of Object.entries(tree)){assert.equal(index[f],pin,f+' index');assert.equal(a1Blob(readFileSync(join(root,f))),pin,f+' checkout');}
+ assert.equal(index[A1_RECORD],text(root,['rev-parse','HEAD:'+A1_RECORD]));assert.equal(a1Blob(readFileSync(join(root,A1_RECORD))),index[A1_RECORD]);
+ assert.deepEqual(Object.keys(edits).sort(),IV_SCOPE.filter(f=>f!==A1_RECORD&&f!==IV_GUARD),'closed IV derivations');
+ for(const [f,changes]of Object.entries(edits)){let b=git(root,['show',IV_PARENT+':'+f]).stdout;for(const e of changes){assert.ok(e.from&&b.split(e.from).length===2,f+' unique IV anchor');b=b.replace(e.from,()=>e.to);}assert.equal(a1Blob(Buffer.from(b)),tree[f],f+' exact IV derivation');}
+ for(const [f,pin]of Object.entries(prior.treePins))if(!IV_SCOPE.includes(f))assert.equal(tree[f],pin,f+' protected prior');
+ if(!ivParentProven){proveLiteralHolder(root,IV_PARENT,'literal IV parent');ivParentProven=true;}
+ return {ok:true,head,files:Object.keys(tree).length};
+}
+function proveLiteralHolder(root,head,label) {
+ const view=sourceView(root,head),env={...process.env};delete env.NODE_TEST_CONTEXT;
+ const code='import {verifyA1Head} from '+JSON.stringify(new URL('test/support/m1-a1-inspection.mjs','file://'+view+'/').href)+';verifyA1Head('+JSON.stringify(view)+');';
+ const p=spawnSync(process.execPath,['--input-type=module','-e',code],{env,encoding:'utf8',timeout:180000,maxBuffer:64*1024*1024});
+ assert.equal(p.status,0,label+'\n'+p.stdout+'\n'+p.stderr);
+}
+// Semantic probes deliberately alter unrelated protected content. Prove the exact
+// committed assembly in an immutable view, then check the projection scaffold on
+// EVERY call (including cache hits). Only BF2 and the two pinned N22 files may be
+// projected; every other path stays visible to the original reader/VAT guards.
+const ivProjectionProofs=new Set();
+function ivProjectionContext(root) {
+ try {
+  const head=text(root,['rev-parse','HEAD']),committed=JSON.parse(git(root,['show','HEAD:'+A1_RECORD]).stdout);
+  if(!committed.integrationCorrection)return null;
+  for(const f of ['test/support/m1-a1-inspection.mjs',A1_RECORD,IV_GUARD]){
+   const pin=text(root,['rev-parse','HEAD:'+f]);
+   assert.equal(text(root,['rev-parse',':'+f]),pin,f+' projection index');
+   assert.equal(a1Blob(readFileSync(join(root,f))),pin,f+' projection checkout');
+  }
+  if(!ivProjectionProofs.has(head)){proveLiteralHolder(root,head,'immutable IV projection proof');ivProjectionProofs.add(head);}
+  return {ok:true};
+ }catch(e){return {ok:false,reason:'iv_correction_projection_proof',detail:String(e.message)};}
+}
+
 // Run the unchanged assertions in an isolated literal source view. This is a local shared-object
 // test fixture, not the bundle-only delivery proof. Current A1 protection is always checked first.
 const views=new Map(), results=new Map();
@@ -336,6 +393,7 @@ export function a1BackfillProjection(root, paths) {
  let bytes;try{bytes=readFileSync(join(root,BF2_FILE));}catch{return {ok:false,reason:'script_missing'};}
  if(a1Blob(bytes)!==BF2_PIN)return {ok:false,reason:'script_content_mismatch'};
  if(text(root,['rev-parse','HEAD:'+BF2_FILE])!==BF2_PIN || text(root,['rev-parse',':'+BF2_FILE])!==BF2_PIN)return {ok:false,reason:'script_history_mismatch'};
+ const iv=ivProjectionContext(root);if(iv&&!iv.ok)return iv;
  // N22's two configuration files are a separate exact-content layer, never a widened
  // reader allowlist. Both files must match HEAD, index and working bytes before either
  // is projected; without this layer they remain protected in the reader verdict.
@@ -345,8 +403,10 @@ export function a1BackfillProjection(root, paths) {
   // PBN: the N22 layer stays bound to the exact N22 commit; PBN's own exact identity and parent are required on its child.
   const combined=load(root).localComposition;
   if(combined){
+   if(!iv){
    if(text(root,['rev-parse','HEAD^'])!==COMBINED_PARENT)return {ok:false,reason:'local_composition_parent'};
    verifyA1Head(root);
+   }
   }
   const probeHead=combined?COMBINED_SOURCE:'HEAD';
   const probe=load(root).serverRecipientTestSuccessor;

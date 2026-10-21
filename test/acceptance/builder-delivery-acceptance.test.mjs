@@ -164,6 +164,7 @@ test("S7 two colliding tenant/business pairs are isolated: both built, both deli
   const P1 = ["t|x", "y", "Pipe Tenant"], P2 = ["t", "x|y", "Pipe Business"];
   for (const [label, order] of [["P1 first", [P1, P2]], ["P2 first", [P2, P1]]]) {
     const db = seedWorld({ withSecondBiz: false, withSecondTenant: false });
+    process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify(order.map(([t, b]) => [t, b, "owner-a@example.test"]));
     db.seed(`tenants/${T}/app/business`, env([]));              // the harness business is out of the way
     for (const [t, b, name] of order) {
       db.seed(`tenants/${t}/biz:${b}:entries`, env(days.map((d, i) => day(d, i + 1)))); db.seed(`tenants/${t}/biz:${b}:config`, env({ businessName: name })); db.seed(`tenants/${t}/biz:${b}:fixed`, env([]));
