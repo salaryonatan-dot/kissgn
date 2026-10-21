@@ -1,5 +1,5 @@
 // Author correction guard. Passing tests are evidence, not independent acceptance.
-import {test} from 'node:test';
+import {historicalTest} from "../support/m1-a1-inspection.mjs";const test=historicalTest(new URL("../../",import.meta.url),"b85c8b2879e1e57a3837a364bbadea07fd205a8f","test/finance/marjin-1.0-iv-correction-guard.test.mjs");
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,appendFileSync,mkdtempSync,rmSync,symlinkSync,existsSync} from 'node:fs';
 import {join} from 'node:path';import {tmpdir} from 'node:os';import {spawnSync} from 'node:child_process';

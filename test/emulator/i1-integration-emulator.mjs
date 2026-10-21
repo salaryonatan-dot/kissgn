@@ -68,6 +68,8 @@ const rowOf = (r, t, b) => (r.body.results || []).find((x) => x.tenantId === t &
 const days = ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04", "2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08"];
 const day = (date, n) => ({ id: `de000000-0000-4000-8000-${String(n).padStart(12, "0")}`, date, sales: "1000", supplier_payments: { s1: "300" }, payroll: "200" });
 async function world({ nameB2 = "מסעדה ב", registryA } = {}) {
+  // IV-T1: explicit synthetic server recipients; keep the real resolver and every refusal/assertion.
+  process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify([[T, B, "owner-a@example.test"], [T, B2, "owner-a@example.test"], [T2, B3, "owner-b@example.test"]]);
   fault.path = null;
   await dbA.ref("/").set(null);
   // HR1 (T-HR1-TEST-EMU): the bootstrapped RELEASED Daily hold record (absent = held, fail closed); every assertion unchanged

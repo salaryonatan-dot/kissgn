@@ -59,6 +59,11 @@ export const SFD_EDITED = Object.freeze(["test/analytics/entries-reader-d1-downs
 export const IV_PARENT = "24a8ccc4da38cdc39373742df38e4df4ff365385";
 export const IV_SCOPE = Object.freeze(["test/acceptance/builder-delivery-acceptance.test.mjs", "test/finance/marjin-1.0-composition-guard.test.mjs", "test/finance/marjin-1.0-iv-correction-guard.test.mjs", "test/security/cron-auth-hardening.test.mjs", "test/security/scheduled-auth-matrix.test.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs"]);
 export const IV_GUARD = "test/finance/marjin-1.0-iv-correction-guard.test.mjs";
+
+// IV-T1: closed fixture-only successor of the independently accepted IV correction.
+export const IV_T1_PARENT = "b85c8b2879e1e57a3837a364bbadea07fd205a8f";
+export const IV_T1_SCOPE = Object.freeze(["test/emulator/i1-integration-emulator.mjs", "test/emulator/owner-notice-rendered.mjs", "test/finance/marjin-1.0-iv-correction-guard.test.mjs", "test/finance/marjin-1.0-iv-t1-fixture-guard.test.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs"]);
+export const IV_T1_GUARD = "test/finance/marjin-1.0-iv-t1-fixture-guard.test.mjs";
 export const A1_RECORD = 'test/support/m1-a1-inspection.json';
 const MODULE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const git = (root,args) => spawnSync('git',['-C',root,...args],{encoding:'utf8',timeout:30000,maxBuffer:64*1024*1024});
@@ -90,6 +95,7 @@ export function a3PolicyPins(root) {
 export function verifyA1Head(root=MODULE_ROOT) {
   assert.ok(isA1Tree(root),'explicit A1 record and fixed source references required');
   const r=load(root), head=text(root,['rev-parse','HEAD']);
+  if(r.transportFixtureCorrection)return verifyTransportFixtureCorrection(root,r,head);
   if(r.integrationCorrection)return verifyIntegrationCorrection(root,r,head);
   if(r.localComposition)return verifyLocalComposition(root,r,head);
   if(r.serverRecipientTestSuccessor)return verifyServerRecipientTestHead(root,r,head);
@@ -319,6 +325,31 @@ function verifyIntegrationCorrection(root,r,head) {
  if(!ivParentProven){proveLiteralHolder(root,IV_PARENT,'literal IV parent');ivParentProven=true;}
  return {ok:true,head,files:Object.keys(tree).length};
 }
+let ivT1ParentProven=false;
+function verifyTransportFixtureCorrection(root,r,head) {
+ const {edits,...identity}=r.transportFixtureCorrection;
+ assert.deepEqual(identity,{parent:IV_T1_PARENT,kind:'iv_t1_recipient_fixture_correction',scope:[...IV_T1_SCOPE],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'});
+ assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,IV_T1_PARENT],'exact IV-T1 sole parent');
+ for(const args of [['diff','--name-only',IV_T1_PARENT,'HEAD','--'],['diff','--name-only','--cached',IV_T1_PARENT,'--'],['diff','--name-only',IV_T1_PARENT,'--']])assert.deepEqual(text(root,args).split('\n').filter(Boolean).sort(),[...IV_T1_SCOPE],'exact IV-T1 scope');
+ assert.deepEqual(untrackedPaths(root),[],'no untracked bypass');
+ const prior=JSON.parse(git(root,['show',IV_T1_PARENT+':'+A1_RECORD]).stdout);
+ for(const k of Object.keys(prior))if(!['treePins','scope','allowedScope','historicalGuards'].includes(k))assert.deepEqual(r[k],prior[k],k+' prior exact');
+ assert.deepEqual(Object.keys(r).sort(),[...Object.keys(prior),'transportFixtureCorrection'].sort(),'closed IV-T1 record');
+ assert.deepEqual(r.scope,[...new Set([...prior.scope,...IV_T1_SCOPE])].sort());
+ assert.deepEqual(r.allowedScope,[...new Set([...prior.allowedScope,...r.scope])].sort());
+ assert.deepEqual(r.historicalGuards,{...prior.historicalGuards,'test/finance/marjin-1.0-iv-correction-guard.test.mjs':IV_T1_PARENT});
+ const tree={};for(const row of text(root,['ls-tree','-r','-z','HEAD']).split('\0').filter(Boolean)){const m=/^(\d+) blob ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);assert.ok(m,row);assert.notEqual(m[1],'120000');tree[m[3]]=m[2];}
+ delete tree[A1_RECORD];assert.deepEqual(tree,r.treePins,'complete IV-T1 tree');
+ const index={};for(const row of text(root,['ls-files','--stage','-z']).split('\0').filter(Boolean)){const m=/^\d+ ([a-f0-9]{40}) 0\t([\s\S]+)$/.exec(row);assert.ok(m,'unmerged index');index[m[2]]=m[1];}
+ assert.deepEqual(Object.keys(index).sort(),[...Object.keys(tree),A1_RECORD].sort());
+ for(const [f,pin]of Object.entries(tree)){assert.equal(index[f],pin,f+' index');assert.equal(a1Blob(readFileSync(join(root,f))),pin,f+' checkout');}
+ assert.equal(index[A1_RECORD],text(root,['rev-parse','HEAD:'+A1_RECORD]));assert.equal(a1Blob(readFileSync(join(root,A1_RECORD))),index[A1_RECORD]);
+ assert.deepEqual(Object.keys(edits).sort(),IV_T1_SCOPE.filter(f=>f!==A1_RECORD&&f!==IV_T1_GUARD),'closed IV-T1 derivations');
+ for(const [f,changes]of Object.entries(edits)){let b=git(root,['show',IV_T1_PARENT+':'+f]).stdout;for(const e of changes){assert.ok(e.from&&b.split(e.from).length===2,f+' unique IV anchor');b=b.replace(e.from,()=>e.to);}assert.equal(a1Blob(Buffer.from(b)),tree[f],f+' exact IV-T1 derivation');}
+ for(const [f,pin]of Object.entries(prior.treePins))if(!IV_T1_SCOPE.includes(f))assert.equal(tree[f],pin,f+' protected prior');
+ if(!ivT1ParentProven){proveLiteralHolder(root,IV_T1_PARENT,'literal accepted b85c parent');ivT1ParentProven=true;}
+ return {ok:true,head,files:Object.keys(tree).length};
+}
 function proveLiteralHolder(root,head,label) {
  const view=sourceView(root,head),env={...process.env};delete env.NODE_TEST_CONTEXT;
  const code='import {verifyA1Head} from '+JSON.stringify(new URL('test/support/m1-a1-inspection.mjs','file://'+view+'/').href)+';verifyA1Head('+JSON.stringify(view)+');';
@@ -334,7 +365,7 @@ function ivProjectionContext(root) {
  try {
   const head=text(root,['rev-parse','HEAD']),committed=JSON.parse(git(root,['show','HEAD:'+A1_RECORD]).stdout);
   if(!committed.integrationCorrection)return null;
-  for(const f of ['test/support/m1-a1-inspection.mjs',A1_RECORD,IV_GUARD]){
+  for(const f of ['test/support/m1-a1-inspection.mjs',A1_RECORD,IV_GUARD,...(committed.transportFixtureCorrection?[IV_T1_GUARD]:[])]){
    const pin=text(root,['rev-parse','HEAD:'+f]);
    assert.equal(text(root,['rev-parse',':'+f]),pin,f+' projection index');
    assert.equal(a1Blob(readFileSync(join(root,f))),pin,f+' projection checkout');
@@ -352,6 +383,13 @@ function sourceView(root,sha) {
   if(views.has(sha)) return views.get(sha);
   const dir=mkdtempSync(join(tmpdir(),'m1-a1-history-'));
   let r=spawnSync('git',['clone','--shared','--no-checkout','--quiet',root,dir],{encoding:'utf8',timeout:60000});assert.equal(r.status,0,r.stderr);
+  // Materialize ALL available proof objects, including literal source commits
+  // that a caller's shared clone did not copy into refs. Keep every old hash and
+  // assertion; remove only the nesting of alternate stores, never a proof.
+  r=spawnSync('git',['-C',root,'cat-file','--batch-all-objects','--batch-check=%(objectname)'],{encoding:'utf8',timeout:60000,maxBuffer:64*1024*1024});assert.equal(r.status,0,r.stderr);
+  const pack=spawnSync('git',['-C',root,'pack-objects','--stdout'],{input:r.stdout,timeout:60000,maxBuffer:256*1024*1024});assert.equal(pack.status,0,String(pack.stderr));
+  r=spawnSync('git',['-C',dir,'index-pack','--stdin'],{input:pack.stdout,encoding:'utf8',timeout:60000,maxBuffer:64*1024*1024});assert.equal(r.status,0,r.stderr);
+  rmSync(join(dir,'.git/objects/info/alternates'),{force:true});
   r=spawnSync('git',['-C',dir,'checkout','--quiet','--detach',sha],{encoding:'utf8',timeout:60000});assert.equal(r.status,0,r.stderr);
   for(const dep of ['node_modules','test/historical/.deps']) { const p=join(root,dep); if(existsSync(p))symlinkSync(resolve(p),join(dir,dep),'dir'); }
   views.set(sha,dir);return dir;

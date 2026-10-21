@@ -94,6 +94,8 @@ const MONTH = new Date(realNow).toLocaleDateString("en-CA", { timeZone: "Asia/Je
 const AS_OF = `${MONTH}-12`, TARGET_MS = Date.parse(`${AS_OF}T07:00:00Z`), CLOCK_OFFSET_MS = TARGET_MS - realNow;
 const d = (n) => `${MONTH}-${String(n).padStart(2, "0")}`;
 const T = "tenantA", B = "bizA", B2 = "bizB", T2 = "tenantB", B3 = "bizC";
+  // IV-T1: explicit synthetic server recipients; keep the real resolver and every refusal/assertion.
+  process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify([[T, B, "owner-a@example.test"], [T, B2, "owner-a@example.test"], [T2, B3, "owner-b@example.test"]]);
 const OWNER = { uid: "u_owner", email: "o@demo.example", displayName: "owner1" };
 const VIEWER = { uid: "u_viewer", email: "v@demo.example", displayName: "viewer1" };
 const MANAGER = { uid: "u_manager", email: "m@demo.example", displayName: "manager1" };
