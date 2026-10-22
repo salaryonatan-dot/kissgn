@@ -11,6 +11,7 @@
     "api/daily-snapshot/run.ts",
     "docs/production-readiness/daily-recipients-1.0.md",
     "docs/production-readiness/daily-recipients.example.json",
+    "index.html",
     "lib/emailDelivery.d.ts",
     "lib/emailDelivery.js",
     "lib/repositories/bizDataRepo.js",
@@ -18,6 +19,7 @@
     "package.json",
     "scripts/backfill-biz-access.mjs",
     "src/analytics/dailyBuilder.ts",
+    "src/server/dailyEmailSubscription.ts",
     "src/server/dailyRecipientConfig.ts",
     "src/utils/dates.ts",
     "test/acceptance/builder-delivery-acceptance.test.mjs",
@@ -25,6 +27,7 @@
     "test/analytics/entries-reader-d1-downstream.test.mjs",
     "test/analytics/entries-reader-decimal-aggregation.test.mjs",
     "test/delivery/daily-email-delivery.test.mjs",
+    "test/delivery/daily-email-subscription.test.mjs",
     "test/delivery/daily-recipient-server-config.test.mjs",
     "test/delivery/de1-r1-remediation.test.mjs",
     "test/delivery/de1-r5-delivery.test.mjs",
@@ -41,6 +44,8 @@
     "test/emulator/canary-operator-matrix.mjs",
     "test/emulator/checklist-cold-cache-emulator.mjs",
     "test/emulator/daily-recipient-server-config-emulator.mjs",
+    "test/emulator/daily-subscription-emulator.mjs",
+    "test/emulator/daily-subscription-rendered.mjs",
     "test/emulator/de1-r1-receipt-emulator.mjs",
     "test/emulator/de1-r2-receipt-emulator.mjs",
     "test/emulator/dp1-manual-policy-emulator.mjs",
@@ -65,6 +70,8 @@
     "test/finance/cc2-checklist-concurrency-guard.test.mjs",
     "test/finance/daily-recipient-server-config-guard.test.mjs",
     "test/finance/daily-recipient-server-config-t1-guard.test.mjs",
+    "test/finance/daily-subscription-guard.test.mjs",
+    "test/finance/daily-subscription-ui-seam.test.mjs",
     "test/finance/dp1-daily-policy-guard.test.mjs",
     "test/finance/dp2-daily-policy-guard.test.mjs",
     "test/finance/dp3-daily-policy-guard.test.mjs",
@@ -117,6 +124,7 @@
     "test/support/cc1-checklist-cold-cache.mjs",
     "test/support/cc2-checklist-concurrency.mjs",
     "test/support/daily-email-harness.mjs",
+    "test/support/daily-subscription-layer.mjs",
     "test/support/dp1-daily-policy.json",
     "test/support/dp1-daily-policy.mjs",
     "test/support/dp2-daily-policy.json",
@@ -145,6 +153,7 @@
     "api/daily-snapshot/run.ts",
     "docs/production-readiness/daily-recipients-1.0.md",
     "docs/production-readiness/daily-recipients.example.json",
+    "index.html",
     "lib/emailDelivery.d.ts",
     "lib/emailDelivery.js",
     "lib/repositories/bizDataRepo.js",
@@ -152,6 +161,7 @@
     "package.json",
     "scripts/backfill-biz-access.mjs",
     "src/analytics/dailyBuilder.ts",
+    "src/server/dailyEmailSubscription.ts",
     "src/server/dailyRecipientConfig.ts",
     "src/utils/dates.ts",
     "test/acceptance/builder-delivery-acceptance.test.mjs",
@@ -159,6 +169,7 @@
     "test/analytics/entries-reader-d1-downstream.test.mjs",
     "test/analytics/entries-reader-decimal-aggregation.test.mjs",
     "test/delivery/daily-email-delivery.test.mjs",
+    "test/delivery/daily-email-subscription.test.mjs",
     "test/delivery/daily-recipient-server-config.test.mjs",
     "test/delivery/de1-r1-remediation.test.mjs",
     "test/delivery/de1-r5-delivery.test.mjs",
@@ -175,6 +186,8 @@
     "test/emulator/canary-operator-matrix.mjs",
     "test/emulator/checklist-cold-cache-emulator.mjs",
     "test/emulator/daily-recipient-server-config-emulator.mjs",
+    "test/emulator/daily-subscription-emulator.mjs",
+    "test/emulator/daily-subscription-rendered.mjs",
     "test/emulator/de1-r1-receipt-emulator.mjs",
     "test/emulator/de1-r2-receipt-emulator.mjs",
     "test/emulator/dp1-manual-policy-emulator.mjs",
@@ -199,6 +212,8 @@
     "test/finance/cc2-checklist-concurrency-guard.test.mjs",
     "test/finance/daily-recipient-server-config-guard.test.mjs",
     "test/finance/daily-recipient-server-config-t1-guard.test.mjs",
+    "test/finance/daily-subscription-guard.test.mjs",
+    "test/finance/daily-subscription-ui-seam.test.mjs",
     "test/finance/dp1-daily-policy-guard.test.mjs",
     "test/finance/dp2-daily-policy-guard.test.mjs",
     "test/finance/dp3-daily-policy-guard.test.mjs",
@@ -251,6 +266,7 @@
     "test/support/cc1-checklist-cold-cache.mjs",
     "test/support/cc2-checklist-concurrency.mjs",
     "test/support/daily-email-harness.mjs",
+    "test/support/daily-subscription-layer.mjs",
     "test/support/dp1-daily-policy.json",
     "test/support/dp1-daily-policy.mjs",
     "test/support/dp2-daily-policy.json",
@@ -291,7 +307,7 @@
     "api/config.js": "c26fa61972c986c2f4b4bcb166a54fb705d55f63",
     "api/cost-history.js": "88324f61cc660e09b3028679c08f83ef7152a6f2",
     "api/create-tenant.js": "c8d626124e460f0024b618d4e38d043e6b85eb85",
-    "api/daily-snapshot/run.ts": "0535076e32b6171436e4b63840a5448f0f4ccb65",
+    "api/daily-snapshot/run.ts": "62d29e833048b03ad511de6a67b8371ea3e2e5fa",
     "api/oref.js": "0107ef2742379a6612f60fb1fd702f1f3192ba55",
     "api/proactive/run.ts": "0ebc63c3cc7412ee0f2fbff8a3193b35e0d416ff",
     "api/whatsapp.js": "86e702d256b7ed0894e226b3a7cb088b5144c3d7",
@@ -698,7 +714,7 @@
     "fincore/v1/presenters/labels.js": "e8a118fbb9b45aedcca42804bcde292db35f19a9",
     "fincore/v1/presenters/money.js": "48a1369e0fda320696eae80e9358a1b087e4ca80",
     "fincore/v1/presenters/percent.js": "3a472f51e9955ac33ff3f99c8bc7cf0d36fc4eeb",
-    "index.html": "c6b4996ec7fc9cc8620c05af8209e1697c93cb0f",
+    "index.html": "f60822f3c44c8dd7193d1c8c9be99eaee7b04639",
     "landing.html": "e53b675af96209da20bed1d2fdce5243cb884043",
     "lib/adminSdk.d.ts": "b7d92c454cf9e84192eb2538c19eb6fa997f7780",
     "lib/adminSdk.js": "a15c45fc6cbe32c41d72c38a3f0e9b224f76530d",
@@ -866,6 +882,7 @@
     "src/repositories/memory/memoryRepo.ts": "3afb63f90d52c98826f418bf30caf90ad13ee45f",
     "src/repositories/memory/recommendationsRepo.ts": "2b5f23b158c4954d3ea0932b52a928a503044f8d",
     "src/repositories/proactive/insightsRepo.ts": "0fe118df1fab0e3e8cb7fb68b876fd8c27b38ee9",
+    "src/server/dailyEmailSubscription.ts": "56c3733feed0aecb8edff5199ed0b906bbfce30c",
     "src/server/dailyRecipientConfig.ts": "9463c5a0cb68deebe5f01792b8ecb498dcad25f3",
     "src/services/analyticsService.ts": "c8238a3875c7033705f4d964ecc6b37cf639ba32",
     "src/services/forecastService.ts": "65379b9cc71a8504537e9416857d09c9eac1d120",
@@ -878,7 +895,7 @@
     "src/utils/logging.ts": "60a690b3eb3e206b0fa45bf0db51fcd5d9bbb288",
     "src/utils/math.ts": "e7523ec3a24c5f01cf2c4cfa576a7dd792ddc101",
     "src/utils/stats.ts": "35727edf5bcb4e846c48e336dd6b7b6f694c0b85",
-    "test/acceptance/builder-delivery-acceptance.test.mjs": "1650220d49963713a1d0dcbbda725fcff1edf2a2",
+    "test/acceptance/builder-delivery-acceptance.test.mjs": "2b43048362f080c0758ea46f5948e8d1d0bbcd88",
     "test/agent-daily/adb05-boundary.test.mjs": "690270a842811f9254dffee63188abdeb16dacec",
     "test/agent-daily/consumer-migration.test.mjs": "1a3846530cbfddac9d77458cb2cc4b908e0eceeb",
     "test/agent-daily/daily-flow.test.mjs": "ae35778377612c801a82d15eb76e8c1fece89511",
@@ -915,11 +932,12 @@
     "test/dashboard/entries-ui-call-sites.test.mjs": "02ce908236fe09ed5274224b808ffbf04211569a",
     "test/dashboard/entries-version-fence.test.mjs": "7a1267046bb6313b11d9a97a7c0bebb5433cc05c",
     "test/dashboard/setup-config-preservation.test.mjs": "35d5d598b8e500e8dd8b99095b9459add47841cd",
-    "test/delivery/daily-email-delivery.test.mjs": "d07df76ac40cacedfc8228884072549e138cf064",
+    "test/delivery/daily-email-delivery.test.mjs": "3a5647e5a90bdf1afe9828768d0bdbe51d056f5f",
+    "test/delivery/daily-email-subscription.test.mjs": "92315fc4f71049ca7c500f736b6995a511e87ff0",
     "test/delivery/daily-recipient-server-config.test.mjs": "cc68baa48a13f8bfa6963a3a753d367eb32a1492",
     "test/delivery/de1-daily-email-guard.test.mjs": "58f452b41721873a4e0c2c9d64b8e158582562c5",
     "test/delivery/de1-r1-email-guard.test.mjs": "18775ba7b498638113666169080ed86e6083199c",
-    "test/delivery/de1-r1-remediation.test.mjs": "60412084cc75dc697f1205ae2b6c517e5bd6c27a",
+    "test/delivery/de1-r1-remediation.test.mjs": "bda208cea8853b4ff1ee9172dcb6d2b62bdbd1a1",
     "test/delivery/de1-r2-email-guard.test.mjs": "80a567bdeff135f71ba54684ef4d8891639d4a5d",
     "test/delivery/de1-r2-remediation.test.mjs": "9cf8fd50378c871b77354fca7219e405eeb75ea8",
     "test/delivery/de1-r3-email-guard.test.mjs": "5af953fccb036d54268356d14d9e1f996d96a3a5",
@@ -928,9 +946,9 @@
     "test/delivery/de1-r4-email-guard.test.mjs": "db58ddf866a636acd527329f8a571292af3efb99",
     "test/delivery/de1-r4-remediation.test.mjs": "c5326355a30a4185ed9e8d92b9526afbb365707c",
     "test/delivery/de1-r5-delivery-guard.test.mjs": "dc0151c642e5b57ef717e5acd0c4b80da75f94e8",
-    "test/delivery/de1-r5-delivery.test.mjs": "8abad32d5dc4e9803e580474280d5c6279976fc0",
+    "test/delivery/de1-r5-delivery.test.mjs": "1a545610e53048a91fc5ebd7dbc16a9f63a3e9d9",
     "test/delivery/de1-r6-provider-guard.test.mjs": "b9fe84a2d4bc6f240fcf79fa08e44c0486272f3f",
-    "test/delivery/de1-r6-provider-structure.test.mjs": "afb046878db10aed3629847e4431b3189e88368a",
+    "test/delivery/de1-r6-provider-structure.test.mjs": "24cfe1bc66cfe8e473e6cb80cad73cf106ccd128",
     "test/delivery/de1-r7-notice-guard.test.mjs": "020e34fbd54e3672160ce1043974c6f628aaca49",
     "test/delivery/de1-r7-notice-integrity.test.mjs": "f7c12b17e620e81018cd25180722b2208eb908a3",
     "test/delivery/de1-r8-provenance-guard.test.mjs": "6cad77ccb4d329e7c2ff0cc87ab104188619c77d",
@@ -952,7 +970,7 @@
     "test/delivery/hr3-s1-durability.test.mjs": "5174a4c090ae86b7161695c826b4eeb77d89dc7f",
     "test/delivery/hr3-s2-protocol.test.mjs": "6993e88c60ef01e80de2daed60f5336115682735",
     "test/delivery/hr3-s3-review-closure.test.mjs": "5b542e6f53e08235c5385fdca0edc9fdd1cf4883",
-    "test/delivery/i1-integration.test.mjs": "65ff9b0565b111980789391260ad20914e2377ef",
+    "test/delivery/i1-integration.test.mjs": "8f1d12b1fd664a4fd9620d10b5f5fd68f0ff70f6",
     "test/emulator/README.md": "4259c67c373c46a1f2827ec51a7cd058e39e08f4",
     "test/emulator/admin-maintenance-gate.mjs": "d56ba7b63fbde38a382b5929f6d77908ffc27ee5",
     "test/emulator/backfill-registry-cli-emulator.mjs": "536bed7b9aa86e84616f04fb075487142006d066",
@@ -962,6 +980,8 @@
     "test/emulator/checklist-cold-cache-emulator.mjs": "274344e9faeca1de7fb3d9ebf5c1137421f1465f",
     "test/emulator/closure-action-emulator.mjs": "7ac10d48acc6b3cf1f2bb497aa3ff12e4f301f2d",
     "test/emulator/daily-recipient-server-config-emulator.mjs": "a52b33a3f9b7abb1fb3b68cb5095279a7b9f8bb6",
+    "test/emulator/daily-subscription-emulator.mjs": "041122914fdd4df83afb300cb3fd24d357299a5b",
+    "test/emulator/daily-subscription-rendered.mjs": "bb85d76d4f3a1f552ea3c1efbe4f315791cc6deb",
     "test/emulator/database.rules.json": "27887d72da5431bd0b6ee69f53e0dfd10cc44caf",
     "test/emulator/de1-r1-receipt-emulator.mjs": "608ba6e74a1e3542f8d2583cf3f4a56aa424c9cb",
     "test/emulator/de1-r2-receipt-emulator.mjs": "154179dbb264de61ac6c1ad02a79fb88194d48ce",
@@ -981,14 +1001,14 @@
     "test/emulator/historical-page-version-fence.mjs": "be5727cf2d3eb80f058814242a6533f6571b12e9",
     "test/emulator/hr1-daily-hold-emulator.mjs": "d4cc2efc35a0fdaa5496cf564da15fe20feebee8",
     "test/emulator/hr3-s3-roundtrip-emulator.mjs": "5024febf4c934e2ed335266fae878114109cbf58",
-    "test/emulator/i1-integration-emulator.mjs": "f1419cf4102df480da2e8c7fe0756e57a9b5224b",
+    "test/emulator/i1-integration-emulator.mjs": "010dece4f3922c22ff5a84fbcfb30203f86c7c1e",
     "test/emulator/i4-boundary-emulator.mjs": "3cd576560bb2252a8e26ba02c96b38172f4d683d",
     "test/emulator/i5-exact-identity-emulator.mjs": "543a143e70d1640853aed97210aef7172e45505a",
     "test/emulator/i6-registry-binding-emulator.mjs": "0cbf4c41be05c9f3ac6f58fe6596de18ba88db24",
     "test/emulator/i7-integration-emulator.mjs": "ee9b478ac2dfd641e4ea7670a55a26ab4706288b",
     "test/emulator/m1-r4-integration-emulator.mjs": "79361a7784506a265cda0054336fd5499e4147b3",
     "test/emulator/m1-rendered-integration.mjs": "e96bfe9f28acbee855ec3a8e7f9909651306d437",
-    "test/emulator/owner-notice-rendered.mjs": "ee573038e7b7aa997e2c98eb40faa5625c0ef126",
+    "test/emulator/owner-notice-rendered.mjs": "39e63ce0f5b90b2f0aa8445d72ebc61fde81acc3",
     "test/emulator/p1-r1-review-emulator.mjs": "63edf8217a78e7f1445754255edd983452d83412",
     "test/emulator/p1-r3-contract-emulator.mjs": "bceb504c0e527a4f65fb78200041e4bc5f973e77",
     "test/emulator/p1-r4-lostack-emulator.mjs": "6124708bd75add7a90b0663c280af8fcb3e7091f",
@@ -1044,6 +1064,8 @@
     "test/finance/core-consumers/p1.json": "3dc6a13aab685265beb14f25d2ea0ec27b737017",
     "test/finance/daily-recipient-server-config-guard.test.mjs": "eb2ac3e2197bac2953104500bd4996b07af9e972",
     "test/finance/daily-recipient-server-config-t1-guard.test.mjs": "058d6378a0f1c0a061eb15497b684969c0678104",
+    "test/finance/daily-subscription-guard.test.mjs": "162f267823e76fc78855b1acf490acfffabbe1a8",
+    "test/finance/daily-subscription-ui-seam.test.mjs": "34e21d4752667a9bba492ebadcd5e105e41ba878",
     "test/finance/dp1-daily-policy-guard.test.mjs": "7606281de9de6903f85b7eaaf60a773b6bcd790b",
     "test/finance/dp2-daily-policy-guard.test.mjs": "a09072df5601686631b80741c06947b0aa351461",
     "test/finance/dp3-daily-policy-guard.test.mjs": "2279e5f15557c24d93c7c8f9fbd371747ea5cc15",
@@ -1160,7 +1182,7 @@
     "test/finance/m1-r5-guard.test.mjs": "721b926fb12b632d160c8c2be168fd32b4987218",
     "test/finance/marjin-1.0-composition-guard.test.mjs": "d225840086c10b95616dafce61500a93b16bbc2f",
     "test/finance/marjin-1.0-iv-correction-guard.test.mjs": "9b024fec6d2539a24f18f8da4f0f3ff9a1a5ceb4",
-    "test/finance/marjin-1.0-iv-t1-fixture-guard.test.mjs": "98dc6010ac6a0d4f1419121a5c02c96a4ca79f7a",
+    "test/finance/marjin-1.0-iv-t1-fixture-guard.test.mjs": "28f76b8d5191f5936e5dbf64fcaab0210a0af55e",
     "test/finance/owner-notice-seam.test.mjs": "7c372165e83fe58e31f84b932c42cb50cc53b6f3",
     "test/finance/owner-notice-ui-guard.test.mjs": "e34cfce313cd6a0c0f6e989efe85a368bd4774b4",
     "test/finance/p1-browser-credits.test.mjs": "35aa1c4c0e448c3a01d55e1616f6e0beb338db53",
@@ -1202,7 +1224,7 @@
     "test/security/checklist-cold-cache.test.mjs": "c0e1ff9a96ed35f00c28597d295bd07244012e1c",
     "test/security/checklist-concurrency.test.mjs": "43b9c581a6ab9bb6a5e6dc12f550a0069d3f85c4",
     "test/security/checklist-template-analytics.test.mjs": "376563e4201081cad98f0b981bc4021392104259",
-    "test/security/cron-auth-hardening.test.mjs": "b21806ce7236a0368e8caf035b3e4b5f1db59d2f",
+    "test/security/cron-auth-hardening.test.mjs": "84e0c55d1694bb39783c0ad815e2a96b71ca1770",
     "test/security/cron-auth-source-invariants.test.mjs": "04f21ceec53b0e65e3f206ca0ae3602c78d5fa2e",
     "test/security/delete-client-maintenance.test.mjs": "9a968da4042a9a02d8139ae94fe4cec21ed5a115",
     "test/security/entries-isolation.test.mjs": "1a397a2522a5596c13e3278edade2470d62c7ecd",
@@ -1216,7 +1238,7 @@
     "test/security/p1-supplier-credits-api.test.mjs": "0bcae9352d0c097efd547300118bb3fd1e4dcc1e",
     "test/security/pr2a-endpoint-hardening.test.mjs": "9af9d97750210c9dc4f8d7d18c8b116e656cabc6",
     "test/security/proactive-read-scope.test.mjs": "a60e4e265bcd0261759dedbea9e28d2da7b74839",
-    "test/security/scheduled-auth-matrix.test.mjs": "81506fd72cbea6ffafd463581e9acece41a433dd",
+    "test/security/scheduled-auth-matrix.test.mjs": "7ec2a9aaf22987bd39303704b6b6212e61656ffb",
     "test/security/security-context.test.mjs": "53a9630745d4a9a588187742a0de5a0449e538e7",
     "test/security/storage-policy-parity.test.mjs": "4e709a9f58631911356204bf56caa967ceb500ea",
     "test/security/storage-policy.test.mjs": "a0760fa89384b87d931aaa0d85ed666f7a6f1c0a",
@@ -1259,7 +1281,8 @@
     "test/support/cc1-checklist-cold-cache.mjs": "7cb8f90d7ba4523d3177c8e521f8db38d50726fa",
     "test/support/cc2-checklist-concurrency.mjs": "ab1aaa6f456c32118c5c3cd959bc1df94ae675d9",
     "test/support/cross-writer-harness.mjs": "9e0ef632b50afc31e1476e2aa61606100a7146d7",
-    "test/support/daily-email-harness.mjs": "581a337c6b8615c5d28dfb6eb40c7e8b1f5748d2",
+    "test/support/daily-email-harness.mjs": "197f6a95b71719df9c58fb2f72df06a6fe8cec67",
+    "test/support/daily-subscription-layer.mjs": "75dfddd6b03a29eec5111020eb6d6f3fa5f95cb7",
     "test/support/dashboard-wiring-harness.mjs": "07d826445cc6b97cbd38e33b179749de8b846498",
     "test/support/de1-daily-email.json": "d66be8c655591d2faf3f4decf3c192f0273dec84",
     "test/support/de1-daily-email.mjs": "277d03c086566db6daa87407616c143b6189ed9e",
@@ -1349,7 +1372,7 @@
     "test/support/i7-integration.json": "3d069d769b5e407515c20cad053674a977152dd3",
     "test/support/i7-integration.mjs": "a52695329d06627d41d49e467f8090cd282453fc",
     "test/support/israel-scenario-clock.mjs": "fb7bd1071b8ff760289a27e1e0aa5594c58e5869",
-    "test/support/m1-a1-inspection.mjs": "da24c3a87ab131d13b71db5a6082162881b65900",
+    "test/support/m1-a1-inspection.mjs": "412005434d19f1c87da1ce8491ef9ae4d237afa5",
     "test/support/m1-derivation.mjs": "5ee45583bf800bd4d9551cd76ec5662827e6c01b",
     "test/support/m1-index-scope.mjs": "7f82aa1b534598cd4d87ae3b75394281598d2ac2",
     "test/support/m1-integration-pin.mjs": "b98d35b0fd76ca482ff2a2c888ef2e69ed90c6c3",
@@ -1357,7 +1380,7 @@
     "test/support/m1-merge-resolutions.json": "65fac7ce6bcc276aed1bb1c600a0662cd8831950",
     "test/support/m1-r1-mutations.mjs": "a2f97b682047656fcb17be096e94ae5c92ac5ce2",
     "test/support/m1-r1-remediation.json": "58b0df2ef93b19de4a6de73df45817d7b65af957",
-    "test/support/m1-r1-remediation.mjs": "17136948b627fc781402e3b0670fd5526cb1c35e",
+    "test/support/m1-r1-remediation.mjs": "c9e9cf3276157b7c884c59f166bf0ed8b0fc55ff",
     "test/support/m1-r2-remediation.json": "866cbc812765cf221d133053ae02ce42e6e515a2",
     "test/support/m1-r2-remediation.mjs": "d1d520e6042ae5628047c3a4d4360591247879bc",
     "test/support/m1-r3-mutations.mjs": "fff95f293557483e8a56283ea34c480efd443cab",
@@ -1538,7 +1561,8 @@
     "test/finance/pbn-sfd-composition-guard.test.mjs": "dffe0d60f36ddca2b8f7370b10ac1e0c24d5f175",
     "test/finance/daily-recipient-server-config-t1-guard.test.mjs": "c509ba66d40cd6e09051d7adc08735a0ad9b66b5",
     "test/finance/marjin-1.0-composition-guard.test.mjs": "24a8ccc4da38cdc39373742df38e4df4ff365385",
-    "test/finance/marjin-1.0-iv-correction-guard.test.mjs": "b85c8b2879e1e57a3837a364bbadea07fd205a8f"
+    "test/finance/marjin-1.0-iv-correction-guard.test.mjs": "b85c8b2879e1e57a3837a364bbadea07fd205a8f",
+    "test/finance/marjin-1.0-iv-t1-fixture-guard.test.mjs": "6786b80377252d77d6bc2b7b9defa2c7d40dc434"
   },
   "exclusions": {
     "pbd": "7ae41336b7c2f02b953b9267768b90f97e39278f",
@@ -2493,6 +2517,236 @@
         {
           "from": "  r=spawnSync('git',['-C',dir,'checkout','--quiet','--detach',sha],{encoding:'utf8',timeout:60000});assert.equal(r.status,0,r.stderr);",
           "to": "  // Materialize ALL available proof objects, including literal source commits\n  // that a caller's shared clone did not copy into refs. Keep every old hash and\n  // assertion; remove only the nesting of alternate stores, never a proof.\n  r=spawnSync('git',['-C',root,'cat-file','--batch-all-objects','--batch-check=%(objectname)'],{encoding:'utf8',timeout:60000,maxBuffer:64*1024*1024});assert.equal(r.status,0,r.stderr);\n  const pack=spawnSync('git',['-C',root,'pack-objects','--stdout'],{input:r.stdout,timeout:60000,maxBuffer:256*1024*1024});assert.equal(pack.status,0,String(pack.stderr));\n  r=spawnSync('git',['-C',dir,'index-pack','--stdin'],{input:pack.stdout,encoding:'utf8',timeout:60000,maxBuffer:64*1024*1024});assert.equal(r.status,0,r.stderr);\n  rmSync(join(dir,'.git/objects/info/alternates'),{force:true});\n  r=spawnSync('git',['-C',dir,'checkout','--quiet','--detach',sha],{encoding:'utf8',timeout:60000});assert.equal(r.status,0,r.stderr);"
+        }
+      ]
+    }
+  },
+  "dailySubscriptionSuccessor": {
+    "parent": "6786b80377252d77d6bc2b7b9defa2c7d40dc434",
+    "kind": "daily_email_subscription_successor",
+    "scope": [
+      "api/daily-snapshot/run.ts",
+      "index.html",
+      "src/server/dailyEmailSubscription.ts",
+      "test/acceptance/builder-delivery-acceptance.test.mjs",
+      "test/delivery/daily-email-delivery.test.mjs",
+      "test/delivery/daily-email-subscription.test.mjs",
+      "test/delivery/de1-r1-remediation.test.mjs",
+      "test/delivery/de1-r5-delivery.test.mjs",
+      "test/delivery/de1-r6-provider-structure.test.mjs",
+      "test/delivery/i1-integration.test.mjs",
+      "test/emulator/daily-subscription-emulator.mjs",
+      "test/emulator/daily-subscription-rendered.mjs",
+      "test/emulator/i1-integration-emulator.mjs",
+      "test/emulator/owner-notice-rendered.mjs",
+      "test/finance/daily-subscription-guard.test.mjs",
+      "test/finance/daily-subscription-ui-seam.test.mjs",
+      "test/finance/marjin-1.0-iv-t1-fixture-guard.test.mjs",
+      "test/security/cron-auth-hardening.test.mjs",
+      "test/security/scheduled-auth-matrix.test.mjs",
+      "test/support/daily-email-harness.mjs",
+      "test/support/daily-subscription-layer.mjs",
+      "test/support/m1-a1-inspection.json",
+      "test/support/m1-a1-inspection.mjs",
+      "test/support/m1-r1-remediation.mjs"
+    ],
+    "newFiles": [
+      "src/server/dailyEmailSubscription.ts",
+      "test/delivery/daily-email-subscription.test.mjs",
+      "test/emulator/daily-subscription-emulator.mjs",
+      "test/emulator/daily-subscription-rendered.mjs",
+      "test/finance/daily-subscription-guard.test.mjs",
+      "test/finance/daily-subscription-ui-seam.test.mjs",
+      "test/support/daily-subscription-layer.mjs"
+    ],
+    "status": "PROPOSED_FOR_INDEPENDENT_REVIEW",
+    "edits": {
+      "api/daily-snapshot/run.ts": [
+        {
+          "from": "      if (action === \"notice\") {\n",
+          "to": "      // action: \"subscription\" / \"subscription_set\" \u2014 the owner-authorized read / change of the business's Daily e-mail\n      // subscription (same authorization as a manual send). Nothing is sent; no receipt, claim, admission or recipient is\n      // touched. The reply never names an address.\n      if (action === \"subscription\" || action === \"subscription_set\") {\n        if (target.state === \"unavailable\") return res.status(503).json({ status: \"unavailable\", code: target.code, tenantId, bizId });\n        if (target.state !== \"deliverable\" && target.state !== \"name_unavailable\")\n          return res.status(MANUAL_REFUSALS[target.code].status).json({ status: \"refused\", error: \"Daily e-mail subscription not available for this business\", code: target.code, tenantId, bizId });\n        if (action === \"subscription\") {\n          const sub = await readDailySubscription(db, tenantId, bizId);\n          if (sub.state === \"unavailable\" || sub.state === \"invalid\") return res.status(503).json({ status: \"unavailable\", code: sub.code, tenantId, bizId });\n          return res.status(200).json({ status: \"ok\", tenantId, bizId, enabled: sub.state === \"enabled\", state: sub.state, explicit: sub.explicit, version: sub.version });\n        }\n        const enabled = (req.body as { enabled?: unknown } | undefined)?.enabled;\n        if (typeof enabled !== \"boolean\") return res.status(400).json({ error: \"invalid_enabled\", tenantId, bizId });\n        const r = await setDailySubscription(db, { tenantId, bizId, enabled, actorRole: snapshotCtx.role, nowMs: Date.now() });\n        if (!r.ok) {\n          console.warn(\"[daily-snapshot] subscription change not applied\", { tenantId, bizId, code: r.code });\n          return res.status(r.code === \"invalid_subscription_request\" ? 400 : 503).json({ status: r.code === \"daily_email_subscription_unconfirmed\" ? \"unconfirmed\" : \"unavailable\", code: r.code, tenantId, bizId });\n        }\n        return res.status(200).json({ status: \"ok\", tenantId, bizId, enabled: r.enabled, state: r.enabled ? \"enabled\" : \"disabled\", explicit: true, version: r.version, changed: r.changed });\n      }\n\n      if (action === \"notice\") {\n"
+        },
+        {
+          "from": "      if (action !== undefined && action !== \"notice\") return res.status(400).json({ error: \"invalid_action\" });\n",
+          "to": "      if (action !== undefined && action !== \"notice\" && action !== \"subscription\" && action !== \"subscription_set\") return res.status(400).json({ error: \"invalid_action\" });\n"
+        },
+        {
+          "from": "        const recipient = await resolveDailyRecipient(snapshot.tenantId, snapshot.bizId);\n",
+          "to": "        // Daily e-mail subscription: without an explicit enabled preference there is no scheduled send for this business \u2014 a\n        // no_send row (default OFF / disabled) or a FAILED row (malformed / unreadable). Build and identity failures above are\n        // reported as before, whatever the preference.\n        const subscription = await readDailySubscription(db, snapshot.tenantId, snapshot.bizId);\n        if (subscription.state !== \"enabled\") {\n          const notEnabled = subscription.state === \"disabled\";\n          if (!notEnabled) console.warn(\"[daily-snapshot] subscription preference not usable\", { tenantId: snapshot.tenantId, bizId: snapshot.bizId, code: subscription.code });\n          results.push({ ...base, outcome: notEnabled ? \"skipped\" : \"failed\", code: subscription.code, settlement: notEnabled ? \"no_send\" : \"failed\", receipt: \"not_written\" });\n          continue;\n        }\n\n        const recipient = await resolveDailyRecipient(snapshot.tenantId, snapshot.bizId);\n"
+        },
+        {
+          "from": "//   no_send     reserved: no contract no-send condition remains (owner decision G4, 2026-10-09: a business without a name is a\n//               FAILED row `business_name_unavailable`, never a silent no-send); the class is kept for the response shape\n",
+          "to": "//   no_send     the business has no explicit enabled Daily e-mail subscription (`daily_email_not_enabled`, owner requirement\n//               2026-10-22). Otherwise no contract no-send condition remains (owner decision G4, 2026-10-09: a subscribed\n//               business without a name is a FAILED row `business_name_unavailable`, never a silent no-send)\n"
+        },
+        {
+          "from": "// Run outcome (R1, review finding D1). Every row settles into exactly one class:\n",
+          "to": "// Daily e-mail subscription (owner requirement 2026-10-22; src/server/dailyEmailSubscription.ts): the SCHEDULED Daily is sent for a\n// business only when its server-only preference is explicitly enabled. Default OFF: an absent record is a contract no-send\n// (`daily_email_not_enabled`, settlement no_send); a malformed or unreadable record is a FAILED row (fail closed). The check\n// follows the build and the pre-send identity gate (whose failures are reported as before, whatever the preference) and\n// precedes every recipient, receipt, claim and admission step, so it only affects runs that read it after a change. The preference grants no recipient eligibility (MARJIN_DAILY_RECIPIENTS_JSON stays the only source) and\n// the manual Daily does not read it. Owner / super_owner read or change it through action \"subscription\" / \"subscription_set\".\n\n// Run outcome (R1, review finding D1). Every row settles into exactly one class:\n"
+        },
+        {
+          "from": "import type { DeliveryTarget, DeliveryTargetCode, DeliveryNotice, DeliveryNoticeState } from \"../../lib/emailDelivery.js\";\n\n",
+          "to": "import type { DeliveryTarget, DeliveryTargetCode, DeliveryNotice, DeliveryNoticeState } from \"../../lib/emailDelivery.js\";\nimport { readDailySubscription, setDailySubscription } from \"../../src/server/dailyEmailSubscription.js\";\n\n"
+        }
+      ],
+      "index.html": [
+        {
+          "from": "      ); })()}\n\n",
+          "to": "      ); })()}\n      {/* Daily e-mail subscription (owner / super_owner of the selected business; server-confirmed state only; default OFF) */}\n      {window.MarjinDailySubscription && !currentUser && !isDemoMode && finSel.tenantId && currentBizId && window.MarjinDailySubscription.OWNER_ROLES.includes(loggedInUser?.role) && (\n        <div style={{display:\"flex\",justifyContent:\"center\",margin:\"8px 12px 0\"}}>\n          <button data-daily-subscription=\"open\" onClick={()=>setShowDailySubscription(true)} style={{background:\"none\",border:\"1px solid #E5E7EB\",borderRadius:4,padding:\"4px 10px\",cursor:\"pointer\",fontSize:12,color:\"#374151\",fontFamily:\"inherit\"}}>{window.MarjinDailySubscription.LABEL_HE}</button>\n        </div>\n      )}\n      {showDailySubscription && window.MarjinDailySubscription && !currentUser && !isDemoMode && finSel.tenantId && currentBizId && window.MarjinDailySubscription.OWNER_ROLES.includes(loggedInUser?.role) && (() => {\n        const s = window.MarjinDailySubscription.stateFor(dailySubscription, finSel.tenantId, currentBizId);\n        const on = window.MarjinDailySubscription.checked(dailySubscription, finSel.tenantId, currentBizId);\n        return (\n          <div style={{position:\"fixed\",inset:0,background:\"rgba(0,0,0,0.3)\",zIndex:9999,display:\"flex\",alignItems:\"center\",justifyContent:\"center\",padding:24}} onClick={()=>setShowDailySubscription(false)}>\n            <div data-daily-subscription={s.kind} role=\"dialog\" aria-label={window.MarjinDailySubscription.LABEL_HE} style={{background:\"#fff\",borderRadius:8,padding:\"20px 24px\",width:\"100%\",maxWidth:360,boxShadow:\"0 8px 32px rgba(0,0,0,0.12)\",direction:\"rtl\",border:\"1px solid #E5E7EB\",fontSize:14,color:\"#111827\"}} onClick={e=>e.stopPropagation()}>\n              <label style={{display:\"flex\",alignItems:\"center\",justifyContent:\"space-between\",gap:12,cursor:s.kind===\"known\"&&!s.busy?\"pointer\":\"default\"}}>\n                <span data-daily-subscription=\"label\">{window.MarjinDailySubscription.LABEL_HE}</span>\n                <input type=\"checkbox\" role=\"switch\" data-daily-subscription=\"switch\" checked={on} aria-checked={on} disabled={s.kind!==\"known\"||s.busy}\n                  onChange={(e)=>changeDailySubscription(e.target.checked)}/>\n              </label>\n              {s.failed && <div role=\"status\" data-daily-subscription=\"error\" style={{color:\"#B91C1C\",fontSize:12,marginTop:8}}>{window.MarjinDailySubscription.ERROR_HE}</div>}\n              <div style={{textAlign:\"left\",marginTop:16}}>\n                <button data-daily-subscription=\"close\" onClick={()=>setShowDailySubscription(false)} style={{background:\"#F3F4F6\",border:\"none\",borderRadius:4,padding:\"4px 12px\",cursor:\"pointer\",fontFamily:\"inherit\"}}>\u05e1\u05d2\u05d9\u05e8\u05d4</button>\n              </div>\n            </div>\n          </div>\n        ); })()}\n\n"
+        },
+        {
+          "from": "  const finF = finCoreState === \"ready\" ? window.MarjinFinance : null;\n",
+          "to": "  // Daily e-mail subscription: read only when the owner opens the panel (nothing is requested on page load), bound to the\n  // captured selection like the notice read. Only a server-confirmed state is shown; a change is sent to the server and the\n  // switch follows the server's reply.\n  const askDailySubscription = (ctx, body) => (async () => {\n    let status = null, json = null;\n    try {\n      const res = await window.apiFetch(window.MarjinDailySubscription.ENDPOINT, { method: \"POST\", body: JSON.stringify(body) });\n      status = res && Number.isInteger(res.status) ? res.status : null;\n      try { json = await res.json(); } catch (_) { json = null; }\n    } catch (_) { status = null; json = null; }\n    return { status, json };\n  })();\n  useEffect(() => {\n    const ctx = captureSelectionCtx();\n    const bound = !!(currentBizId && ctx && typeof ctx.tenantId === \"string\" && ctx.tenantId && ctx.bizId === currentBizId);\n    if (!showDailySubscription || !bound || currentUser || !window.MarjinDailySubscription || !window.MarjinDailySubscription.shouldAsk(dailyNoticeRole, ctx.tenantId, currentBizId, isDemoMode) || typeof window.apiFetch !== \"function\") return;\n    let live = true;\n    (async () => {\n      const { status, json } = await askDailySubscription(ctx, window.MarjinDailySubscription.readRequest(ctx.tenantId, currentBizId));\n      if (!live || !isSelectionLive(ctx)) return;\n      const decision = window.MarjinDailySubscription.decide(status, json, ctx.tenantId, currentBizId);\n      setDailySubscription((prev) => window.MarjinDailySubscription.next(prev, decision, ctx.tenantId, currentBizId));\n    })();\n    return () => { live = false; };\n  }, [showDailySubscription, currentBizId, finSel.gen, finSel.tenantId, dailyNoticeRole, isDemoMode, currentUser]);\n  const changeDailySubscription = (enabled) => {\n    const ctx = captureSelectionCtx();\n    if (!currentBizId || !ctx || ctx.bizId !== currentBizId || currentUser || !window.MarjinDailySubscription || !window.MarjinDailySubscription.shouldAsk(dailyNoticeRole, ctx.tenantId, currentBizId, isDemoMode) || typeof window.apiFetch !== \"function\") return;\n    const bizId = currentBizId;\n    setDailySubscription((prev) => window.MarjinDailySubscription.busy(prev, ctx.tenantId, bizId));\n    (async () => {\n      const { status, json } = await askDailySubscription(ctx, window.MarjinDailySubscription.setRequest(ctx.tenantId, bizId, enabled));\n      const decision = window.MarjinDailySubscription.decide(status, json, ctx.tenantId, bizId);\n      setDailySubscription((prev) => window.MarjinDailySubscription.next(prev, decision, ctx.tenantId, bizId));\n    })();\n  };\n  const finF = finCoreState === \"ready\" ? window.MarjinFinance : null;\n"
+        },
+        {
+          "from": "  // \u2500\u2500 Insight Engine v1 \u2014 Dashboard card state (Phase 3, read-only) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+          "to": "  const [dailySubscription, setDailySubscription] = useState({});   // per-business server-confirmed states (MarjinDailySubscription)\n  const [showDailySubscription, setShowDailySubscription] = useState(false);   // the owner opened the Daily e-mail panel\n  // \u2500\u2500 Insight Engine v1 \u2014 Dashboard card state (Phase 3, read-only) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        },
+        {
+          "from": "  <script type=\"text/babel\" data-presets=\"react\">\n",
+          "to": "  <script>\n  // \u2500\u2500 Daily e-mail subscription (owner requirement 2026-10-22): \u00ab\u05e7\u05d1\u05dc\u05ea \u05d3\u05d5\u05d7 \u05d9\u05d5\u05de\u05d9 \u05d1\u05de\u05d9\u05d9\u05dc\u00bb \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n  // A per-business switch for the owner / super_owner of the selected business. The page never reads or writes the stored\n  // preference (the preference store is server-only under the Rules): it asks the owner-authorized route of the Daily notice\n  // (the SAME endpoint, MarjinDailyNotice.NOTICE_ENDPOINT, defined once above) with action \"subscription\" (read) or\n  // \"subscription_set\" (change) \u2014 and shows only what the\n  // server CONFIRMED for THIS business. Default OFF. Anything else \u2014 a refused / failed / unreachable request, a reply of\n  // another shape \u2014 confirms nothing: the switch keeps the last confirmed state (or none) and the page is unaffected. The\n  // switch never shows or edits an address; the recipient stays the server configuration.\n  (function () {\n    \"use strict\";\n    var LABEL_HE = \"\u05e7\u05d1\u05dc\u05ea \u05d3\u05d5\u05d7 \u05d9\u05d5\u05de\u05d9 \u05d1\u05de\u05d9\u05d9\u05dc\";\n    var ERROR_HE = \"\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05e2\u05d3\u05db\u05df \u05db\u05e2\u05ea. \u05e0\u05e1\u05d5 \u05e9\u05d5\u05d1 \u05de\u05d0\u05d5\u05d7\u05e8 \u05d9\u05d5\u05ea\u05e8.\";\n    // one endpoint definition for the page: without the notice seam nothing is requested (the switch stays unconfirmed)\n    var ENDPOINT = window.MarjinDailyNotice && typeof window.MarjinDailyNotice.NOTICE_ENDPOINT === \"string\" ? window.MarjinDailyNotice.NOTICE_ENDPOINT : null;\n    var OWNER_ROLES = Object.freeze([\"owner\", \"super_owner\"]);\n    function isRecord(x) { return x !== null && typeof x === \"object\" && !Array.isArray(x); }\n    /** `action` is mandatory: without it the same route is a manual Daily send. */\n    function readRequest(tenantId, bizId) { return { tenantId: tenantId, bizId: bizId, action: \"subscription\" }; }\n    function setRequest(tenantId, bizId, enabled) { return { tenantId: tenantId, bizId: bizId, action: \"subscription_set\", enabled: enabled === true }; }\n    function shouldAsk(role, tenantId, bizId, demo) {\n      return typeof ENDPOINT === \"string\" && OWNER_ROLES.indexOf(role) >= 0 && typeof tenantId === \"string\" && tenantId !== \"\" && typeof bizId === \"string\" && bizId !== \"\" && demo !== true;\n    }\n    /** { kind: \"known\", enabled } only for a 200 \"ok\" reply with a boolean `enabled` for THIS business; else { kind: \"unknown\" }. */\n    function decide(status, body, tenantId, bizId) {\n      if (status !== 200 || !isRecord(body) || body.status !== \"ok\" || body.tenantId !== tenantId || body.bizId !== bizId || typeof body.enabled !== \"boolean\")\n        return { kind: \"unknown\", reason: status === null ? \"no_reply\" : status !== 200 ? \"http_\" + status : \"shape_or_identity\" };\n      return { kind: \"known\", enabled: body.enabled };\n    }\n    function key(tenantId, bizId) { return String(tenantId) + \"\\u0000\" + String(bizId); }\n    /** The state of one business: { kind: \"idle\" | \"known\", enabled, busy, failed }. */\n    function stateFor(states, tenantId, bizId) { var s = isRecord(states) ? states[key(tenantId, bizId)] : null; return isRecord(s) ? s : { kind: \"idle\", enabled: false, busy: false, failed: false }; }\n    function withState(states, tenantId, bizId, patch) {\n      var out = Object.assign({}, isRecord(states) ? states : {});\n      out[key(tenantId, bizId)] = Object.assign({}, stateFor(states, tenantId, bizId), patch);\n      return out;\n    }\n    /** After a reply: a known decision replaces the shown state; an unknown one keeps it and marks the failure. */\n    function next(states, decision, tenantId, bizId) {\n      if (isRecord(decision) && decision.kind === \"known\") return withState(states, tenantId, bizId, { kind: \"known\", enabled: decision.enabled, busy: false, failed: false });\n      return withState(states, tenantId, bizId, { busy: false, failed: true });\n    }\n    function busy(states, tenantId, bizId) { return withState(states, tenantId, bizId, { busy: true, failed: false }); }\n    /** The switch is ON only when the server confirmed enabled for this business. */\n    function checked(states, tenantId, bizId) { var s = stateFor(states, tenantId, bizId); return s.kind === \"known\" && s.enabled === true; }\n    window.MarjinDailySubscription = Object.freeze({ LABEL_HE: LABEL_HE, ERROR_HE: ERROR_HE, ENDPOINT: ENDPOINT, OWNER_ROLES: OWNER_ROLES, readRequest: readRequest,\n      setRequest: setRequest, shouldAsk: shouldAsk, decide: decide, stateFor: stateFor, next: next, busy: busy, checked: checked });\n  })();\n  </script>\n\n  <script type=\"text/babel\" data-presets=\"react\">\n"
+        }
+      ],
+      "test/acceptance/builder-delivery-acceptance.test.mjs": [
+        {
+          "from": "    db.seed(`tenants/${T}/app/business`, env([]));              // the harness business is out of the way\n",
+          "to": "    for (const [t, b] of order) db.seed(`${SUBSCRIPTIONS}/${t}/${b}`, enabledSubscriptionRecord());\n    db.seed(`tenants/${T}/app/business`, env([]));              // the harness business is out of the way\n"
+        },
+        {
+          "from": "import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, captureConsole, RECEIPTS, T, B, B2 } from \"../support/daily-email-harness.mjs\";\n",
+          "to": "import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, captureConsole, RECEIPTS, T, B, B2, SUBSCRIPTIONS, enabledSubscriptionRecord } from \"../support/daily-email-harness.mjs\";\n"
+        }
+      ],
+      "test/delivery/daily-email-delivery.test.mjs": [
+        {
+          "from": "  db.seed(`tenants/${T2}/biz:${B}:entries`, db.read(`tenants/${T}/biz:${B}:entries`)); db.seed(`tenants/${T2}/biz:${B}:config`, env({})); db.seed(`tenants/${T2}/biz:${B}:fixed`, env([]));\n",
+          "to": "  db.seed(`${SUBSCRIPTIONS}/${T2}/${B}`, enabledSubscriptionRecord());\n  db.seed(`tenants/${T2}/biz:${B}:entries`, db.read(`tenants/${T}/biz:${B}:entries`)); db.seed(`tenants/${T2}/biz:${B}:config`, env({})); db.seed(`tenants/${T2}/biz:${B}:fixed`, env([]));\n"
+        },
+        {
+          "from": "import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, captureConsole, mkRes, RECEIPTS, CRON_SECRET, T, B, B2, T2, B3 } from \"../support/daily-email-harness.mjs\";\n",
+          "to": "import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, captureConsole, mkRes, RECEIPTS, CRON_SECRET, T, B, B2, T2, B3, SUBSCRIPTIONS, enabledSubscriptionRecord } from \"../support/daily-email-harness.mjs\";\n"
+        }
+      ],
+      "test/delivery/de1-r1-remediation.test.mjs": [
+        {
+          "from": "  db.seed(`tenants/${T2}/biz:${B}:entries`, db.read(`tenants/${T}/biz:${B}:entries`)); db.seed(`tenants/${T2}/biz:${B}:config`, env({ businessName: \"\u05de\u05e1\u05e2\u05d3\u05d4 \u05d3\" })); db.seed(`tenants/${T2}/biz:${B}:fixed`, env([]));\n",
+          "to": "  db.seed(`${SUBSCRIPTIONS}/${T2}/${B}`, enabledSubscriptionRecord());\n  db.seed(`tenants/${T2}/biz:${B}:entries`, db.read(`tenants/${T}/biz:${B}:entries`)); db.seed(`tenants/${T2}/biz:${B}:config`, env({ businessName: \"\u05de\u05e1\u05e2\u05d3\u05d4 \u05d3\" })); db.seed(`tenants/${T2}/biz:${B}:fixed`, env([]));\n"
+        },
+        {
+          "from": "import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, captureConsole, RECEIPTS, T, B, B2, T2, B3 } from \"../support/daily-email-harness.mjs\";\n",
+          "to": "import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, captureConsole, RECEIPTS, T, B, B2, T2, B3, SUBSCRIPTIONS, enabledSubscriptionRecord } from \"../support/daily-email-harness.mjs\";\n"
+        }
+      ],
+      "test/delivery/de1-r5-delivery.test.mjs": [
+        {
+          "from": "  db.seed(`tenants/${t}/biz:${b}:entries`, db.read(`tenants/${T}/biz:${B}:entries`));\n",
+          "to": "  db.seed(`${SUBSCRIPTIONS}/${t}/${b}`, enabledSubscriptionRecord());\n  db.seed(`tenants/${t}/biz:${b}:entries`, db.read(`tenants/${T}/biz:${B}:entries`));\n"
+        },
+        {
+          "from": "import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, mkRes, captureConsole, RECEIPTS, T, B, B2, T2, B3 } from \"../support/daily-email-harness.mjs\";\n",
+          "to": "import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, mkRes, captureConsole, RECEIPTS, T, B, B2, T2, B3, SUBSCRIPTIONS, enabledSubscriptionRecord } from \"../support/daily-email-harness.mjs\";\n"
+        }
+      ],
+      "test/delivery/de1-r6-provider-structure.test.mjs": [
+        {
+          "from": "  db.seed(\"tenants/acme:il/app/business\", { _v: JSON.stringify([{ id: \"bizX\", name: \"Colon\" }]) }); db.seed(\"tenants/acme:il/app/users\", db.read(`tenants/${T}/app/users`));\n",
+          "to": "  db.seed(`${SUBSCRIPTIONS}/acme:il/bizX`, enabledSubscriptionRecord());\n  db.seed(\"tenants/acme:il/app/business\", { _v: JSON.stringify([{ id: \"bizX\", name: \"Colon\" }]) }); db.seed(\"tenants/acme:il/app/users\", db.read(`tenants/${T}/app/users`));\n"
+        },
+        {
+          "from": "import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, captureConsole, RECEIPTS, T, B } from \"../support/daily-email-harness.mjs\";\n",
+          "to": "import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, captureConsole, RECEIPTS, T, B, SUBSCRIPTIONS, enabledSubscriptionRecord } from \"../support/daily-email-harness.mjs\";\n"
+        }
+      ],
+      "test/delivery/i1-integration.test.mjs": [
+        {
+          "from": "  db.seed(`tenants/${t}/biz:${b}:entries`, db.read(`tenants/${T}/biz:${B}:entries`));\n",
+          "to": "  db.seed(`${SUBSCRIPTIONS}/${t}/${b}`, enabledSubscriptionRecord());\n  db.seed(`tenants/${t}/biz:${b}:entries`, db.read(`tenants/${T}/biz:${B}:entries`));\n"
+        },
+        {
+          "from": "import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, mkRes, captureConsole, RECEIPTS, T, B, B2, T2, B3 } from \"../support/daily-email-harness.mjs\";\n",
+          "to": "import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, mkRes, captureConsole, RECEIPTS, T, B, B2, T2, B3, SUBSCRIPTIONS, enabledSubscriptionRecord } from \"../support/daily-email-harness.mjs\";\n"
+        }
+      ],
+      "test/emulator/i1-integration-emulator.mjs": [
+        {
+          "from": "    await dbA.ref(`tenants/${t}/biz:${b}:entries`).set(env(days.map((d, i) => day(d, i + 1))));\n",
+          "to": "    // Daily e-mail subscription (runtime default OFF): explicit ENABLED fixture preference; every assertion unchanged\n    await dbA.ref(`${SUBSCRIPTIONS}/${t}/${b}`).set(enabledSubscriptionRecord());\n    await dbA.ref(`tenants/${t}/biz:${b}:entries`).set(env(days.map((d, i) => day(d, i + 1))));\n"
+        },
+        {
+          "from": "import { buildSandbox, installSmtp, SMTP, mkRes, runCron, T, B, B2, T2, B3, HOLD_PATH, releasedHoldRecord } from \"../support/daily-email-harness.mjs\";\n",
+          "to": "import { buildSandbox, installSmtp, SMTP, mkRes, runCron, T, B, B2, T2, B3, HOLD_PATH, releasedHoldRecord, SUBSCRIPTIONS, enabledSubscriptionRecord } from \"../support/daily-email-harness.mjs\";\n"
+        }
+      ],
+      "test/emulator/owner-notice-rendered.mjs": [
+        {
+          "from": "  tenants: {\n",
+          "to": "  // Daily e-mail subscription (runtime default OFF): explicit ENABLED fixture preferences; every assertion unchanged\n  email_delivery_subscriptions: { daily_snapshot: { [T]: { [B]: SUBSCRIBED, [B2]: SUBSCRIBED }, [T2]: { [B3]: SUBSCRIBED } } },\n  tenants: {\n"
+        },
+        {
+          "from": "const fixtures = ({ nameA = \"\u05e1\u05e0\u05d9\u05e3 \u05d0\", nameB = \"\u05e1\u05e0\u05d9\u05e3 \u05d1\", activeUid = OWNER.uid, activeBiz = B } = {}) => ({\n",
+          "to": "const SUBSCRIBED = { schema: 1, enabled: true, version: 1, updatedAt: 0, updatedByRole: \"owner\" };\nconst fixtures = ({ nameA = \"\u05e1\u05e0\u05d9\u05e3 \u05d0\", nameB = \"\u05e1\u05e0\u05d9\u05e3 \u05d1\", activeUid = OWNER.uid, activeBiz = B } = {}) => ({\n"
+        }
+      ],
+      "test/finance/marjin-1.0-iv-t1-fixture-guard.test.mjs": [
+        {
+          "from": "import {test,after} from 'node:test';\n",
+          "to": "import {after} from 'node:test';import {historicalTest} from \"../support/m1-a1-inspection.mjs\";const test=historicalTest(new URL(\"../../\",import.meta.url),\"6786b80377252d77d6bc2b7b9defa2c7d40dc434\",\"test/finance/marjin-1.0-iv-t1-fixture-guard.test.mjs\");\n"
+        }
+      ],
+      "test/security/cron-auth-hardening.test.mjs": [
+        {
+          "from": "  }\n",
+          "to": "    // Daily e-mail subscription: the route's real server-only preference module, compiled with the route\n    copyFileSync(join(REPO, \"src/server/dailyEmailSubscription.ts\"), join(dir, \"src/server/dailyEmailSubscription.ts\"));\n  }\n"
+        }
+      ],
+      "test/security/scheduled-auth-matrix.test.mjs": [
+        {
+          "from": "    copyFileSync(join(REPO, \"src/server/dailyRecipientConfig.ts\"), join(dir, \"src/server/dailyRecipientConfig.ts\"));\n  }\n",
+          "to": "    copyFileSync(join(REPO, \"src/server/dailyRecipientConfig.ts\"), join(dir, \"src/server/dailyRecipientConfig.ts\"));\n    // Daily e-mail subscription: the route's real server-only preference module, compiled with the route\n    copyFileSync(join(REPO, \"src/server/dailyEmailSubscription.ts\"), join(dir, \"src/server/dailyEmailSubscription.ts\"));\n  }\n"
+        }
+      ],
+      "test/support/daily-email-harness.mjs": [
+        {
+          "from": "    db.seed(`tenants/${t}/biz:${b}:entries`, env(days.map((d, i) => day(d, i + 1))));\n",
+          "to": "    if (subscriptions === \"enabled\") db.seed(`${SUBSCRIPTIONS}/${t}/${b}`, enabledSubscriptionRecord());\n    db.seed(`tenants/${t}/biz:${b}:entries`, env(days.map((d, i) => day(d, i + 1))));\n"
+        },
+        {
+          "from": "export function seedWorld({ withSecondBiz = true, withSecondTenant = true, ownerEmail = \"owner-a@example.test\", tenantBOwner = \"owner-b@example.test\", users, hold = \"released\" } = {}) {\n",
+          "to": "// Daily e-mail subscription (default OFF in the runtime): the world's businesses carry an explicit ENABLED preference unless\n// `subscriptions: \"absent\"` is asked for. Only a test fixture, like the released hold above; no production default.\nexport const SUBSCRIPTIONS = \"email_delivery_subscriptions/daily_snapshot\";\nexport function enabledSubscriptionRecord(at = 0) {\n  return { schema: 1, enabled: true, version: 1, updatedAt: at, updatedByRole: \"owner\" };\n}\nexport function seedWorld({ withSecondBiz = true, withSecondTenant = true, ownerEmail = \"owner-a@example.test\", tenantBOwner = \"owner-b@example.test\", users, hold = \"released\", subscriptions = \"enabled\" } = {}) {\n"
+        }
+      ],
+      "test/support/m1-a1-inspection.mjs": [
+        {
+          "from": "  for(const f of ['test/support/m1-a1-inspection.mjs',A1_RECORD,IV_GUARD,...(committed.transportFixtureCorrection?[IV_T1_GUARD]:[])]){\n",
+          "to": "  for(const f of ['test/support/m1-a1-inspection.mjs',A1_RECORD,IV_GUARD,...(committed.transportFixtureCorrection?[IV_T1_GUARD]:[]),...(committed.dailySubscriptionSuccessor?[DS_GUARD]:[])]){\n"
+        },
+        {
+          "from": "let ivT1ParentProven=false;\n",
+          "to": "// Full current holder for the subscription successor: exact sole parent, closed scope (named in the record), complete\n// HEAD/index/checkout pins, unique edit derivations for every changed file, new files absent at the parent, every other\n// prior pin protected, and a literal proof of the accepted IV-T1 holder.\nlet dsParentProven=false;\nfunction verifyDailySubscriptionSuccessor(root,r,head) {\n const {edits,...identity}=r.dailySubscriptionSuccessor;\n const scope=identity.scope,newFiles=identity.newFiles;\n assert.ok(Array.isArray(scope)&&Array.isArray(newFiles)&&scope.includes(A1_RECORD)&&scope.includes('test/support/m1-a1-inspection.mjs')&&scope.includes(DS_GUARD)&&newFiles.includes(DS_GUARD),'closed DS scope shape');\n assert.deepEqual(scope,[...new Set(scope)].sort(),'sorted unique DS scope');assert.ok(newFiles.every(f=>scope.includes(f)));\n assert.deepEqual(identity,{parent:DS_PARENT,kind:'daily_email_subscription_successor',scope:[...scope],newFiles:[...newFiles],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'});\n assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,DS_PARENT],'exact DS sole parent');\n for(const args of [['diff','--name-only',DS_PARENT,'HEAD','--'],['diff','--name-only','--cached',DS_PARENT,'--'],['diff','--name-only',DS_PARENT,'--']])assert.deepEqual(text(root,args).split('\\n').filter(Boolean).sort(),[...scope],'exact DS scope');\n assert.deepEqual(untrackedPaths(root),[],'no untracked bypass');\n const prior=JSON.parse(git(root,['show',DS_PARENT+':'+A1_RECORD]).stdout);\n for(const k of Object.keys(prior))if(!['treePins','scope','allowedScope','historicalGuards'].includes(k))assert.deepEqual(r[k],prior[k],k+' prior exact');\n assert.deepEqual(Object.keys(r).sort(),[...Object.keys(prior),'dailySubscriptionSuccessor'].sort(),'closed DS record');\n assert.deepEqual(r.scope,[...new Set([...prior.scope,...scope])].sort());\n assert.deepEqual(r.allowedScope,[...new Set([...prior.allowedScope,...r.scope])].sort());\n assert.deepEqual(r.historicalGuards,{...prior.historicalGuards,[IV_T1_GUARD]:DS_PARENT});\n const tree={};for(const row of text(root,['ls-tree','-r','-z','HEAD']).split('\\0').filter(Boolean)){const m=/^(\\d+) blob ([a-f0-9]{40})\\t([\\s\\S]+)$/.exec(row);assert.ok(m,row);assert.notEqual(m[1],'120000');tree[m[3]]=m[2];}\n delete tree[A1_RECORD];assert.deepEqual(tree,r.treePins,'complete DS tree');\n const index={};for(const row of text(root,['ls-files','--stage','-z']).split('\\0').filter(Boolean)){const m=/^\\d+ ([a-f0-9]{40}) 0\\t([\\s\\S]+)$/.exec(row);assert.ok(m,'unmerged index');index[m[2]]=m[1];}\n assert.deepEqual(Object.keys(index).sort(),[...Object.keys(tree),A1_RECORD].sort());\n for(const [f,pin]of Object.entries(tree)){assert.equal(index[f],pin,f+' index');assert.equal(a1Blob(readFileSync(join(root,f))),pin,f+' checkout');}\n assert.equal(index[A1_RECORD],text(root,['rev-parse','HEAD:'+A1_RECORD]));assert.equal(a1Blob(readFileSync(join(root,A1_RECORD))),index[A1_RECORD]);\n for(const f of newFiles)assert.notEqual(git(root,['cat-file','-e',DS_PARENT+':'+f]).status,0,f+' is new at DS');\n assert.deepEqual([...newFiles].sort(),Object.keys(DS_NEW_FILE_PINS).sort(),'closed DS new files');\n for(const f of newFiles)assert.equal(tree[f],DS_NEW_FILE_PINS[f],f+' exact DS new-file pin');\n assert.deepEqual(Object.keys(edits).sort(),scope.filter(f=>f!==A1_RECORD&&!newFiles.includes(f)),'closed DS derivations');\n for(const [f,changes]of Object.entries(edits)){let b=git(root,['show',DS_PARENT+':'+f]).stdout;for(const e of changes){assert.ok(e.from&&b.split(e.from).length===2,f+' unique DS anchor');b=b.replace(e.from,()=>e.to);}assert.equal(a1Blob(Buffer.from(b)),tree[f],f+' exact DS derivation');}\n for(const [f,pin]of Object.entries(prior.treePins))if(!scope.includes(f))assert.equal(tree[f],pin,f+' protected prior');\n if(!dsParentProven){proveLiteralHolder(root,DS_PARENT,'literal accepted IV-T1 parent');dsParentProven=true;}\n return {ok:true,head,files:Object.keys(tree).length};\n}\nlet ivT1ParentProven=false;\n"
+        },
+        {
+          "from": "  if(r.transportFixtureCorrection)return verifyTransportFixtureCorrection(root,r,head);\n",
+          "to": "  if(r.dailySubscriptionSuccessor)return verifyDailySubscriptionSuccessor(root,r,head);\n  if(r.transportFixtureCorrection)return verifyTransportFixtureCorrection(root,r,head);\n"
+        },
+        {
+          "from": "export const A1_RECORD = 'test/support/m1-a1-inspection.json';\n",
+          "to": "\n// Daily e-mail subscription successor (owner requirement 2026-10-22): closed scope over the IV-T1 head; review pending.\nexport const DS_PARENT = \"6786b80377252d77d6bc2b7b9defa2c7d40dc434\";\nexport const DS_GUARD = \"test/finance/daily-subscription-guard.test.mjs\";\n// The exact blobs of the successor's NEW files (they have no parent derivation): a repinned record alone never accepts them.\nexport const DS_NEW_FILE_PINS = Object.freeze({ \"src/server/dailyEmailSubscription.ts\": \"56c3733feed0aecb8edff5199ed0b906bbfce30c\", \"test/delivery/daily-email-subscription.test.mjs\": \"92315fc4f71049ca7c500f736b6995a511e87ff0\", \"test/emulator/daily-subscription-emulator.mjs\": \"041122914fdd4df83afb300cb3fd24d357299a5b\", \"test/emulator/daily-subscription-rendered.mjs\": \"bb85d76d4f3a1f552ea3c1efbe4f315791cc6deb\", \"test/finance/daily-subscription-guard.test.mjs\": \"162f267823e76fc78855b1acf490acfffabbe1a8\", \"test/finance/daily-subscription-ui-seam.test.mjs\": \"34e21d4752667a9bba492ebadcd5e105e41ba878\", \"test/support/daily-subscription-layer.mjs\": \"75dfddd6b03a29eec5111020eb6d6f3fa5f95cb7\" });\nexport const A1_RECORD = 'test/support/m1-a1-inspection.json';\n"
+        }
+      ],
+      "test/support/m1-r1-remediation.mjs": [
+        {
+          "from": "  if (!want.equals(B)) return { ok: false, reason: \"not_the_recorded_derivation\" };\n",
+          "to": "  if (preDs !== null && !want.equals(B) && preDs.equals(B) && !isCurrentTreePage(repo, B)) return { ok: true };\n  if (!want.equals(B)) return { ok: false, reason: \"not_the_recorded_derivation\" };\n"
+        },
+        {
+          "from": "  const B = Buffer.isBuffer(candidateBytes) ? candidateBytes : Buffer.from(String(candidateBytes), \"utf8\");\n",
+          "to": "  // Daily e-mail subscription successor of the IV-T1 head: \u2026 + exactly the recorded DS page edits (holder record). The\n  // pre-DS page (I1 \u2295 I2 \u2295 I3) keeps its verdict only as the page of an EARLIER commit a layered guard inspects (CC1G-01,\n  // HR1G-01): never when it is the page of the current tree in any state (committed, staged or checked out).\n  let preDs = null;\n  if (withLaterLayers && isDailySubscriptionTree(repo)) { const ds = applyDailySubscriptionPageEdits(want); if (!ds.ok) return ds; preDs = want; want = ds.bytes; }\n  const B = Buffer.isBuffer(candidateBytes) ? candidateBytes : Buffer.from(String(candidateBytes), \"utf8\");\n"
+        },
+        {
+          "from": "  const a1 = withDTO1 && withHR3OT4 && isA1Tree(repo) ? { ...a1LocalPins(repo), ...a3PolicyPins(repo) } : {};\n",
+          "to": "  const a1 = withDTO1 && withHR3OT4 && isA1Tree(repo) ? { ...a1LocalPins(repo), ...a3PolicyPins(repo), ...dailySubscriptionPins(repo) } : {};\n"
+        },
+        {
+          "from": "// I4 (Agent/Daily integration I4 \u2014 the M1 D-CTRL application-boundary layer, PROPOSED for the M1 identity / admin-API / P0 / P1\n",
+          "to": "import { isDailySubscriptionTree, applyDailySubscriptionPageEdits, isCurrentTreePage, dailySubscriptionPins } from \"./daily-subscription-layer.mjs\";\n// I4 (Agent/Daily integration I4 \u2014 the M1 D-CTRL application-boundary layer, PROPOSED for the M1 identity / admin-API / P0 / P1\n"
         }
       ]
     }

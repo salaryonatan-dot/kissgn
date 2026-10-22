@@ -17,7 +17,7 @@
 //   DR6-04  privacy: nothing of the malformed result (its elements, its response text) reaches the log, the row or the receipt
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, captureConsole, RECEIPTS, T, B } from "../support/daily-email-harness.mjs";
+import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, captureConsole, RECEIPTS, T, B, SUBSCRIPTIONS, enabledSubscriptionRecord } from "../support/daily-email-harness.mjs";
 import * as D from "../../lib/emailDelivery.js";
 
 const { route } = await buildSandbox();
@@ -95,6 +95,7 @@ test("DR6-03 controls: the adapter's own shape, a consistent refusal, R4's empty
   const db = seedWorld({ withSecondBiz: false, withSecondTenant: false }); smtp = installSmtp([SMTP.accept()]);
   for (const [k, v] of [["entries", db.read(`tenants/${T}/biz:${B}:entries`)], ["config", { _v: JSON.stringify({ businessName: "Colon" }) }], ["fixed", { _v: "[]" }]]) db.seed(`tenants/acme:il/biz:bizX:${k}`, v);
   process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify([...JSON.parse(process.env.MARJIN_DAILY_RECIPIENTS_JSON),["acme:il","bizX","owner-a@example.test"]]);
+  db.seed(`${SUBSCRIPTIONS}/acme:il/bizX`, enabledSubscriptionRecord());
   db.seed("tenants/acme:il/app/business", { _v: JSON.stringify([{ id: "bizX", name: "Colon" }]) }); db.seed("tenants/acme:il/app/users", db.read(`tenants/${T}/app/users`));
   r = await cron();
   assert.deepEqual([r.statusCode, r.body.results.length, db.read(`${RECEIPTS}/acme:il/bizX/${DATE}`).state], [200, 2, "accepted"]);

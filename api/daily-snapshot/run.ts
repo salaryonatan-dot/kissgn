@@ -9,6 +9,7 @@ import { deliverWithReceipt, deliverManualDaily, boundedCode, DAILY_SNAPSHOT_KIN
   readDeliveryTarget, recordMissingNameNotice, clearDeliveryNotice, readDeliveryNoticeState,
   makeDailyDeliveryGate, readManualDeliveryGate } from "../../lib/emailDelivery.js";
 import type { DeliveryTarget, DeliveryTargetCode, DeliveryNotice, DeliveryNoticeState } from "../../lib/emailDelivery.js";
+import { readDailySubscription, setDailySubscription } from "../../src/server/dailyEmailSubscription.js";
 
 function setCorsHeaders(req: VercelRequest, res: VercelResponse): void {
   const origin = (req.headers.origin as string) || "";
@@ -23,10 +24,18 @@ function setCorsHeaders(req: VercelRequest, res: VercelResponse): void {
 // Owner scope amendment 2026-10-20 17:31 Asia/Jerusalem: recipient eligibility comes ONLY from server deployment configuration.
 // Resolution precedes receipt/manual/admission work. No RTDB recipient or user fallback.
 
+// Daily e-mail subscription (owner requirement 2026-10-22; src/server/dailyEmailSubscription.ts): the SCHEDULED Daily is sent for a
+// business only when its server-only preference is explicitly enabled. Default OFF: an absent record is a contract no-send
+// (`daily_email_not_enabled`, settlement no_send); a malformed or unreadable record is a FAILED row (fail closed). The check
+// follows the build and the pre-send identity gate (whose failures are reported as before, whatever the preference) and
+// precedes every recipient, receipt, claim and admission step, so it only affects runs that read it after a change. The preference grants no recipient eligibility (MARJIN_DAILY_RECIPIENTS_JSON stays the only source) and
+// the manual Daily does not read it. Owner / super_owner read or change it through action "subscription" / "subscription_set".
+
 // Run outcome (R1, review finding D1). Every row settles into exactly one class:
 //   delivered   provider acceptance is DURABLY RECORDED: accepted with the receipt recorded, or already_accepted
-//   no_send     reserved: no contract no-send condition remains (owner decision G4, 2026-10-09: a business without a name is a
-//               FAILED row `business_name_unavailable`, never a silent no-send); the class is kept for the response shape
+//   no_send     the business has no explicit enabled Daily e-mail subscription (`daily_email_not_enabled`, owner requirement
+//               2026-10-22). Otherwise no contract no-send condition remains (owner decision G4, 2026-10-09: a subscribed
+//               business without a name is a FAILED row `business_name_unavailable`, never a silent no-send)
 //   pending     an unresolved active claim held by another invocation (in_progress): not delivered, not failed — yet
 //   unknown     the provider may have accepted it (unknown / unknown_requires_reconciliation): never re-sent automatically
 //   unrecorded  the provider accepted it but the receipt could not be finalized
@@ -283,6 +292,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           continue;
         }
 
+        // Daily e-mail subscription: without an explicit enabled preference there is no scheduled send for this business — a
+        // no_send row (default OFF / disabled) or a FAILED row (malformed / unreadable). Build and identity failures above are
+        // reported as before, whatever the preference.
+        const subscription = await readDailySubscription(db, snapshot.tenantId, snapshot.bizId);
+        if (subscription.state !== "enabled") {
+          const notEnabled = subscription.state === "disabled";
+          if (!notEnabled) console.warn("[daily-snapshot] subscription preference not usable", { tenantId: snapshot.tenantId, bizId: snapshot.bizId, code: subscription.code });
+          results.push({ ...base, outcome: notEnabled ? "skipped" : "failed", code: subscription.code, settlement: notEnabled ? "no_send" : "failed", receipt: "not_written" });
+          continue;
+        }
+
         const recipient = await resolveDailyRecipient(snapshot.tenantId, snapshot.bizId);
         if (!recipient.ok) {
           console.warn(`[daily-snapshot] no deliverable recipient for ${snapshot.tenantId}:${snapshot.bizId} (${recipient.code})`);
@@ -373,7 +393,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(MANUAL_REFUSALS[code].status).json({ error: MANUAL_REFUSALS[code].error, code, tenantId, bizId });
       };
       const action = (req.body as { action?: unknown } | undefined)?.action;
-      if (action !== undefined && action !== "notice") return res.status(400).json({ error: "invalid_action" });
+      if (action !== undefined && action !== "notice" && action !== "subscription" && action !== "subscription_set") return res.status(400).json({ error: "invalid_action" });
       const heldReply = (code: string | null) => {
         console.warn("[daily-snapshot] manual send held", { tenantId, bizId, code });
         return res.status(503).json({ error: "Daily delivery is held; email not sent", code: boundedCode(code) ?? "delivery_held", tenantId, bizId });
@@ -390,6 +410,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // action: "notice" — the owner-authorized read of the in-app notice for this business (same authorization as a manual
       // send: owner / super_owner of the tenant, through requireBizContext). Nothing is sent. A notice whose cause is gone
       // (the name is present again) is removed on read; a target that is not deliverable for another reason is reported as such.
+      // action: "subscription" / "subscription_set" — the owner-authorized read / change of the business's Daily e-mail
+      // subscription (same authorization as a manual send). Nothing is sent; no receipt, claim, admission or recipient is
+      // touched. The reply never names an address.
+      if (action === "subscription" || action === "subscription_set") {
+        if (target.state === "unavailable") return res.status(503).json({ status: "unavailable", code: target.code, tenantId, bizId });
+        if (target.state !== "deliverable" && target.state !== "name_unavailable")
+          return res.status(MANUAL_REFUSALS[target.code].status).json({ status: "refused", error: "Daily e-mail subscription not available for this business", code: target.code, tenantId, bizId });
+        if (action === "subscription") {
+          const sub = await readDailySubscription(db, tenantId, bizId);
+          if (sub.state === "unavailable" || sub.state === "invalid") return res.status(503).json({ status: "unavailable", code: sub.code, tenantId, bizId });
+          return res.status(200).json({ status: "ok", tenantId, bizId, enabled: sub.state === "enabled", state: sub.state, explicit: sub.explicit, version: sub.version });
+        }
+        const enabled = (req.body as { enabled?: unknown } | undefined)?.enabled;
+        if (typeof enabled !== "boolean") return res.status(400).json({ error: "invalid_enabled", tenantId, bizId });
+        const r = await setDailySubscription(db, { tenantId, bizId, enabled, actorRole: snapshotCtx.role, nowMs: Date.now() });
+        if (!r.ok) {
+          console.warn("[daily-snapshot] subscription change not applied", { tenantId, bizId, code: r.code });
+          return res.status(r.code === "invalid_subscription_request" ? 400 : 503).json({ status: r.code === "daily_email_subscription_unconfirmed" ? "unconfirmed" : "unavailable", code: r.code, tenantId, bizId });
+        }
+        return res.status(200).json({ status: "ok", tenantId, bizId, enabled: r.enabled, state: r.enabled ? "enabled" : "disabled", explicit: true, version: r.version, changed: r.changed });
+      }
+
       if (action === "notice") {
         const reply = (ok: boolean, error: string | null, noticeState: NoticeState, clearState: ClearState, notice: DeliveryNotice | null) => {
           if (!ok) console.warn("[daily-snapshot] notice state unavailable", { tenantId, bizId, noticeState, clearState });

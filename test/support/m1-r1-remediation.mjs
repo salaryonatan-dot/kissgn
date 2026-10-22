@@ -39,6 +39,7 @@ import { isI2Tree, I2_PINS, applyI2Edits } from "./i2-integration.mjs";
 // I3 (Agent/Daily integration I3 — the M1 D-CTRL shared-predicate layer, PROPOSED for the M1 identity owner and the page owner):
 // overlays lib/securityContext.js, lib/businessRegistry.js and the page's registry-rule mirror.
 import { isI3Tree, I3_PINS, applyI3Edits } from "./i3-integration.mjs";
+import { isDailySubscriptionTree, applyDailySubscriptionPageEdits, isCurrentTreePage, dailySubscriptionPins } from "./daily-subscription-layer.mjs";
 // I4 (Agent/Daily integration I4 — the M1 D-CTRL application-boundary layer, PROPOSED for the M1 identity / admin-API / P0 / P1
 // owners): overlays api/admin.js, lib/helpers.js, lib/businessRegistry.js and lib/bizAccess.js. No page byte.
 import { isI4Tree, I4_PINS } from "./i4-integration.mjs";
@@ -99,7 +100,7 @@ export function m1EffectivePins(repo, { withI3 = true, withI4 = withI3, withI5 =
   const dto = withDTO1 && isDTO1Tree(repo) ? DT_O1_PINS : {};
   // A1-local B2 composition pin; original S3/approved tables are unchanged.
   // M1-A3 (T-A3-M1-PINS): the A3 policy pins ride on the A1 overlay, with the same gating; empty off A3.
-  const a1 = withDTO1 && withHR3OT4 && isA1Tree(repo) ? { ...a1LocalPins(repo), ...a3PolicyPins(repo) } : {};
+  const a1 = withDTO1 && withHR3OT4 && isA1Tree(repo) ? { ...a1LocalPins(repo), ...a3PolicyPins(repo), ...dailySubscriptionPins(repo) } : {};
   const i1 = isI1Tree(repo) ? { ...I1_PINS, ...(isI2Tree(repo) ? I2_PINS : {}), ...(withI3 && isI3Tree(repo) ? I3_PINS : {}), ...(withI3 && withI4 && isI4Tree(repo) ? I4_PINS : {}), ...(withI3 && withI4 && withI5 && isI5Tree(repo) ? I5_PINS : {}), ...(withI3 && withI4 && withI5 && withI6 && isI6Tree(repo) ? I6_PINS : {}), ...(withI3 && withI4 && withI5 && withI6 && withI7 && isI7Tree(repo) ? I7_PINS : {}), ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && isHR1Tree(repo) ? HR1_PINS : {}),
     ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && isHR2Tree(repo) ? HR2_PINS : {}),
     ...(withI3 && withI4 && withI5 && withI6 && withI7 && withHR1 && withHR2 && withHR3 && isHR3Tree(repo) ? HR3_PINS : {}),
@@ -175,7 +176,13 @@ export function m1EffectivePageVerdict(repo, candidateBytes, edits = M1_R1_EDITS
   if (withLaterLayers && isI2Tree(repo)) { const d2 = applyI2Edits("index.html", want); if (!d2.ok) return d2; want = d2.bytes; }
   // I3 tree: … + exactly the recorded I3 page edit (the registry-rule mirror refuses control characters, = isRegistryBizId)
   if (withLaterLayers && isI3Tree(repo)) { const d3 = applyI3Edits("index.html", want); if (!d3.ok) return d3; want = d3.bytes; }
+  // Daily e-mail subscription successor of the IV-T1 head: … + exactly the recorded DS page edits (holder record). The
+  // pre-DS page (I1 ⊕ I2 ⊕ I3) keeps its verdict only as the page of an EARLIER commit a layered guard inspects (CC1G-01,
+  // HR1G-01): never when it is the page of the current tree in any state (committed, staged or checked out).
+  let preDs = null;
+  if (withLaterLayers && isDailySubscriptionTree(repo)) { const ds = applyDailySubscriptionPageEdits(want); if (!ds.ok) return ds; preDs = want; want = ds.bytes; }
   const B = Buffer.isBuffer(candidateBytes) ? candidateBytes : Buffer.from(String(candidateBytes), "utf8");
+  if (preDs !== null && !want.equals(B) && preDs.equals(B) && !isCurrentTreePage(repo, B)) return { ok: true };
   if (!want.equals(B)) return { ok: false, reason: "not_the_recorded_derivation" };
   return { ok: true };
 }

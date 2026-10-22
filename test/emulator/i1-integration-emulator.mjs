@@ -18,7 +18,7 @@
 // Run: bash test/support/p1-r7-emu-run.sh <checkout> <abs-log-dir> i1=test/emulator/i1-integration-emulator.mjs
 import admin from "firebase-admin";
 import assert from "node:assert/strict";
-import { buildSandbox, installSmtp, SMTP, mkRes, runCron, T, B, B2, T2, B3, HOLD_PATH, releasedHoldRecord } from "../support/daily-email-harness.mjs";
+import { buildSandbox, installSmtp, SMTP, mkRes, runCron, T, B, B2, T2, B3, HOLD_PATH, releasedHoldRecord, SUBSCRIPTIONS, enabledSubscriptionRecord } from "../support/daily-email-harness.mjs";
 import { deliveryNoticePath, MISSING_NAME_NOTICE_HE } from "../../lib/emailDelivery.js";
 
 const PROJECT = "demo-marjin-rules";
@@ -75,6 +75,8 @@ async function world({ nameB2 = "מסעדה ב", registryA } = {}) {
   // HR1 (T-HR1-TEST-EMU): the bootstrapped RELEASED Daily hold record (absent = held, fail closed); every assertion unchanged
   await dbA.ref(HOLD_PATH).set(releasedHoldRecord());
   for (const [t, b, name] of [[T, B, "מסעדה א"], [T, B2, nameB2 ?? "x"], [T2, B3, "מסעדה ג"]]) {
+    // Daily e-mail subscription (runtime default OFF): explicit ENABLED fixture preference; every assertion unchanged
+    await dbA.ref(`${SUBSCRIPTIONS}/${t}/${b}`).set(enabledSubscriptionRecord());
     await dbA.ref(`tenants/${t}/biz:${b}:entries`).set(env(days.map((d, i) => day(d, i + 1))));
     await dbA.ref(`tenants/${t}/biz:${b}:config`).set(env({ businessName: name }));
     await dbA.ref(`tenants/${t}/biz:${b}:fixed`).set(env([]));

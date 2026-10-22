@@ -28,7 +28,7 @@ const legacyRecipientTest = historicalTest(new URL("../../", import.meta.url), "
 const test = (title, ...args) => /^DR1-(07 |08 |08b |09 )/.test(title) ? legacyRecipientTest(title, ...args) : nodeTest(title, ...args);
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, captureConsole, RECEIPTS, T, B, B2, T2, B3 } from "../support/daily-email-harness.mjs";
+import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, captureConsole, RECEIPTS, T, B, B2, T2, B3, SUBSCRIPTIONS, enabledSubscriptionRecord } from "../support/daily-email-harness.mjs";
 import * as D from "../../lib/emailDelivery.js";
 
 const { route } = await buildSandbox();
@@ -450,6 +450,7 @@ test("DR1-12 receipts hold exactly the allow-listed fields; tenant / business is
   const env = (v) => ({ _v: JSON.stringify(v) });
   db.seed(`tenants/${T2}/app/business`, env([{ id: B3, name: "מסעדה ג" }, { id: B, name: "מסעדה ד" }]));
   process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify([...JSON.parse(process.env.MARJIN_DAILY_RECIPIENTS_JSON),[T2,B,"owner-b@example.test"]]);
+  db.seed(`${SUBSCRIPTIONS}/${T2}/${B}`, enabledSubscriptionRecord());
   db.seed(`tenants/${T2}/biz:${B}:entries`, db.read(`tenants/${T}/biz:${B}:entries`)); db.seed(`tenants/${T2}/biz:${B}:config`, env({ businessName: "מסעדה ד" })); db.seed(`tenants/${T2}/biz:${B}:fixed`, env([]));
   const smtp = installSmtp([async (mail) => ({ messageId: "<private@example.test>", accepted: [mail.to], rejected: [], response: "250 OK", envelope: { to: [mail.to] }, extra: "sensitive@example.test" })]);
   const r = await cron();

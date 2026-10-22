@@ -104,6 +104,8 @@ function build(route) {
   if (route.src === "api/daily-snapshot/run.ts") {
     mkdirSync(join(dir, "src/server"), { recursive: true });
     copyFileSync(join(REPO, "src/server/dailyRecipientConfig.ts"), join(dir, "src/server/dailyRecipientConfig.ts"));
+    // Daily e-mail subscription: the route's real server-only preference module, compiled with the route
+    copyFileSync(join(REPO, "src/server/dailyEmailSubscription.ts"), join(dir, "src/server/dailyEmailSubscription.ts"));
   }
   const routeAbs = join(dir, route.src);
   mkdirSync(dirname(routeAbs), { recursive: true });

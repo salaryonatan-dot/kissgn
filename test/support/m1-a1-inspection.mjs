@@ -64,6 +64,12 @@ export const IV_GUARD = "test/finance/marjin-1.0-iv-correction-guard.test.mjs";
 export const IV_T1_PARENT = "b85c8b2879e1e57a3837a364bbadea07fd205a8f";
 export const IV_T1_SCOPE = Object.freeze(["test/emulator/i1-integration-emulator.mjs", "test/emulator/owner-notice-rendered.mjs", "test/finance/marjin-1.0-iv-correction-guard.test.mjs", "test/finance/marjin-1.0-iv-t1-fixture-guard.test.mjs", "test/support/m1-a1-inspection.json", "test/support/m1-a1-inspection.mjs"]);
 export const IV_T1_GUARD = "test/finance/marjin-1.0-iv-t1-fixture-guard.test.mjs";
+
+// Daily e-mail subscription successor (owner requirement 2026-10-22): closed scope over the IV-T1 head; review pending.
+export const DS_PARENT = "6786b80377252d77d6bc2b7b9defa2c7d40dc434";
+export const DS_GUARD = "test/finance/daily-subscription-guard.test.mjs";
+// The exact blobs of the successor's NEW files (they have no parent derivation): a repinned record alone never accepts them.
+export const DS_NEW_FILE_PINS = Object.freeze({ "src/server/dailyEmailSubscription.ts": "56c3733feed0aecb8edff5199ed0b906bbfce30c", "test/delivery/daily-email-subscription.test.mjs": "92315fc4f71049ca7c500f736b6995a511e87ff0", "test/emulator/daily-subscription-emulator.mjs": "041122914fdd4df83afb300cb3fd24d357299a5b", "test/emulator/daily-subscription-rendered.mjs": "bb85d76d4f3a1f552ea3c1efbe4f315791cc6deb", "test/finance/daily-subscription-guard.test.mjs": "162f267823e76fc78855b1acf490acfffabbe1a8", "test/finance/daily-subscription-ui-seam.test.mjs": "34e21d4752667a9bba492ebadcd5e105e41ba878", "test/support/daily-subscription-layer.mjs": "75dfddd6b03a29eec5111020eb6d6f3fa5f95cb7" });
 export const A1_RECORD = 'test/support/m1-a1-inspection.json';
 const MODULE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const git = (root,args) => spawnSync('git',['-C',root,...args],{encoding:'utf8',timeout:30000,maxBuffer:64*1024*1024});
@@ -95,6 +101,7 @@ export function a3PolicyPins(root) {
 export function verifyA1Head(root=MODULE_ROOT) {
   assert.ok(isA1Tree(root),'explicit A1 record and fixed source references required');
   const r=load(root), head=text(root,['rev-parse','HEAD']);
+  if(r.dailySubscriptionSuccessor)return verifyDailySubscriptionSuccessor(root,r,head);
   if(r.transportFixtureCorrection)return verifyTransportFixtureCorrection(root,r,head);
   if(r.integrationCorrection)return verifyIntegrationCorrection(root,r,head);
   if(r.localComposition)return verifyLocalComposition(root,r,head);
@@ -325,6 +332,40 @@ function verifyIntegrationCorrection(root,r,head) {
  if(!ivParentProven){proveLiteralHolder(root,IV_PARENT,'literal IV parent');ivParentProven=true;}
  return {ok:true,head,files:Object.keys(tree).length};
 }
+// Full current holder for the subscription successor: exact sole parent, closed scope (named in the record), complete
+// HEAD/index/checkout pins, unique edit derivations for every changed file, new files absent at the parent, every other
+// prior pin protected, and a literal proof of the accepted IV-T1 holder.
+let dsParentProven=false;
+function verifyDailySubscriptionSuccessor(root,r,head) {
+ const {edits,...identity}=r.dailySubscriptionSuccessor;
+ const scope=identity.scope,newFiles=identity.newFiles;
+ assert.ok(Array.isArray(scope)&&Array.isArray(newFiles)&&scope.includes(A1_RECORD)&&scope.includes('test/support/m1-a1-inspection.mjs')&&scope.includes(DS_GUARD)&&newFiles.includes(DS_GUARD),'closed DS scope shape');
+ assert.deepEqual(scope,[...new Set(scope)].sort(),'sorted unique DS scope');assert.ok(newFiles.every(f=>scope.includes(f)));
+ assert.deepEqual(identity,{parent:DS_PARENT,kind:'daily_email_subscription_successor',scope:[...scope],newFiles:[...newFiles],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'});
+ assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,DS_PARENT],'exact DS sole parent');
+ for(const args of [['diff','--name-only',DS_PARENT,'HEAD','--'],['diff','--name-only','--cached',DS_PARENT,'--'],['diff','--name-only',DS_PARENT,'--']])assert.deepEqual(text(root,args).split('\n').filter(Boolean).sort(),[...scope],'exact DS scope');
+ assert.deepEqual(untrackedPaths(root),[],'no untracked bypass');
+ const prior=JSON.parse(git(root,['show',DS_PARENT+':'+A1_RECORD]).stdout);
+ for(const k of Object.keys(prior))if(!['treePins','scope','allowedScope','historicalGuards'].includes(k))assert.deepEqual(r[k],prior[k],k+' prior exact');
+ assert.deepEqual(Object.keys(r).sort(),[...Object.keys(prior),'dailySubscriptionSuccessor'].sort(),'closed DS record');
+ assert.deepEqual(r.scope,[...new Set([...prior.scope,...scope])].sort());
+ assert.deepEqual(r.allowedScope,[...new Set([...prior.allowedScope,...r.scope])].sort());
+ assert.deepEqual(r.historicalGuards,{...prior.historicalGuards,[IV_T1_GUARD]:DS_PARENT});
+ const tree={};for(const row of text(root,['ls-tree','-r','-z','HEAD']).split('\0').filter(Boolean)){const m=/^(\d+) blob ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);assert.ok(m,row);assert.notEqual(m[1],'120000');tree[m[3]]=m[2];}
+ delete tree[A1_RECORD];assert.deepEqual(tree,r.treePins,'complete DS tree');
+ const index={};for(const row of text(root,['ls-files','--stage','-z']).split('\0').filter(Boolean)){const m=/^\d+ ([a-f0-9]{40}) 0\t([\s\S]+)$/.exec(row);assert.ok(m,'unmerged index');index[m[2]]=m[1];}
+ assert.deepEqual(Object.keys(index).sort(),[...Object.keys(tree),A1_RECORD].sort());
+ for(const [f,pin]of Object.entries(tree)){assert.equal(index[f],pin,f+' index');assert.equal(a1Blob(readFileSync(join(root,f))),pin,f+' checkout');}
+ assert.equal(index[A1_RECORD],text(root,['rev-parse','HEAD:'+A1_RECORD]));assert.equal(a1Blob(readFileSync(join(root,A1_RECORD))),index[A1_RECORD]);
+ for(const f of newFiles)assert.notEqual(git(root,['cat-file','-e',DS_PARENT+':'+f]).status,0,f+' is new at DS');
+ assert.deepEqual([...newFiles].sort(),Object.keys(DS_NEW_FILE_PINS).sort(),'closed DS new files');
+ for(const f of newFiles)assert.equal(tree[f],DS_NEW_FILE_PINS[f],f+' exact DS new-file pin');
+ assert.deepEqual(Object.keys(edits).sort(),scope.filter(f=>f!==A1_RECORD&&!newFiles.includes(f)),'closed DS derivations');
+ for(const [f,changes]of Object.entries(edits)){let b=git(root,['show',DS_PARENT+':'+f]).stdout;for(const e of changes){assert.ok(e.from&&b.split(e.from).length===2,f+' unique DS anchor');b=b.replace(e.from,()=>e.to);}assert.equal(a1Blob(Buffer.from(b)),tree[f],f+' exact DS derivation');}
+ for(const [f,pin]of Object.entries(prior.treePins))if(!scope.includes(f))assert.equal(tree[f],pin,f+' protected prior');
+ if(!dsParentProven){proveLiteralHolder(root,DS_PARENT,'literal accepted IV-T1 parent');dsParentProven=true;}
+ return {ok:true,head,files:Object.keys(tree).length};
+}
 let ivT1ParentProven=false;
 function verifyTransportFixtureCorrection(root,r,head) {
  const {edits,...identity}=r.transportFixtureCorrection;
@@ -365,7 +406,7 @@ function ivProjectionContext(root) {
  try {
   const head=text(root,['rev-parse','HEAD']),committed=JSON.parse(git(root,['show','HEAD:'+A1_RECORD]).stdout);
   if(!committed.integrationCorrection)return null;
-  for(const f of ['test/support/m1-a1-inspection.mjs',A1_RECORD,IV_GUARD,...(committed.transportFixtureCorrection?[IV_T1_GUARD]:[])]){
+  for(const f of ['test/support/m1-a1-inspection.mjs',A1_RECORD,IV_GUARD,...(committed.transportFixtureCorrection?[IV_T1_GUARD]:[]),...(committed.dailySubscriptionSuccessor?[DS_GUARD]:[])]){
    const pin=text(root,['rev-parse','HEAD:'+f]);
    assert.equal(text(root,['rev-parse',':'+f]),pin,f+' projection index');
    assert.equal(a1Blob(readFileSync(join(root,f))),pin,f+' projection checkout');

@@ -32,7 +32,7 @@ import { cpSync, writeFileSync, renameSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, mkRes, captureConsole, RECEIPTS, T, B, B2, T2, B3 } from "../support/daily-email-harness.mjs";
+import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, mkRes, captureConsole, RECEIPTS, T, B, B2, T2, B3, SUBSCRIPTIONS, enabledSubscriptionRecord } from "../support/daily-email-harness.mjs";
 import * as D from "../../lib/emailDelivery.js";
 
 const { route, dir: SANDBOX } = await buildSandbox();
@@ -56,6 +56,7 @@ async function post(r, body, { uid = "u_owner_a", email = "owner-a@example.test"
 }
 const seedTenant = (db, t, b, name) => {
   process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify([...JSON.parse(process.env.MARJIN_DAILY_RECIPIENTS_JSON),[t,b,"owner-a@example.test"]]);
+  db.seed(`${SUBSCRIPTIONS}/${t}/${b}`, enabledSubscriptionRecord());
   db.seed(`tenants/${t}/biz:${b}:entries`, db.read(`tenants/${T}/biz:${B}:entries`));
   db.seed(`tenants/${t}/biz:${b}:config`, env({ businessName: name }));
   db.seed(`tenants/${t}/biz:${b}:fixed`, env([]));

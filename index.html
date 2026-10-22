@@ -2502,6 +2502,56 @@
   })();
   </script>
 
+  <script>
+  // ── Daily e-mail subscription (owner requirement 2026-10-22): «קבלת דוח יומי במייל» ─────────────────────────────────────
+  // A per-business switch for the owner / super_owner of the selected business. The page never reads or writes the stored
+  // preference (the preference store is server-only under the Rules): it asks the owner-authorized route of the Daily notice
+  // (the SAME endpoint, MarjinDailyNotice.NOTICE_ENDPOINT, defined once above) with action "subscription" (read) or
+  // "subscription_set" (change) — and shows only what the
+  // server CONFIRMED for THIS business. Default OFF. Anything else — a refused / failed / unreachable request, a reply of
+  // another shape — confirms nothing: the switch keeps the last confirmed state (or none) and the page is unaffected. The
+  // switch never shows or edits an address; the recipient stays the server configuration.
+  (function () {
+    "use strict";
+    var LABEL_HE = "קבלת דוח יומי במייל";
+    var ERROR_HE = "לא ניתן לעדכן כעת. נסו שוב מאוחר יותר.";
+    // one endpoint definition for the page: without the notice seam nothing is requested (the switch stays unconfirmed)
+    var ENDPOINT = window.MarjinDailyNotice && typeof window.MarjinDailyNotice.NOTICE_ENDPOINT === "string" ? window.MarjinDailyNotice.NOTICE_ENDPOINT : null;
+    var OWNER_ROLES = Object.freeze(["owner", "super_owner"]);
+    function isRecord(x) { return x !== null && typeof x === "object" && !Array.isArray(x); }
+    /** `action` is mandatory: without it the same route is a manual Daily send. */
+    function readRequest(tenantId, bizId) { return { tenantId: tenantId, bizId: bizId, action: "subscription" }; }
+    function setRequest(tenantId, bizId, enabled) { return { tenantId: tenantId, bizId: bizId, action: "subscription_set", enabled: enabled === true }; }
+    function shouldAsk(role, tenantId, bizId, demo) {
+      return typeof ENDPOINT === "string" && OWNER_ROLES.indexOf(role) >= 0 && typeof tenantId === "string" && tenantId !== "" && typeof bizId === "string" && bizId !== "" && demo !== true;
+    }
+    /** { kind: "known", enabled } only for a 200 "ok" reply with a boolean `enabled` for THIS business; else { kind: "unknown" }. */
+    function decide(status, body, tenantId, bizId) {
+      if (status !== 200 || !isRecord(body) || body.status !== "ok" || body.tenantId !== tenantId || body.bizId !== bizId || typeof body.enabled !== "boolean")
+        return { kind: "unknown", reason: status === null ? "no_reply" : status !== 200 ? "http_" + status : "shape_or_identity" };
+      return { kind: "known", enabled: body.enabled };
+    }
+    function key(tenantId, bizId) { return String(tenantId) + "\u0000" + String(bizId); }
+    /** The state of one business: { kind: "idle" | "known", enabled, busy, failed }. */
+    function stateFor(states, tenantId, bizId) { var s = isRecord(states) ? states[key(tenantId, bizId)] : null; return isRecord(s) ? s : { kind: "idle", enabled: false, busy: false, failed: false }; }
+    function withState(states, tenantId, bizId, patch) {
+      var out = Object.assign({}, isRecord(states) ? states : {});
+      out[key(tenantId, bizId)] = Object.assign({}, stateFor(states, tenantId, bizId), patch);
+      return out;
+    }
+    /** After a reply: a known decision replaces the shown state; an unknown one keeps it and marks the failure. */
+    function next(states, decision, tenantId, bizId) {
+      if (isRecord(decision) && decision.kind === "known") return withState(states, tenantId, bizId, { kind: "known", enabled: decision.enabled, busy: false, failed: false });
+      return withState(states, tenantId, bizId, { busy: false, failed: true });
+    }
+    function busy(states, tenantId, bizId) { return withState(states, tenantId, bizId, { busy: true, failed: false }); }
+    /** The switch is ON only when the server confirmed enabled for this business. */
+    function checked(states, tenantId, bizId) { var s = stateFor(states, tenantId, bizId); return s.kind === "known" && s.enabled === true; }
+    window.MarjinDailySubscription = Object.freeze({ LABEL_HE: LABEL_HE, ERROR_HE: ERROR_HE, ENDPOINT: ENDPOINT, OWNER_ROLES: OWNER_ROLES, readRequest: readRequest,
+      setRequest: setRequest, shouldAsk: shouldAsk, decide: decide, stateFor: stateFor, next: next, busy: busy, checked: checked });
+  })();
+  </script>
+
   <script type="text/babel" data-presets="react">
 
 
@@ -6442,6 +6492,8 @@ function PilotDashboard() {
   const [currentBizId, setCurrentBizId_] = useState(null);
   // ── Owner notice (D-G4): the Daily cannot be prepared for the selected business (window.MarjinDailyNotice) ───────────
   const [dailyNotice, setDailyNotice] = useState({});   // per-business displayed states (MarjinDailyNotice.next / stateFor)
+  const [dailySubscription, setDailySubscription] = useState({});   // per-business server-confirmed states (MarjinDailySubscription)
+  const [showDailySubscription, setShowDailySubscription] = useState(false);   // the owner opened the Daily e-mail panel
   // ── Insight Engine v1 — Dashboard card state (Phase 3, read-only) ──────────
   const [dashboardInsights, setDashboardInsights] = useState(null);        // null = no doc found; [] = doc exists but no insights
   const [dashboardInsightsDate, setDashboardInsightsDate] = useState(null);
@@ -7086,6 +7138,42 @@ function PilotDashboard() {
     })();
     return () => { live = false; };
   }, [currentBizId, finSel.gen, finSel.tenantId, dailyNoticeRole, isDemoMode, dailyNoticeBizName]);
+  // Daily e-mail subscription: read only when the owner opens the panel (nothing is requested on page load), bound to the
+  // captured selection like the notice read. Only a server-confirmed state is shown; a change is sent to the server and the
+  // switch follows the server's reply.
+  const askDailySubscription = (ctx, body) => (async () => {
+    let status = null, json = null;
+    try {
+      const res = await window.apiFetch(window.MarjinDailySubscription.ENDPOINT, { method: "POST", body: JSON.stringify(body) });
+      status = res && Number.isInteger(res.status) ? res.status : null;
+      try { json = await res.json(); } catch (_) { json = null; }
+    } catch (_) { status = null; json = null; }
+    return { status, json };
+  })();
+  useEffect(() => {
+    const ctx = captureSelectionCtx();
+    const bound = !!(currentBizId && ctx && typeof ctx.tenantId === "string" && ctx.tenantId && ctx.bizId === currentBizId);
+    if (!showDailySubscription || !bound || currentUser || !window.MarjinDailySubscription || !window.MarjinDailySubscription.shouldAsk(dailyNoticeRole, ctx.tenantId, currentBizId, isDemoMode) || typeof window.apiFetch !== "function") return;
+    let live = true;
+    (async () => {
+      const { status, json } = await askDailySubscription(ctx, window.MarjinDailySubscription.readRequest(ctx.tenantId, currentBizId));
+      if (!live || !isSelectionLive(ctx)) return;
+      const decision = window.MarjinDailySubscription.decide(status, json, ctx.tenantId, currentBizId);
+      setDailySubscription((prev) => window.MarjinDailySubscription.next(prev, decision, ctx.tenantId, currentBizId));
+    })();
+    return () => { live = false; };
+  }, [showDailySubscription, currentBizId, finSel.gen, finSel.tenantId, dailyNoticeRole, isDemoMode, currentUser]);
+  const changeDailySubscription = (enabled) => {
+    const ctx = captureSelectionCtx();
+    if (!currentBizId || !ctx || ctx.bizId !== currentBizId || currentUser || !window.MarjinDailySubscription || !window.MarjinDailySubscription.shouldAsk(dailyNoticeRole, ctx.tenantId, currentBizId, isDemoMode) || typeof window.apiFetch !== "function") return;
+    const bizId = currentBizId;
+    setDailySubscription((prev) => window.MarjinDailySubscription.busy(prev, ctx.tenantId, bizId));
+    (async () => {
+      const { status, json } = await askDailySubscription(ctx, window.MarjinDailySubscription.setRequest(ctx.tenantId, bizId, enabled));
+      const decision = window.MarjinDailySubscription.decide(status, json, ctx.tenantId, bizId);
+      setDailySubscription((prev) => window.MarjinDailySubscription.next(prev, decision, ctx.tenantId, bizId));
+    })();
+  };
   const finF = finCoreState === "ready" ? window.MarjinFinance : null;
   const finAsOf = finF ? finF.finance.businessDate.israelBusinessDate(finNowMs) : null;
   // Entries are usable only once the coordinator hydrated them (or confirmed the node absent)
@@ -8491,6 +8579,30 @@ function PilotDashboard() {
           )}
         </div>
       ); })()}
+      {/* Daily e-mail subscription (owner / super_owner of the selected business; server-confirmed state only; default OFF) */}
+      {window.MarjinDailySubscription && !currentUser && !isDemoMode && finSel.tenantId && currentBizId && window.MarjinDailySubscription.OWNER_ROLES.includes(loggedInUser?.role) && (
+        <div style={{display:"flex",justifyContent:"center",margin:"8px 12px 0"}}>
+          <button data-daily-subscription="open" onClick={()=>setShowDailySubscription(true)} style={{background:"none",border:"1px solid #E5E7EB",borderRadius:4,padding:"4px 10px",cursor:"pointer",fontSize:12,color:"#374151",fontFamily:"inherit"}}>{window.MarjinDailySubscription.LABEL_HE}</button>
+        </div>
+      )}
+      {showDailySubscription && window.MarjinDailySubscription && !currentUser && !isDemoMode && finSel.tenantId && currentBizId && window.MarjinDailySubscription.OWNER_ROLES.includes(loggedInUser?.role) && (() => {
+        const s = window.MarjinDailySubscription.stateFor(dailySubscription, finSel.tenantId, currentBizId);
+        const on = window.MarjinDailySubscription.checked(dailySubscription, finSel.tenantId, currentBizId);
+        return (
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.3)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:24}} onClick={()=>setShowDailySubscription(false)}>
+            <div data-daily-subscription={s.kind} role="dialog" aria-label={window.MarjinDailySubscription.LABEL_HE} style={{background:"#fff",borderRadius:8,padding:"20px 24px",width:"100%",maxWidth:360,boxShadow:"0 8px 32px rgba(0,0,0,0.12)",direction:"rtl",border:"1px solid #E5E7EB",fontSize:14,color:"#111827"}} onClick={e=>e.stopPropagation()}>
+              <label style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,cursor:s.kind==="known"&&!s.busy?"pointer":"default"}}>
+                <span data-daily-subscription="label">{window.MarjinDailySubscription.LABEL_HE}</span>
+                <input type="checkbox" role="switch" data-daily-subscription="switch" checked={on} aria-checked={on} disabled={s.kind!=="known"||s.busy}
+                  onChange={(e)=>changeDailySubscription(e.target.checked)}/>
+              </label>
+              {s.failed && <div role="status" data-daily-subscription="error" style={{color:"#B91C1C",fontSize:12,marginTop:8}}>{window.MarjinDailySubscription.ERROR_HE}</div>}
+              <div style={{textAlign:"left",marginTop:16}}>
+                <button data-daily-subscription="close" onClick={()=>setShowDailySubscription(false)} style={{background:"#F3F4F6",border:"none",borderRadius:4,padding:"4px 12px",cursor:"pointer",fontFamily:"inherit"}}>סגירה</button>
+              </div>
+            </div>
+          </div>
+        ); })()}
 
       {/* Business Switch Modal */}
       {showBizSelect && (

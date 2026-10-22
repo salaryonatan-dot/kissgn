@@ -142,13 +142,20 @@ export function releasedHoldRecord(at = 0) {
     v000000001: { action: "init", state: "held", version: 1, prevVersion: 0, actor: "fixture", reason: "fixture bootstrap", at },
     v000000002: { action: "release", state: "released", version: 2, prevVersion: 1, actor: "fixture", reason: "fixture release", at } } };
 }
-export function seedWorld({ withSecondBiz = true, withSecondTenant = true, ownerEmail = "owner-a@example.test", tenantBOwner = "owner-b@example.test", users, hold = "released" } = {}) {
+// Daily e-mail subscription (default OFF in the runtime): the world's businesses carry an explicit ENABLED preference unless
+// `subscriptions: "absent"` is asked for. Only a test fixture, like the released hold above; no production default.
+export const SUBSCRIPTIONS = "email_delivery_subscriptions/daily_snapshot";
+export function enabledSubscriptionRecord(at = 0) {
+  return { schema: 1, enabled: true, version: 1, updatedAt: at, updatedByRole: "owner" };
+}
+export function seedWorld({ withSecondBiz = true, withSecondTenant = true, ownerEmail = "owner-a@example.test", tenantBOwner = "owner-b@example.test", users, hold = "released", subscriptions = "enabled" } = {}) {
   // Explicit deployment fixture, independent of ownerEmail/users/RTDB configuration. No production default.
   process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify([[T,B,"owner-a@example.test"],[T,B2,"owner-a@example.test"],[T2,B3,"owner-b@example.test"]]);
   const db = makeDb();
   if (hold === "released") db.seed(HOLD_PATH, releasedHoldRecord());
   const days = ["2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-05", "2026-09-06", "2026-09-07"];
   const seedBiz = (t, b, name) => {
+    if (subscriptions === "enabled") db.seed(`${SUBSCRIPTIONS}/${t}/${b}`, enabledSubscriptionRecord());
     db.seed(`tenants/${t}/biz:${b}:entries`, env(days.map((d, i) => day(d, i + 1))));
     db.seed(`tenants/${t}/biz:${b}:config`, env({ businessName: name }));
     db.seed(`tenants/${t}/biz:${b}:fixed`, env([]));

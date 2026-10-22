@@ -30,7 +30,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
-import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, mkRes, captureConsole, RECEIPTS, T, B, B2, T2, B3 } from "../support/daily-email-harness.mjs";
+import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, mkRes, captureConsole, RECEIPTS, T, B, B2, T2, B3, SUBSCRIPTIONS, enabledSubscriptionRecord } from "../support/daily-email-harness.mjs";
 import * as D from "../../lib/emailDelivery.js";
 import { isValidId } from "../../lib/securityContext.js";
 import { isRegistryBizId } from "../../lib/businessRegistry.js";
@@ -46,6 +46,7 @@ const SECRET_NAME = "Secret Cafe", SECRET_ADDR = "private@example.test";
 const leaks = (l) => l.includes(SECRET_NAME) || l.includes(SECRET_ADDR) || l.includes("is not valid JSON");
 const seedTenant = (db, t, b, name, designate = true) => {
   if (designate) process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify([...JSON.parse(process.env.MARJIN_DAILY_RECIPIENTS_JSON),[t,b,"owner-a@example.test"]]);
+  db.seed(`${SUBSCRIPTIONS}/${t}/${b}`, enabledSubscriptionRecord());
   db.seed(`tenants/${t}/biz:${b}:entries`, db.read(`tenants/${T}/biz:${B}:entries`));
   db.seed(`tenants/${t}/biz:${b}:config`, env({ businessName: name }));
   db.seed(`tenants/${t}/biz:${b}:fixed`, env([]));

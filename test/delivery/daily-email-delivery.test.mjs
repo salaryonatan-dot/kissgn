@@ -24,7 +24,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, captureConsole, mkRes, RECEIPTS, CRON_SECRET, T, B, B2, T2, B3 } from "../support/daily-email-harness.mjs";
+import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, captureConsole, mkRes, RECEIPTS, CRON_SECRET, T, B, B2, T2, B3, SUBSCRIPTIONS, enabledSubscriptionRecord } from "../support/daily-email-harness.mjs";
 
 const { route } = await buildSandbox();
 const AT = Date.UTC(2026, 8, 8, 4, 5);              // the scheduled 04:05 UTC run ⇒ 07:05 Israel, business date 2026-09-08
@@ -209,6 +209,7 @@ test("DE-12 tenant / business isolation: the same business id in two tenants has
   const env = (v) => ({ _v: JSON.stringify(v) });
   db.seed(`tenants/${T2}/app/business`, env([{ id: B3, name: "מסעדה ג" }, { id: B, name: "מסעדה ד" }]));
   process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify([...JSON.parse(process.env.MARJIN_DAILY_RECIPIENTS_JSON),[T2,B,"owner-b@example.test"]]);
+  db.seed(`${SUBSCRIPTIONS}/${T2}/${B}`, enabledSubscriptionRecord());
   db.seed(`tenants/${T2}/biz:${B}:entries`, db.read(`tenants/${T}/biz:${B}:entries`)); db.seed(`tenants/${T2}/biz:${B}:config`, env({})); db.seed(`tenants/${T2}/biz:${B}:fixed`, env([]));
   const smtp = installSmtp([SMTP.accept()]);
   await cron();

@@ -1,5 +1,5 @@
 // IV-T1 author evidence only; transport and independent acceptance remain separate.
-import {test,after} from 'node:test';
+import {after} from 'node:test';import {historicalTest} from "../support/m1-a1-inspection.mjs";const test=historicalTest(new URL("../../",import.meta.url),"6786b80377252d77d6bc2b7b9defa2c7d40dc434","test/finance/marjin-1.0-iv-t1-fixture-guard.test.mjs");
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,appendFileSync,mkdtempSync,rmSync,symlinkSync,existsSync} from 'node:fs';
 import {join} from 'node:path';import {tmpdir} from 'node:os';import {spawnSync} from 'node:child_process';

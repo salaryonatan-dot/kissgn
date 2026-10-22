@@ -26,7 +26,7 @@
 //   C0  controls: clean two-business run; clean zero-eligible run           (contract "may complete")
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, captureConsole, RECEIPTS, T, B, B2 } from "../support/daily-email-harness.mjs";
+import { buildSandbox, installSmtp, SMTP, seedWorld, freezeClock, runCron, runManual, captureConsole, RECEIPTS, T, B, B2, SUBSCRIPTIONS, enabledSubscriptionRecord } from "../support/daily-email-harness.mjs";
 
 const { route, import: imp } = await buildSandbox();
 const SB = await imp("src/snapshot/snapshotBuilder.js");
@@ -165,6 +165,7 @@ test("S7 two colliding tenant/business pairs are isolated: both built, both deli
   for (const [label, order] of [["P1 first", [P1, P2]], ["P2 first", [P2, P1]]]) {
     const db = seedWorld({ withSecondBiz: false, withSecondTenant: false });
     process.env.MARJIN_DAILY_RECIPIENTS_JSON = JSON.stringify(order.map(([t, b]) => [t, b, "owner-a@example.test"]));
+    for (const [t, b] of order) db.seed(`${SUBSCRIPTIONS}/${t}/${b}`, enabledSubscriptionRecord());
     db.seed(`tenants/${T}/app/business`, env([]));              // the harness business is out of the way
     for (const [t, b, name] of order) {
       db.seed(`tenants/${t}/biz:${b}:entries`, env(days.map((d, i) => day(d, i + 1)))); db.seed(`tenants/${t}/biz:${b}:config`, env({ businessName: name })); db.seed(`tenants/${t}/biz:${b}:fixed`, env([]));
