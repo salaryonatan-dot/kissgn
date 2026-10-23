@@ -10,7 +10,7 @@
 //   DSCG-06  a wrong parent and a repinned page forgery refuse in the full holder and the projection
 //   DSCG-07  the page layer: HEAD's page = I3 page + DS edits + C1 edits (and the effective M1 page pin); the candidate's page
 //            (51f00aa) and the pre-DS page never pass as the current page
-import {test} from 'node:test';
+import {historicalTest} from "../support/m1-a1-inspection.mjs";const test=historicalTest(new URL("../../",import.meta.url),"c0433c456164c53503bd2b9a4553b887ec13b6f8","test/finance/daily-subscription-correction-guard.test.mjs");
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,appendFileSync,mkdtempSync,rmSync,symlinkSync,existsSync} from 'node:fs';
 import {join} from 'node:path';import {tmpdir} from 'node:os';import {spawnSync} from 'node:child_process';

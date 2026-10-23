@@ -74,6 +74,10 @@ export const DS_NEW_FILE_PINS = Object.freeze({ "src/server/dailyEmailSubscripti
 export const DSC_PARENT = "51f00aa92355d9aee1b6dcfa27f3d74e4dd16bdd";
 export const DSC_GUARD = "test/finance/daily-subscription-correction-guard.test.mjs";
 export const DSC_NEW_FILE_PINS = Object.freeze({ "test/delivery/daily-subscription-authority.test.mjs": "c1548b86e4ca21a868cd2f98d09e235c5cb1b77b", "test/emulator/daily-subscription-ordering-rendered.mjs": "4056db84f84c86544ae85fa5f4a02b4063b2d4b4", "test/finance/daily-subscription-correction-guard.test.mjs": "6c8259664c531c736da35fa377e41fdcbf45990d" });
+// Marjin 1.0 release packaging: the WhatsApp stub leaves the deployment upload (Hobby 12-function limit); review pending.
+export const RP_PARENT = "c0433c456164c53503bd2b9a4553b887ec13b6f8";
+export const RP_GUARD = "test/finance/release-packaging-guard.test.mjs";
+export const RP_NEW_FILE_PINS = Object.freeze({ "test/finance/release-packaging-guard.test.mjs": "def0a63f5fcd899f0cfd915c3bbf71b1576af937" });
 export const A1_RECORD = 'test/support/m1-a1-inspection.json';
 const MODULE_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const git = (root,args) => spawnSync('git',['-C',root,...args],{encoding:'utf8',timeout:30000,maxBuffer:64*1024*1024});
@@ -105,6 +109,7 @@ export function a3PolicyPins(root) {
 export function verifyA1Head(root=MODULE_ROOT) {
   assert.ok(isA1Tree(root),'explicit A1 record and fixed source references required');
   const r=load(root), head=text(root,['rev-parse','HEAD']);
+  if(r.releasePackagingSuccessor)return verifyReleasePackagingSuccessor(root,r,head);
   if(r.dailySubscriptionCorrection)return verifyDailySubscriptionCorrection(root,r,head);
   if(r.dailySubscriptionSuccessor)return verifyDailySubscriptionSuccessor(root,r,head);
   if(r.transportFixtureCorrection)return verifyTransportFixtureCorrection(root,r,head);
@@ -403,6 +408,38 @@ function verifyDailySubscriptionCorrection(root,r,head) {
  if(!dscParentProven){proveLiteralHolder(root,DSC_PARENT,'literal subscription candidate parent');dscParentProven=true;}
  return {ok:true,head,files:Object.keys(tree).length};
 }
+let rpParentProven=false;
+function verifyReleasePackagingSuccessor(root,r,head) {
+ const {edits,...identity}=r.releasePackagingSuccessor;
+ const scope=identity.scope,newFiles=identity.newFiles;
+ assert.ok(Array.isArray(scope)&&Array.isArray(newFiles)&&scope.includes(A1_RECORD)&&scope.includes('test/support/m1-a1-inspection.mjs')&&scope.includes(RP_GUARD)&&scope.includes(DSC_GUARD)&&newFiles.includes(RP_GUARD),'closed RP scope shape');
+ assert.deepEqual(scope,[...new Set(scope)].sort(),'sorted unique RP scope');assert.ok(newFiles.every(f=>scope.includes(f)));
+ assert.deepEqual(identity,{parent:RP_PARENT,kind:'release_packaging_successor',scope:[...scope],newFiles:[...newFiles],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'});
+ assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,RP_PARENT],'exact RP sole parent');
+ for(const args of [['diff','--name-only',RP_PARENT,'HEAD','--'],['diff','--name-only','--cached',RP_PARENT,'--'],['diff','--name-only',RP_PARENT,'--']])assert.deepEqual(text(root,args).split('\n').filter(Boolean).sort(),[...scope],'exact RP scope');
+ assert.deepEqual(untrackedPaths(root),[],'no untracked bypass');
+ const prior=JSON.parse(git(root,['show',RP_PARENT+':'+A1_RECORD]).stdout);
+ assert.ok(prior.dailySubscriptionCorrection&&!prior.releasePackagingSuccessor,'the parent is the subscription correction C1');
+ for(const k of Object.keys(prior))if(!['treePins','scope','allowedScope','historicalGuards'].includes(k))assert.deepEqual(r[k],prior[k],k+' prior exact');
+ assert.deepEqual(Object.keys(r).sort(),[...Object.keys(prior),'releasePackagingSuccessor'].sort(),'closed RP record');
+ assert.deepEqual(r.scope,[...new Set([...prior.scope,...scope])].sort());
+ assert.deepEqual(r.allowedScope,[...new Set([...prior.allowedScope,...r.scope])].sort());
+ assert.deepEqual(r.historicalGuards,{...prior.historicalGuards,[DSC_GUARD]:RP_PARENT});
+ const tree={};for(const row of text(root,['ls-tree','-r','-z','HEAD']).split('\0').filter(Boolean)){const m=/^(\d+) blob ([a-f0-9]{40})\t([\s\S]+)$/.exec(row);assert.ok(m,row);assert.notEqual(m[1],'120000');tree[m[3]]=m[2];}
+ delete tree[A1_RECORD];assert.deepEqual(tree,r.treePins,'complete RP tree');
+ const index={};for(const row of text(root,['ls-files','--stage','-z']).split('\0').filter(Boolean)){const m=/^\d+ ([a-f0-9]{40}) 0\t([\s\S]+)$/.exec(row);assert.ok(m,'unmerged index');index[m[2]]=m[1];}
+ assert.deepEqual(Object.keys(index).sort(),[...Object.keys(tree),A1_RECORD].sort());
+ for(const [f,pin]of Object.entries(tree)){assert.equal(index[f],pin,f+' index');assert.equal(a1Blob(readFileSync(join(root,f))),pin,f+' checkout');}
+ assert.equal(index[A1_RECORD],text(root,['rev-parse','HEAD:'+A1_RECORD]));assert.equal(a1Blob(readFileSync(join(root,A1_RECORD))),index[A1_RECORD]);
+ for(const f of newFiles)assert.notEqual(git(root,['cat-file','-e',RP_PARENT+':'+f]).status,0,f+' is new at RP');
+ assert.deepEqual([...newFiles].sort(),Object.keys(RP_NEW_FILE_PINS).sort(),'closed RP new files');
+ for(const f of newFiles)assert.equal(tree[f],RP_NEW_FILE_PINS[f],f+' exact RP new-file pin');
+ assert.deepEqual(Object.keys(edits).sort(),scope.filter(f=>f!==A1_RECORD&&!newFiles.includes(f)),'closed RP derivations');
+ for(const [f,changes]of Object.entries(edits)){let b=git(root,['show',RP_PARENT+':'+f]).stdout;for(const e of changes){assert.ok(e.from&&b.split(e.from).length===2,f+' unique RP anchor');b=b.replace(e.from,()=>e.to);}assert.equal(a1Blob(Buffer.from(b)),tree[f],f+' exact RP derivation');}
+ for(const [f,pin]of Object.entries(prior.treePins))if(!scope.includes(f))assert.equal(tree[f],pin,f+' protected prior');
+ if(!rpParentProven){proveLiteralHolder(root,RP_PARENT,'literal subscription correction C1 parent');rpParentProven=true;}
+ return {ok:true,head,files:Object.keys(tree).length};
+}
 let ivT1ParentProven=false;
 function verifyTransportFixtureCorrection(root,r,head) {
  const {edits,...identity}=r.transportFixtureCorrection;
@@ -443,7 +480,7 @@ function ivProjectionContext(root) {
  try {
   const head=text(root,['rev-parse','HEAD']),committed=JSON.parse(git(root,['show','HEAD:'+A1_RECORD]).stdout);
   if(!committed.integrationCorrection)return null;
-  for(const f of ['test/support/m1-a1-inspection.mjs',A1_RECORD,IV_GUARD,...(committed.transportFixtureCorrection?[IV_T1_GUARD]:[]),...(committed.dailySubscriptionSuccessor?[DS_GUARD]:[]),...(committed.dailySubscriptionCorrection?[DSC_GUARD]:[])]){
+  for(const f of ['test/support/m1-a1-inspection.mjs',A1_RECORD,IV_GUARD,...(committed.transportFixtureCorrection?[IV_T1_GUARD]:[]),...(committed.dailySubscriptionSuccessor?[DS_GUARD]:[]),...(committed.dailySubscriptionCorrection?[DSC_GUARD]:[]),...(committed.releasePackagingSuccessor?[RP_GUARD]:[])]){
    const pin=text(root,['rev-parse','HEAD:'+f]);
    assert.equal(text(root,['rev-parse',':'+f]),pin,f+' projection index');
    assert.equal(a1Blob(readFileSync(join(root,f))),pin,f+' projection checkout');

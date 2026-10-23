@@ -1,7 +1,9 @@
 // P0 — Vercel deployment surface. Proves, offline, that the .vercelignore allowlist
-//   (1) keeps every file the browser runtime, the 13 serverless functions (the 12 approved at
-//       55eb3712 plus the ONE reviewed F2 trusted route api/cost-history.js; including the four
-//       scheduled routes) and their transitive src/lib imports need, and
+//   (1) keeps every file the browser runtime, the 12 DEPLOYED serverless functions (the 12 approved at
+//       55eb3712 plus the ONE reviewed F2 trusted route api/cost-history.js, minus the disabled WhatsApp
+//       stub api/whatsapp.js, which Marjin 1.0 excludes from the upload — owner decision, Hobby limit
+//       of 12 functions per deployment; including the four scheduled routes) and their transitive
+//       src/lib imports need, and
 //   (2) keeps docs, tests, artifacts, tooling, operator scripts, Rules, stray sources,
 //       secrets/env files and any unclassified new top-level entry out of the deployment.
 // Model and its limits: test/support/vercel-surface.mjs and
@@ -75,27 +77,39 @@ const APPROVED_FUNCTIONS = Object.freeze([
 ]);
 const F2_TRUSTED_ROUTE = "api/cost-history.js";
 const EXPECTED_FUNCTIONS = Object.freeze([...APPROVED_FUNCTIONS, F2_TRUSTED_ROUTE].sort());
+// Marjin 1.0 release packaging: the disabled 410 WhatsApp stub stays in the source tree but is NOT uploaded,
+// so the DEPLOYED inventory is the 13 source entrypoints minus it — 12, the Hobby per-deployment maximum.
+const EXCLUDED_FUNCTIONS = Object.freeze(["api/whatsapp.js"]);
+const DEPLOYED_FUNCTIONS = Object.freeze(EXPECTED_FUNCTIONS.filter((f) => !EXCLUDED_FUNCTIONS.includes(f)));
+const HOBBY_MAX_FUNCTIONS = 12;
 
-test("5 the function inventory is EXACTLY the 12 approved functions + the F2 trusted route (13); each is uploaded, and each scheduled route in vercel.json has an uploaded handler", () => {
+test("5 the source inventory is EXACTLY the 12 approved functions + the F2 trusted route (13); the DEPLOYED inventory is those minus the excluded WhatsApp stub (12, the Hobby maximum); each scheduled route in vercel.json has an uploaded handler", () => {
   const entries = functionEntrypoints(FILES);
-  assert.deepEqual(entries.slice().sort(), EXPECTED_FUNCTIONS, `function inventory differs from the approved 13: ${entries.join(", ")}`);
+  assert.deepEqual(entries.slice().sort(), EXPECTED_FUNCTIONS, `source function inventory differs from the approved 13: ${entries.join(", ")}`);
   assert.equal(entries.length, 13);
   assert.ok(entries.includes(F2_TRUSTED_ROUTE), "the F2 trusted route is present");
   // every api/ file is a detected function: no helper, declaration, dotfile or underscore path hides under api/
   assert.deepEqual(FILES.filter((f) => f.startsWith("api/") && !entries.includes(f)), [], "a non-function file under api/ is not allowed");
-  for (const e of entries) assert.ok(keep(e), `${e} must be uploaded`);
+  const deployed = functionEntrypoints(FILES.filter(keep));
+  assert.deepEqual(deployed.slice().sort(), [...DEPLOYED_FUNCTIONS], `deployed function inventory differs: ${deployed.join(", ")}`);
+  assert.ok(deployed.length <= HOBBY_MAX_FUNCTIONS, `at most ${HOBBY_MAX_FUNCTIONS} functions per deployment on Hobby (${deployed.length})`);
+  assert.equal(deployed.length, 12);
+  assert.ok(deployed.includes(F2_TRUSTED_ROUTE), "the F2 trusted route is deployed");
+  for (const e of EXCLUDED_FUNCTIONS) assert.ok(entries.includes(e) && !keep(e), `${e} stays in the source tree and is not uploaded`);
+
   const crons = JSON.parse(readFileSync(join(ROOT, "vercel.json"), "utf8")).crons;
   assert.equal(crons.length, 4);
   for (const c of crons) {
     const base = c.path.replace(/^\//, "");
-    const handler = entries.find((e) => e === `${base}.ts` || e === `${base}.js`);
+    const handler = deployed.find((e) => e === `${base}.ts` || e === `${base}.js`);
     assert.ok(handler, `cron ${c.path} has no handler file`);
     assert.ok(keep(handler), `cron handler ${handler} must be uploaded`);
   }
 });
 
-test("6 the transitive import closure of every function (nft trace) is uploaded — nothing a function needs is excluded", async () => {
-  const entries = functionEntrypoints(FILES);
+test("6 the transitive import closure of every DEPLOYED function (nft trace) is uploaded — nothing a function needs is excluded", async () => {
+  const entries = functionEntrypoints(FILES.filter(keep));
+  assert.equal(entries.length, 12, "the 12 deployed functions are traced");
   const missing = [];
   let traced = 0;
   const seen = new Set();
@@ -121,9 +135,9 @@ test("6 the transitive import closure of every function (nft trace) is uploaded 
   for (const f of seen) assert.ok(RUNTIME_TOP.has(topOf(f)), `traced file outside the runtime roots: ${f}`);
 });
 
-test("7 whole runtime directories are uploaded except the never-upload patterns (type declarations and JSON fixtures imported by src stay for the TS build)", () => {
+test("7 whole runtime directories are uploaded except the never-upload patterns and the one excluded WhatsApp entry point (type declarations and JSON fixtures imported by src stay for the TS build)", () => {
   for (const f of FILES.filter((x) => ["api", "src", "lib"].includes(topOf(x)))) {
-    const neverUpload = /\.test\.[^/]+$/.test(f);
+    const neverUpload = /\.test\.[^/]+$/.test(f) || EXCLUDED_FUNCTIONS.includes(f);
     assert.equal(keep(f), !neverUpload, `${f}: unexpected upload decision`);
   }
   assert.ok(keep("lib/verifyToken.d.ts") || !FILES.includes("lib/verifyToken.d.ts"));
@@ -170,4 +184,17 @@ test("11 the served set never contains a file whose name looks like a secret, ev
   const s = surface(FILES, TEXT);
   const suspicious = s.served.filter((f) => /(^|\/)(\.env|.*secret.*|.*password.*|.*credential.*|.*service-?account.*|id_rsa.*)$/i.test(f) || /\.(pem|key|p12|pfx|crt)$/i.test(f));
   assert.deepEqual(suspicious, []);
+});
+
+test("12 WhatsApp is out of the 1.0 deployment: only the standalone entry point is excluded; no shared module, route, rewrite or cron changes", () => {
+  assert.deepEqual(FILES.filter((f) => !keep(f) && ["api", "src", "lib"].includes(topOf(f)) && !/\.test\.[^/]+$/.test(f)), [...EXCLUDED_FUNCTIONS], "the only runtime-directory exclusion besides tests");
+  const src = readFileSync(join(ROOT, "api/whatsapp.js"), "utf8");
+  assert.ok(src.includes('res.status(410)') && !/sendWhatsApp|GREENAPI|green-api/.test(src.replace(/\/\/.*$/gm, "")), "the excluded file is the disabled 410 stub (kept in source)");
+  for (const f of ["lib/whatsappMessages.js", "lib/sendWhatsApp.js"]) if (FILES.includes(f)) assert.equal(keep(f), true, `${f}: shared lib modules keep their upload decision`);
+  const v = JSON.parse(readFileSync(join(ROOT, "vercel.json"), "utf8"));
+  assert.ok(!v.crons.some((c) => /whatsapp/i.test(c.path)), "no WhatsApp schedule");
+  assert.ok(!JSON.stringify(v.rewrites).includes("whatsapp") && !JSON.stringify(v.functions || {}).includes("whatsapp"), "no WhatsApp routing configuration");
+  const rules = TEXT.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  assert.equal(rules[rules.length - 1], "/api/whatsapp.js", "the exclusion is the last rule (after the re-allow of /api), so gitignore order applies it");
+  assert.equal(rules.filter((r) => r.startsWith("/api/")).length, 1, "exactly one api/ exclusion");
 });

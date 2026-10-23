@@ -44,3 +44,9 @@
 **/*.swp
 **/*~
 **/*.test.*
+
+# 4. Marjin 1.0 release scope (owner decision: WhatsApp is not part of 1.0; Hobby allows at most 12
+#    functions per deployment). The disabled 410 stub stays in the source tree with its PR2A test,
+#    but is not uploaded, so it is neither a function nor a file of the deployment. No shared module
+#    is excluded. Guarded by test/security/vercel-deployment-surface.test.mjs (tests 5, 7 and 12).
+/api/whatsapp.js

@@ -8,6 +8,7 @@
     "dt": "7b1d3061c1a42b2d05d7702fbe376f98916e2ce6"
   },
   "scope": [
+    ".vercelignore",
     "api/daily-snapshot/run.ts",
     "docs/production-readiness/daily-recipients-1.0.md",
     "docs/production-readiness/daily-recipients.example.json",
@@ -99,6 +100,7 @@
     "test/finance/marjin-1.0-iv-correction-guard.test.mjs",
     "test/finance/marjin-1.0-iv-t1-fixture-guard.test.mjs",
     "test/finance/pbn-sfd-composition-guard.test.mjs",
+    "test/finance/release-packaging-guard.test.mjs",
     "test/finance/rf1-rules-gate-guard.test.mjs",
     "test/finance/rf2-rules-gate-guard.test.mjs",
     "test/finance/rf3-rules-gate-guard.test.mjs",
@@ -109,6 +111,7 @@
     "test/security/checklist-concurrency.test.mjs",
     "test/security/cron-auth-hardening.test.mjs",
     "test/security/scheduled-auth-matrix.test.mjs",
+    "test/security/vercel-deployment-surface.test.mjs",
     "test/storage-v2/canary-contract.test.mjs",
     "test/storage-v2/canary-transport.test.mjs",
     "test/storage-v2/rf1-rules-gate.test.mjs",
@@ -153,6 +156,7 @@
     "tools/daily-delivery/hold.mjs"
   ],
   "allowedScope": [
+    ".vercelignore",
     "api/daily-snapshot/run.ts",
     "docs/production-readiness/daily-recipients-1.0.md",
     "docs/production-readiness/daily-recipients.example.json",
@@ -244,6 +248,7 @@
     "test/finance/marjin-1.0-iv-correction-guard.test.mjs",
     "test/finance/marjin-1.0-iv-t1-fixture-guard.test.mjs",
     "test/finance/pbn-sfd-composition-guard.test.mjs",
+    "test/finance/release-packaging-guard.test.mjs",
     "test/finance/rf1-rules-gate-guard.test.mjs",
     "test/finance/rf2-rules-gate-guard.test.mjs",
     "test/finance/rf3-rules-gate-guard.test.mjs",
@@ -254,6 +259,7 @@
     "test/security/checklist-concurrency.test.mjs",
     "test/security/cron-auth-hardening.test.mjs",
     "test/security/scheduled-auth-matrix.test.mjs",
+    "test/security/vercel-deployment-surface.test.mjs",
     "test/storage-v2/canary-contract.test.mjs",
     "test/storage-v2/canary-transport.test.mjs",
     "test/storage-v2/rf1-rules-gate.test.mjs",
@@ -299,7 +305,7 @@
     "tools/daily-delivery/hold.mjs"
   ],
   "treePins": {
-    ".vercelignore": "c7140b012034e18f47e652950ee90ad4dec18112",
+    ".vercelignore": "c98ca6d4b0800c1751699b206ad4921708fb6be1",
     "CREATED_FILES_SUMMARY.txt": "18c51ed9c5e2ad0959d88813d03b11678a7ba1db",
     "SECURITY.md": "264c3b0f2cdb5fc1f425d74de7dc6fed071d6ddf",
     "admin.js": "f5174f36a756d1baa2922422f1a59a2f6a00d517",
@@ -1072,7 +1078,7 @@
     "test/finance/core-consumers/p1.json": "3dc6a13aab685265beb14f25d2ea0ec27b737017",
     "test/finance/daily-recipient-server-config-guard.test.mjs": "eb2ac3e2197bac2953104500bd4996b07af9e972",
     "test/finance/daily-recipient-server-config-t1-guard.test.mjs": "058d6378a0f1c0a061eb15497b684969c0678104",
-    "test/finance/daily-subscription-correction-guard.test.mjs": "6c8259664c531c736da35fa377e41fdcbf45990d",
+    "test/finance/daily-subscription-correction-guard.test.mjs": "207ddac131558db59f9ba5124966fb021bc137bc",
     "test/finance/daily-subscription-guard.test.mjs": "0578e10e4d0d9923ca6ecbe3f532628667522701",
     "test/finance/daily-subscription-ui-seam.test.mjs": "2ec275ac2f2fbf0f7b1f198deba771b00531b39c",
     "test/finance/dp1-daily-policy-guard.test.mjs": "7606281de9de6903f85b7eaaf60a773b6bcd790b",
@@ -1211,6 +1217,7 @@
     "test/finance/pbn-sfd-composition-guard.test.mjs": "47d0a8d99e1646b0fa60a7b9035bde4fd5a70a69",
     "test/finance/r2-red-probes.test.mjs": "68ecb247b2c8d77f2f9c90dd55c0cd694574d388",
     "test/finance/rc-closure-snapshot-integration.test.mjs": "4a50cab5fb4c8074b126cb9910dc9fc66a3fe2f6",
+    "test/finance/release-packaging-guard.test.mjs": "def0a63f5fcd899f0cfd915c3bbf71b1576af937",
     "test/finance/rf1-rules-gate-guard.test.mjs": "e401dba0d910e18d433d7baaedb6dac290e6cf20",
     "test/finance/rf2-rules-gate-guard.test.mjs": "1ae7d1ccd4253eb16dc82cb2d6d1b7eec20853f6",
     "test/finance/rf3-rules-gate-guard.test.mjs": "943b52bfe79067a6ae1e91c8a31edb5369fcf80e",
@@ -1254,7 +1261,7 @@
     "test/security/strict-daily-metrics.test.mjs": "05f12734d8b1413ff2b8a93bb3d7c3f0a4b9b0ba",
     "test/security/user-invite-disabled.test.mjs": "356f2853d171e5d63702c90c81a4adec87d459a3",
     "test/security/vercel-cron-routes.test.mjs": "242132894d5bb1b4a44909121856ed2d02e955c7",
-    "test/security/vercel-deployment-surface.test.mjs": "488195bef2b26535276535379a3853295b87f805",
+    "test/security/vercel-deployment-surface.test.mjs": "74435a4e8a4254f07af5e15f0b028f40cb8fcef7",
     "test/snapshot/builder-failure-accounting.test.mjs": "7a1cae4e41b08aabe03096a90af36ae32eb817f8",
     "test/storage-v2/canary-cli.test.mjs": "3268ac8bcd402c6b95bf1151a4c77ec75d6aa439",
     "test/storage-v2/canary-contract.test.mjs": "3660f598d0970bf9726f869c7b7581f61e6fb6a3",
@@ -1381,7 +1388,7 @@
     "test/support/i7-integration.json": "3d069d769b5e407515c20cad053674a977152dd3",
     "test/support/i7-integration.mjs": "a52695329d06627d41d49e467f8090cd282453fc",
     "test/support/israel-scenario-clock.mjs": "fb7bd1071b8ff760289a27e1e0aa5594c58e5869",
-    "test/support/m1-a1-inspection.mjs": "28dfcb330f70b921da24a61795d2b9459990dec3",
+    "test/support/m1-a1-inspection.mjs": "698a72ab9edd577d79efcd085a8c6a269bca3f2c",
     "test/support/m1-derivation.mjs": "5ee45583bf800bd4d9551cd76ec5662827e6c01b",
     "test/support/m1-index-scope.mjs": "7f82aa1b534598cd4d87ae3b75394281598d2ac2",
     "test/support/m1-integration-pin.mjs": "b98d35b0fd76ca482ff2a2c888ef2e69ed90c6c3",
@@ -1572,7 +1579,8 @@
     "test/finance/marjin-1.0-composition-guard.test.mjs": "24a8ccc4da38cdc39373742df38e4df4ff365385",
     "test/finance/marjin-1.0-iv-correction-guard.test.mjs": "b85c8b2879e1e57a3837a364bbadea07fd205a8f",
     "test/finance/marjin-1.0-iv-t1-fixture-guard.test.mjs": "6786b80377252d77d6bc2b7b9defa2c7d40dc434",
-    "test/finance/daily-subscription-guard.test.mjs": "51f00aa92355d9aee1b6dcfa27f3d74e4dd16bdd"
+    "test/finance/daily-subscription-guard.test.mjs": "51f00aa92355d9aee1b6dcfa27f3d74e4dd16bdd",
+    "test/finance/daily-subscription-correction-guard.test.mjs": "c0433c456164c53503bd2b9a4553b887ec13b6f8"
   },
   "exclusions": {
     "pbd": "7ae41336b7c2f02b953b9267768b90f97e39278f",
@@ -2894,6 +2902,96 @@
         {
           "from": "export const A1_RECORD = 'test/support/m1-a1-inspection.json';\n",
           "to": "// Daily e-mail subscription correction C1: closed successor of the (not accepted) subscription candidate; review pending.\nexport const DSC_PARENT = \"51f00aa92355d9aee1b6dcfa27f3d74e4dd16bdd\";\nexport const DSC_GUARD = \"test/finance/daily-subscription-correction-guard.test.mjs\";\nexport const DSC_NEW_FILE_PINS = Object.freeze({ \"test/delivery/daily-subscription-authority.test.mjs\": \"c1548b86e4ca21a868cd2f98d09e235c5cb1b77b\", \"test/emulator/daily-subscription-ordering-rendered.mjs\": \"4056db84f84c86544ae85fa5f4a02b4063b2d4b4\", \"test/finance/daily-subscription-correction-guard.test.mjs\": \"6c8259664c531c736da35fa377e41fdcbf45990d\" });\nexport const A1_RECORD = 'test/support/m1-a1-inspection.json';\n"
+        }
+      ]
+    }
+  },
+  "releasePackagingSuccessor": {
+    "parent": "c0433c456164c53503bd2b9a4553b887ec13b6f8",
+    "kind": "release_packaging_successor",
+    "scope": [
+      ".vercelignore",
+      "test/finance/daily-subscription-correction-guard.test.mjs",
+      "test/finance/release-packaging-guard.test.mjs",
+      "test/security/vercel-deployment-surface.test.mjs",
+      "test/support/m1-a1-inspection.json",
+      "test/support/m1-a1-inspection.mjs"
+    ],
+    "newFiles": [
+      "test/finance/release-packaging-guard.test.mjs"
+    ],
+    "status": "PROPOSED_FOR_INDEPENDENT_REVIEW",
+    "edits": {
+      ".vercelignore": [
+        {
+          "from": "**/*.test.*\n",
+          "to": "**/*.test.*\n\n# 4. Marjin 1.0 release scope (owner decision: WhatsApp is not part of 1.0; Hobby allows at most 12\n#    functions per deployment). The disabled 410 stub stays in the source tree with its PR2A test,\n#    but is not uploaded, so it is neither a function nor a file of the deployment. No shared module\n#    is excluded. Guarded by test/security/vercel-deployment-surface.test.mjs (tests 5, 7 and 12).\n/api/whatsapp.js\n"
+        }
+      ],
+      "test/finance/daily-subscription-correction-guard.test.mjs": [
+        {
+          "from": "import {test} from 'node:test';\n",
+          "to": "import {historicalTest} from \"../support/m1-a1-inspection.mjs\";const test=historicalTest(new URL(\"../../\",import.meta.url),\"c0433c456164c53503bd2b9a4553b887ec13b6f8\",\"test/finance/daily-subscription-correction-guard.test.mjs\");\n"
+        }
+      ],
+      "test/security/vercel-deployment-surface.test.mjs": [
+        {
+          "from": "  assert.deepEqual(suspicious, []);\n});\n",
+          "to": "  assert.deepEqual(suspicious, []);\n});\n\ntest(\"12 WhatsApp is out of the 1.0 deployment: only the standalone entry point is excluded; no shared module, route, rewrite or cron changes\", () => {\n  assert.deepEqual(FILES.filter((f) => !keep(f) && [\"api\", \"src\", \"lib\"].includes(topOf(f)) && !/\\.test\\.[^/]+$/.test(f)), [...EXCLUDED_FUNCTIONS], \"the only runtime-directory exclusion besides tests\");\n  const src = readFileSync(join(ROOT, \"api/whatsapp.js\"), \"utf8\");\n  assert.ok(src.includes('res.status(410)') && !/sendWhatsApp|GREENAPI|green-api/.test(src.replace(/\\/\\/.*$/gm, \"\")), \"the excluded file is the disabled 410 stub (kept in source)\");\n  for (const f of [\"lib/whatsappMessages.js\", \"lib/sendWhatsApp.js\"]) if (FILES.includes(f)) assert.equal(keep(f), true, `${f}: shared lib modules keep their upload decision`);\n  const v = JSON.parse(readFileSync(join(ROOT, \"vercel.json\"), \"utf8\"));\n  assert.ok(!v.crons.some((c) => /whatsapp/i.test(c.path)), \"no WhatsApp schedule\");\n  assert.ok(!JSON.stringify(v.rewrites).includes(\"whatsapp\") && !JSON.stringify(v.functions || {}).includes(\"whatsapp\"), \"no WhatsApp routing configuration\");\n  const rules = TEXT.split(\"\\n\").map((l) => l.trim()).filter((l) => l && !l.startsWith(\"#\"));\n  assert.equal(rules[rules.length - 1], \"/api/whatsapp.js\", \"the exclusion is the last rule (after the re-allow of /api), so gitignore order applies it\");\n  assert.equal(rules.filter((r) => r.startsWith(\"/api/\")).length, 1, \"exactly one api/ exclusion\");\n});\n"
+        },
+        {
+          "from": "    const neverUpload = /\\.test\\.[^/]+$/.test(f);\n",
+          "to": "    const neverUpload = /\\.test\\.[^/]+$/.test(f) || EXCLUDED_FUNCTIONS.includes(f);\n"
+        },
+        {
+          "from": "test(\"7 whole runtime directories are uploaded except the never-upload patterns (type declarations and JSON fixtures imported by src stay for the TS build)\", () => {\n",
+          "to": "test(\"7 whole runtime directories are uploaded except the never-upload patterns and the one excluded WhatsApp entry point (type declarations and JSON fixtures imported by src stay for the TS build)\", () => {\n"
+        },
+        {
+          "from": "test(\"6 the transitive import closure of every function (nft trace) is uploaded \u2014 nothing a function needs is excluded\", async () => {\n  const entries = functionEntrypoints(FILES);\n",
+          "to": "test(\"6 the transitive import closure of every DEPLOYED function (nft trace) is uploaded \u2014 nothing a function needs is excluded\", async () => {\n  const entries = functionEntrypoints(FILES.filter(keep));\n  assert.equal(entries.length, 12, \"the 12 deployed functions are traced\");\n"
+        },
+        {
+          "from": "    const handler = entries.find((e) => e === `${base}.ts` || e === `${base}.js`);\n",
+          "to": "    const handler = deployed.find((e) => e === `${base}.ts` || e === `${base}.js`);\n"
+        },
+        {
+          "from": "  for (const e of entries) assert.ok(keep(e), `${e} must be uploaded`);\n",
+          "to": "  const deployed = functionEntrypoints(FILES.filter(keep));\n  assert.deepEqual(deployed.slice().sort(), [...DEPLOYED_FUNCTIONS], `deployed function inventory differs: ${deployed.join(\", \")}`);\n  assert.ok(deployed.length <= HOBBY_MAX_FUNCTIONS, `at most ${HOBBY_MAX_FUNCTIONS} functions per deployment on Hobby (${deployed.length})`);\n  assert.equal(deployed.length, 12);\n  assert.ok(deployed.includes(F2_TRUSTED_ROUTE), \"the F2 trusted route is deployed\");\n  for (const e of EXCLUDED_FUNCTIONS) assert.ok(entries.includes(e) && !keep(e), `${e} stays in the source tree and is not uploaded`);\n\n"
+        },
+        {
+          "from": "  assert.deepEqual(entries.slice().sort(), EXPECTED_FUNCTIONS, `function inventory differs from the approved 13: ${entries.join(\", \")}`);\n",
+          "to": "  assert.deepEqual(entries.slice().sort(), EXPECTED_FUNCTIONS, `source function inventory differs from the approved 13: ${entries.join(\", \")}`);\n"
+        },
+        {
+          "from": "test(\"5 the function inventory is EXACTLY the 12 approved functions + the F2 trusted route (13); each is uploaded, and each scheduled route in vercel.json has an uploaded handler\", () => {\n",
+          "to": "test(\"5 the source inventory is EXACTLY the 12 approved functions + the F2 trusted route (13); the DEPLOYED inventory is those minus the excluded WhatsApp stub (12, the Hobby maximum); each scheduled route in vercel.json has an uploaded handler\", () => {\n"
+        },
+        {
+          "from": "const EXPECTED_FUNCTIONS = Object.freeze([...APPROVED_FUNCTIONS, F2_TRUSTED_ROUTE].sort());\n\n",
+          "to": "const EXPECTED_FUNCTIONS = Object.freeze([...APPROVED_FUNCTIONS, F2_TRUSTED_ROUTE].sort());\n// Marjin 1.0 release packaging: the disabled 410 WhatsApp stub stays in the source tree but is NOT uploaded,\n// so the DEPLOYED inventory is the 13 source entrypoints minus it \u2014 12, the Hobby per-deployment maximum.\nconst EXCLUDED_FUNCTIONS = Object.freeze([\"api/whatsapp.js\"]);\nconst DEPLOYED_FUNCTIONS = Object.freeze(EXPECTED_FUNCTIONS.filter((f) => !EXCLUDED_FUNCTIONS.includes(f)));\nconst HOBBY_MAX_FUNCTIONS = 12;\n\n"
+        },
+        {
+          "from": "//   (1) keeps every file the browser runtime, the 13 serverless functions (the 12 approved at\n//       55eb3712 plus the ONE reviewed F2 trusted route api/cost-history.js; including the four\n//       scheduled routes) and their transitive src/lib imports need, and\n",
+          "to": "//   (1) keeps every file the browser runtime, the 12 DEPLOYED serverless functions (the 12 approved at\n//       55eb3712 plus the ONE reviewed F2 trusted route api/cost-history.js, minus the disabled WhatsApp\n//       stub api/whatsapp.js, which Marjin 1.0 excludes from the upload \u2014 owner decision, Hobby limit\n//       of 12 functions per deployment; including the four scheduled routes) and their transitive\n//       src/lib imports need, and\n"
+        }
+      ],
+      "test/support/m1-a1-inspection.mjs": [
+        {
+          "from": "  for(const f of ['test/support/m1-a1-inspection.mjs',A1_RECORD,IV_GUARD,...(committed.transportFixtureCorrection?[IV_T1_GUARD]:[]),...(committed.dailySubscriptionSuccessor?[DS_GUARD]:[]),...(committed.dailySubscriptionCorrection?[DSC_GUARD]:[])]){\n",
+          "to": "  for(const f of ['test/support/m1-a1-inspection.mjs',A1_RECORD,IV_GUARD,...(committed.transportFixtureCorrection?[IV_T1_GUARD]:[]),...(committed.dailySubscriptionSuccessor?[DS_GUARD]:[]),...(committed.dailySubscriptionCorrection?[DSC_GUARD]:[]),...(committed.releasePackagingSuccessor?[RP_GUARD]:[])]){\n"
+        },
+        {
+          "from": "let ivT1ParentProven=false;\n",
+          "to": "let rpParentProven=false;\nfunction verifyReleasePackagingSuccessor(root,r,head) {\n const {edits,...identity}=r.releasePackagingSuccessor;\n const scope=identity.scope,newFiles=identity.newFiles;\n assert.ok(Array.isArray(scope)&&Array.isArray(newFiles)&&scope.includes(A1_RECORD)&&scope.includes('test/support/m1-a1-inspection.mjs')&&scope.includes(RP_GUARD)&&scope.includes(DSC_GUARD)&&newFiles.includes(RP_GUARD),'closed RP scope shape');\n assert.deepEqual(scope,[...new Set(scope)].sort(),'sorted unique RP scope');assert.ok(newFiles.every(f=>scope.includes(f)));\n assert.deepEqual(identity,{parent:RP_PARENT,kind:'release_packaging_successor',scope:[...scope],newFiles:[...newFiles],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'});\n assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,RP_PARENT],'exact RP sole parent');\n for(const args of [['diff','--name-only',RP_PARENT,'HEAD','--'],['diff','--name-only','--cached',RP_PARENT,'--'],['diff','--name-only',RP_PARENT,'--']])assert.deepEqual(text(root,args).split('\\n').filter(Boolean).sort(),[...scope],'exact RP scope');\n assert.deepEqual(untrackedPaths(root),[],'no untracked bypass');\n const prior=JSON.parse(git(root,['show',RP_PARENT+':'+A1_RECORD]).stdout);\n assert.ok(prior.dailySubscriptionCorrection&&!prior.releasePackagingSuccessor,'the parent is the subscription correction C1');\n for(const k of Object.keys(prior))if(!['treePins','scope','allowedScope','historicalGuards'].includes(k))assert.deepEqual(r[k],prior[k],k+' prior exact');\n assert.deepEqual(Object.keys(r).sort(),[...Object.keys(prior),'releasePackagingSuccessor'].sort(),'closed RP record');\n assert.deepEqual(r.scope,[...new Set([...prior.scope,...scope])].sort());\n assert.deepEqual(r.allowedScope,[...new Set([...prior.allowedScope,...r.scope])].sort());\n assert.deepEqual(r.historicalGuards,{...prior.historicalGuards,[DSC_GUARD]:RP_PARENT});\n const tree={};for(const row of text(root,['ls-tree','-r','-z','HEAD']).split('\\0').filter(Boolean)){const m=/^(\\d+) blob ([a-f0-9]{40})\\t([\\s\\S]+)$/.exec(row);assert.ok(m,row);assert.notEqual(m[1],'120000');tree[m[3]]=m[2];}\n delete tree[A1_RECORD];assert.deepEqual(tree,r.treePins,'complete RP tree');\n const index={};for(const row of text(root,['ls-files','--stage','-z']).split('\\0').filter(Boolean)){const m=/^\\d+ ([a-f0-9]{40}) 0\\t([\\s\\S]+)$/.exec(row);assert.ok(m,'unmerged index');index[m[2]]=m[1];}\n assert.deepEqual(Object.keys(index).sort(),[...Object.keys(tree),A1_RECORD].sort());\n for(const [f,pin]of Object.entries(tree)){assert.equal(index[f],pin,f+' index');assert.equal(a1Blob(readFileSync(join(root,f))),pin,f+' checkout');}\n assert.equal(index[A1_RECORD],text(root,['rev-parse','HEAD:'+A1_RECORD]));assert.equal(a1Blob(readFileSync(join(root,A1_RECORD))),index[A1_RECORD]);\n for(const f of newFiles)assert.notEqual(git(root,['cat-file','-e',RP_PARENT+':'+f]).status,0,f+' is new at RP');\n assert.deepEqual([...newFiles].sort(),Object.keys(RP_NEW_FILE_PINS).sort(),'closed RP new files');\n for(const f of newFiles)assert.equal(tree[f],RP_NEW_FILE_PINS[f],f+' exact RP new-file pin');\n assert.deepEqual(Object.keys(edits).sort(),scope.filter(f=>f!==A1_RECORD&&!newFiles.includes(f)),'closed RP derivations');\n for(const [f,changes]of Object.entries(edits)){let b=git(root,['show',RP_PARENT+':'+f]).stdout;for(const e of changes){assert.ok(e.from&&b.split(e.from).length===2,f+' unique RP anchor');b=b.replace(e.from,()=>e.to);}assert.equal(a1Blob(Buffer.from(b)),tree[f],f+' exact RP derivation');}\n for(const [f,pin]of Object.entries(prior.treePins))if(!scope.includes(f))assert.equal(tree[f],pin,f+' protected prior');\n if(!rpParentProven){proveLiteralHolder(root,RP_PARENT,'literal subscription correction C1 parent');rpParentProven=true;}\n return {ok:true,head,files:Object.keys(tree).length};\n}\nlet ivT1ParentProven=false;\n"
+        },
+        {
+          "from": "  if(r.dailySubscriptionCorrection)return verifyDailySubscriptionCorrection(root,r,head);\n",
+          "to": "  if(r.releasePackagingSuccessor)return verifyReleasePackagingSuccessor(root,r,head);\n  if(r.dailySubscriptionCorrection)return verifyDailySubscriptionCorrection(root,r,head);\n"
+        },
+        {
+          "from": "export const A1_RECORD = 'test/support/m1-a1-inspection.json';\n",
+          "to": "// Marjin 1.0 release packaging: the WhatsApp stub leaves the deployment upload (Hobby 12-function limit); review pending.\nexport const RP_PARENT = \"c0433c456164c53503bd2b9a4553b887ec13b6f8\";\nexport const RP_GUARD = \"test/finance/release-packaging-guard.test.mjs\";\nexport const RP_NEW_FILE_PINS = Object.freeze({ \"test/finance/release-packaging-guard.test.mjs\": \"def0a63f5fcd899f0cfd915c3bbf71b1576af937\" });\nexport const A1_RECORD = 'test/support/m1-a1-inspection.json';\n"
         }
       ]
     }
