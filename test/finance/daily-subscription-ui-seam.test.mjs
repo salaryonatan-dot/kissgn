@@ -7,6 +7,8 @@
 //   DSU-04  default OFF; the switch is ON only after the server confirmed enabled; an unknown reply never changes the shown
 //           state; states are per business
 //   DSU-05  wiring: the page never touches the preference path directly; the switch is server-confirmed and address-free
+//   DSU-06  ordering (C1): a reply never replaces a confirmed state of a higher version, in any arrival order; pending
+//           changes lock the switch until all are settled; a failure shows only when no later request was confirmed
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -28,7 +30,8 @@ function loadSeam(html = HTML, { withNotice = true } = {}) {
 const RAW = loadSeam();
 const plain = (x) => (x === undefined ? undefined : JSON.parse(JSON.stringify(x)));
 const M = { ...RAW, readRequest: (...a) => plain(RAW.readRequest(...a)), setRequest: (...a) => plain(RAW.setRequest(...a)), decide: (...a) => plain(RAW.decide(...a)),
-  stateFor: (...a) => plain(RAW.stateFor(...a)), next: (...a) => plain(RAW.next(...a)), busy: (...a) => plain(RAW.busy(...a)) };
+  stateFor: (...a) => plain(RAW.stateFor(...a)) };
+const view = (st, b = B) => { const x = RAW.stateFor(st, T, b); return { kind: x.kind, enabled: x.enabled, version: x.version, busy: x.busy, failed: x.failed, checked: RAW.checked(st, T, b) }; };
 const T = "tenantA", B = "bizA", B2 = "bizB";
 const ok = (over = {}) => ({ status: "ok", tenantId: T, bizId: B, enabled: true, state: "enabled", explicit: true, version: 1, ...over });
 
@@ -52,8 +55,9 @@ test("DSU-02 requests always carry the action; enabled is a strict boolean", () 
 });
 
 test("DSU-03 decide: known only for a confirmed reply for this business", () => {
-  assert.deepEqual(M.decide(200, ok(), T, B), { kind: "known", enabled: true });
-  assert.deepEqual(M.decide(200, ok({ enabled: false }), T, B), { kind: "known", enabled: false });
+  assert.deepEqual(M.decide(200, ok(), T, B), { kind: "known", enabled: true, version: 1 });
+  assert.deepEqual(M.decide(200, ok({ enabled: false, version: null }), T, B), { kind: "known", enabled: false, version: 0 }, "no record = version 0");
+  for (const version of [undefined, 0, -1, 1.5, "2", NaN]) assert.equal(M.decide(200, ok({ version }), T, B).kind, "unknown", "version " + String(version));
   const unknown = [[200, ok({ enabled: "true" })], [200, ok({ enabled: undefined })], [200, ok({ status: "unavailable" })], [200, ok({ tenantId: "other" })],
     [200, ok({ bizId: B2 })], [200, null], [200, []], [200, "ok"], [503, ok()], [400, ok()], [401, ok()], [403, ok()], [404, ok()], [500, ok()], [null, null]];
   for (const [status, body] of unknown) assert.equal(M.decide(status, body, T, B).kind, "unknown", JSON.stringify([status, body]));
@@ -61,16 +65,46 @@ test("DSU-03 decide: known only for a confirmed reply for this business", () => 
 
 test("DSU-04 default OFF; only confirmed states change the switch; per business", () => {
   assert.equal(RAW.checked({}, T, B), false, "default OFF before any confirmation");
-  assert.deepEqual(M.stateFor({}, T, B), { kind: "idle", enabled: false, busy: false, failed: false });
-  let s = RAW.next({}, RAW.decide(200, ok({ enabled: true }), T, B), T, B);
+  assert.deepEqual(view({}), { kind: "idle", enabled: false, version: -1, busy: false, failed: false, checked: false });
+  let s = RAW.settle({}, RAW.decide(200, ok({ enabled: true }), T, B), T, B, 1, false);
   assert.equal(RAW.checked(s, T, B), true); assert.equal(RAW.checked(s, T, B2), false, "another business is untouched");
-  s = RAW.busy(s, T, B); assert.deepEqual([RAW.stateFor(s, T, B).busy, RAW.checked(s, T, B)], [true, true], "busy keeps the confirmed state");
-  s = RAW.next(s, RAW.decide(503, { status: "unavailable" }, T, B), T, B);
-  assert.deepEqual([RAW.checked(s, T, B), RAW.stateFor(s, T, B).failed, RAW.stateFor(s, T, B).busy], [true, true, false], "a failed change never flips the switch");
-  s = RAW.next(s, RAW.decide(200, ok({ enabled: false }), T, B), T, B);
-  assert.deepEqual([RAW.checked(s, T, B), RAW.stateFor(s, T, B).failed], [false, false]);
-  const fresh = RAW.next({}, RAW.decide(null, null, T, B), T, B);
-  assert.deepEqual([RAW.checked(fresh, T, B), RAW.stateFor(fresh, T, B).kind], [false, "idle"], "an unknown first reply confirms nothing");
+  s = RAW.begin(s, T, B, true); assert.deepEqual([view(s).busy, view(s).checked], [true, true], "busy keeps the confirmed state");
+  s = RAW.settle(s, RAW.decide(503, { status: "unavailable" }, T, B), T, B, 2, true);
+  assert.deepEqual([view(s).checked, view(s).failed, view(s).busy], [true, true, false], "a failed change never flips the switch");
+  s = RAW.settle(s, RAW.decide(200, ok({ enabled: false, version: 2 }), T, B), T, B, 3, false);
+  assert.deepEqual([view(s).checked, view(s).failed], [false, false], "a later confirmed reply clears the failure");
+  const fresh = RAW.settle({}, RAW.decide(null, null, T, B), T, B, 1, false);
+  assert.deepEqual([RAW.checked(fresh, T, B), view(fresh).kind, view(fresh).failed], [false, "idle", true], "an unknown first reply confirms nothing");
+});
+
+test("DSU-06 ordering: versions win over arrival order; pending changes lock; stale failures stay silent", () => {
+  const known = (enabled, version) => RAW.decide(200, ok({ enabled, version }), T, B);
+  // delayed ON read (v1, request 2) arriving after the confirmed OFF change (v2, request 3)
+  let s = RAW.settle({}, known(true, 1), T, B, 1, false);
+  s = RAW.begin(s, T, B, true);
+  s = RAW.settle(s, known(false, 2), T, B, 3, true);
+  s = RAW.settle(s, known(true, 1), T, B, 2, false);
+  assert.deepEqual(view(s), { kind: "known", enabled: false, version: 2, busy: false, failed: false, checked: false }, "the stale ON read is ignored");
+  // every arrival order of { read v1 ON, change v2 OFF, read v2 OFF, change v3 ON } ends at the highest version
+  const replies = [[known(true, 1), 1, false], [known(false, 2), 2, true], [known(false, 2), 3, false], [known(true, 3), 4, true]];
+  const perms = (a) => a.length <= 1 ? [a] : a.flatMap((x, i) => perms([...a.slice(0, i), ...a.slice(i + 1)]).map((p) => [x, ...p]));
+  for (const order of perms(replies)) {
+    let st = RAW.begin(RAW.begin({}, T, B, true), T, B, true);
+    for (const [d, seq, ch] of order) st = RAW.settle(st, d, T, B, seq, ch);
+    assert.deepEqual(view(st), { kind: "known", enabled: true, version: 3, busy: false, failed: false, checked: true }, JSON.stringify(order.map((o) => o[1])));
+  }
+  // pending changes: the switch stays locked until EVERY change is settled, even when a read confirms meanwhile
+  s = RAW.begin(RAW.begin(RAW.settle({}, known(true, 1), T, B, 1, false), T, B, true), T, B, true);
+  s = RAW.settle(s, known(false, 2), T, B, 2, true); assert.equal(view(s).busy, true, "one change still pending");
+  s = RAW.settle(s, known(true, 3), T, B, 3, false); assert.equal(view(s).busy, true, "a read never unlocks a pending change");
+  s = RAW.settle(s, RAW.decide(null, null, T, B), T, B, 4, true); assert.deepEqual([view(s).busy, view(s).checked, view(s).failed], [false, true, true]);
+  // a failure of an EARLIER request after a later confirmation shows nothing
+  s = RAW.settle(RAW.settle({}, known(false, null), T, B, 5, false), RAW.decide(503, {}, T, B), T, B, 4, false);
+  assert.deepEqual([view(s).failed, view(s).checked], [false, false], "a stale failure stays silent");
+  // per business: replies settle only their own business
+  s = RAW.begin(RAW.settle({}, known(true, 1), T, B, 1, false), T, B, true);
+  s = RAW.settle(s, RAW.decide(200, ok({ bizId: B2, enabled: false, version: null }), T, B2), T, B2, 2, false);
+  assert.deepEqual([view(s).busy, view(s).checked, view(s, B2).checked, view(s, B2).busy], [true, true, false, false]);
 });
 
 test("DSU-05 wiring: server-confirmed, owner-only, address-free; the preference path is never touched by the page", () => {
@@ -81,8 +115,11 @@ test("DSU-05 wiring: server-confirmed, owner-only, address-free; the preference 
     "onChange={(e)=>changeDailySubscription(e.target.checked)}", "window.MarjinDailySubscription.LABEL_HE"]) assert.ok(block.includes(needle), needle);
   assert.ok(!/@|recipient|email\b/i.test(block.replace(/LABEL_HE|data-daily-subscription|MarjinDailySubscription|changeDailySubscription|dailySubscription/g, "")), "no address or recipient field in the switch");
   const EFF = "// Daily e-mail subscription: read only when the owner opens the panel";
-  const eff = HTML.slice(HTML.indexOf(EFF), HTML.indexOf(EFF) + 3500); assert.ok(HTML.indexOf(EFF) > 0);
-  assert.ok(eff.includes("window.MarjinDailySubscription.readRequest(ctx.tenantId, currentBizId)") && eff.includes("window.MarjinDailySubscription.setRequest(ctx.tenantId, bizId, enabled)"));
-  assert.ok(eff.includes("if (!live || !isSelectionLive(ctx)) return;"), "a reply for a selection that is no longer live is dropped");
+  const eff = HTML.slice(HTML.indexOf(EFF), HTML.indexOf("  const finF = finCoreState", HTML.indexOf(EFF))); assert.ok(HTML.indexOf(EFF) > 0 && eff.length > 1000);
+  assert.ok(eff.includes("window.MarjinDailySubscription.readRequest(ctx.tenantId, bizId)") && eff.includes("window.MarjinDailySubscription.setRequest(ctx.tenantId, bizId, enabled)"));
+  for (const needle of ["const seq = ++dailySubSeqRef.current;", "const bizId = currentBizId, seq = ++dailySubSeqRef.current;", "window.MarjinDailySubscription.begin(prev, ctx.tenantId, bizId, true)",
+    "window.MarjinDailySubscription.settle(prev, decision, ctx.tenantId, bizId, seq, false)", "window.MarjinDailySubscription.settle(prev, decision, ctx.tenantId, bizId, seq, true)"])
+    assert.equal(eff.split(needle).length, 2, "C1 ordering wiring: " + needle);
+  assert.ok(eff.includes("if (!isLive() || !isSelectionLive(ctx)) return;") && eff.includes("readDailySubscription(ctx, currentBizId, () => live);"), "a read for a closed panel or a selection that is no longer live is dropped");
   assert.ok(eff.includes("if (!showDailySubscription || !bound || currentUser"), "nothing is requested on page load: the read waits for the owner to open the panel");
 });

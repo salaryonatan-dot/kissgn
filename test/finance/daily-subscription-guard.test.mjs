@@ -8,7 +8,7 @@
 //   DSG-06  a wrong parent and a repinned protected-content forgery refuse in the full holder and the projection
 //   DSG-07  the page layer: HEAD's page is the I3 page + exactly the recorded edits and the effective M1 page pin; the pre-DS page
 //           passes only as an EARLIER commit's page, never as the current page (committed / staged / checked out)
-import {test} from 'node:test';
+import {historicalTest} from "../support/m1-a1-inspection.mjs";const test=historicalTest(new URL("../../",import.meta.url),"51f00aa92355d9aee1b6dcfa27f3d74e4dd16bdd","test/finance/daily-subscription-guard.test.mjs");
 import assert from 'node:assert/strict';
 import {readFileSync,writeFileSync,appendFileSync,mkdtempSync,rmSync,symlinkSync,existsSync} from 'node:fs';
 import {join} from 'node:path';import {tmpdir} from 'node:os';import {spawnSync} from 'node:child_process';

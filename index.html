@@ -2511,6 +2511,10 @@
   // server CONFIRMED for THIS business. Default OFF. Anything else — a refused / failed / unreachable request, a reply of
   // another shape — confirms nothing: the switch keeps the last confirmed state (or none) and the page is unaffected. The
   // switch never shows or edits an address; the recipient stays the server configuration.
+  // Ordering (correction C1): every confirmed reply carries the server record's version (absent = 0). A reply never replaces
+  // a confirmed state of a HIGHER version, whatever order the replies arrive in, so a delayed read or write never undoes a
+  // newer confirmed change. Changes in flight are counted per business (the switch is locked until all are settled); a
+  // failure is shown only when no LATER request of that business has already been confirmed.
   (function () {
     "use strict";
     var LABEL_HE = "קבלת דוח יומי במייל";
@@ -2525,30 +2529,49 @@
     function shouldAsk(role, tenantId, bizId, demo) {
       return typeof ENDPOINT === "string" && OWNER_ROLES.indexOf(role) >= 0 && typeof tenantId === "string" && tenantId !== "" && typeof bizId === "string" && bizId !== "" && demo !== true;
     }
-    /** { kind: "known", enabled } only for a 200 "ok" reply with a boolean `enabled` for THIS business; else { kind: "unknown" }. */
+    /** { kind: "known", enabled, version } only for a 200 "ok" reply with a boolean `enabled` and a record version (null = no
+     *  record = 0, else a positive safe integer) for THIS business; else { kind: "unknown" }. */
     function decide(status, body, tenantId, bizId) {
-      if (status !== 200 || !isRecord(body) || body.status !== "ok" || body.tenantId !== tenantId || body.bizId !== bizId || typeof body.enabled !== "boolean")
+      if (status !== 200 || !isRecord(body) || body.status !== "ok" || body.tenantId !== tenantId || body.bizId !== bizId || typeof body.enabled !== "boolean" ||
+          !(body.version === null || (Number.isSafeInteger(body.version) && body.version >= 1)))
         return { kind: "unknown", reason: status === null ? "no_reply" : status !== 200 ? "http_" + status : "shape_or_identity" };
-      return { kind: "known", enabled: body.enabled };
+      return { kind: "known", enabled: body.enabled, version: body.version === null ? 0 : body.version };
     }
     function key(tenantId, bizId) { return String(tenantId) + "\u0000" + String(bizId); }
-    /** The state of one business: { kind: "idle" | "known", enabled, busy, failed }. */
-    function stateFor(states, tenantId, bizId) { var s = isRecord(states) ? states[key(tenantId, bizId)] : null; return isRecord(s) ? s : { kind: "idle", enabled: false, busy: false, failed: false }; }
+    var EMPTY = Object.freeze({ kind: "idle", enabled: false, version: -1, pending: 0, busy: false, failed: false, okSeq: 0, failSeq: 0 });
+    /** The state of one business: { kind: "idle" | "known", enabled, version, pending (changes in flight), busy, failed, okSeq, failSeq }. */
+    function stateFor(states, tenantId, bizId) { var s = isRecord(states) ? states[key(tenantId, bizId)] : null; return isRecord(s) ? s : EMPTY; }
     function withState(states, tenantId, bizId, patch) {
       var out = Object.assign({}, isRecord(states) ? states : {});
       out[key(tenantId, bizId)] = Object.assign({}, stateFor(states, tenantId, bizId), patch);
       return out;
     }
-    /** After a reply: a known decision replaces the shown state; an unknown one keeps it and marks the failure. */
-    function next(states, decision, tenantId, bizId) {
-      if (isRecord(decision) && decision.kind === "known") return withState(states, tenantId, bizId, { kind: "known", enabled: decision.enabled, busy: false, failed: false });
-      return withState(states, tenantId, bizId, { busy: false, failed: true });
+    /** A request was sent (seq: a page-wide increasing number). A change locks the switch until it is settled. */
+    function begin(states, tenantId, bizId, isChange) {
+      var s = stateFor(states, tenantId, bizId), pending = s.pending + (isChange === true ? 1 : 0);
+      return withState(states, tenantId, bizId, { pending: pending, busy: pending > 0 });
     }
-    function busy(states, tenantId, bizId) { return withState(states, tenantId, bizId, { busy: true, failed: false }); }
+    /** A reply arrived for request `seq`. A confirmed reply is applied only when its version is not older than the confirmed
+     *  state; a failure is marked only when no later request of this business was already confirmed. */
+    function settle(states, decision, tenantId, bizId, seq, isChange) {
+      var s = stateFor(states, tenantId, bizId), n = Number.isSafeInteger(seq) ? seq : 0;
+      var pending = isChange === true ? Math.max(0, s.pending - 1) : s.pending;
+      var patch = { pending: pending, busy: pending > 0 };
+      if (isRecord(decision) && decision.kind === "known" && Number.isSafeInteger(decision.version)) {
+        if (s.kind !== "known" || decision.version >= s.version) {
+          patch.kind = "known"; patch.enabled = decision.enabled === true; patch.version = decision.version;
+          patch.okSeq = Math.max(s.okSeq, n);
+          if (s.failed && n > s.failSeq) patch.failed = false;
+        }
+      } else if (n > s.okSeq) {
+        patch.failed = true; patch.failSeq = Math.max(s.failSeq, n);
+      }
+      return withState(states, tenantId, bizId, patch);
+    }
     /** The switch is ON only when the server confirmed enabled for this business. */
     function checked(states, tenantId, bizId) { var s = stateFor(states, tenantId, bizId); return s.kind === "known" && s.enabled === true; }
     window.MarjinDailySubscription = Object.freeze({ LABEL_HE: LABEL_HE, ERROR_HE: ERROR_HE, ENDPOINT: ENDPOINT, OWNER_ROLES: OWNER_ROLES, readRequest: readRequest,
-      setRequest: setRequest, shouldAsk: shouldAsk, decide: decide, stateFor: stateFor, next: next, busy: busy, checked: checked });
+      setRequest: setRequest, shouldAsk: shouldAsk, decide: decide, stateFor: stateFor, begin: begin, settle: settle, checked: checked });
   })();
   </script>
 
@@ -6494,6 +6517,8 @@ function PilotDashboard() {
   const [dailyNotice, setDailyNotice] = useState({});   // per-business displayed states (MarjinDailyNotice.next / stateFor)
   const [dailySubscription, setDailySubscription] = useState({});   // per-business server-confirmed states (MarjinDailySubscription)
   const [showDailySubscription, setShowDailySubscription] = useState(false);   // the owner opened the Daily e-mail panel
+  const dailySubSeqRef = useRef(0);            // page-wide request order for the subscription replies (C1)
+  const dailySubOpenRef = useRef(false);       // the panel is open now (a failed change re-reads only while it is)
   // ── Insight Engine v1 — Dashboard card state (Phase 3, read-only) ──────────
   const [dashboardInsights, setDashboardInsights] = useState(null);        // null = no doc found; [] = doc exists but no insights
   const [dashboardInsightsDate, setDashboardInsightsDate] = useState(null);
@@ -7140,7 +7165,11 @@ function PilotDashboard() {
   }, [currentBizId, finSel.gen, finSel.tenantId, dailyNoticeRole, isDemoMode, dailyNoticeBizName]);
   // Daily e-mail subscription: read only when the owner opens the panel (nothing is requested on page load), bound to the
   // captured selection like the notice read. Only a server-confirmed state is shown; a change is sent to the server and the
-  // switch follows the server's reply.
+  // switch follows the server's reply. C1: each request takes a page-wide sequence number; every reply is settled into the
+  // state of the business it was sent for (MarjinDailySubscription.settle orders by the server's version), so a delayed
+  // read or change never replaces a newer confirmed state, and a pending change keeps the switch locked across reopening
+  // and business switching. A read whose panel was closed or whose selection is no longer live is dropped. A failed change
+  // shows the error and the last confirmed state, then re-reads the server state while the panel is still open.
   const askDailySubscription = (ctx, body) => (async () => {
     let status = null, json = null;
     try {
@@ -7150,28 +7179,36 @@ function PilotDashboard() {
     } catch (_) { status = null; json = null; }
     return { status, json };
   })();
+  const readDailySubscription = (ctx, bizId, isLive) => {
+    const seq = ++dailySubSeqRef.current;
+    (async () => {
+      const { status, json } = await askDailySubscription(ctx, window.MarjinDailySubscription.readRequest(ctx.tenantId, bizId));
+      if (!isLive() || !isSelectionLive(ctx)) return;
+      const decision = window.MarjinDailySubscription.decide(status, json, ctx.tenantId, bizId);
+      setDailySubscription((prev) => window.MarjinDailySubscription.settle(prev, decision, ctx.tenantId, bizId, seq, false));
+    })();
+  };
+  useEffect(() => { dailySubOpenRef.current = showDailySubscription; }, [showDailySubscription]);
   useEffect(() => {
     const ctx = captureSelectionCtx();
     const bound = !!(currentBizId && ctx && typeof ctx.tenantId === "string" && ctx.tenantId && ctx.bizId === currentBizId);
     if (!showDailySubscription || !bound || currentUser || !window.MarjinDailySubscription || !window.MarjinDailySubscription.shouldAsk(dailyNoticeRole, ctx.tenantId, currentBizId, isDemoMode) || typeof window.apiFetch !== "function") return;
     let live = true;
-    (async () => {
-      const { status, json } = await askDailySubscription(ctx, window.MarjinDailySubscription.readRequest(ctx.tenantId, currentBizId));
-      if (!live || !isSelectionLive(ctx)) return;
-      const decision = window.MarjinDailySubscription.decide(status, json, ctx.tenantId, currentBizId);
-      setDailySubscription((prev) => window.MarjinDailySubscription.next(prev, decision, ctx.tenantId, currentBizId));
-    })();
+    readDailySubscription(ctx, currentBizId, () => live);
     return () => { live = false; };
   }, [showDailySubscription, currentBizId, finSel.gen, finSel.tenantId, dailyNoticeRole, isDemoMode, currentUser]);
   const changeDailySubscription = (enabled) => {
     const ctx = captureSelectionCtx();
     if (!currentBizId || !ctx || ctx.bizId !== currentBizId || currentUser || !window.MarjinDailySubscription || !window.MarjinDailySubscription.shouldAsk(dailyNoticeRole, ctx.tenantId, currentBizId, isDemoMode) || typeof window.apiFetch !== "function") return;
-    const bizId = currentBizId;
-    setDailySubscription((prev) => window.MarjinDailySubscription.busy(prev, ctx.tenantId, bizId));
+    const bizId = currentBizId, seq = ++dailySubSeqRef.current;
+    setDailySubscription((prev) => window.MarjinDailySubscription.begin(prev, ctx.tenantId, bizId, true));
     (async () => {
       const { status, json } = await askDailySubscription(ctx, window.MarjinDailySubscription.setRequest(ctx.tenantId, bizId, enabled));
       const decision = window.MarjinDailySubscription.decide(status, json, ctx.tenantId, bizId);
-      setDailySubscription((prev) => window.MarjinDailySubscription.next(prev, decision, ctx.tenantId, bizId));
+      // a change is always settled into ITS business (it may have been switched away from meanwhile)
+      setDailySubscription((prev) => window.MarjinDailySubscription.settle(prev, decision, ctx.tenantId, bizId, seq, true));
+      // the change may or may not have been applied: re-read the server state while the panel is open on that business
+      if (decision.kind !== "known" && dailySubOpenRef.current && isSelectionLive(ctx)) readDailySubscription(ctx, bizId, () => dailySubOpenRef.current);
     })();
   };
   const finF = finCoreState === "ready" ? window.MarjinFinance : null;

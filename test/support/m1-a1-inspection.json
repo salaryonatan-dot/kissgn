@@ -29,6 +29,7 @@
     "test/delivery/daily-email-delivery.test.mjs",
     "test/delivery/daily-email-subscription.test.mjs",
     "test/delivery/daily-recipient-server-config.test.mjs",
+    "test/delivery/daily-subscription-authority.test.mjs",
     "test/delivery/de1-r1-remediation.test.mjs",
     "test/delivery/de1-r5-delivery.test.mjs",
     "test/delivery/de1-r6-provider-structure.test.mjs",
@@ -45,6 +46,7 @@
     "test/emulator/checklist-cold-cache-emulator.mjs",
     "test/emulator/daily-recipient-server-config-emulator.mjs",
     "test/emulator/daily-subscription-emulator.mjs",
+    "test/emulator/daily-subscription-ordering-rendered.mjs",
     "test/emulator/daily-subscription-rendered.mjs",
     "test/emulator/de1-r1-receipt-emulator.mjs",
     "test/emulator/de1-r2-receipt-emulator.mjs",
@@ -70,6 +72,7 @@
     "test/finance/cc2-checklist-concurrency-guard.test.mjs",
     "test/finance/daily-recipient-server-config-guard.test.mjs",
     "test/finance/daily-recipient-server-config-t1-guard.test.mjs",
+    "test/finance/daily-subscription-correction-guard.test.mjs",
     "test/finance/daily-subscription-guard.test.mjs",
     "test/finance/daily-subscription-ui-seam.test.mjs",
     "test/finance/dp1-daily-policy-guard.test.mjs",
@@ -171,6 +174,7 @@
     "test/delivery/daily-email-delivery.test.mjs",
     "test/delivery/daily-email-subscription.test.mjs",
     "test/delivery/daily-recipient-server-config.test.mjs",
+    "test/delivery/daily-subscription-authority.test.mjs",
     "test/delivery/de1-r1-remediation.test.mjs",
     "test/delivery/de1-r5-delivery.test.mjs",
     "test/delivery/de1-r6-provider-structure.test.mjs",
@@ -187,6 +191,7 @@
     "test/emulator/checklist-cold-cache-emulator.mjs",
     "test/emulator/daily-recipient-server-config-emulator.mjs",
     "test/emulator/daily-subscription-emulator.mjs",
+    "test/emulator/daily-subscription-ordering-rendered.mjs",
     "test/emulator/daily-subscription-rendered.mjs",
     "test/emulator/de1-r1-receipt-emulator.mjs",
     "test/emulator/de1-r2-receipt-emulator.mjs",
@@ -212,6 +217,7 @@
     "test/finance/cc2-checklist-concurrency-guard.test.mjs",
     "test/finance/daily-recipient-server-config-guard.test.mjs",
     "test/finance/daily-recipient-server-config-t1-guard.test.mjs",
+    "test/finance/daily-subscription-correction-guard.test.mjs",
     "test/finance/daily-subscription-guard.test.mjs",
     "test/finance/daily-subscription-ui-seam.test.mjs",
     "test/finance/dp1-daily-policy-guard.test.mjs",
@@ -714,7 +720,7 @@
     "fincore/v1/presenters/labels.js": "e8a118fbb9b45aedcca42804bcde292db35f19a9",
     "fincore/v1/presenters/money.js": "48a1369e0fda320696eae80e9358a1b087e4ca80",
     "fincore/v1/presenters/percent.js": "3a472f51e9955ac33ff3f99c8bc7cf0d36fc4eeb",
-    "index.html": "f60822f3c44c8dd7193d1c8c9be99eaee7b04639",
+    "index.html": "74ef1d71a0a1e19950adf20333affea69604e479",
     "landing.html": "e53b675af96209da20bed1d2fdce5243cb884043",
     "lib/adminSdk.d.ts": "b7d92c454cf9e84192eb2538c19eb6fa997f7780",
     "lib/adminSdk.js": "a15c45fc6cbe32c41d72c38a3f0e9b224f76530d",
@@ -935,6 +941,7 @@
     "test/delivery/daily-email-delivery.test.mjs": "3a5647e5a90bdf1afe9828768d0bdbe51d056f5f",
     "test/delivery/daily-email-subscription.test.mjs": "92315fc4f71049ca7c500f736b6995a511e87ff0",
     "test/delivery/daily-recipient-server-config.test.mjs": "cc68baa48a13f8bfa6963a3a753d367eb32a1492",
+    "test/delivery/daily-subscription-authority.test.mjs": "c1548b86e4ca21a868cd2f98d09e235c5cb1b77b",
     "test/delivery/de1-daily-email-guard.test.mjs": "58f452b41721873a4e0c2c9d64b8e158582562c5",
     "test/delivery/de1-r1-email-guard.test.mjs": "18775ba7b498638113666169080ed86e6083199c",
     "test/delivery/de1-r1-remediation.test.mjs": "bda208cea8853b4ff1ee9172dcb6d2b62bdbd1a1",
@@ -981,6 +988,7 @@
     "test/emulator/closure-action-emulator.mjs": "7ac10d48acc6b3cf1f2bb497aa3ff12e4f301f2d",
     "test/emulator/daily-recipient-server-config-emulator.mjs": "a52b33a3f9b7abb1fb3b68cb5095279a7b9f8bb6",
     "test/emulator/daily-subscription-emulator.mjs": "041122914fdd4df83afb300cb3fd24d357299a5b",
+    "test/emulator/daily-subscription-ordering-rendered.mjs": "4056db84f84c86544ae85fa5f4a02b4063b2d4b4",
     "test/emulator/daily-subscription-rendered.mjs": "bb85d76d4f3a1f552ea3c1efbe4f315791cc6deb",
     "test/emulator/database.rules.json": "27887d72da5431bd0b6ee69f53e0dfd10cc44caf",
     "test/emulator/de1-r1-receipt-emulator.mjs": "608ba6e74a1e3542f8d2583cf3f4a56aa424c9cb",
@@ -1064,8 +1072,9 @@
     "test/finance/core-consumers/p1.json": "3dc6a13aab685265beb14f25d2ea0ec27b737017",
     "test/finance/daily-recipient-server-config-guard.test.mjs": "eb2ac3e2197bac2953104500bd4996b07af9e972",
     "test/finance/daily-recipient-server-config-t1-guard.test.mjs": "058d6378a0f1c0a061eb15497b684969c0678104",
-    "test/finance/daily-subscription-guard.test.mjs": "162f267823e76fc78855b1acf490acfffabbe1a8",
-    "test/finance/daily-subscription-ui-seam.test.mjs": "34e21d4752667a9bba492ebadcd5e105e41ba878",
+    "test/finance/daily-subscription-correction-guard.test.mjs": "6c8259664c531c736da35fa377e41fdcbf45990d",
+    "test/finance/daily-subscription-guard.test.mjs": "0578e10e4d0d9923ca6ecbe3f532628667522701",
+    "test/finance/daily-subscription-ui-seam.test.mjs": "2ec275ac2f2fbf0f7b1f198deba771b00531b39c",
     "test/finance/dp1-daily-policy-guard.test.mjs": "7606281de9de6903f85b7eaaf60a773b6bcd790b",
     "test/finance/dp2-daily-policy-guard.test.mjs": "a09072df5601686631b80741c06947b0aa351461",
     "test/finance/dp3-daily-policy-guard.test.mjs": "2279e5f15557c24d93c7c8f9fbd371747ea5cc15",
@@ -1282,7 +1291,7 @@
     "test/support/cc2-checklist-concurrency.mjs": "ab1aaa6f456c32118c5c3cd959bc1df94ae675d9",
     "test/support/cross-writer-harness.mjs": "9e0ef632b50afc31e1476e2aa61606100a7146d7",
     "test/support/daily-email-harness.mjs": "197f6a95b71719df9c58fb2f72df06a6fe8cec67",
-    "test/support/daily-subscription-layer.mjs": "75dfddd6b03a29eec5111020eb6d6f3fa5f95cb7",
+    "test/support/daily-subscription-layer.mjs": "42497939c9203121c183c436ec8bc695b52cdffb",
     "test/support/dashboard-wiring-harness.mjs": "07d826445cc6b97cbd38e33b179749de8b846498",
     "test/support/de1-daily-email.json": "d66be8c655591d2faf3f4decf3c192f0273dec84",
     "test/support/de1-daily-email.mjs": "277d03c086566db6daa87407616c143b6189ed9e",
@@ -1372,7 +1381,7 @@
     "test/support/i7-integration.json": "3d069d769b5e407515c20cad053674a977152dd3",
     "test/support/i7-integration.mjs": "a52695329d06627d41d49e467f8090cd282453fc",
     "test/support/israel-scenario-clock.mjs": "fb7bd1071b8ff760289a27e1e0aa5594c58e5869",
-    "test/support/m1-a1-inspection.mjs": "412005434d19f1c87da1ce8491ef9ae4d237afa5",
+    "test/support/m1-a1-inspection.mjs": "28dfcb330f70b921da24a61795d2b9459990dec3",
     "test/support/m1-derivation.mjs": "5ee45583bf800bd4d9551cd76ec5662827e6c01b",
     "test/support/m1-index-scope.mjs": "7f82aa1b534598cd4d87ae3b75394281598d2ac2",
     "test/support/m1-integration-pin.mjs": "b98d35b0fd76ca482ff2a2c888ef2e69ed90c6c3",
@@ -1562,7 +1571,8 @@
     "test/finance/daily-recipient-server-config-t1-guard.test.mjs": "c509ba66d40cd6e09051d7adc08735a0ad9b66b5",
     "test/finance/marjin-1.0-composition-guard.test.mjs": "24a8ccc4da38cdc39373742df38e4df4ff365385",
     "test/finance/marjin-1.0-iv-correction-guard.test.mjs": "b85c8b2879e1e57a3837a364bbadea07fd205a8f",
-    "test/finance/marjin-1.0-iv-t1-fixture-guard.test.mjs": "6786b80377252d77d6bc2b7b9defa2c7d40dc434"
+    "test/finance/marjin-1.0-iv-t1-fixture-guard.test.mjs": "6786b80377252d77d6bc2b7b9defa2c7d40dc434",
+    "test/finance/daily-subscription-guard.test.mjs": "51f00aa92355d9aee1b6dcfa27f3d74e4dd16bdd"
   },
   "exclusions": {
     "pbd": "7ae41336b7c2f02b953b9267768b90f97e39278f",
@@ -2747,6 +2757,143 @@
         {
           "from": "// I4 (Agent/Daily integration I4 \u2014 the M1 D-CTRL application-boundary layer, PROPOSED for the M1 identity / admin-API / P0 / P1\n",
           "to": "import { isDailySubscriptionTree, applyDailySubscriptionPageEdits, isCurrentTreePage, dailySubscriptionPins } from \"./daily-subscription-layer.mjs\";\n// I4 (Agent/Daily integration I4 \u2014 the M1 D-CTRL application-boundary layer, PROPOSED for the M1 identity / admin-API / P0 / P1\n"
+        }
+      ]
+    }
+  },
+  "dailySubscriptionCorrection": {
+    "parent": "51f00aa92355d9aee1b6dcfa27f3d74e4dd16bdd",
+    "kind": "daily_email_subscription_correction",
+    "scope": [
+      "index.html",
+      "test/delivery/daily-subscription-authority.test.mjs",
+      "test/emulator/daily-subscription-ordering-rendered.mjs",
+      "test/finance/daily-subscription-correction-guard.test.mjs",
+      "test/finance/daily-subscription-guard.test.mjs",
+      "test/finance/daily-subscription-ui-seam.test.mjs",
+      "test/support/daily-subscription-layer.mjs",
+      "test/support/m1-a1-inspection.json",
+      "test/support/m1-a1-inspection.mjs"
+    ],
+    "newFiles": [
+      "test/delivery/daily-subscription-authority.test.mjs",
+      "test/emulator/daily-subscription-ordering-rendered.mjs",
+      "test/finance/daily-subscription-correction-guard.test.mjs"
+    ],
+    "status": "PROPOSED_FOR_INDEPENDENT_REVIEW",
+    "edits": {
+      "index.html": [
+        {
+          "from": "      setDailySubscription((prev) => window.MarjinDailySubscription.next(prev, decision, ctx.tenantId, bizId));\n",
+          "to": "      // a change is always settled into ITS business (it may have been switched away from meanwhile)\n      setDailySubscription((prev) => window.MarjinDailySubscription.settle(prev, decision, ctx.tenantId, bizId, seq, true));\n      // the change may or may not have been applied: re-read the server state while the panel is open on that business\n      if (decision.kind !== \"known\" && dailySubOpenRef.current && isSelectionLive(ctx)) readDailySubscription(ctx, bizId, () => dailySubOpenRef.current);\n"
+        },
+        {
+          "from": "    const bizId = currentBizId;\n    setDailySubscription((prev) => window.MarjinDailySubscription.busy(prev, ctx.tenantId, bizId));\n",
+          "to": "    const bizId = currentBizId, seq = ++dailySubSeqRef.current;\n    setDailySubscription((prev) => window.MarjinDailySubscription.begin(prev, ctx.tenantId, bizId, true));\n"
+        },
+        {
+          "from": "    (async () => {\n      const { status, json } = await askDailySubscription(ctx, window.MarjinDailySubscription.readRequest(ctx.tenantId, currentBizId));\n      if (!live || !isSelectionLive(ctx)) return;\n      const decision = window.MarjinDailySubscription.decide(status, json, ctx.tenantId, currentBizId);\n      setDailySubscription((prev) => window.MarjinDailySubscription.next(prev, decision, ctx.tenantId, currentBizId));\n    })();\n",
+          "to": "    readDailySubscription(ctx, currentBizId, () => live);\n"
+        },
+        {
+          "from": "  })();\n  useEffect(() => {\n",
+          "to": "  })();\n  const readDailySubscription = (ctx, bizId, isLive) => {\n    const seq = ++dailySubSeqRef.current;\n    (async () => {\n      const { status, json } = await askDailySubscription(ctx, window.MarjinDailySubscription.readRequest(ctx.tenantId, bizId));\n      if (!isLive() || !isSelectionLive(ctx)) return;\n      const decision = window.MarjinDailySubscription.decide(status, json, ctx.tenantId, bizId);\n      setDailySubscription((prev) => window.MarjinDailySubscription.settle(prev, decision, ctx.tenantId, bizId, seq, false));\n    })();\n  };\n  useEffect(() => { dailySubOpenRef.current = showDailySubscription; }, [showDailySubscription]);\n  useEffect(() => {\n"
+        },
+        {
+          "from": "  // switch follows the server's reply.\n",
+          "to": "  // switch follows the server's reply. C1: each request takes a page-wide sequence number; every reply is settled into the\n  // state of the business it was sent for (MarjinDailySubscription.settle orders by the server's version), so a delayed\n  // read or change never replaces a newer confirmed state, and a pending change keeps the switch locked across reopening\n  // and business switching. A read whose panel was closed or whose selection is no longer live is dropped. A failed change\n  // shows the error and the last confirmed state, then re-reads the server state while the panel is still open.\n"
+        },
+        {
+          "from": "  // \u2500\u2500 Insight Engine v1 \u2014 Dashboard card state (Phase 3, read-only) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n",
+          "to": "  const dailySubSeqRef = useRef(0);            // page-wide request order for the subscription replies (C1)\n  const dailySubOpenRef = useRef(false);       // the panel is open now (a failed change re-reads only while it is)\n  // \u2500\u2500 Insight Engine v1 \u2014 Dashboard card state (Phase 3, read-only) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n"
+        },
+        {
+          "from": "      setRequest: setRequest, shouldAsk: shouldAsk, decide: decide, stateFor: stateFor, next: next, busy: busy, checked: checked });\n",
+          "to": "      setRequest: setRequest, shouldAsk: shouldAsk, decide: decide, stateFor: stateFor, begin: begin, settle: settle, checked: checked });\n"
+        },
+        {
+          "from": "    function busy(states, tenantId, bizId) { return withState(states, tenantId, bizId, { busy: true, failed: false }); }\n",
+          "to": ""
+        },
+        {
+          "from": "    /** After a reply: a known decision replaces the shown state; an unknown one keeps it and marks the failure. */\n    function next(states, decision, tenantId, bizId) {\n      if (isRecord(decision) && decision.kind === \"known\") return withState(states, tenantId, bizId, { kind: \"known\", enabled: decision.enabled, busy: false, failed: false });\n      return withState(states, tenantId, bizId, { busy: false, failed: true });\n",
+          "to": "    /** A request was sent (seq: a page-wide increasing number). A change locks the switch until it is settled. */\n    function begin(states, tenantId, bizId, isChange) {\n      var s = stateFor(states, tenantId, bizId), pending = s.pending + (isChange === true ? 1 : 0);\n      return withState(states, tenantId, bizId, { pending: pending, busy: pending > 0 });\n    }\n    /** A reply arrived for request `seq`. A confirmed reply is applied only when its version is not older than the confirmed\n     *  state; a failure is marked only when no later request of this business was already confirmed. */\n    function settle(states, decision, tenantId, bizId, seq, isChange) {\n      var s = stateFor(states, tenantId, bizId), n = Number.isSafeInteger(seq) ? seq : 0;\n      var pending = isChange === true ? Math.max(0, s.pending - 1) : s.pending;\n      var patch = { pending: pending, busy: pending > 0 };\n      if (isRecord(decision) && decision.kind === \"known\" && Number.isSafeInteger(decision.version)) {\n        if (s.kind !== \"known\" || decision.version >= s.version) {\n          patch.kind = \"known\"; patch.enabled = decision.enabled === true; patch.version = decision.version;\n          patch.okSeq = Math.max(s.okSeq, n);\n          if (s.failed && n > s.failSeq) patch.failed = false;\n        }\n      } else if (n > s.okSeq) {\n        patch.failed = true; patch.failSeq = Math.max(s.failSeq, n);\n      }\n      return withState(states, tenantId, bizId, patch);\n"
+        },
+        {
+          "from": "    /** The state of one business: { kind: \"idle\" | \"known\", enabled, busy, failed }. */\n    function stateFor(states, tenantId, bizId) { var s = isRecord(states) ? states[key(tenantId, bizId)] : null; return isRecord(s) ? s : { kind: \"idle\", enabled: false, busy: false, failed: false }; }\n",
+          "to": "    var EMPTY = Object.freeze({ kind: \"idle\", enabled: false, version: -1, pending: 0, busy: false, failed: false, okSeq: 0, failSeq: 0 });\n    /** The state of one business: { kind: \"idle\" | \"known\", enabled, version, pending (changes in flight), busy, failed, okSeq, failSeq }. */\n    function stateFor(states, tenantId, bizId) { var s = isRecord(states) ? states[key(tenantId, bizId)] : null; return isRecord(s) ? s : EMPTY; }\n"
+        },
+        {
+          "from": "      return { kind: \"known\", enabled: body.enabled };\n",
+          "to": "      return { kind: \"known\", enabled: body.enabled, version: body.version === null ? 0 : body.version };\n"
+        },
+        {
+          "from": "      if (status !== 200 || !isRecord(body) || body.status !== \"ok\" || body.tenantId !== tenantId || body.bizId !== bizId || typeof body.enabled !== \"boolean\")\n",
+          "to": "      if (status !== 200 || !isRecord(body) || body.status !== \"ok\" || body.tenantId !== tenantId || body.bizId !== bizId || typeof body.enabled !== \"boolean\" ||\n          !(body.version === null || (Number.isSafeInteger(body.version) && body.version >= 1)))\n"
+        },
+        {
+          "from": "    /** { kind: \"known\", enabled } only for a 200 \"ok\" reply with a boolean `enabled` for THIS business; else { kind: \"unknown\" }. */\n",
+          "to": "    /** { kind: \"known\", enabled, version } only for a 200 \"ok\" reply with a boolean `enabled` and a record version (null = no\n     *  record = 0, else a positive safe integer) for THIS business; else { kind: \"unknown\" }. */\n"
+        },
+        {
+          "from": "  // switch never shows or edits an address; the recipient stays the server configuration.\n  (function () {\n",
+          "to": "  // switch never shows or edits an address; the recipient stays the server configuration.\n  // Ordering (correction C1): every confirmed reply carries the server record's version (absent = 0). A reply never replaces\n  // a confirmed state of a HIGHER version, whatever order the replies arrive in, so a delayed read or write never undoes a\n  // newer confirmed change. Changes in flight are counted per business (the switch is locked until all are settled); a\n  // failure is shown only when no LATER request of that business has already been confirmed.\n  (function () {\n"
+        }
+      ],
+      "test/finance/daily-subscription-guard.test.mjs": [
+        {
+          "from": "import {test} from 'node:test';\n",
+          "to": "import {historicalTest} from \"../support/m1-a1-inspection.mjs\";const test=historicalTest(new URL(\"../../\",import.meta.url),\"51f00aa92355d9aee1b6dcfa27f3d74e4dd16bdd\",\"test/finance/daily-subscription-guard.test.mjs\");\n"
+        }
+      ],
+      "test/finance/daily-subscription-ui-seam.test.mjs": [
+        {
+          "from": "  const eff = HTML.slice(HTML.indexOf(EFF), HTML.indexOf(EFF) + 3500); assert.ok(HTML.indexOf(EFF) > 0);\n  assert.ok(eff.includes(\"window.MarjinDailySubscription.readRequest(ctx.tenantId, currentBizId)\") && eff.includes(\"window.MarjinDailySubscription.setRequest(ctx.tenantId, bizId, enabled)\"));\n  assert.ok(eff.includes(\"if (!live || !isSelectionLive(ctx)) return;\"), \"a reply for a selection that is no longer live is dropped\");\n",
+          "to": "  const eff = HTML.slice(HTML.indexOf(EFF), HTML.indexOf(\"  const finF = finCoreState\", HTML.indexOf(EFF))); assert.ok(HTML.indexOf(EFF) > 0 && eff.length > 1000);\n  assert.ok(eff.includes(\"window.MarjinDailySubscription.readRequest(ctx.tenantId, bizId)\") && eff.includes(\"window.MarjinDailySubscription.setRequest(ctx.tenantId, bizId, enabled)\"));\n  for (const needle of [\"const seq = ++dailySubSeqRef.current;\", \"const bizId = currentBizId, seq = ++dailySubSeqRef.current;\", \"window.MarjinDailySubscription.begin(prev, ctx.tenantId, bizId, true)\",\n    \"window.MarjinDailySubscription.settle(prev, decision, ctx.tenantId, bizId, seq, false)\", \"window.MarjinDailySubscription.settle(prev, decision, ctx.tenantId, bizId, seq, true)\"])\n    assert.equal(eff.split(needle).length, 2, \"C1 ordering wiring: \" + needle);\n  assert.ok(eff.includes(\"if (!isLive() || !isSelectionLive(ctx)) return;\") && eff.includes(\"readDailySubscription(ctx, currentBizId, () => live);\"), \"a read for a closed panel or a selection that is no longer live is dropped\");\n"
+        },
+        {
+          "from": "  s = RAW.busy(s, T, B); assert.deepEqual([RAW.stateFor(s, T, B).busy, RAW.checked(s, T, B)], [true, true], \"busy keeps the confirmed state\");\n  s = RAW.next(s, RAW.decide(503, { status: \"unavailable\" }, T, B), T, B);\n  assert.deepEqual([RAW.checked(s, T, B), RAW.stateFor(s, T, B).failed, RAW.stateFor(s, T, B).busy], [true, true, false], \"a failed change never flips the switch\");\n  s = RAW.next(s, RAW.decide(200, ok({ enabled: false }), T, B), T, B);\n  assert.deepEqual([RAW.checked(s, T, B), RAW.stateFor(s, T, B).failed], [false, false]);\n  const fresh = RAW.next({}, RAW.decide(null, null, T, B), T, B);\n  assert.deepEqual([RAW.checked(fresh, T, B), RAW.stateFor(fresh, T, B).kind], [false, \"idle\"], \"an unknown first reply confirms nothing\");\n",
+          "to": "  s = RAW.begin(s, T, B, true); assert.deepEqual([view(s).busy, view(s).checked], [true, true], \"busy keeps the confirmed state\");\n  s = RAW.settle(s, RAW.decide(503, { status: \"unavailable\" }, T, B), T, B, 2, true);\n  assert.deepEqual([view(s).checked, view(s).failed, view(s).busy], [true, true, false], \"a failed change never flips the switch\");\n  s = RAW.settle(s, RAW.decide(200, ok({ enabled: false, version: 2 }), T, B), T, B, 3, false);\n  assert.deepEqual([view(s).checked, view(s).failed], [false, false], \"a later confirmed reply clears the failure\");\n  const fresh = RAW.settle({}, RAW.decide(null, null, T, B), T, B, 1, false);\n  assert.deepEqual([RAW.checked(fresh, T, B), view(fresh).kind, view(fresh).failed], [false, \"idle\", true], \"an unknown first reply confirms nothing\");\n});\n\ntest(\"DSU-06 ordering: versions win over arrival order; pending changes lock; stale failures stay silent\", () => {\n  const known = (enabled, version) => RAW.decide(200, ok({ enabled, version }), T, B);\n  // delayed ON read (v1, request 2) arriving after the confirmed OFF change (v2, request 3)\n  let s = RAW.settle({}, known(true, 1), T, B, 1, false);\n  s = RAW.begin(s, T, B, true);\n  s = RAW.settle(s, known(false, 2), T, B, 3, true);\n  s = RAW.settle(s, known(true, 1), T, B, 2, false);\n  assert.deepEqual(view(s), { kind: \"known\", enabled: false, version: 2, busy: false, failed: false, checked: false }, \"the stale ON read is ignored\");\n  // every arrival order of { read v1 ON, change v2 OFF, read v2 OFF, change v3 ON } ends at the highest version\n  const replies = [[known(true, 1), 1, false], [known(false, 2), 2, true], [known(false, 2), 3, false], [known(true, 3), 4, true]];\n  const perms = (a) => a.length <= 1 ? [a] : a.flatMap((x, i) => perms([...a.slice(0, i), ...a.slice(i + 1)]).map((p) => [x, ...p]));\n  for (const order of perms(replies)) {\n    let st = RAW.begin(RAW.begin({}, T, B, true), T, B, true);\n    for (const [d, seq, ch] of order) st = RAW.settle(st, d, T, B, seq, ch);\n    assert.deepEqual(view(st), { kind: \"known\", enabled: true, version: 3, busy: false, failed: false, checked: true }, JSON.stringify(order.map((o) => o[1])));\n  }\n  // pending changes: the switch stays locked until EVERY change is settled, even when a read confirms meanwhile\n  s = RAW.begin(RAW.begin(RAW.settle({}, known(true, 1), T, B, 1, false), T, B, true), T, B, true);\n  s = RAW.settle(s, known(false, 2), T, B, 2, true); assert.equal(view(s).busy, true, \"one change still pending\");\n  s = RAW.settle(s, known(true, 3), T, B, 3, false); assert.equal(view(s).busy, true, \"a read never unlocks a pending change\");\n  s = RAW.settle(s, RAW.decide(null, null, T, B), T, B, 4, true); assert.deepEqual([view(s).busy, view(s).checked, view(s).failed], [false, true, true]);\n  // a failure of an EARLIER request after a later confirmation shows nothing\n  s = RAW.settle(RAW.settle({}, known(false, null), T, B, 5, false), RAW.decide(503, {}, T, B), T, B, 4, false);\n  assert.deepEqual([view(s).failed, view(s).checked], [false, false], \"a stale failure stays silent\");\n  // per business: replies settle only their own business\n  s = RAW.begin(RAW.settle({}, known(true, 1), T, B, 1, false), T, B, true);\n  s = RAW.settle(s, RAW.decide(200, ok({ bizId: B2, enabled: false, version: null }), T, B2), T, B2, 2, false);\n  assert.deepEqual([view(s).busy, view(s).checked, view(s, B2).checked, view(s, B2).busy], [true, true, false, false]);\n"
+        },
+        {
+          "from": "  assert.deepEqual(M.stateFor({}, T, B), { kind: \"idle\", enabled: false, busy: false, failed: false });\n  let s = RAW.next({}, RAW.decide(200, ok({ enabled: true }), T, B), T, B);\n",
+          "to": "  assert.deepEqual(view({}), { kind: \"idle\", enabled: false, version: -1, busy: false, failed: false, checked: false });\n  let s = RAW.settle({}, RAW.decide(200, ok({ enabled: true }), T, B), T, B, 1, false);\n"
+        },
+        {
+          "from": "  assert.deepEqual(M.decide(200, ok(), T, B), { kind: \"known\", enabled: true });\n  assert.deepEqual(M.decide(200, ok({ enabled: false }), T, B), { kind: \"known\", enabled: false });\n",
+          "to": "  assert.deepEqual(M.decide(200, ok(), T, B), { kind: \"known\", enabled: true, version: 1 });\n  assert.deepEqual(M.decide(200, ok({ enabled: false, version: null }), T, B), { kind: \"known\", enabled: false, version: 0 }, \"no record = version 0\");\n  for (const version of [undefined, 0, -1, 1.5, \"2\", NaN]) assert.equal(M.decide(200, ok({ version }), T, B).kind, \"unknown\", \"version \" + String(version));\n"
+        },
+        {
+          "from": "  stateFor: (...a) => plain(RAW.stateFor(...a)), next: (...a) => plain(RAW.next(...a)), busy: (...a) => plain(RAW.busy(...a)) };\n",
+          "to": "  stateFor: (...a) => plain(RAW.stateFor(...a)) };\nconst view = (st, b = B) => { const x = RAW.stateFor(st, T, b); return { kind: x.kind, enabled: x.enabled, version: x.version, busy: x.busy, failed: x.failed, checked: RAW.checked(st, T, b) }; };\n"
+        },
+        {
+          "from": "import { test } from \"node:test\";\n",
+          "to": "//   DSU-06  ordering (C1): a reply never replaces a confirmed state of a higher version, in any arrival order; pending\n//           changes lock the switch until all are settled; a failure shows only when no later request was confirmed\nimport { test } from \"node:test\";\n"
+        }
+      ],
+      "test/support/daily-subscription-layer.mjs": [
+        {
+          "from": "export const DS_PAGE_EDITS = Object.freeze(LAYER && LAYER.edits && Array.isArray(LAYER.edits[\"index.html\"]) ? LAYER.edits[\"index.html\"] : []);\n",
+          "to": "// C1 (correction of the subscription candidate, sole parent 51f00aa9): its recorded index.html edits apply to the DS page, in\n// order, after the DS edits (each list is an exact derivation of its own parent's bytes).\nconst CORRECTION = RECORD.dailySubscriptionCorrection || null;\nconst pageEdits = (layer) => (layer && layer.edits && Array.isArray(layer.edits[\"index.html\"]) ? layer.edits[\"index.html\"] : []);\nexport const DS_PAGE_EDITS = Object.freeze([...pageEdits(LAYER), ...(CORRECTION && CORRECTION.parent === \"51f00aa92355d9aee1b6dcfa27f3d74e4dd16bdd\" ? pageEdits(CORRECTION) : [])]);\n"
+        }
+      ],
+      "test/support/m1-a1-inspection.mjs": [
+        {
+          "from": "  for(const f of ['test/support/m1-a1-inspection.mjs',A1_RECORD,IV_GUARD,...(committed.transportFixtureCorrection?[IV_T1_GUARD]:[]),...(committed.dailySubscriptionSuccessor?[DS_GUARD]:[])]){\n",
+          "to": "  for(const f of ['test/support/m1-a1-inspection.mjs',A1_RECORD,IV_GUARD,...(committed.transportFixtureCorrection?[IV_T1_GUARD]:[]),...(committed.dailySubscriptionSuccessor?[DS_GUARD]:[]),...(committed.dailySubscriptionCorrection?[DSC_GUARD]:[])]){\n"
+        },
+        {
+          "from": "let ivT1ParentProven=false;\n",
+          "to": "let dscParentProven=false;\nfunction verifyDailySubscriptionCorrection(root,r,head) {\n const {edits,...identity}=r.dailySubscriptionCorrection;\n const scope=identity.scope,newFiles=identity.newFiles;\n assert.ok(Array.isArray(scope)&&Array.isArray(newFiles)&&scope.includes(A1_RECORD)&&scope.includes('test/support/m1-a1-inspection.mjs')&&scope.includes(DSC_GUARD)&&scope.includes(DS_GUARD)&&newFiles.includes(DSC_GUARD),'closed DSC scope shape');\n assert.deepEqual(scope,[...new Set(scope)].sort(),'sorted unique DSC scope');assert.ok(newFiles.every(f=>scope.includes(f)));\n assert.deepEqual(identity,{parent:DSC_PARENT,kind:'daily_email_subscription_correction',scope:[...scope],newFiles:[...newFiles],status:'PROPOSED_FOR_INDEPENDENT_REVIEW'});\n assert.deepEqual(text(root,['rev-list','--parents','-n1','HEAD']).split(' '),[head,DSC_PARENT],'exact DSC sole parent');\n for(const args of [['diff','--name-only',DSC_PARENT,'HEAD','--'],['diff','--name-only','--cached',DSC_PARENT,'--'],['diff','--name-only',DSC_PARENT,'--']])assert.deepEqual(text(root,args).split('\\n').filter(Boolean).sort(),[...scope],'exact DSC scope');\n assert.deepEqual(untrackedPaths(root),[],'no untracked bypass');\n const prior=JSON.parse(git(root,['show',DSC_PARENT+':'+A1_RECORD]).stdout);\n assert.ok(prior.dailySubscriptionSuccessor&&!prior.dailySubscriptionCorrection,'the parent is the subscription candidate');\n for(const k of Object.keys(prior))if(!['treePins','scope','allowedScope','historicalGuards'].includes(k))assert.deepEqual(r[k],prior[k],k+' prior exact');\n assert.deepEqual(Object.keys(r).sort(),[...Object.keys(prior),'dailySubscriptionCorrection'].sort(),'closed DSC record');\n assert.deepEqual(r.scope,[...new Set([...prior.scope,...scope])].sort());\n assert.deepEqual(r.allowedScope,[...new Set([...prior.allowedScope,...r.scope])].sort());\n assert.deepEqual(r.historicalGuards,{...prior.historicalGuards,[DS_GUARD]:DSC_PARENT});\n const tree={};for(const row of text(root,['ls-tree','-r','-z','HEAD']).split('\\0').filter(Boolean)){const m=/^(\\d+) blob ([a-f0-9]{40})\\t([\\s\\S]+)$/.exec(row);assert.ok(m,row);assert.notEqual(m[1],'120000');tree[m[3]]=m[2];}\n delete tree[A1_RECORD];assert.deepEqual(tree,r.treePins,'complete DSC tree');\n const index={};for(const row of text(root,['ls-files','--stage','-z']).split('\\0').filter(Boolean)){const m=/^\\d+ ([a-f0-9]{40}) 0\\t([\\s\\S]+)$/.exec(row);assert.ok(m,'unmerged index');index[m[2]]=m[1];}\n assert.deepEqual(Object.keys(index).sort(),[...Object.keys(tree),A1_RECORD].sort());\n for(const [f,pin]of Object.entries(tree)){assert.equal(index[f],pin,f+' index');assert.equal(a1Blob(readFileSync(join(root,f))),pin,f+' checkout');}\n assert.equal(index[A1_RECORD],text(root,['rev-parse','HEAD:'+A1_RECORD]));assert.equal(a1Blob(readFileSync(join(root,A1_RECORD))),index[A1_RECORD]);\n for(const f of newFiles)assert.notEqual(git(root,['cat-file','-e',DSC_PARENT+':'+f]).status,0,f+' is new at DSC');\n assert.deepEqual([...newFiles].sort(),Object.keys(DSC_NEW_FILE_PINS).sort(),'closed DSC new files');\n for(const f of newFiles)assert.equal(tree[f],DSC_NEW_FILE_PINS[f],f+' exact DSC new-file pin');\n assert.deepEqual(Object.keys(edits).sort(),scope.filter(f=>f!==A1_RECORD&&!newFiles.includes(f)),'closed DSC derivations');\n for(const [f,changes]of Object.entries(edits)){let b=git(root,['show',DSC_PARENT+':'+f]).stdout;for(const e of changes){assert.ok(e.from&&b.split(e.from).length===2,f+' unique DSC anchor');b=b.replace(e.from,()=>e.to);}assert.equal(a1Blob(Buffer.from(b)),tree[f],f+' exact DSC derivation');}\n for(const [f,pin]of Object.entries(prior.treePins))if(!scope.includes(f))assert.equal(tree[f],pin,f+' protected prior');\n if(!dscParentProven){proveLiteralHolder(root,DSC_PARENT,'literal subscription candidate parent');dscParentProven=true;}\n return {ok:true,head,files:Object.keys(tree).length};\n}\nlet ivT1ParentProven=false;\n"
+        },
+        {
+          "from": "  if(r.dailySubscriptionSuccessor)return verifyDailySubscriptionSuccessor(root,r,head);\n",
+          "to": "  if(r.dailySubscriptionCorrection)return verifyDailySubscriptionCorrection(root,r,head);\n  if(r.dailySubscriptionSuccessor)return verifyDailySubscriptionSuccessor(root,r,head);\n"
+        },
+        {
+          "from": "export const A1_RECORD = 'test/support/m1-a1-inspection.json';\n",
+          "to": "// Daily e-mail subscription correction C1: closed successor of the (not accepted) subscription candidate; review pending.\nexport const DSC_PARENT = \"51f00aa92355d9aee1b6dcfa27f3d74e4dd16bdd\";\nexport const DSC_GUARD = \"test/finance/daily-subscription-correction-guard.test.mjs\";\nexport const DSC_NEW_FILE_PINS = Object.freeze({ \"test/delivery/daily-subscription-authority.test.mjs\": \"c1548b86e4ca21a868cd2f98d09e235c5cb1b77b\", \"test/emulator/daily-subscription-ordering-rendered.mjs\": \"4056db84f84c86544ae85fa5f4a02b4063b2d4b4\", \"test/finance/daily-subscription-correction-guard.test.mjs\": \"6c8259664c531c736da35fa377e41fdcbf45990d\" });\nexport const A1_RECORD = 'test/support/m1-a1-inspection.json';\n"
         }
       ]
     }

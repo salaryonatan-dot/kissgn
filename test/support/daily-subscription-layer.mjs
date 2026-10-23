@@ -11,7 +11,11 @@ import { createHash } from "node:crypto";
 export const DS_LAYER_PARENT = "6786b80377252d77d6bc2b7b9defa2c7d40dc434";
 const RECORD = JSON.parse(readFileSync(new URL("./m1-a1-inspection.json", import.meta.url), "utf8"));
 const LAYER = RECORD.dailySubscriptionSuccessor || null;
-export const DS_PAGE_EDITS = Object.freeze(LAYER && LAYER.edits && Array.isArray(LAYER.edits["index.html"]) ? LAYER.edits["index.html"] : []);
+// C1 (correction of the subscription candidate, sole parent 51f00aa9): its recorded index.html edits apply to the DS page, in
+// order, after the DS edits (each list is an exact derivation of its own parent's bytes).
+const CORRECTION = RECORD.dailySubscriptionCorrection || null;
+const pageEdits = (layer) => (layer && layer.edits && Array.isArray(layer.edits["index.html"]) ? layer.edits["index.html"] : []);
+export const DS_PAGE_EDITS = Object.freeze([...pageEdits(LAYER), ...(CORRECTION && CORRECTION.parent === "51f00aa92355d9aee1b6dcfa27f3d74e4dd16bdd" ? pageEdits(CORRECTION) : [])]);
 
 const git = (repo, args) => spawnSync("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 1 << 28 });
 /** The DS tree: the record carries the layer for the literal parent, and that parent is a STRICT ancestor of HEAD. */
