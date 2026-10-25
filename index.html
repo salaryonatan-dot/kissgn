@@ -1203,7 +1203,7 @@
         request: function (key, fetchNode, isLive) {
           invalidate();
           latest = key;
-          var setTimer = timing.setTimeout || setTimeout, clearTimer = timing.clearTimeout || clearTimeout;
+          var setTimer = timing.setTimeout || setTimeout, clearTimer = timing.clearTimeout || function (id) { clearTimeout(id); };
           var deadline = timing.deadlineMs === undefined ? CREDITS_DEADLINE_MS : timing.deadlineMs;
           var controller = typeof AbortController === "function" ? new AbortController() : null;
           var a = { key: key, done: false, timer: null, clearTimer: clearTimer, controller: controller, resolve: null };
@@ -1738,7 +1738,7 @@
           invalidate();
           latest = key;
           // A test may supply deterministic timers; production always uses the fixed 30 s policy.
-          var setTimer = timing.setTimeout || setTimeout, clearTimer = timing.clearTimeout || clearTimeout;
+          var setTimer = timing.setTimeout || setTimeout, clearTimer = timing.clearTimeout || function (id) { clearTimeout(id); };
           var deadline = timing.deadlineMs === undefined ? LEDGER_ATTEMPT_DEADLINE_MS : timing.deadlineMs;
           var controller = typeof AbortController === "function" ? new AbortController() : null;
           var attempt = { key: key, done: false, timer: null, clearTimer: clearTimer, controller: controller, resolve: null };
