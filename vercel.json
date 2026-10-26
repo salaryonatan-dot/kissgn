@@ -20,8 +20,6 @@
   ],
   "crons": [
     { "path": "/api/analytics/daily-builder", "schedule": "0 23 * * *" },
-    { "path": "/api/proactive/run", "schedule": "0 3 * * *" },
-    { "path": "/api/alerts/run", "schedule": "0 4 * * *" },
-    { "path": "/api/daily-snapshot/run", "schedule": "5 4 * * *" }
+    { "path": "/api/proactive/run", "schedule": "0 3 * * *" }
   ]
 }
