@@ -1588,6 +1588,23 @@
       if (status === 409 && body && body.error === "tenant_has_data") return { proceed: false, reason: "setup_tenant_has_data" };
       return { proceed: false, reason: "setup_bootstrap_failed" };
     }
+    /**
+     * BIZ-SEL (login business selection): the businesses a user record may OPEN. owner / super_owner
+     * see every selectable business; any other role only the ids in its allowedBizIds (strings,
+     * de-duplicated). An unknown user (null) keeps the whole list — the caller re-resolves after login.
+     * Selecting an unauthorized business made the client subscribe to data the Rules deny, which
+     * surfaced as the storage-policy / read-only banner right after login (manager with Kiss-only access
+     * was dropped on Arkafe, the first business in the registry).
+     */
+    function authorizedBusinesses(selectable, user) {
+      var list = Array.isArray(selectable) ? selectable : [];
+      if (!user) return list;
+      var role = user.role;
+      if (role === "owner" || role === "super_owner") return list;
+      var allowed = {};
+      (Array.isArray(user.allowedBizIds) ? user.allowedBizIds : []).forEach(function (id) { if (typeof id === "string" && id) allowed[id] = true; });
+      return list.filter(function (b) { return b && allowed[b.id] === true; });
+    }
     function pickBusiness(selectable, preferred) {
       var ids = (Array.isArray(selectable) ? selectable : []).map(function (b) { return b.id; });
       var want = Array.isArray(preferred) ? preferred : [];
@@ -2380,7 +2397,7 @@
       C1_VERSION: C1_VERSION, EXPECT: EXPECT, LEDGER_CHUNK_DAYS: LEDGER_CHUNK_DAYS, LEDGER_ATTEMPT_DEADLINE_MS: LEDGER_ATTEMPT_DEADLINE_MS, TXT: TXT, READ_FAILED: READ_FAILED,
       checkBundle: checkBundle, nodeState: nodeState, historyBinding: historyBinding, ledgerChunks: ledgerChunks, structuredStates: structuredStates,
       selectableBusinesses: selectableBusinesses, businessRegistryView: businessRegistryView, pickBusiness: pickBusiness,
-      businessRegistryNodeView: businessRegistryNodeView, firstSetupEligible: firstSetupEligible, registrySetupWrite: registrySetupWrite,
+      businessRegistryNodeView: businessRegistryNodeView, firstSetupEligible: firstSetupEligible, registrySetupWrite: registrySetupWrite, authorizedBusinesses: authorizedBusinesses,
       registryIdTaken: registryIdTaken, freshBusinessId: freshBusinessId, registrySetupReread: registrySetupReread, setupBootstrapProceed: setupBootstrapProceed,
       earliestRowDate: earliestRowDate, ledgerWindow: ledgerWindow, ledgerCovers: ledgerCovers, loadLedger: loadLedger,
       revisionOf: revisionOf, ledgerKey: ledgerKey, ledgerFor: ledgerFor, createLedgerSession: createLedgerSession, inputsFor: inputsFor,
@@ -2595,7 +2612,7 @@
   </script>
 
   <!-- app.html and app.js are GENERATED from index.html by tools/app-precompile/precompile.mjs — do not edit.
-       source index.html sha256 9159e677a77a9f7caa1788250a1d60c01d0cb2aac5de0da1c420963e2f9c2366; app.js sha256 63c7662b213b7a6a9ba4cc374ef005ffb03e8c46b42ae30b7d0a51931409ac62; @babel/standalone 7.23.6, presets ["react"]. -->
-  <script defer src="/app.js?v=63c7662b213b"></script>
+       source index.html sha256 992a9b67cb18eaa65a30a15eaa00c568ceb8516d3d188e34b6db62b29e4260aa; app.js sha256 b1a4e7394950910f081a13b915195c9a34ea694f3b7a08154055fa71039c1c41; @babel/standalone 7.23.6, presets ["react"]. -->
+  <script defer src="/app.js?v=b1a4e7394950"></script>
 </body>
 </html>

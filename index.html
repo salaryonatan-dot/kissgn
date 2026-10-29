@@ -1589,6 +1589,23 @@
       if (status === 409 && body && body.error === "tenant_has_data") return { proceed: false, reason: "setup_tenant_has_data" };
       return { proceed: false, reason: "setup_bootstrap_failed" };
     }
+    /**
+     * BIZ-SEL (login business selection): the businesses a user record may OPEN. owner / super_owner
+     * see every selectable business; any other role only the ids in its allowedBizIds (strings,
+     * de-duplicated). An unknown user (null) keeps the whole list — the caller re-resolves after login.
+     * Selecting an unauthorized business made the client subscribe to data the Rules deny, which
+     * surfaced as the storage-policy / read-only banner right after login (manager with Kiss-only access
+     * was dropped on Arkafe, the first business in the registry).
+     */
+    function authorizedBusinesses(selectable, user) {
+      var list = Array.isArray(selectable) ? selectable : [];
+      if (!user) return list;
+      var role = user.role;
+      if (role === "owner" || role === "super_owner") return list;
+      var allowed = {};
+      (Array.isArray(user.allowedBizIds) ? user.allowedBizIds : []).forEach(function (id) { if (typeof id === "string" && id) allowed[id] = true; });
+      return list.filter(function (b) { return b && allowed[b.id] === true; });
+    }
     function pickBusiness(selectable, preferred) {
       var ids = (Array.isArray(selectable) ? selectable : []).map(function (b) { return b.id; });
       var want = Array.isArray(preferred) ? preferred : [];
@@ -2381,7 +2398,7 @@
       C1_VERSION: C1_VERSION, EXPECT: EXPECT, LEDGER_CHUNK_DAYS: LEDGER_CHUNK_DAYS, LEDGER_ATTEMPT_DEADLINE_MS: LEDGER_ATTEMPT_DEADLINE_MS, TXT: TXT, READ_FAILED: READ_FAILED,
       checkBundle: checkBundle, nodeState: nodeState, historyBinding: historyBinding, ledgerChunks: ledgerChunks, structuredStates: structuredStates,
       selectableBusinesses: selectableBusinesses, businessRegistryView: businessRegistryView, pickBusiness: pickBusiness,
-      businessRegistryNodeView: businessRegistryNodeView, firstSetupEligible: firstSetupEligible, registrySetupWrite: registrySetupWrite,
+      businessRegistryNodeView: businessRegistryNodeView, firstSetupEligible: firstSetupEligible, registrySetupWrite: registrySetupWrite, authorizedBusinesses: authorizedBusinesses,
       registryIdTaken: registryIdTaken, freshBusinessId: freshBusinessId, registrySetupReread: registrySetupReread, setupBootstrapProceed: setupBootstrapProceed,
       earliestRowDate: earliestRowDate, ledgerWindow: ledgerWindow, ledgerCovers: ledgerCovers, loadLedger: loadLedger,
       revisionOf: revisionOf, ledgerKey: ledgerKey, ledgerFor: ledgerFor, createLedgerSession: createLedgerSession, inputsFor: inputsFor,
@@ -5179,7 +5196,9 @@ function LoginScreen({ onLogin, tenantId, autoDemo=false }) {
       // Cache tenant + biz to sessionStorage + RTDB on every login
       try {
         sessionStorage.setItem("marjin_tid_" + fbUser.uid, foundTenantId);
-        sessionStorage.setItem("marjin_biz_" + fbUser.uid, foundTenantId);
+        // BIZ-SEL: marjin_biz_{uid} holds a BUSINESS id (written by setCurrentBizId); it used to be overwritten here
+        // with the tenant id, a preference that never matched a business. A stale value is cleared, never trusted.
+        try { const prevBiz = sessionStorage.getItem("marjin_biz_" + fbUser.uid); if(prevBiz && prevBiz === foundTenantId) sessionStorage.removeItem("marjin_biz_" + fbUser.uid); } catch(_){}
         await window._rtdbSet("user_tenants/" + fbUser.uid, foundTenantId);
         // Always update username_index so new browsers can find this user
         if(u.username) await window._rtdbSet("username_index/" + u.username.toLowerCase(), { tenantId: foundTenantId, email: u.email });
@@ -6834,6 +6853,7 @@ function PilotDashboard() {
       }
 
       // Step B: load data (requires tenantId set above)
+      let restoredUser = null;   // BIZ-SEL: the app/users record restored for this uid (null when not logged in)
       const rau = await sg("app-users", true);
       if(rau) {
         try {
@@ -6846,6 +6866,7 @@ function PilotDashboard() {
           if(uid && hasSessionCache) {
             const match = users.find(u => u.firebaseUid === uid);
             if(match) {
+              restoredUser = match;
               setLoggedInUser({...match, _tenantId: window._currentTenantId});
               // Ensure username_index is populated for future cross-browser logins
               if(match.username) {
@@ -6889,7 +6910,9 @@ function PilotDashboard() {
               if(typeof activeBiz === "string") preferred.push(activeBiz);
             }
           } catch(_){}
-          const targetBizId = window.MarjinC1.pickBusiness(view.selectable, preferred);
+          // BIZ-SEL: a stale preference (sessionStorage / user_active_biz) or the registry order can never
+          // select a business this user may not open — the pick is made from the AUTHORIZED list only.
+          const targetBizId = window.MarjinC1.pickBusiness(window.MarjinC1.authorizedBusinesses(view.selectable, restoredUser), preferred);
           if(targetBizId) setCurrentBizId(targetBizId);
         }
       }
@@ -8430,8 +8453,10 @@ function PilotDashboard() {
                 const cached2 = uid2 ? sessionStorage.getItem("marjin_biz_" + uid2) : null;
                 if(cached2) preferred.push(cached2);
               } catch(_){}
-              const target = window.MarjinC1.pickBusiness(selectable, preferred);
-              if(target) setCurrentBizId(target);
+              // BIZ-SEL: only a business this user may open; an empty authorized list leaves no selection
+              // (the explicit no-business screen below), never the first business of the registry.
+              const target = window.MarjinC1.pickBusiness(window.MarjinC1.authorizedBusinesses(selectable, user), preferred);
+              setCurrentBizId(target || null);
             };
             // Force fresh load from RTDB (never use stale businesses state). M1 R2: the same decoder as the initial load;
             // an unreadable list or a failed read ends in the explicit unavailable state.
@@ -8493,6 +8518,20 @@ function PilotDashboard() {
           <div style={{fontWeight:700,fontSize:16,marginBottom:8}}>רשימת העסקים אינה זמינה כעת</div>
           <div style={{fontSize:13,color:"#6B7280",marginBottom:16}}>לא ניתן לטעון את העסק — לא מוצגים נתונים כספיים. נסה לרענן בעוד מספר רגעים.</div>
           <button onClick={()=>{ window.location.reload(); }} style={{background:"#111827",color:"#fff",border:"none",borderRadius:6,padding:"8px 16px",cursor:"pointer",fontFamily:"inherit"}}>רענן</button>
+        </div>
+      </div>
+    );
+  }
+
+  // BIZ-SEL: a signed-in non-owner whose authorized list is EMPTY (no allowedBizIds, or none that is a selectable
+  // business) gets an explicit screen — never the first business of the registry, never the first-business setup.
+  if(loaded && loggedInUser && !loggedInUser._demo && !currentBizId && selectableBizList.length > 0 && !isSuperOwner && allowedBusinesses.length === 0) {
+    return (
+      <div data-m1="no-authorized-business" style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:24,fontFamily:"'Heebo',sans-serif",direction:"rtl"}}>
+        <div style={{maxWidth:360,textAlign:"center",color:"#111827"}}>
+          <div style={{fontWeight:700,fontSize:16,marginBottom:8}}>אין עסק משויך למשתמש זה</div>
+          <div style={{fontSize:13,color:"#6B7280",marginBottom:16}}>המשתמש {loggedInUser.name||""} מחובר, אך לא שויך לאף עסק. בקש מבעל העסק לשייך אותך לעסק במסך המשתמשים.</div>
+          <button onClick={async()=>{ try { await window.firebaseSignOut(); } catch(_){} window.location.reload(); }} style={{background:"#111827",color:"#fff",border:"none",borderRadius:6,padding:"8px 16px",cursor:"pointer",fontFamily:"inherit"}}>יציאה</button>
         </div>
       </div>
     );
