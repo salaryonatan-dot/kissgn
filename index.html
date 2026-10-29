@@ -6659,6 +6659,22 @@ function PilotDashboard() {
   // R6: supplier RESULT/ERROR ownership bound to tenant+business+generation+token+mount.
   const supplierResultOwnershipRef = useRef(null);
   if (!supplierResultOwnershipRef.current) supplierResultOwnershipRef.current = window.MarjinSaveLifecycle.createSupplierResultOwnership();
+  // SUP-DRAFT (supplier amount entry fix): typing in a supplier cell edits a LOCAL draft keyed by
+  // business|supplier|date; the complete amount is committed ONCE, on blur or Enter, through the
+  // unchanged setSupPayDate lane. Before this, every keystroke was submitted as its own write and
+  // the controlled input showed the PERSISTED value, so on a date without a row "566" produced
+  // three created rows ("5", "6", "6") and edits of an existing amount lost keystrokes. A draft
+  // survives a failed commit (the typed value stays visible for a retry) and is dropped when the
+  // selection it was bound to is gone. `supCreateRef` remembers the id of a row this grid just
+  // CREATED for a date until the listener echo delivers it, so a second cell of the same date
+  // (another supplier) edits that row instead of creating a duplicate.
+  const [supDrafts, setSupDrafts] = useState({});
+  const supDraftsRef = useRef({});
+  const supCommittingRef = useRef({});
+  const supCreateRef = useRef({});
+  const supDraftKey = (bizId, supId, date) => `${bizId}|${supId}|${window.MarjinEntries.entryDateKey(date)}`;
+  const setSupDraft = (key, val) => { const next = { ...supDraftsRef.current, [key]: val }; supDraftsRef.current = next; setSupDrafts(next); };
+  const clearSupDraft = (key) => { if (!(key in supDraftsRef.current)) return; const next = { ...supDraftsRef.current }; delete next[key]; supDraftsRef.current = next; setSupDrafts(next); };
   // R6: role port updated EVERY render — the once-created insight loader reads current
   // eligibility at call time, so a null-role mount that later logs in as owner is not
   // stuck skipping insight loads (the R5 useRef-closed-over-initial-role defect).
@@ -9170,17 +9186,46 @@ function PilotDashboard() {
               const token = supplierResultOwnershipRef.current.begin(captureSelectionCtx());
               // R10: carry the row's stable id (when present) and the exact BASE value
               // the user edited from, so the remote transaction can detect a conflict.
-              const __row = entries.find(e => window.MarjinEntries.entryDateKey(e && e.date) === window.MarjinEntries.entryDateKey(date)) || null;
+              const __dateKey = window.MarjinEntries.entryDateKey(date);
+              const __row = entries.find(e => window.MarjinEntries.entryDateKey(e && e.date) === __dateKey) || null;
               const __base = __row && __row.supplier_payments ? __row.supplier_payments[supId] : undefined;
+              // SUP-DRAFT: stable identity across quick successive cells of ONE date. A row this
+              // grid created moments ago (echo not yet applied) is edited by its id, never recreated.
+              const __createKey = `${currentBizId}|${__dateKey}`;
+              let __targetId = __row && __row.id != null ? __row.id : undefined, __newId;
+              if (__row) delete supCreateRef.current[__createKey];
+              else if (supCreateRef.current[__createKey]) __targetId = supCreateRef.current[__createKey];
+              else { __newId = newRowId(); supCreateRef.current[__createKey] = __newId; }
               const res = await entriesWriteCoordRef.current.submitSupplierEdit({
                 supId, date, val, emptyEntry: EMPTY_ENTRY,
-                targetId: __row && __row.id != null ? __row.id : undefined,
-                baseValue: __base, newId: newRowId(),
+                targetId: __targetId,
+                baseValue: __base, newId: __newId,
               });
+              const __st = res && res.status;
+              if (__newId && __st !== "committed" && __st !== "committed_idempotent" && supCreateRef.current[__createKey] === __newId) delete supCreateRef.current[__createKey];
               supplierResultOwnershipRef.current.settle(token, res, selectionCtrlRef.current, {
                 setError: (msg) => setSupplierWriteError(msg || "שמירת התשלום לספק נכשלה. הערך מוצג אך לא נשמר — נסה שוב."),
                 clearError: () => setSupplierWriteError(""),
               });
+              return res;
+            };
+            // SUP-DRAFT: commit a cell's draft exactly once (Enter and the blur that follows it
+            // share one in-flight commit). An unchanged draft writes nothing. A failed commit keeps
+            // the draft (typed value stays visible, error surface set by settle()) for a retry; a
+            // result for a superseded selection drops it.
+            const commitSupDraft = async (supId, date) => {
+              const key = supDraftKey(currentBizId, supId, date);
+              if (!(key in supDraftsRef.current) || supCommittingRef.current[key]) return;
+              const draft = supDraftsRef.current[key];
+              const persisted = getSupPay(supId, date);
+              if (String(draft) === String(persisted === 0 ? "0" : (persisted || ""))) { clearSupDraft(key); return; }
+              supCommittingRef.current[key] = true;
+              let res = null;
+              try { res = await setSupPayDate(supId, date, draft); } finally { delete supCommittingRef.current[key]; }
+              const st = res && res.status;
+              if (st === "committed" || st === "committed_idempotent" || st === "stale" || st === "cancelled_selection_changed") {
+                if (supDraftsRef.current[key] === draft) clearSupDraft(key);   // keep anything typed during the flight
+              }
             };
             // C1 (S-03/S-04/S-05/U-05): month totals, shares and the top supplier are fields of the
             // selected month's report (purchases.bySource — includes deleted suppliers and legacy
@@ -9335,6 +9380,8 @@ function PilotDashboard() {
                           {renderDays.map(({day,date,dow,unplanned})=>{
                             const val=getSupPay(sup.id,date);
                             const paid=Number(val)>0;
+                            const dkey=supDraftKey(currentBizId,sup.id,date);
+                            const shown=(dkey in supDrafts)?supDrafts[dkey]:(val==="0"||val===0?"":val||"");   // SUP-DRAFT: local draft while typing
                             return (
                               <div key={date} style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
                                 <div style={{minWidth:88}}>
@@ -9342,13 +9389,15 @@ function PilotDashboard() {
                                   {unplanned && <span style={{display:"inline-block",marginTop:2,fontSize:9,fontWeight:700,color:"#92400E",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:99,padding:"1px 6px"}}>לא מתוכנן</span>}
                                   {rowsOnDate(date)>1 && <span data-c1="dup-rows" title="בתאריך זה נשמרו כמה שורות; התא מציג ועורך את הראשונה, הסכומים למעלה כוללים את כולן" style={{display:"inline-block",marginTop:2,fontSize:9,fontWeight:700,color:"#7C3AED",background:"#F5F3FF",border:"1px solid #DDD6FE",borderRadius:99,padding:"1px 6px"}}>({rowsOnDate(date)} שורות)</span>}
                                 </div>
-                                <input type="number" inputMode="decimal" placeholder="₪"
-                                  value={val==="0"||val===0?"":val||""}
-                                  onChange={e=>setSupPayDate(sup.id,date,e.target.value)}
+                                <input type="number" inputMode="decimal" placeholder="₪" data-c1={"sup-cell-"+sup.id+"-"+date}
+                                  value={shown}
+                                  onChange={e=>setSupDraft(dkey,e.target.value)}
+                                  onBlur={()=>commitSupDraft(sup.id,date)}
+                                  onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); commitSupDraft(sup.id,date); } }}
                                   style={{flex:1,border:`1px solid ${paid?"#D1D5DB":"#E5E7EB"}`,borderRadius:6,padding:"8px 11px",fontSize:13,fontFamily:"inherit",color:"#111827",background:val==="0"||val===0?"#F9FAFB":paid?"#FFFFFF":"#FFFFFF",outline:"none"}}/>
                                 {(val==="0"||val===0) && <span style={{color:"#9CA3AF",fontSize:13,flexShrink:0}}>—</span>}
                                 {paid && val!=="0" && val!==0 && <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2.5 7l3 3 6-6" stroke="#16A34A" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-                                <button onClick={()=>setSupPayDate(sup.id,date,val==="0"||val===0?"":"0")}
+                                <button onClick={()=>{ clearSupDraft(dkey); setSupPayDate(sup.id,date,val==="0"||val===0?"":"0"); }}
                                   title={val==="0"||val===0?"בטל דילוג":"דלגתי"}
                                   style={{background:"none",border:"1px solid #E5E7EB",borderRadius:5,color:val==="0"||val===0?"#6B7280":"#9CA3AF",padding:"5px 9px",fontSize:11,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",flexShrink:0}}>
                                   {val==="0"||val===0?"↩":"דלגתי"}
