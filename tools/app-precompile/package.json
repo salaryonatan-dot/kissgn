@@ -1,0 +1,17 @@
+{
+  "name": "marjin-app-precompile",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ahead-of-time compilation of index.html's inline JSX app into app.html + app.js (same @babel/standalone build the browser used).",
+  "type": "module",
+  "scripts": {
+    "build": "node precompile.mjs",
+    "check": "node precompile.mjs --check"
+  },
+  "dependencies": {
+    "@babel/standalone": "7.23.6"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

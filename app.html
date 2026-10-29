@@ -1,0 +1,2581 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://cdn.sheetjs.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://www.gstatic.com https://*.firebaseio.com https://*.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; connect-src 'self' https://*.firebaseio.com wss://*.firebaseio.com https://*.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://api.open-meteo.com https://www.oref.org.il https://*.cloudfunctions.net https://firestore.googleapis.com https://firebase.googleapis.com wss://*.firebaseio.com https://*.firebase.com wss://*.firebase.com https://fcmregistrations.googleapis.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com https://fonts.googleapis.com; object-src 'none'; base-uri 'self';">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#111827" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Marjin" />
+  <title>Marjin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    /* ══ Design Tokens ══════════════════════════════════════════════════════ */
+    :root {
+      --bg:         #F9FAFB;
+      --surface:    #FFFFFF;
+      --border:     #E5E7EB;
+      --border-sub: #F3F4F6;
+      --ink:        #111827;
+      --ink-sub:    #6B7280;
+      --ink-muted:  #9CA3AF;
+      --accent:     #B91C1C;
+      --success:    #16A34A;
+      --warning:    #D97706;
+      --danger:     #DC2626;
+      --r:          8px;
+      --rsm:        5px;
+      --shadow:     0 1px 2px rgba(0,0,0,0.04);
+      --shadow-md:  0 4px 12px rgba(0,0,0,0.08);
+    }
+    @keyframes pulse   { 0%,100%{opacity:1} 50%{opacity:.5} }
+    @keyframes fadeIn  { from{opacity:0;transform:translateY(3px)} to{opacity:1;transform:none} }
+    @keyframes shimmer { from{opacity:.6} to{opacity:1} }
+
+    /* ══ Reset ══════════════════════════════════════════════════════════════ */
+    *, *::before, *::after { box-sizing:border-box; margin:0; padding:0; }
+    html                   { overflow-x:hidden; }
+    html, body, #root      { width:100%; max-width:100vw; min-height:100vh; font-family:'Heebo',sans-serif; background:var(--bg); color:var(--ink); overflow-x:hidden; }
+    input, button, select, textarea { font-family:inherit; font-size:inherit; }
+    ::-webkit-scrollbar { display:none; } * { scrollbar-width:none; }
+    input:focus, select:focus, textarea:focus { outline:none; border-color:var(--ink) !important; }
+    button:active { opacity:.85; }
+    a { color:inherit; text-decoration:none; }
+
+    /* ══ App shell ══════════════════════════════════════════════════════════ */
+    .app { min-height:100vh; background:var(--bg); width:100%; overflow-x:hidden; }
+
+    /* ── Mobile header: 3 stacked rows ── */
+    .mhd              { background:#FFFFFF; width:100%; position:sticky; top:0; z-index:50; }
+    .mhd-row1         { display:flex; align-items:center; justify-content:space-between; padding:10px 16px 0; }
+    .mhd-biz          { min-width:0; flex:1; }
+    .mhd-name         { font-size:17px; font-weight:700; color:#0F172A; letter-spacing:-.4px; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .mhd-sub          { font-size:11px; color:#94A3B8; margin-top:2px; white-space:nowrap; }
+    .mhd-icons        { display:flex; align-items:center; gap:8px; flex-shrink:0; margin-right:12px; }
+    .mhd-icon-btn     { width:34px; height:34px; background:#F8FAFC; border:1px solid #E5E7EB; border-radius:10px; display:flex; align-items:center; justify-content:center; cursor:pointer; color:#6B7280; flex-shrink:0; }
+    .mhd-avatar       { width:34px; height:34px; background:#6366F1; border-radius:10px; display:flex; align-items:center; justify-content:center; color:#fff; font-size:12px; font-weight:700; flex-shrink:0; cursor:pointer; }
+    .mhd-row2         { display:flex; align-items:center; gap:8px; padding:10px 16px 0; }
+    .mhd-cta          { flex:1; height:38px; background:#6366F1; color:#fff; border:none; border-radius:10px; font-size:13px; font-weight:600; cursor:pointer; font-family:inherit; letter-spacing:-.2px; }
+    .mhd-switch       { height:38px; padding:0 14px; background:#F8FAFC; border:1px solid #E5E7EB; border-radius:10px; font-size:12px; font-weight:500; color:#6B7280; cursor:pointer; font-family:inherit; white-space:nowrap; flex-shrink:0; }
+    .mhd-logout       { height:38px; padding:0 14px; background:#F8FAFC; border:1px solid #E5E7EB; border-radius:10px; font-size:12px; font-weight:500; color:#6B7280; cursor:pointer; font-family:inherit; white-space:nowrap; flex-shrink:0; }
+    .mhd-nav          { margin-top:6px; border-top:1px solid #F1F5F9; }
+    .mhd-nav-inner    { display:flex; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; padding:0 12px; }
+    .mhd-nav-inner::-webkit-scrollbar { display:none; }
+    .mhd-tab          { height:38px; padding:0 12px; background:transparent; border:none; border-bottom:2px solid transparent; font-size:12px; font-weight:500; color:#94A3B8; white-space:nowrap; flex-shrink:0; cursor:pointer; font-family:inherit; transition:color .15s, border-color .15s; }
+    .mhd-tab.active   { color:#0F172A; font-weight:700; border-bottom-color:#6366F1; }
+    .mhd-tab.shift-active { color:#6366F1; font-weight:700; border-bottom-color:#6366F1; }
+
+    /* Keep legacy classes for non-header parts */
+    .app-title { font-size:14px; font-weight:700; color:var(--ink); }
+    .app-sub   { font-size:11px; color:var(--ink-muted); }
+    .app-nav   { display:none; } /* replaced by mhd-nav */
+    .app-nav-inner { display:flex; }
+    .nav-tab   { height:40px; padding:0 12px; display:inline-flex; align-items:center; font-size:12px; font-weight:500; color:var(--ink-muted); background:transparent; border:none; border-bottom:2px solid transparent; cursor:pointer; white-space:nowrap; flex-shrink:0; }
+    .nav-tab.is-active { color:var(--ink); font-weight:600; border-bottom-color:var(--ink); }
+    .nav-tab.is-red    { color:var(--accent); font-weight:600; border-bottom-color:var(--accent); }
+    .screen { padding:14px 14px 80px; background:var(--bg); min-height:calc(100vh - 120px); width:100%; max-width:100%; overflow-x:hidden; }
+
+    /* ══ Cards ══════════════════════════════════════════════════════════════ */
+    .card       { background:var(--surface); border:1px solid var(--border); border-radius:var(--r); box-shadow:var(--shadow); }
+    .card-p     { padding:16px; }
+    .card-p-sm  { padding:12px 14px; }
+    .card + .card { margin-top:10px; }
+
+    /* ══ KPI ════════════════════════════════════════════════════════════════ */
+    .kpi-grid  { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:12px; }
+    .kpi-card  { background:var(--surface); border:1px solid var(--border); border-radius:var(--r); padding:16px 14px; box-shadow:var(--shadow); }
+    .kpi-label { font-size:10px; font-weight:600; color:var(--ink-muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:9px; display:block; }
+    .kpi-val   { font-size:22px; font-weight:700; letter-spacing:-.8px; line-height:1; color:var(--ink); }
+    .kpi-val.warn   { color:var(--warning); }
+    .kpi-val.danger { color:var(--danger); }
+    .kpi-sub   { font-size:11px; color:var(--ink-muted); margin-top:5px; line-height:1.3; }
+
+    /* ══ Buttons ════════════════════════════════════════════════════════════ */
+    .btn {
+      display:inline-flex; align-items:center; justify-content:center; gap:5px;
+      cursor:pointer; font-weight:600; font-size:13px;
+      border-radius:var(--rsm); border:none; padding:8px 14px;
+      line-height:1; transition:opacity .1s; white-space:nowrap;
+    }
+    .btn:disabled { opacity:.4; cursor:default; pointer-events:none; }
+    .btn-primary   { background:var(--ink); color:#fff; }
+    .btn-secondary { background:var(--surface); color:var(--ink-sub); border:1px solid var(--border); }
+    .btn-ghost     { background:transparent; color:var(--ink-sub); border:1px solid var(--border); }
+    .btn-danger    { background:#FEF2F2; color:var(--danger); border:1px solid #FECACA; }
+    .btn-sm   { padding:6px 11px; font-size:12px; }
+    .btn-xs   { padding:4px 8px;  font-size:11px; }
+    .btn-full { width:100%; }
+    .btn-full + .btn-full { margin-top:6px; }
+    .btn-link { background:none; border:none; color:var(--ink-sub); cursor:pointer; font-size:12px; padding:0; }
+    .icon-btn {
+      display:inline-flex; align-items:center; justify-content:center;
+      width:28px; height:28px; padding:0; border-radius:4px;
+      background:transparent; border:none; cursor:pointer; color:var(--ink-muted);
+    }
+    .icon-btn:hover { background:var(--border-sub); color:var(--ink-sub); }
+    .icon-btn svg   { pointer-events:none; }
+
+    /* ══ Forms ══════════════════════════════════════════════════════════════ */
+    .field    { margin-bottom:9px; }
+    .label    { display:block; font-size:12px; color:var(--ink-sub); margin-bottom:4px; font-weight:500; }
+    .input    { width:100%; background:var(--surface); border:1px solid #D1D5DB; border-radius:var(--rsm); padding:9px 11px; color:var(--ink); font-size:13px; outline:none; box-sizing:border-box; }
+    .input-sm { padding:7px 9px; font-size:12px; }
+    .input-num{ width:64px; text-align:center; }
+    .input-pin{ text-align:center; letter-spacing:10px; font-size:22px; padding:12px; }
+    .select   { width:100%; appearance:none; background:var(--surface); border:1px solid #D1D5DB; border-radius:var(--rsm); padding:9px 11px; color:var(--ink); font-size:13px; outline:none; box-sizing:border-box; cursor:pointer; }
+    .pass-wrap { position:relative; }
+    .pass-wrap .input { padding-left:32px; }
+    [dir=rtl] .pass-wrap .input { padding-left:11px; padding-right:32px; }
+    .pass-eye { position:absolute; left:9px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; color:var(--ink-muted); padding:4px; line-height:1; font-size:12px; }
+    [dir=rtl] .pass-eye { left:auto; right:9px; }
+    .form-sec  { font-size:10px; font-weight:600; color:var(--ink-muted); text-transform:uppercase; letter-spacing:1px; margin:16px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--border-sub); }
+    .form-err  { background:#FEF2F2; border:1px solid #FECACA; border-radius:var(--rsm); padding:7px 10px; font-size:12px; color:var(--danger); margin-bottom:9px; }
+    .form-hint { background:var(--bg); border:1px solid var(--border); border-radius:var(--rsm); padding:8px 11px; font-size:12px; color:var(--ink-sub); margin-bottom:9px; line-height:1.5; }
+    .form-ok   { background:#F0FDF4; border:1px solid #D1FAE5; border-radius:var(--rsm); padding:7px 10px; font-size:12px; color:#166534; margin-bottom:9px; }
+
+    /* ══ Badges ═════════════════════════════════════════════════════════════ */
+    .badge         { display:inline-block; padding:2px 7px; border-radius:3px; font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:.4px; }
+    .badge-neutral { background:var(--border-sub); color:var(--ink-sub); }
+    .badge-pending { background:#FFFBEB; color:#92400E; border:1px solid #FDE68A; }
+    .badge-success { background:#F0FDF4; color:#166534; border:1px solid #D1FAE5; }
+    .badge-danger  { background:#FEF2F2; color:#991B1B; border:1px solid #FECACA; }
+    .badge-dot     { position:absolute; top:-4px; left:-4px; background:var(--accent); color:#fff; font-size:9px; font-weight:700; border-radius:50%; width:14px; height:14px; display:flex; align-items:center; justify-content:center; }
+
+    /* ══ Section headers ════════════════════════════════════════════════════ */
+    .sec-head  { font-size:10px; font-weight:600; color:var(--ink-muted); text-transform:uppercase; letter-spacing:1px; margin:0 0 12px; }
+    .page-head { font-size:14px; font-weight:700; color:var(--ink); }
+    .page-sub  { font-size:11px; color:var(--ink-muted); margin-top:2px; }
+
+    /* ══ Status / Alerts ════════════════════════════════════════════════════ */
+    .status-strip { display:flex; align-items:center; gap:8px; font-size:12px; margin-bottom:12px; color:var(--ink-muted); }
+    .status-dot   { width:5px; height:5px; border-radius:50%; flex-shrink:0; }
+    .banner       { border-radius:var(--rsm); padding:9px 12px; font-size:12px; font-weight:500; margin-bottom:12px; display:flex; align-items:center; gap:8px; }
+    .banner-ok    { background:#F0FDF4; border:1px solid #D1FAE5; color:#166534; }
+    .banner-warn  { background:#FFFBEB; border:1px solid #FDE68A; color:#92400E; }
+    .banner-alert { background:#FEF2F2; border:1px solid #FECACA; color:#991B1B; }
+    .alert-box    { background:#FEF2F2; border:1px solid #FECACA; border-radius:var(--rsm); padding:10px 12px; margin-bottom:12px; }
+    .alert-title  { color:#991B1B; font-weight:600; font-size:12px; margin-bottom:5px; }
+    .alert-tag    { background:#FEE2E2; border:1px solid #FECACA; color:#991B1B; padding:2px 7px; border-radius:3px; font-size:11px; font-weight:500; display:inline-block; margin:2px; }
+    .alert-row    { display:flex; align-items:flex-start; gap:9px; }
+    .alert-row + .alert-row { margin-top:10px; padding-top:10px; border-top:1px solid var(--border-sub); }
+
+    /* ══ Progress / Gauge ═══════════════════════════════════════════════════ */
+    .progress      { height:3px; background:var(--border-sub); border-radius:2px; overflow:hidden; }
+    .progress-fill { height:100%; border-radius:2px; transition:width .4s ease; }
+    .gauge         { height:4px; background:var(--border-sub); border-radius:2px; overflow:hidden; position:relative; }
+    .gauge-fill    { height:100%; border-radius:2px; transition:width .5s ease; }
+    .gauge-marker  { position:absolute; top:0; bottom:0; width:1px; background:var(--ink-muted); opacity:.4; }
+
+    /* ══ Data tables ════════════════════════════════════════════════════════ */
+    .data-table      { background:var(--surface); border:1px solid var(--border); border-radius:var(--r); overflow:hidden; }
+    .data-table-head { display:flex; align-items:center; padding:8px 14px; background:var(--bg); border-bottom:1px solid var(--border-sub); }
+    .th  { font-size:10px; font-weight:600; color:var(--ink-muted); text-transform:uppercase; letter-spacing:1px; }
+    .data-row { display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--border-sub); background:var(--surface); }
+    .data-row:last-child { border-bottom:none; }
+
+    /* ══ Empty states ═══════════════════════════════════════════════════════ */
+    .empty      { text-align:center; padding:52px 20px; color:var(--ink-muted); }
+    .empty-icon { width:36px; height:36px; border:1px solid var(--border); border-radius:var(--rsm); display:flex; align-items:center; justify-content:center; margin:0 auto 12px; font-size:14px; }
+    .empty p    { font-size:13px; margin:0 0 14px; color:var(--ink-muted); }
+
+    /* ══ Modals ═════════════════════════════════════════════════════════════ */
+    .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:999; display:flex; align-items:center; justify-content:center; padding:24px; }
+    .modal-box     { background:var(--surface); border-radius:var(--r); padding:22px 24px; width:100%; max-width:380px; border:1px solid var(--border); box-shadow:0 8px 32px rgba(0,0,0,.12); direction:rtl; animation:fadeIn .15s ease; }
+    .modal-title   { font-size:15px; font-weight:700; color:var(--ink); margin:0 0 4px; }
+    .modal-sub     { font-size:12px; color:var(--ink-muted); margin:0 0 18px; }
+    .modal-actions { display:flex; gap:8px; margin-top:16px; }
+
+    /* ══ Auth screens ═══════════════════════════════════════════════════════ */
+    .auth-root   { min-height:100vh; background:var(--bg); display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; direction:rtl; }
+    .auth-box    { background:var(--surface); border-radius:var(--r); padding:28px 24px; width:100%; max-width:380px; border:1px solid var(--border); box-shadow:0 1px 3px rgba(0,0,0,.06),0 6px 20px rgba(0,0,0,.04); }
+    .auth-logo   { width:32px; height:32px; background:var(--ink); border-radius:7px; display:flex; align-items:center; justify-content:center; margin:0 auto 12px; }
+    .auth-logo span { color:#fff; font-size:13px; font-weight:700; }
+    .auth-title  { font-size:17px; font-weight:700; color:var(--ink); text-align:center; letter-spacing:-.3px; }
+    .auth-sub    { font-size:12px; color:var(--ink-muted); text-align:center; margin-top:3px; }
+    .auth-footer { text-align:center; margin-top:14px; font-size:11px; color:var(--ink-muted); }
+
+    /* ══ Setup Wizard ═══════════════════════════════════════════════════════ */
+    .wizard-root   { position:fixed; inset:0; background:var(--bg); overflow-y:auto; z-index:1000; direction:rtl; }
+    .wizard-wrap   { max-width:420px; margin:0 auto; padding:20px 20px 80px; }
+    .wizard-header { text-align:center; padding:20px 0 16px; }
+    .wizard-step   { font-size:11px; color:var(--ink-muted); margin-bottom:4px; }
+    .wizard-title  { font-size:17px; font-weight:700; color:var(--ink); letter-spacing:-.3px; }
+    .wizard-sub    { font-size:12px; color:var(--ink-muted); margin-top:2px; }
+    .wizard-prog   { height:2px; background:var(--border); border-radius:1px; margin-bottom:22px; overflow:hidden; }
+    .wizard-bar    { height:100%; background:var(--ink); border-radius:1px; transition:width .3s ease; }
+    .toggle-wrap   { width:38px; height:20px; border-radius:10px; border:none; cursor:pointer; position:relative; flex-shrink:0; transition:background .2s; }
+    .toggle-knob   { position:absolute; top:3px; width:14px; height:14px; border-radius:50%; background:#fff; transition:left .2s; pointer-events:none; }
+    .day-btn       { width:32px; height:32px; border-radius:var(--rsm); border:1px solid var(--border); background:var(--bg); color:var(--ink-sub); cursor:pointer; font-size:12px; font-weight:600; display:flex; align-items:center; justify-content:center; }
+    .day-btn.on    { background:var(--ink); border-color:var(--ink); color:#fff; }
+
+    /* ══ Shift Manager ══════════════════════════════════════════════════════ */
+    .shift-wrap { padding:14px 18px 80px; }
+    .task-row     { display:flex; align-items:flex-start; gap:9px; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:var(--rsm); margin-bottom:5px; }
+    .task-row.done{ background:var(--bg); }
+    .task-cb      { width:20px; height:20px; border-radius:4px; border:1.5px solid var(--border); display:flex; align-items:center; justify-content:center; flex-shrink:0; margin-top:1px; cursor:pointer; }
+    .task-cb.on   { background:#16A34A; border-color:#16A34A; color:#fff; }
+    .shift-nav    { display:flex; border-bottom:1px solid var(--border); margin-bottom:14px; }
+    .shift-tab    { padding:0 11px; height:36px; background:transparent; border:none; border-bottom:2px solid transparent; color:var(--ink-muted); cursor:pointer; font-size:12px; font-weight:500; white-space:nowrap; display:inline-flex; align-items:center; }
+    .shift-tab.on { color:var(--ink); font-weight:600; border-bottom-color:var(--ink); }
+
+    /* ══ Forecast ═══════════════════════════════════════════════════════════ */
+    .forecast-card  { background:var(--surface); border:1px solid var(--border); border-radius:var(--r); padding:16px; margin-bottom:12px; box-shadow:var(--shadow); }
+    .forecast-grid  { display:grid; grid-template-columns:repeat(3,1fr); gap:0; border-top:1px solid var(--border-sub); padding-top:13px; }
+    .forecast-cell  { }
+    .forecast-cell:not(:last-child) { padding-left:14px; border-left:1px solid var(--border-sub); margin-left:14px; }
+
+    /* ══ Utility classes ════════════════════════════════════════════════════ */
+    .flex    { display:flex; }
+    .fcol    { flex-direction:column; }
+    .icenter { align-items:center; }
+    .istart  { align-items:flex-start; }
+    .jbet    { justify-content:space-between; }
+    .jcenter { justify-content:center; }
+    .g1 { gap:4px; }  .g2 { gap:8px; }  .g3 { gap:12px; }  .g4 { gap:16px; }
+    .f1 { flex:1; }   .f0 { flex-shrink:0; }
+    .fw { width:100%; }
+    .tc { text-align:center; } .tl { text-align:left; }
+    .rel { position:relative; } .abs { position:absolute; }
+    .of-h { overflow:hidden; } .trunc { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .mt1 { margin-top:4px; }   .mt2 { margin-top:8px; }   .mt3 { margin-top:12px; }  .mt4 { margin-top:16px; }
+    .mb0 { margin-bottom:0; }  .mb1 { margin-bottom:4px; } .mb2 { margin-bottom:8px; } .mb3 { margin-bottom:12px; } .mb4 { margin-bottom:16px; }
+    .mr2 { margin-right:8px; } .mr3 { margin-right:12px; }
+    .p2 { padding:8px; }  .p3 { padding:12px; }  .p4 { padding:16px; }
+    .px3 { padding-left:12px; padding-right:12px; }
+    .py1 { padding-top:4px; padding-bottom:4px; }
+    .py2 { padding-top:8px; padding-bottom:8px; }
+    .t-xs   { font-size:10px; }  .t-sm  { font-size:12px; }  .t-base { font-size:13px; }  .t-md { font-size:14px; }
+    .fw5 { font-weight:500; }  .fw6 { font-weight:600; }  .fw7 { font-weight:700; }
+    .c-ink   { color:var(--ink); }
+    .c-sub   { color:var(--ink-sub); }
+    .c-muted { color:var(--ink-muted); }
+    .c-ok    { color:var(--success); }
+    .c-warn  { color:var(--warning); }
+    .c-err   { color:var(--danger); }
+    .bg-bg   { background:var(--bg); }
+    .bg-surface { background:var(--surface); }
+    .divider { border:none; border-top:1px solid var(--border-sub); margin:12px 0; }
+    .sep     { font-size:11px; color:var(--border); }
+    .border  { border:1px solid var(--border); }
+    .border-b{ border-bottom:1px solid var(--border-sub); }
+    .rounded   { border-radius:var(--rsm); }
+    .rounded-md{ border-radius:var(--r); }
+    .shadow-sm { box-shadow:var(--shadow); }
+    .shadow-md { box-shadow:var(--shadow-md); }
+
+    /* ══ Dashboard ══════════════════════════════════════════════════════════ */
+    .dash            { padding:0 0 96px; background:linear-gradient(180deg,#F8FAFC 0%,#EEF2F7 100%); min-height:100vh; width:100%; overflow-x:hidden; }
+    .dash-wrap       { max-width:980px; width:100%; margin:0 auto; padding:0 14px; box-sizing:border-box; }
+    .dash-section    { margin-top:36px; }
+
+    /* Status strip */
+    .dash-status { display:flex; align-items:center; gap:10px; font-size:12px; color:#94A3B8; padding:16px 0 6px; line-height:1.5; }
+    .dash-dot    { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+
+    /* ── KPI row — flat, secondary ── */
+    .kpi-row  { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; width:100%; }
+    .kpi-card {
+      background:#FFFFFF; border-radius:16px; padding:20px 20px 17px;
+      box-shadow:0 1px 3px rgba(0,0,0,.05); border:1px solid rgba(0,0,0,.04);
+      transition:transform .2s ease, box-shadow .2s ease; cursor:default;
+    }
+    .kpi-card:hover { transform:translateY(-2px); box-shadow:0 6px 20px rgba(0,0,0,.09); border-color:rgba(0,0,0,.06); }
+    .kpi-card-link  { cursor:pointer; }
+    .kpi-card-link:active { transform:translateY(0); box-shadow:0 1px 3px rgba(0,0,0,.05); background:#FAFBFF; }
+    .kpi-forecast   { font-size:10px; color:#94A3B8; margin-top:6px; line-height:1.4; font-weight:400; }
+    .kpi-pct-badge  { font-size:10px; font-weight:600; margin-top:5px; display:flex; align-items:center; gap:4px; flex-wrap:wrap; }
+    .kpi-pct-bar    { height:3px; background:#F1F5F9; border-radius:3px; overflow:hidden; margin-top:7px; }
+    .kpi-pct-fill   { height:100%; border-radius:3px; transition:width .6s ease; }
+    .kpi-label { font-size:10px; font-weight:400; color:#94A3B8; letter-spacing:.5px; text-transform:uppercase; margin-bottom:9px; display:block; line-height:1.4; }
+    .kpi-val   { font-size:21px; font-weight:600; color:#64748B; letter-spacing:-.8px; line-height:1; }
+    .kpi-val.s-warn { color:#D97706; }
+    .kpi-val.s-bad  { color:#818CF8; }
+    .kpi-ctx   { font-size:11px; color:#CBD5E1; margin-top:5px; font-weight:400; line-height:1.4; }
+
+    /* ── HERO — a section, not a card ── */
+    .hero-card {
+      background:#EEF2FF;
+      border-radius:20px; padding:56px 20px 48px;
+      width:100%; overflow:hidden;
+      box-shadow:0 2px 4px rgba(99,102,241,.04),
+                 0 8px 20px rgba(99,102,241,.06),
+                 0 20px 50px rgba(0,0,0,.08);
+      position:relative; overflow:hidden; border:none;
+    }
+    .hero-card::before {
+      content:''; position:absolute; top:0; left:0; right:0; height:3px;
+      background:linear-gradient(90deg,#818CF8 0%,#6366F1 50%,#A5B4FC 100%);
+      border-radius:20px 20px 0 0;
+    }
+    .hero-card::after {
+      content:''; position:absolute; top:-60px; right:-60px;
+      width:200px; height:200px;
+      background:radial-gradient(circle, rgba(129,140,248,.08) 0%, transparent 65%);
+      pointer-events:none;
+    }
+    .hero-header  { margin-bottom:22px; position:relative; z-index:1; }
+    .hero-eyebrow { font-size:11px; font-weight:500; color:#818CF8; letter-spacing:.6px; text-transform:uppercase; margin-bottom:12px; line-height:1.4; display:flex; align-items:center; gap:8px; }
+    .hero-eyebrow::before { content:''; width:6px; height:6px; border-radius:50%; background:#818CF8; flex-shrink:0; }
+    .hero-main    { display:flex; justify-content:space-between; align-items:flex-end; position:relative; z-index:1; }
+    .hero-left    { }
+    .hero-amount  { font-size:76px; font-weight:800; color:#0F172A; letter-spacing:-4.5px; line-height:1; }
+    .hero-target  { font-size:13px; color:#64748B; font-weight:500; margin-top:10px; line-height:1.5; }
+    .hero-badge   { font-size:12px; font-weight:600; padding:6px 16px; border-radius:999px; align-self:flex-start; margin-top:4px; }
+    .hero-badge.ok   { background:rgba(129,140,248,.18); color:#4F46E5; }
+    .hero-badge.warn { background:rgba(253,230,138,.4); color:#B45309; }
+
+    /* Progress bar — 6px, premium */
+    .prog-wrap   { margin-top:22px; margin-bottom:8px; position:relative; z-index:1; }
+    .prog-track  { height:6px; background:rgba(15,23,42,.08); border-radius:999px; position:relative; overflow:hidden; }
+    .prog-fill   { height:100%; border-radius:999px; background:linear-gradient(90deg,#6366F1 0%,#818CF8 60%,#A5B4FC 100%); transition:width 1.1s cubic-bezier(.16,1,.3,1); box-shadow:0 0 10px rgba(99,102,241,.25); }
+    .prog-marker { position:absolute; top:0; bottom:0; width:1.5px; background:rgba(15,23,42,.2); border-radius:2px; }
+    .prog-labels { display:flex; justify-content:space-between; font-size:10px; color:#94A3B8; margin-top:8px; line-height:1.4; }
+
+    /* Hero forecast footer */
+    .hm-row  { display:grid; grid-template-columns:repeat(2,1fr); padding-top:26px; margin-top:26px; border-top:1px solid rgba(99,102,241,.1); position:relative; z-index:1; }
+    .hm-cell { }
+    .hm-cell:not(:last-child) { padding-left:28px; border-left:1px solid rgba(99,102,241,.1); margin-left:28px; }
+    .hm-label { font-size:11px; font-weight:600; color:#64748B; letter-spacing:.2px; margin-bottom:7px; line-height:1.4; }
+    .hm-val   { font-size:22px; font-weight:700; color:#0F172A; letter-spacing:-.8px; line-height:1; }
+    .hm-val.neg { color:#818CF8; }
+    .hm-sub   { font-size:11px; color:#64748B; margin-top:5px; line-height:1.4; font-weight:500; }
+
+    /* ── 2-col grid ── */
+    .dash-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; width:100%; }
+
+    .chart-card  { background:#FFFFFF; border-radius:16px; padding:24px 16px 18px; box-shadow:0 1px 3px rgba(0,0,0,.05); border:1px solid rgba(0,0,0,.04); transition:transform .2s ease, box-shadow .2s ease; width:100%; overflow:hidden; }
+    .chart-card:hover { transform:translateY(-2px); box-shadow:0 6px 20px rgba(0,0,0,.09); border-color:rgba(0,0,0,.06); }
+    .chart-label { font-size:10px; font-weight:400; color:#94A3B8; letter-spacing:.5px; text-transform:uppercase; margin-bottom:20px; line-height:1.4; }
+
+    .bd-card  { background:#FFFFFF; border-radius:16px; padding:24px 16px; box-shadow:0 1px 3px rgba(0,0,0,.05); border:1px solid rgba(0,0,0,.04); transition:transform .2s ease, box-shadow .2s ease; width:100%; overflow:hidden; }
+    .bd-card:hover { transform:translateY(-2px); box-shadow:0 6px 20px rgba(0,0,0,.09); border-color:rgba(0,0,0,.06); }
+    .bd-label { font-size:10px; font-weight:400; color:#94A3B8; letter-spacing:.5px; text-transform:uppercase; margin-bottom:22px; line-height:1.4; }
+    .bd-row   { margin-bottom:16px; }
+    .bd-row:last-child { margin-bottom:0; }
+    .bd-hdr   { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px; }
+    .bd-lbl   { font-size:13px; font-weight:500; color:#64748B; line-height:1.4; }
+    .bd-val   { font-size:13px; font-weight:600; color:#334155; }
+    .bd-pct   { font-size:10px; color:#CBD5E1; margin-right:10px; }
+    .bd-track { height:4px; background:#F1F5F9; border-radius:999px; overflow:hidden; }
+    .bd-fill  { height:100%; border-radius:999px; transition:width .6s ease; }
+
+    .alert-card { background:#FEFCE8; border-radius:16px; padding:16px 20px; border:1px solid #FDE68A; box-shadow:none; transition:box-shadow .2s ease; }
+    .alert-card:hover { box-shadow:0 4px 12px rgba(251,191,36,.1); }
+    .alert-item { display:flex; align-items:flex-start; gap:10px; }
+    .alert-item + .alert-item { margin-top:11px; padding-top:11px; border-top:1px solid rgba(253,230,138,.5); }
+    .alert-dot  { width:6px; height:6px; border-radius:50%; flex-shrink:0; margin-top:4px; }
+    .alert-ttl  { font-size:12px; font-weight:600; color:#374151; margin-bottom:2px; line-height:1.4; }
+    .alert-body { font-size:11px; color:#9CA3AF; line-height:1.5; }
+    @keyframes fadeUp   { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+    @keyframes countUp  { from{opacity:0} to{opacity:1} }
+    .dash-section       { animation:fadeUp .35s ease both; }
+    .kpi-card           { animation:fadeUp .3s ease both; }
+    .kpi-card:nth-child(1){ animation-delay:.04s; }
+    .kpi-card:nth-child(2){ animation-delay:.08s; }
+    .kpi-card:nth-child(3){ animation-delay:.12s; }
+    .kpi-card:nth-child(4){ animation-delay:.16s; }
+    .hero-card          { animation:fadeUp .4s .1s ease both; }
+
+    /* ══ Mobile-first responsive overrides ══════════════════════════════════ */
+    @media (max-width: 640px) {
+
+      /* ── Overflow containment ── */
+      .app, .dash, .screen { overflow-x:hidden !important; }
+      .app-header  { padding:0 10px; gap:6px; }
+      .app-nav     { overflow:hidden; }
+      .app-nav-inner { padding:0 10px; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+
+      /* ── Page & container ── */
+      .dash-wrap       { padding:0 12px; }
+      .dash-section    { margin-top:18px; }
+      .screen          { padding:10px 12px 80px; }
+
+      /* ── Status strip ── */
+      .dash-status { font-size:11px; padding:12px 0 4px; gap:8px; }
+
+      /* ── KPI: 2-column grid on mobile ── */
+      .kpi-row  { grid-template-columns:repeat(2,1fr); gap:10px; }
+      .kpi-card { padding:14px 14px 12px; border-radius:14px; }
+      .kpi-label{ font-size:10px; margin-bottom:7px; }
+      .kpi-val  { font-size:20px; letter-spacing:-.6px; }
+      .kpi-ctx  { font-size:10px; margin-top:4px; }
+
+      /* ── Hero: compact, not dominant ── */
+      .hero-card    { padding:24px 18px 20px; border-radius:16px; }
+      .hero-header  { margin-bottom:14px; }
+      .hero-eyebrow { font-size:10px; margin-bottom:8px; }
+      .hero-amount  { font-size:36px; letter-spacing:-2px; word-break:break-all; }
+      .hero-target  { font-size:11px; margin-top:6px; }
+      .hero-badge   { font-size:11px; padding:5px 12px; }
+      .hero-main    { align-items:center; }
+
+      /* ── Progress bar: thinner ── */
+      .prog-wrap  { margin-top:16px; margin-bottom:6px; }
+      .prog-track { height:4px; }
+      .prog-labels{ font-size:9px; margin-top:5px; }
+
+      /* ── Hero metrics footer: tighter ── */
+      .hm-row   { padding-top:16px; margin-top:16px; }
+      .hm-cell:not(:last-child) { padding-left:16px; margin-left:16px; }
+      .hm-label { font-size:9px; margin-bottom:5px; }
+      .hm-val   { font-size:17px; letter-spacing:-.5px; }
+      .hm-sub   { font-size:10px; margin-top:3px; }
+
+      /* ── Chart & breakdown: single column ── */
+      .dash-grid { grid-template-columns:1fr; gap:10px; }
+      .chart-card{ padding:18px 16px 14px; border-radius:14px; }
+      .bd-card   { padding:18px 16px; border-radius:14px; }
+      .bd-row    { margin-bottom:13px; }
+      .bd-lbl    { font-size:12px; }
+      .bd-val    { font-size:12px; }
+      .bd-track  { height:4px; }
+
+      /* ── Alerts: tighter ── */
+      .alert-card { padding:13px 14px; border-radius:14px; }
+      .alert-ttl  { font-size:12px; }
+      .alert-body { font-size:11px; }
+
+      /* ── App header ── */
+      .app-header { padding:0 14px; height:48px; }
+      .app-nav    { padding:0 14px; }
+
+      /* ── Disable hover animations on touch ── */
+      .kpi-card:hover,
+      .chart-card:hover,
+      .bd-card:hover,
+      .alert-card:hover { transform:none; box-shadow:0 1px 3px rgba(0,0,0,.05); }
+
+      /* ── Tighten animation delays ── */
+      .kpi-card:nth-child(3){ animation-delay:.06s; }
+      .kpi-card:nth-child(4){ animation-delay:.1s; }
+    }
+
+    /* Slightly bigger phones / small tablets */
+    @media (min-width: 641px) and (max-width: 768px) {
+      .dash-wrap  { padding:0 18px; }
+      .kpi-row    { grid-template-columns:repeat(2,1fr); gap:12px; }
+      .hero-amount{ font-size:52px; }
+      .dash-grid  { grid-template-columns:1fr; }
+    }
+
+
+    /* ══ AI Chat — Floating Button + Panel ══════════════════════════════════ */
+    .ai-fab          { position:fixed; bottom:24px; left:20px; z-index:200;
+                       width:48px; height:48px; border-radius:50%; background:#6366F1; border:none;
+                       cursor:pointer; display:flex; align-items:center; justify-content:center;
+                       box-shadow:0 4px 18px rgba(99,102,241,.45); transition:all .2s; }
+    .ai-fab:hover    { transform:scale(1.08); box-shadow:0 6px 24px rgba(99,102,241,.6); }
+    .ai-fab-dot      { position:absolute; top:4px; left:4px; width:10px; height:10px;
+                       background:#EF4444; border:2px solid white; border-radius:50%;
+                       display:none; }
+    .ai-fab-dot.show { display:block; animation:pulse 1.5s infinite; }
+
+    .ai-panel        { position:fixed; bottom:84px; left:16px; right:16px; z-index:200;
+                       background:#FFFFFF; border-radius:20px;
+                       box-shadow:0 8px 40px rgba(0,0,0,.18), 0 0 0 1px rgba(99,102,241,.1);
+                       overflow:hidden; transition:all .25s cubic-bezier(.4,0,.2,1);
+                       transform-origin:bottom left; }
+    .ai-panel.closed { opacity:0; transform:scale(.92) translateY(12px); pointer-events:none; }
+    .ai-panel.open   { opacity:1; transform:scale(1) translateY(0); }
+    .ai-panel-head   { background:#F8FAFC; border-bottom:1px solid #E5E7EB;
+                       padding:12px 16px; display:flex; align-items:center; justify-content:space-between; }
+    .ai-panel-title  { font-size:13px; font-weight:700; color:#0F172A; display:flex; align-items:center; gap:7px; }
+    .ai-panel-dot    { width:7px; height:7px; background:#10B981; border-radius:50%; }
+    .ai-panel-close  { width:26px; height:26px; border-radius:7px; background:#F1F5F9; border:none;
+                       cursor:pointer; font-size:15px; color:#94A3B8; display:flex; align-items:center; justify-content:center; line-height:1; }
+    .ai-panel-body   { padding:12px 14px; }
+    .ai-answer       { background:#FAFBFF; border:1px solid #E0E7FF; border-radius:12px;
+                       padding:12px 14px; margin-bottom:10px; font-size:13px; line-height:1.65;
+                       color:#1E293B; max-height:160px; overflow-y:auto; }
+    .ai-answer-label { font-size:10px; font-weight:600; color:#818CF8; letter-spacing:.5px;
+                       text-transform:uppercase; margin-bottom:6px; display:flex; align-items:center; gap:5px; }
+    .ai-answer-dot   { width:6px; height:6px; border-radius:50%; background:#818CF8; animation:pulse 1.2s infinite; }
+    .ai-chips        { display:flex; gap:6px; overflow-x:auto; padding-bottom:8px; scrollbar-width:none; margin-bottom:8px; }
+    .ai-chips::-webkit-scrollbar { display:none; }
+    .ai-chip         { white-space:nowrap; font-size:11px; font-weight:500; padding:5px 11px;
+                       background:#F1F5F9; border:1px solid #E2E8F0; border-radius:999px;
+                       color:#475569; cursor:pointer; font-family:inherit; flex-shrink:0; transition:all .15s; }
+    .ai-chip:hover   { background:#EEF2FF; border-color:#C7D2FE; color:#4F46E5; }
+    .ai-bar-input    { display:flex; gap:8px; align-items:center; }
+    .ai-input        { flex:1; background:#F8FAFC; border:1.5px solid #E2E8F0; border-radius:12px;
+                       padding:10px 14px; font-size:14px; font-family:inherit; color:#111827;
+                       outline:none; direction:rtl; transition:border-color .15s; }
+    .ai-input:focus  { border-color:#6366F1; background:#FAFBFF; }
+    .ai-input::placeholder { color:#9CA3AF; }
+    .ai-send         { width:40px; height:40px; border-radius:12px; background:#6366F1; border:none;
+                       cursor:pointer; display:flex; align-items:center; justify-content:center;
+                       flex-shrink:0; transition:opacity .15s; }
+    .ai-send:disabled{ opacity:.45; cursor:default; }
+    .ai-loading      { display:flex; gap:4px; align-items:center; padding:4px 0; }
+    .ai-dot          { width:6px; height:6px; border-radius:50%; background:#818CF8; animation:aiBounce .9s ease infinite; }
+    .ai-dot:nth-child(2){ animation-delay:.15s; }
+    .ai-dot:nth-child(3){ animation-delay:.3s; }
+    @keyframes aiBounce { 0%,80%,100%{transform:translateY(0)} 40%{transform:translateY(-5px)} }
+    @keyframes spin      { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+
+    /* ══ Demo / Onboarding ═══════════════════════════════════════════════════ */
+    .demo-banner   { background:linear-gradient(135deg,#6366F1,#818CF8); color:#fff;
+                     text-align:center; padding:7px 16px; font-size:12px; font-weight:600;
+                     letter-spacing:.2px; position:sticky; top:0; z-index:60; }
+    .demo-banner span { opacity:.8; font-weight:400; margin-right:8px; }
+
+    .conv-modal    { position:fixed; inset:0; background:rgba(15,23,42,.55); z-index:1000;
+                     display:flex; align-items:flex-end; padding:0;
+                     backdrop-filter:blur(3px); }
+    .conv-sheet    { background:#FFFFFF; width:100%; border-radius:24px 24px 0 0;
+                     padding:28px 24px 36px; animation:slideUp .3s cubic-bezier(.4,0,.2,1); }
+    @keyframes slideUp { from{transform:translateY(100%)} to{transform:translateY(0)} }
+    .conv-title    { font-size:20px; font-weight:800; color:#0F172A; letter-spacing:-.5px;
+                     margin-bottom:8px; line-height:1.3; }
+    .conv-body     { font-size:14px; color:#64748B; line-height:1.7; margin-bottom:24px; }
+    .conv-btn-main { width:100%; padding:15px; background:#6366F1; color:#fff; border:none;
+                     border-radius:14px; font-size:15px; font-weight:700; cursor:pointer;
+                     font-family:inherit; letter-spacing:-.2px; margin-bottom:10px; }
+    .conv-btn-skip { width:100%; padding:10px; background:none; border:none; color:#94A3B8;
+                     font-size:13px; cursor:pointer; font-family:inherit; }
+
+    .connect-screen { padding:28px 20px 80px; max-width:500px; margin:0 auto; direction:rtl; }
+    .connect-hero   { text-align:center; margin-bottom:32px; }
+    .connect-step   { display:flex; gap:14px; align-items:flex-start; margin-bottom:20px; }
+    .connect-icon   { width:36px; height:36px; background:#EEF2FF; border-radius:10px;
+                      display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+  <script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js"></script>
+
+  <!-- Leaflet (used by SetupWizard's location picker) — CDN, no API key required -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" crossorigin=""/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" crossorigin=""></script>
+
+  <!-- Synchronous stub: apiFetch is available immediately, upgraded by the module once Firebase loads -->
+  <script>
+    window.apiFetch = async function(path, options) {
+      options = options || {};
+      var headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
+      // Try to get auth token — silently skip if not available
+      if (typeof window.getIdToken === "function") {
+        try {
+          var token = await window.getIdToken();
+          if (token) headers["Authorization"] = "Bearer " + token;
+        } catch(_) {}
+      }
+      return fetch(path, Object.assign({}, options, { headers: headers }));
+    };
+    console.log("[Marjin] apiFetch stub registered");
+  </script>
+    <script type="module">
+    import { initializeApp, initializeApp as initializeApp2 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+    import { getDatabase, ref, get, set, remove, onValue, forceWebSockets, runTransaction } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+    import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
+             sendPasswordResetEmail, onAuthStateChanged, signOut, updateProfile,
+             updateEmail, updatePassword, browserLocalPersistence, setPersistence }
+             from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+    import { initializeAppCheck, ReCaptchaV3Provider } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app-check.js";
+
+    // ── Config loaded from server (keeps keys out of static HTML) ──────────────
+    let firebaseConfig;
+    try {
+      const res = await fetch("/api/config");
+      if (!res.ok) throw new Error("config fetch failed");
+      firebaseConfig = await res.json();
+      if (firebaseConfig.error) throw new Error(firebaseConfig.error);
+    } catch(e) {
+      console.error("[firebase-init] could not load config:", e.message);
+      document.getElementById("root").innerHTML =
+        "<div style='padding:40px;text-align:center;color:#DC2626;font-family:sans-serif'>שגיאה בטעינת הגדרות האפליקציה. רענן את הדף.</div>";
+      throw e; // stop execution
+    }
+
+    const app  = initializeApp(firebaseConfig);
+    forceWebSockets(); // Use WebSocket only -- prevents CSP violations from long-polling <script> injection
+    const db   = getDatabase(app);
+    const auth = getAuth(app);
+
+    // ── App Check (reCAPTCHA v3) -- enforced on RTDB ────────────────────────────
+    // Set RECAPTCHA_SITE_KEY in Vercel env. In dev, set self.FIREBASE_APPCHECK_DEBUG_TOKEN=true in console.
+    const recaptchaKey = firebaseConfig.recaptchaSiteKey;
+    if (recaptchaKey) {
+      try {
+        initializeAppCheck(app, {
+          provider: new ReCaptchaV3Provider(recaptchaKey),
+          isTokenAutoRefreshEnabled: true,
+        });
+      } catch(e) { console.warn("[app-check] init failed:", e.message); }
+    } else {
+      console.warn("[app-check] RECAPTCHA_SITE_KEY missing -- App Check disabled");
+    }
+
+    // ── Auth: Email/Password ──────────────────────────────────────────────────
+    let _uid  = null;
+    let _user = null;
+
+    // Returns a fresh ID token for API Authorization headers
+    window.getIdToken = async (forceRefresh=false) => {
+      if (!_user) throw new Error("not authenticated");
+      return _user.getIdToken(forceRefresh);
+    };
+
+    // Sign in with email + password
+    window.firebaseSignIn = async (email, password) => {
+      const cred = await signInWithEmailAndPassword(auth, email, password);
+      _uid  = cred.user.uid;
+      _user = cred.user;
+      return cred.user;
+    };
+
+    // Create a new Firebase Auth user (uses secondary app to avoid signing out current user)
+    window.firebaseCreateUser = async (email, password) => {
+      const cfg = window._firebaseConfig || firebaseConfig;
+      const secondaryApp  = window._initializeApp(cfg, `secondary_${Date.now()}`);
+      const secondaryAuth = getAuth(secondaryApp);
+      const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+      const uid  = cred.user.uid;
+      await signOut(secondaryAuth);
+      return uid;
+    };
+
+    // Send password reset email
+    window.firebaseSendReset = async (email) => {
+      await sendPasswordResetEmail(auth, email);
+    };
+
+    // Update user display name (used for tenant discovery)
+    window.firebaseUpdateDisplayName = async (user, name) => {
+      try { await updateProfile(user, { displayName: name }); } catch(_){}
+    };
+
+    // Update email for current logged-in user (used on first login profile completion)
+    window.firebaseUpdateEmail = async (newEmail) => {
+      if (!_user) throw new Error("not authenticated");
+      await updateEmail(_user, newEmail);
+    };
+
+    // Update password for current logged-in user
+    window.firebaseUpdatePassword = async (newPassword) => {
+      if (!_user) throw new Error("not authenticated");
+      await updatePassword(_user, newPassword);
+    };
+
+    // Sign out
+    window.firebaseSignOut = async () => {
+      const prevUid = _uid;
+      await signOut(auth);
+      _uid  = null;
+      _user = null;
+      // Clear tenant cache on logout
+      if(prevUid) {
+        try {
+          sessionStorage.removeItem("marjin_tid_" + prevUid);
+          sessionStorage.removeItem("marjin_biz_" + prevUid);
+        } catch(_){}
+      }
+    };
+
+    // Ensure Firebase persists session across page reloads (browserLocalPersistence = IndexedDB/localStorage)
+    try { await setPersistence(auth, browserLocalPersistence); } catch(_) {}
+
+    // Wait for auth state to settle (fires immediately if session already exists)
+    let _authUser = null;
+    const authReady = new Promise(resolve => {
+      const unsub = onAuthStateChanged(auth, user => {
+        _authUser = user;
+        if (user) { _uid = user.uid; _user = user; }
+        else { _uid = null; _user = null; }
+        resolve(user);
+        // Keep listener alive — updates _uid/_user on login/logout events after app load
+        // but do not call resolve again (Promise already settled)
+      });
+      window._unsubAuthListener = unsub; // store for cleanup if needed
+    });
+    await authReady;
+
+    // Firebase converts arrays to objects -- so we store as {v: jsonString}
+    // All operational data lives under /tenants/{bizId}/ scoped by RTDB RBAC
+    // _currentTenantId is set by the app when a business is selected
+    let _currentTenantId = null;
+    window.setTenantId = id => { _currentTenantId = id; };
+
+    const fkey = k => {
+      if (!_currentTenantId) throw new Error("tenant not set");
+      return "tenants/" + _currentTenantId + "/" + k.replace(/[.#$\[\]]/g, "_");
+    };
+    // System data now lives under tenants/{tenantId}/app/
+    // Requires tenantId to be set first via window.setTenantId
+    const fkeyShared = k => {
+      const safe = k.replace(/[.#$\[\]]/g, "_");
+      if (safe === "app-users")      return _currentTenantId ? `tenants/${_currentTenantId}/app/users`    : null;
+      if (safe === "app-businesses") return _currentTenantId ? `tenants/${_currentTenantId}/app/business` : null;
+      if (!_currentTenantId) return null;
+      return `tenants/${_currentTenantId}/${safe}`;
+    };
+    window.storage = {
+      get: async (key, shared=false) => {
+        const path = shared ? fkeyShared(key) : fkey(key);
+        if (!path) throw new Error("tenant not set for shared key: " + key);
+        const snap = await get(ref(db, path));
+        if (!snap.exists()) throw new Error("not found");
+        const raw = snap.val();
+        const value = (raw && typeof raw === "object" && "_v" in raw) ? raw._v : JSON.stringify(raw);
+        return { key, value, shared };
+      },
+      set: async (key, value, shared=false) => {
+        const str = typeof value === "string" ? value : JSON.stringify(value);
+        const path = shared ? fkeyShared(key) : fkey(key);
+        if (!path) throw new Error("tenant not set for shared key: " + key);
+        await set(ref(db, path), { _v: str });
+        return { key, value: str, shared };
+      },
+      delete: async (key, shared=false) => {
+        const path = shared ? fkeyShared(key) : fkey(key);
+        await remove(ref(db, path));
+        return { key, deleted: true };
+      },
+      list: async (prefix) => {
+        const snap = await get(ref(db, "marjin"));
+        if (!snap.exists()) return { keys: [] };
+        const pfx = (prefix || "").replace(/[.#$\[\]]/g, "_");
+        const keys = Object.keys(snap.val()).filter(k => k.startsWith(pfx));
+        return { keys };
+      },
+    };
+
+    // R4 (P0-DATA-01): explicit-tenant write path. Derives the RTDB path from an
+    // EXPLICIT tenantId argument (the captured selection context) instead of the
+    // mutable _currentTenantId global — so a write dispatched after a tenant switch
+    // still lands in the originating tenant's namespace and can never be retargeted
+    // by a later selection. Path semantics are byte-identical to set(): same
+    // `tenants/{tenantId}/...` layout, same shared-key mapping, same {_v} envelope.
+    // Additive/backward-compatible: set()/get()/subscribe() are unchanged.
+    const fkeySharedForTenant = (tenantId, k) => {
+      const safe = k.replace(/[.#$\[\]]/g, "_");
+      if (safe === "app-users")      return `tenants/${tenantId}/app/users`;
+      if (safe === "app-businesses") return `tenants/${tenantId}/app/business`;
+      return `tenants/${tenantId}/${safe}`;
+    };
+    window.storage.setFor = async (tenantId, key, value, shared=false) => {
+      if (!tenantId) throw new Error("explicit tenant required");
+      const str = typeof value === "string" ? value : JSON.stringify(value);
+      const path = shared ? fkeySharedForTenant(tenantId, key) : ("tenants/" + tenantId + "/" + key.replace(/[.#$\[\]]/g, "_"));
+      if (!path) throw new Error("tenant not set for shared key: " + key);
+      const tenantRef = ref(db, path);
+      await set(tenantRef, { _v: str });
+      return { key, value: str, shared };
+    };
+
+    // R10: REMOTE-ATOMIC mutation transport (compare-and-swap). `txnFn(rawCurrent)`
+    // must be PURE — RTDB may re-run it several times against a fresher remote value.
+    // `applyLocally:false` suppresses optimistic local events, so listeners never see
+    // an intermediate financial value that was never committed.
+    window.storage.mutateFor = async (tenantId, key, txnFn) => {
+      if (!tenantId) throw new Error("explicit tenant required");
+      const path = fkeySharedForTenant(tenantId, key);
+      return await runTransaction(ref(db, path), txnFn, { applyLocally: false });
+    };
+    // M1 R3: RAW-node read. `get` above turns a raw RTDB array into JSON text, which hides the stored shape; the business
+    // registry must be judged on the node exactly as stored (the server rule). null = confirmed absent; a failed read throws.
+    window.storage.getNode = async (key) => {
+      const path = fkeyShared(key);
+      if (!path) throw new Error("tenant not set for shared key: " + key);
+      const snap = await get(ref(db, path));
+      return snap.exists() ? snap.val() : null;
+    };
+
+    // R-V2: RAW-node subscribe. `subscribe` above unwraps `_v` for the legacy blob,
+    // which after a V2 cutover would hand the caller the FROZEN snapshot. This one
+    // delivers the node exactly as stored so the reader can decide the storage mode.
+    window.storage.subscribeNode = (key, callback, onError) => {
+      const path = fkeyShared(key);
+      if (!path) return () => {};
+      return onValue(ref(db, path), (snap) => { if (snap.exists()) callback(snap.val()); },
+        (err) => { if (typeof onError === "function") { try { onError(err); } catch(_){} } });
+    };
+    // F1: cost_history must deliver a confirmed absent snapshot. The legacy raw-node
+    // helper intentionally suppresses absent nodes, so it cannot serve this contract.
+    window.storage.subscribeCostHistory = (bizId, callback, onError) => {
+      const path = fkeyShared(`biz:${bizId}:cost_history`);
+      if (!path) return () => {};
+      return onValue(ref(db, path), (snap) => callback(snap.exists() ? snap.val() : null),
+        (err) => { if (typeof onError === "function") onError(err); });
+    };
+    // VERSION FENCE (P0-DATA-01): the server-owned per-business storage policy lives
+    // OUTSIDE the tenant subtree (`storage_v2_control/{tenantId}/{bizId}`), readable by
+    // authorized members, never writable by a client. `subscribePolicy` delivers `null`
+    // for a CONFIRMED-absent record (legacy defaults) and calls `onError` for a failed
+    // read — the two are never conflated: a read failure is "unresolved", not "absent".
+    const policyPath = (tenantId, bizId) => "storage_v2_control/" + String(tenantId).replace(/[.#$\[\]]/g, "_") + "/" + String(bizId).replace(/[.#$\[\]]/g, "_");
+    window.storage.subscribePolicy = (tenantId, bizId, callback, onError) => {
+      if (!tenantId || !bizId) return () => {};
+      return onValue(ref(db, policyPath(tenantId, bizId)), (snap) => callback(snap.exists() ? snap.val() : null),
+        (err) => { if (typeof onError === "function") { try { onError(err); } catch(_){} } });
+    };
+    window.storage.getPolicy = async (tenantId, bizId) => {
+      if (!tenantId || !bizId) throw new Error("explicit tenant and business required");
+      const snap = await get(ref(db, policyPath(tenantId, bizId)));
+      return snap.exists() ? snap.val() : null;
+    };
+    // R-V2: row-scoped compare-and-swap. Same contract as mutateFor, addressed at a
+    // child path, so two operators editing different rows never contend.
+    window.storage.mutateForPath = async (tenantId, key, subPath, txnFn) => {
+      if (!tenantId) throw new Error("explicit tenant required");
+      const base = fkeySharedForTenant(tenantId, key);
+      const path = subPath ? (base + "/" + String(subPath).replace(/[.#$[\]]/g, "_")) : base;
+      return await runTransaction(ref(db, path), txnFn, { applyLocally: false });
+    };
+
+    // Live listener -- calls callback whenever any key changes
+    window.storage.subscribe = (key, callback, shared=false, onError) => {
+      const path = shared ? fkeyShared(key) : fkey(key);
+      if (!path) return () => {}; // no-op unsubscribe if tenant not set
+      const r = ref(db, path);
+      // R9: surface listener errors to the caller so a financial lane can stay
+      // FAIL-CLOSED instead of assuming an un-hydrated empty state is authoritative.
+      return onValue(r, (snap) => {
+        if (snap.exists()) {
+          const raw = snap.val();
+          const value = (raw && typeof raw === "object" && "_v" in raw) ? raw._v : JSON.stringify(raw);
+          callback({ key, value });
+        }
+      }, (err) => { if (typeof onError === "function") { try { onError(err); } catch(_){} } });
+    };
+    // Expose uid for app use
+    window.storage.getUid = () => _uid;
+
+    // ── Authenticated fetch for Edge Functions ────────────────────────────────
+    window.apiFetch = async (path, options={}) => {
+      let token = null;
+      try { token = await window.getIdToken(); } catch(_) { /* demo mode or not logged in */ }
+      const headers = {
+        ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+      };
+      return fetch(path, { ...options, headers });
+    };
+
+    // Raw RTDB get (without storage wrapper) -- used for pre-auth lookups
+    window._rtdbGet = async (path) => {
+      const snap = await get(ref(db, path));
+      return snap.exists() ? snap.val() : null;
+    };
+    // Raw RTDB set -- used for lookup table writes
+    window._rtdbSet = async (path, val) => {
+      await set(ref(db, path), val);
+    };
+
+    window._auth            = auth;             // expose for tenant discovery fallback
+    window._initializeApp   = initializeApp2;  // expose for creating secondary apps
+    window._firebaseConfig  = firebaseConfig;  // expose config for secondary app creation
+    window._firebaseReady = true;
+    window.dispatchEvent(new Event("firebase-ready"));
+  </script>
+  <!-- ═══ C1: shared Financial Core loader (fincore/v1, same-origin, script-src 'self') ═══
+       The browser runs the SAME generated core as the server. A missing file, a load error or a
+       bundle with other identifiers leaves window.__marjinFinance.state = "failed": every
+       financial view then shows an explicit unavailable state — there is no old-formula fallback. -->
+  <script type="module">
+    // ── C1 fincore bootstrap ──
+    window.__marjinFinance = { state: "loading", error: null };
+    try {
+      const mod = await import("/fincore/v1/browser/marjinFinanceGlobal.js");
+      const api = mod && mod.default;
+      const v = api && api.versions;
+      if (!api || api !== window.MarjinFinance || !v || v.product !== "MARJIN_PRODUCT/3" || v.forecast !== "REV_FORECAST/v2" ||
+          v.costHistory !== "MARJIN_COSTH/6" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") {
+        throw new Error("fincore_version_mismatch");
+      }
+      window.__marjinFinance = { state: "ready", error: null };
+    } catch (e) {
+      window.__marjinFinance = { state: "failed", error: String((e && e.message) || e) };
+    }
+    window.dispatchEvent(new Event("marjin-finance-settled"));
+  </script>
+  <!-- ═══ REV_FORECAST/v1 — mirrored from src/forecast/revenueForecast.ts ═══
+       Canonical, deterministic revenue month-end forecast + exception-day helpers.
+       This inline block is the SINGLE active forecast implementation in the UI.
+       It must stay behaviorally equivalent to src/forecast/revenueForecast.ts
+       (same thresholds, last-4/min-3, same-weekday, missing/partial/future/exception
+       semantics, confidence bands, warning ids). Do not add a third formula. -->
+  <script>
+  (function(){
+    var WINDOW = 4, MIN_SAMPLES = 3, MAX_CONFIDENCE = 0.95;
+    // Day-of-week 0=Sun..6=Sat for "YYYY-MM-DD" (pure Sakamoto — no ambiguous Date parsing)
+    function dowOf(dateStr){
+      var p = String(dateStr).split("-").map(Number), y=p[0], m=p[1], d=p[2];
+      var t=[0,3,2,5,0,3,5,1,4,6,2,4]; var yy = m<3 ? y-1 : y;
+      return (yy + Math.floor(yy/4) - Math.floor(yy/100) + Math.floor(yy/400) + t[m-1] + d) % 7;
+    }
+    function daysInMonth(year, month1){ return new Date(Date.UTC(year, month1, 0)).getUTCDate(); }
+    function datesInMonth(targetMonth){
+      var p=targetMonth.split("-").map(Number), y=p[0], m=p[1], n=daysInMonth(y,m), out=[];
+      for(var d=1; d<=n; d++) out.push(y+"-"+String(m).padStart(2,"0")+"-"+String(d).padStart(2,"0"));
+      return out;
+    }
+    function num(v){ var n=parseFloat(String(v).replace(/,/g,"")); return isFinite(n)?n:0; }
+    // Map app daily entries -> forecast days (mirrors dailyBuilder has_sales/total logic)
+    function entriesToForecastDays(entries, exByDate){
+      var hasMap = exByDate && typeof exByDate==='object';
+      return (entries||[]).map(function(e){
+        var sales=num(e.sales), del=num(e.deliveries), oi=num(e.other_income);
+        var food = e.supplier_payments ? Object.values(e.supplier_payments).filter(function(v){return v!=='skip';}).reduce(function(a,v){return a+num(v);},0) : num(e.food_cost);
+        var total = sales+del+oi;
+        // Structured-first: the effective-exception map (from the server list action)
+        //   already encodes structured active/cleared + narrow legacy fallback and WINS.
+        //   Absent from the map (or map not loaded) => legacy embedded value (compat mode).
+        var exc = (hasMap && Object.prototype.hasOwnProperty.call(exByDate, e.date)) ? (exByDate[e.date]===true) : (e.is_exception===true);
+        return { date:e.date, total:total, had_entry:(sales>0||del>0||food>0),
+                 has_sales:(sales>0||del>0||oi>0), is_exception:exc,
+                 is_outlier:e.is_outlier===true, stale:e.stale===true };
+      });
+    }
+    function isValidSample(d){
+      return !!d && d.had_entry===true && isFinite(d.total) && d.total>0 &&
+             d.has_sales!==false && d.is_exception!==true && d.is_outlier!==true && d.stale!==true;
+    }
+    function sameWeekdayForecast(history, weekday, beforeDate){
+      var s = history.filter(function(d){ return d.date < beforeDate && dowOf(d.date)===weekday && isValidSample(d); })
+                     .sort(function(a,b){ return a.date<b.date?-1:a.date>b.date?1:0; }).slice(-WINDOW);
+      var values=s.map(function(d){return d.total;});
+      var avg = values.length ? values.reduce(function(a,b){return a+b;},0)/values.length : null;
+      return { avg:avg, n:values.length, dates:s.map(function(d){return d.date;}), values:values };
+    }
+    function r0(n){ return Math.round(n); }
+    function r4(n){ return Math.round(n*10000)/10000; }
+    // opts: { today, targetMonth, tenantId, bizId }. history = forecast days (all months).
+    function computeRevenueForecast(opts){
+      var history = opts.history||[], today = opts.today, targetMonth = opts.targetMonth || String(today).slice(0,7);
+      var warnings = {}; var setW=function(w){warnings[w]=true;};
+      var byDate={}; history.forEach(function(d){ (byDate[d.date]=byDate[d.date]||[]).push(d); });
+      var dup={}; Object.keys(byDate).forEach(function(k){ if(byDate[k].length>1) dup[k]=true; });
+      if(Object.keys(dup).length) setW("duplicate_dates");
+      var dayOf=function(dt){ return byDate[dt] && byDate[dt][0]; };
+      var baseHistory = history.filter(function(d){ return !dup[d.date]; });
+      var dates = datesInMonth(targetMonth);
+      var wkMap={}; var wkOrder=[]; var ensureWk=function(wd){ if(!wkMap[wd]){ wkMap[wd]={weekday:wd,calendarOccurrencesInMonth:0,actualOccurrences:0,futureOrPartialOccurrences:0,validHistoricalSamples:0,sampleDates:[],sampleValues:[],sampleAverage:null,forecastContribution:0,status:"insufficient_history"}; wkOrder.push(wd); } return wkMap[wd]; };
+      var actual=0, entered=0, completed=0, missing=[], remainingFC=0, remaining=0, partial=null, anyExc=false;
+      dates.forEach(function(date){
+        var wd=dowOf(date), wk=ensureWk(wd); wk.calendarOccurrencesInMonth++;
+        if(date<today){
+          completed++;
+          var e = dup[date]?null:dayOf(date);
+          if(e && e.had_entry===true){ entered++; wk.actualOccurrences++; actual += isFinite(e.total)?e.total:0; if(e.is_exception===true) anyExc=true; if(e.stale===true) setW("stale_source_data"); }
+          else missing.push(date);
+        } else {
+          remaining++; wk.futureOrPartialOccurrences++;
+          if(date===today){ setW("partial_current_day"); var t=dup[date]?null:dayOf(date); partial=(t&&t.had_entry===true&&isFinite(t.total))?t.total:null; }
+          var s=sameWeekdayForecast(baseHistory, wd, date);
+          if(s.n>=MIN_SAMPLES && s.avg!==null){ wk.status="ready"; wk.validHistoricalSamples=s.n; wk.sampleDates=s.dates; wk.sampleValues=s.values; wk.sampleAverage=s.avg; wk.forecastContribution+=s.avg; remainingFC+=s.avg; }
+          else { wk.validHistoricalSamples=s.n; wk.sampleDates=s.dates; wk.sampleValues=s.values; setW("insufficient_weekday_history"); }
+        }
+      });
+      if(missing.length) setW("missing_completed_days");
+      if(anyExc) setW("exception_days_excluded");
+      var remWk = Object.keys(wkMap).map(function(k){return wkMap[k];}).filter(function(w){return w.futureOrPartialOccurrences>0;});
+      var anyReady = remWk.some(function(w){return w.status==="ready";});
+      var allInsuff = remWk.length>0 && !anyReady;
+      var monthEnd = allInsuff ? null : r0(actual+remainingFC);
+      var dataComp = completed>0 ? entered/completed : 1;
+      var sufficient = remWk.filter(function(w){return w.status==="ready";}).length;
+      var wkComp = remWk.length>0 ? sufficient/remWk.length : 1;
+      var completeness = r4(Math.min(dataComp, wkComp));
+      var readyN = remWk.filter(function(w){return w.status==="ready";}).map(function(w){return w.validHistoricalSamples;});
+      var nEff = readyN.length ? Math.min.apply(null, readyN) : 0;
+      var base = Math.min(MAX_CONFIDENCE, Math.max(0.3, 0.3+0.05*nEff));
+      var confidence = allInsuff ? 0 : r4(Math.min(MAX_CONFIDENCE, base*completeness));
+      var band = confidence>=0.75?"high":confidence>=0.5?"medium":"low";
+      var evidence=[];
+      wkOrder.forEach(function(wd){ var w=wkMap[wd]; if(w.sampleAverage!==null) evidence.push("יום "+w.weekday+": ממוצע "+r0(w.sampleAverage)+" מתוך "+w.validHistoricalSamples+" דגימות ("+w.sampleDates.join(", ")+")"); });
+      if(missing.length) evidence.push("ימים שהסתיימו וטרם הוזנו: "+missing.join(", "));
+      return {
+        formulaId:"REV_FORECAST/v1", confidenceFormulaId:"CONFIDENCE/v1",
+        tenantId:opts.tenantId||null, bizId:opts.bizId||null, targetMonth:targetMonth,
+        businessTimezone:"Asia/Jerusalem", today:today, generatedAt:(opts.nowMs||Date.now()),
+        actualCompletedRevenue:r0(actual), partialTodayRevenue: partial===null?null:r0(partial),
+        remainingForecastRevenue:r0(remainingFC), monthEndForecastRevenue:monthEnd,
+        completedCalendarDays:completed, enteredCompletedDays:entered, missingCompletedDays:missing.length,
+        missingCompletedDates:missing, remainingDays:remaining,
+        weekdayBreakdown:Object.keys(wkMap).map(function(k){return wkMap[k];}).sort(function(a,b){return a.weekday-b.weekday;}),
+        completeness:completeness, confidence:confidence, confidenceBand:band, warnings:Object.keys(warnings), evidence:evidence
+      };
+    }
+    function ILS(n){ return "₪"+Math.round(n).toLocaleString("en-US"); }
+    var BAND_HE={high:"גבוה",medium:"בינוני",low:"נמוך"};
+    function buildForecastCardModel(r){
+      var suppressed = r.monthEndForecastRevenue===null;
+      return {
+        title:"תחזית מחזור לסוף החודש",
+        actualLine:"בפועל מימים שהושלמו: "+ILS(r.actualCompletedRevenue),
+        remainingLine:"תחזית לימים שנותרו: "+ILS(r.remainingForecastRevenue),
+        monthEndLine: suppressed ? "אין מספיק היסטוריה לתחזית אמינה" : "תחזית סוף חודש: "+ILS(r.monthEndForecastRevenue),
+        completenessLine:"שלמות נתונים: "+r.enteredCompletedDays+" מתוך "+r.completedCalendarDays+" ימים שהסתיימו",
+        confidenceLine:"ביטחון: "+BAND_HE[r.confidenceBand],
+        missingWarning: r.missingCompletedDays>0 ? "התחזית מבוססת על נתונים חלקיים — "+r.missingCompletedDays+" ימים טרם הוזנו" : null,
+        partialNote: r.partialTodayRevenue!==null ? "היום טרם הסתיים: "+ILS(r.partialTodayRevenue)+" עד כה; בתחזית החודש חושב לפי ממוצע יום השבוע" : null,
+        suppressed:suppressed
+      };
+    }
+    // ── Exception-day helpers (role-gated; Formula Bible §7 + §35) ──
+    var EXCEPTION_ROLES = ["super_owner","owner","manager"];
+    function canEditException(role){ return EXCEPTION_ROLES.indexOf(role) !== -1; }
+    var EXCEPTION_REASONS = ["closure","holiday_eve","holiday","partial_hours","one_off","promotion","operational_failure","extreme_weather","renovation","force_majeure","other"];
+    var REASON_HE = { closure:"סגור", holiday_eve:"ערב חג", holiday:"חג", partial_hours:"שעות פעילות חלקיות", one_off:"אירוע חד-פעמי", promotion:"מבצע חריג", operational_failure:"תקלה תפעולית", extreme_weather:"מזג אוויר קיצוני", renovation:"שיפוץ", force_majeure:"כוח עליון", other:"אחר" };
+    // Legacy entries load as non-exception.
+    function loadExceptionForForm(entry){
+      return { is_exception: (entry && entry.is_exception===true), exception_reason:(entry&&entry.exception_reason)||"", exception_note:(entry&&entry.exception_note)||"" };
+    }
+    // Merge exception fields into a save object. Unauthorized roles CANNOT change
+    // exception status — their attempted changes are stripped and the PRIOR values
+    // are preserved. Authorized changes stamp set_at/set_by. Clearing nulls fields.
+    function sanitizeExceptionOnSave(role, prevEntry, formVals, uid, nowMs){
+      var prev = loadExceptionForForm(prevEntry||{});
+      if(!canEditException(role)){
+        // preserve prior exception state exactly; ignore any forged form fields
+        if(prevEntry && prevEntry.is_exception===true){
+          return { is_exception:true, exception_reason:prevEntry.exception_reason||null, exception_note:prevEntry.exception_note||null, exception_set_at:prevEntry.exception_set_at||null, exception_set_by:prevEntry.exception_set_by||null };
+        }
+        return { is_exception:false };
+      }
+      var wantOn = formVals && formVals.is_exception===true;
+      if(!wantOn){ return { is_exception:false }; } // cleared => nulled/removed
+      var changed = !prev.is_exception || prev.exception_reason!==(formVals.exception_reason||"") || prev.exception_note!==(formVals.exception_note||"");
+      return {
+        is_exception:true,
+        exception_reason: formVals.exception_reason || (prevEntry&&prevEntry.exception_reason) || null,
+        exception_note: (formVals.exception_note!==undefined ? (formVals.exception_note||null) : (prevEntry&&prevEntry.exception_note)||null),
+        exception_set_at: changed ? (nowMs||Date.now()) : ((prevEntry&&prevEntry.exception_set_at)|| (nowMs||Date.now())),
+        exception_set_by: changed ? (uid||null) : ((prevEntry&&prevEntry.exception_set_by)||uid||null)
+      };
+    }
+    window.MarjinForecast = {
+      dowOf:dowOf, daysInMonth:daysInMonth, datesInMonth:datesInMonth, entriesToForecastDays:entriesToForecastDays,
+      sameWeekdayForecast:sameWeekdayForecast, computeRevenueForecast:computeRevenueForecast,
+      buildForecastCardModel:buildForecastCardModel, canEditException:canEditException,
+      EXCEPTION_REASONS:EXCEPTION_REASONS, REASON_HE:REASON_HE, loadExceptionForForm:loadExceptionForForm,
+      sanitizeExceptionOnSave:sanitizeExceptionOnSave, FORMULA_ID:"REV_FORECAST/v1"
+    };
+  })();
+  </script>
+  <!-- ═══ P1: Supplier Credits browser seam (MARJIN_P1/2 over MARJIN_CREDITS/4, P1 R1) ═══
+       A supplier credit is its own document (never a negative purchase), attributed to the
+       credit document's ISSUE DATE, net of VAT and strictly positive, with a MANDATORY document
+       number (unique per business + supplier + normalized number). The browser never reads or
+       writes the node itself (client Rules deny it): it lists it through the admin API list action
+       and mutates it only through the create / void / replace / review actions. The stored node is
+       decoded with the SAME Financial Core decoder the server loader uses
+       (F.finance.supplierCredits.decodeSupplierCredits, bound to the selected tenant + business) —
+       the browser adds no amount, date, identity or review rule of its own. A pending / flagged
+       operation (DEC-AUTH-1) is shown as such and never counted. An ambiguous outcome (network
+       failure, 5xx, unknown response) is "status unknown — retry the SAME operation", never "not
+       saved". Every function takes the core `F` explicitly (no globals), so the block is vm-testable
+       (test/finance/p1-browser-credits.test.mjs). -->
+  <script>
+  // ── P1 supplier credits browser seam ───────────────────────────────────────
+  (function () {
+    "use strict";
+    var P1_VERSION = "MARJIN_P1/2";
+    var CREDITS_CONTRACT = "MARJIN_CREDITS/4";
+    /** One deadline for the whole list read (same policy as the C1 closure-history read). */
+    var CREDITS_DEADLINE_MS = 30000;
+    var TXT = Object.freeze({
+      tab: "זיכויי ספקים",
+      loading: "טוען זיכויי ספקים…",
+      unavailable: "לא ניתן לטעון את זיכויי הספקים כעת. הקניות ועלות המזון אינן מוצגות כסופיות.",
+      retry: "נסה שוב",
+      empty: "לא הונפקו זיכויים בחודש זה.",
+      invalid: "נמצאו רשומות זיכוי לא תקינות. הקניות ועלות המזון אינן סופיות עד לתיקון.",
+      purchasesIncomplete: "זיכויי הספקים לא נטענו או אינם תקינים — הקניות ועלות המזון אינן סופיות.",
+      purchasesReview: "יש זיכויים הממתינים לאימות הרשאה או לבדיקת הבעלים — הקניות ועלות המזון אינן סופיות.",
+      negativeNet: "הקניות נטו לאחר זיכויים שליליות בתקופה — מומלץ לבדוק את הזיכויים.",
+      voided: "בוטל",
+      replaced: "הוחלף בעריכה",
+      reviewPending: "ממתין לאימות הרשאה — לא נספר",
+      reviewFlagged: "סומן לבדיקת הבעלים — לא נספר",
+      reviewRejected: "נדחה על ידי הבעלים — לא נספר",
+      pendingChange: "שינוי ממתין לאימות הרשאה",
+      flaggedChange: "שינוי סומן לבדיקת הבעלים",
+      reviewSummary: "פעולות זיכוי ממתינות לאימות הרשאה או לבדיקת הבעלים. עד להכרעה הן אינן נספרות והחודשים שלהן אינם סופיים.",
+      reconcile: "אמת הרשאות מחדש",
+      accept: "אשר זיכוי",
+      reject: "דחה זיכוי",
+      saved: "הזיכוי נשמר.",
+      voidedOk: "הזיכוי בוטל.",
+      decidedOk: "ההכרעה נשמרה.",
+      reconciledOk: "בדיקת ההרשאות הסתיימה.",
+      decisionPending: "ההחלטה טרם אושרה. הזיכוי עדיין אינו נכלל בחישוב; ניתן לנסות שוב.",
+      savedPending: "הזיכוי נשמר אך ממתין לאימות הרשאה ואינו נספר עדיין. ניתן לבקש אימות מחדש.",
+      rebuildWarning: "הזיכוי נשמר, אך עדכון התובנות היומיות נכשל. הנתונים יתעדכנו בהרצה הבאה.",
+      revokedWarning: "הזיכוי נשמר, אך ההרשאה שלך לעסק בוטלה במהלך השמירה. הרשומה סומנה לבדיקת הבעלים ואינה נספרת.",
+      unknown: "מצב השמירה אינו ידוע (ייתכן שנשמר). רענן או לחץ \"נסה שוב\" — אותה פעולה תישלח שוב ולא תיווצר כפילות.",
+      retrySame: "נסה שוב (אותה פעולה)",
+      identityChange: "שינית את מספר המסמך או את הספק. זהו תיקון זהות מסמך: הזהות הקודמת תישאר שמורה ומתועדת. להמשיך?",
+      refused: "הפעולה נדחתה על ידי השרת. לא בוצע שינוי.",
+    });
+    var ERRORS = Object.freeze({
+      invalid_supplier_id: "יש לבחור ספק.",
+      unknown_supplier: "הספק אינו קיים ברשימת הספקים של העסק.",
+      suppliers_unavailable: "רשימת הספקים אינה זמינה כעת. הזיכוי לא נשמר. נסה שוב.",
+      invalid_issue_date: "יש להזין תאריך הנפקה תקין של מסמך הזיכוי.",
+      invalid_amount: "יש להזין סכום זיכוי חיובי לפני מע״מ (עד שתי ספרות אחרי הנקודה).",
+      document_number_required: "יש להזין מספר מסמך זיכוי.",
+      invalid_document_number: "מספר המסמך אינו תקין.",
+      invalid_document_number_chars: "מספר המסמך יכול לכלול אותיות, ספרות ומפרידים (רווח, מקף, לוכסן, נקודה) בלבד.",
+      invalid_document_number_too_long: "מספר המסמך ארוך מדי (עד 64 תווים).",
+      duplicate_document: "מסמך זיכוי עם מספר זה כבר רשום לספק זה. הזיכוי לא נשמר.",
+      similar_document: "נמצא מספר מסמך דומה אצל ספק זה. בדוק שזהו מסמך אחר ואשר במפורש; המסמך טרם נשמר.",
+      similarity_confirmation_not_applicable: "האישור למסמך דומה אינו מתאים למצב הנוכחי. רענן ובדוק שוב.",
+      identity_change_requires_correction: "שינוי מספר המסמך או הספק דורש אישור תיקון זהות.",
+      identity_correction_not_applicable: "מספר המסמך והספק לא השתנו.",
+      invalid_note: "ההערה אינה תקינה.",
+      invalid_note_too_long: "ההערה ארוכה מדי.",
+      invalid_void_reason: "סיבת הביטול אינה תקינה.",
+      invalid_void_reason_too_long: "סיבת הביטול ארוכה מדי.",
+      credit_id_exists: "הזיכוי כבר נשמר.",
+      credit_not_found: "הזיכוי לא נמצא. רענן ונסה שוב.",
+      credit_not_active: "הזיכוי כבר בוטל או נדחה.",
+      credit_not_current: "הזיכוי הוחלף בגרסה חדשה. רענן ונסה שוב.",
+      revision_conflict: "הזיכוי עודכן במקביל על ידי משתמש אחר. רענן ונסה שוב.",
+      review_unresolved: "לזיכוי זה יש פעולה הממתינה לאימות הרשאה או לבדיקת הבעלים. לא ניתן לשנות אותו עד להכרעה.",
+      review_not_flagged: "הפעולה אינה מסומנת לבדיקה (ייתכן שכבר הוכרעה). רענן.",
+      review_not_found: "הפעולה לא נמצאה. רענן.",
+      review_identity_mismatch: "הפעולה השתנתה מאז שנטענה. רענן.",
+      idempotency_conflict: "הפעולה כבר נשלחה עם נתונים אחרים. רענן ונסה שוב.",
+      record_limit_reached: "הגעת למספר הזיכויים המרבי לעסק. פנה לתמיכה.",
+      operation_limit_reached: "הגעת למספר הפעולות המרבי לעסק. פנה לתמיכה.",
+      node_unreadable: "רשומות הזיכויים של העסק אינן תקינות. לא בוצע שינוי. פנה לתמיכה.",
+      role_not_allowed: "אין לך הרשאה לפעולה זו.",
+      business_access_denied: "אין לך הרשאה לעסק זה.",
+      maintenance: "העסק בתחזוקה זמנית. לא בוצע שינוי. נסה שוב מאוחר יותר.",
+      "authorization check unavailable": "בדיקת ההרשאה אינה זמינה כעת. לא בוצע שינוי. נסה שוב.",
+      no_uuid: "הדפדפן אינו תומך ביצירת מזהה מאובטח. עדכן את הדפדפן.",
+    });
+    function errorText(code) { return ERRORS[code] || TXT.unknown; }
+    /** A CONFIRMED refusal (nothing was written): its message, or a generic "refused, nothing changed". */
+    function refusalText(code) { return ERRORS[code] || TXT.refused; }
+    /** Definite refusals: the server CONFIRMED nothing was written. Anything else is an unknown outcome. */
+    var DEFINITE = Object.freeze(["authorization check unavailable", "invalid_supplier_id", "unknown_supplier", "suppliers_unavailable", "invalid_issue_date", "invalid_amount", "document_number_required", "invalid_document_number", "invalid_document_number_chars", "invalid_document_number_too_long", "duplicate_document", "identity_change_requires_correction", "identity_correction_not_applicable", "invalid_note", "invalid_note_too_long", "invalid_void_reason", "invalid_void_reason_too_long", "credit_id_exists", "credit_not_found", "credit_not_active", "credit_not_current", "revision_conflict", "review_unresolved", "review_not_flagged", "review_not_found", "review_identity_mismatch", "idempotency_conflict", "record_limit_reached", "operation_limit_reached", "node_unreadable", "role_not_allowed", "business_access_denied", "maintenance", "unauthorized", "forbidden", "invalid_credit_id", "invalid_operation_id", "invalid_new_credit_id", "invalid_expected_seq", "invalid_identity_correction", "invalid_target_operation_id", "invalid_intent_digest", "invalid_decision"]);
+    /**
+     * Classify one mutation response: { kind:"ok", json } | { kind:"refused", code } (definitely not
+     * written) | { kind:"unknown", code } (it MAY have been written — the caller keeps the SAME operation
+     * for a retry and says so). Every 4xx is decided before or by the transaction on a server-confirmed
+     * value (a post-commit revocation answers 200 flagged), so it is a refusal; a 5xx is a refusal only
+     * with a known pre-transaction code; a network failure, any other 5xx (incl. outcome_unknown), an
+     * unparseable body or a 200 without ok is UNKNOWN.
+     */
+    function classify(transportOk, status, json) {
+      if (!transportOk) return { kind: "unknown", code: "network" };
+      var code = json && typeof json.error === "string" ? json.error : null;
+      if (status === 200 && json && json.ok === true) return { kind: "ok", json: json };
+      if (status >= 400 && status < 500) return { kind: "refused", code: code || "http_" + status };
+      if (code && code !== "outcome_unknown" && DEFINITE.indexOf(code) !== -1) return { kind: "refused", code: code };
+      return { kind: "unknown", code: code || "http_" + status };
+    }
+
+    /**
+     * Ordered list session (same guarantees as the C1 ledger session): one deadline bounds the
+     * whole attempt; a timeout resolves an explicit unreadable state (manual retry); only the
+     * LATEST requested key resolves; an older or cancelled request resolves `stale`, is aborted,
+     * and can never overwrite a newer result.
+     */
+    function createCreditsSession(timing) {
+      timing = timing || {};
+      var latest = null, active = null;
+      function finish(a, result, abort) {
+        if (a.done) return;
+        a.done = true;
+        if (a.timer !== null) { a.clearTimer(a.timer); a.timer = null; }
+        if (active === a) active = null;
+        if (abort && a.controller) a.controller.abort();
+        a.resolve(result);
+      }
+      function invalidate() { if (active) finish(active, { state: "stale", key: active.key }, true); }
+      return {
+        latest: function () { return latest; },
+        cancel: function () { invalidate(); latest = null; },
+        request: function (key, fetchNode, isLive) {
+          invalidate();
+          latest = key;
+          var setTimer = timing.setTimeout || setTimeout, clearTimer = timing.clearTimeout || function (id) { clearTimeout(id); };
+          var deadline = timing.deadlineMs === undefined ? CREDITS_DEADLINE_MS : timing.deadlineMs;
+          var controller = typeof AbortController === "function" ? new AbortController() : null;
+          var a = { key: key, done: false, timer: null, clearTimer: clearTimer, controller: controller, resolve: null };
+          var outcome = new Promise(function (resolve) { a.resolve = resolve; });
+          active = a;
+          var current = function () { return active === a && !a.done && latest === key && (!isLive || isLive()); };
+          a.timer = setTimer(function () {
+            finish(a, current() ? { state: "unreadable", reason: "deadline_exceeded", key: key } : { state: "stale", key: key }, true);
+          }, deadline);
+          Promise.resolve().then(function () { return fetchNode(controller && controller.signal); }).then(function (body) {
+            if (!current()) { finish(a, { state: "stale", key: key }, false); return; }
+            if (!body || body.ok !== true || !Object.prototype.hasOwnProperty.call(body, "node")) { finish(a, { state: "unreadable", reason: "response_shape", key: key }, false); return; }
+            finish(a, { state: "ready", node: body.node, key: key }, false);
+          }, function () {
+            finish(a, current() ? { state: "unreadable", reason: "read_failed", key: key } : { state: "stale", key: key }, false);
+          });
+          return outcome;
+        },
+      };
+    }
+
+    /**
+     * The credit source of the finance inputs (`src.credits`): loading until the CURRENT key's list
+     * read is held; then the core-decoded node BOUND to the selected tenant + business; a failed read
+     * (or a core of another credit contract) is `not_loaded` — purchases are never complete, never
+     * "no credits".
+     */
+    function sourceFor(F, held, key, bind) {
+      if (key === null || !held || held.key !== key || held.state === "loading") return { state: "loading" };
+      if (held.state !== "ready") return { state: "not_loaded" };
+      if (!F.versions || F.versions.credits !== CREDITS_CONTRACT || !bind) return { state: "not_loaded" };
+      return F.finance.supplierCredits.decodeSupplierCredits(held.node, { tenantId: bind.tenantId, bizId: bind.bizId });
+    }
+
+    /**
+     * Client validation = the core's own rules (no third definition): supplier, issue date, amount and
+     * the MANDATORY document number (the shared normalization). When editing, `editing` is the row
+     * being replaced: a changed supplier / document identity is reported (`identityChanged`) so the
+     * page asks for an explicit corrected-identity confirmation.
+     */
+    function validateForm(F, form, supplierList, editing) {
+      var errors = {};
+      var f = form || {};
+      var SC = F.finance.supplierCredits;
+      var known = (supplierList || []).some(function (s) { return s && s.id !== undefined && s.id !== null && String(s.id) === f.supplierId; });
+      if (!SC.isValidSupplierId(f.supplierId) || !known) errors.supplierId = ERRORS.invalid_supplier_id;
+      if (!F.finance.businessDate.isBusinessDate(f.issueDate)) errors.issueDate = ERRORS.invalid_issue_date;
+      var amount = SC.canonicalCreditAmount(typeof f.amount === "string" ? f.amount.trim() : f.amount);
+      if (amount === null) errors.amount = ERRORS.invalid_amount;
+      var supplier = (supplierList || []).find(function (s) { return s && String(s.id) === f.supplierId; });
+      var doc = SC.normalizeDocumentNumber(typeof f.documentNumber === "string" ? f.documentNumber : null);
+      if (!doc.ok) errors.documentNumber = ERRORS[doc.code];
+      var note = typeof f.note === "string" ? f.note.trim() : "";
+      if (note.length > SC.MAX_NOTE_LENGTH) errors.note = ERRORS.invalid_note_too_long;
+      if (Object.keys(errors).length) return { ok: false, errors: errors };
+      var input = { supplierId: f.supplierId, issueDate: f.issueDate, amount: amount, documentNumber: doc.display };
+      if (note) input.note = note;
+      var identityChanged = !!editing && (editing.supplierId !== f.supplierId || editing.documentKey !== doc.key);
+      return { ok: true, input: input, identityChanged: identityChanged };
+    }
+
+    function newId(cryptoObj) {
+      var c = cryptoObj || (typeof crypto !== "undefined" ? crypto : null);
+      if (!c || typeof c.randomUUID !== "function") return null; // never a Math.random identity
+      return c.randomUUID();
+    }
+    function createBody(ctx, input, creditId, operationId) {
+      return Object.assign({ tenantId: ctx.tenantId, bizId: ctx.bizId, creditId: creditId, operationId: operationId }, input);
+    }
+    function voidBody(ctx, row, operationId, reason) {
+      var b = { tenantId: ctx.tenantId, bizId: ctx.bizId, creditId: row.creditId, operationId: operationId, expectedSeq: row.headSeq };
+      if (reason) b.voidReason = reason;
+      return b;
+    }
+    function replaceBody(ctx, row, input, newCreditId, operationId, identityCorrection) {
+      var b = Object.assign({ tenantId: ctx.tenantId, bizId: ctx.bizId, creditId: row.creditId, newCreditId: newCreditId, operationId: operationId, expectedSeq: row.headSeq }, input);
+      if (identityCorrection) b.identityCorrection = true;
+      return b;
+    }
+    function decideBody(ctx, row, decision, operationId) {
+      return { tenantId: ctx.tenantId, bizId: ctx.bizId, operationId: operationId, targetOperationId: row.pendingOp.operationId, intentDigest: row.pendingOp.intentDigest, decision: decision };
+    }
+    function reconcileBody(ctx, operationId) { return { tenantId: ctx.tenantId, bizId: ctx.bizId, operationId: operationId }; }
+
+    function names(supplierList) {
+      var out = {};
+      (supplierList || []).forEach(function (s) { if (s && s.id !== undefined) out[String(s.id)] = s.name; });
+      return out;
+    }
+
+    function statusTextOf(r) {
+      if (r.review === "rejected") return TXT.reviewRejected;
+      if (r.unresolved && r.unresolved.kind === "create") return r.unresolved.state === "pending" ? TXT.reviewPending : TXT.reviewFlagged;
+      if (r.unresolved && r.unresolved.kind === "replace" && r.status === "not_effective") return r.unresolved.state === "pending" ? TXT.reviewPending : TXT.reviewFlagged;
+      if (r.status === "voided") return TXT.voided;
+      if (r.status === "replaced") return TXT.replaced;
+      if (r.unresolved) return r.unresolved.state === "pending" ? TXT.pendingChange : TXT.flaggedChange;
+      return "";
+    }
+
+    /**
+     * The Supplier Credits tab of one month: every record ISSUED in the month (counted, voided,
+     * replaced, under review or rejected), newest issue date first, and the month's counted total
+     * (EFFECTIVE credits only — a pending / flagged / rejected credit is never in it). Loading /
+     * unavailable / invalid / under-review are explicit states; an empty month is "ready" with no row.
+     */
+    function monthView(F, credits, month, supplierList) {
+      if (!credits || credits.state === "loading") return { status: "loading", text: TXT.loading };
+      if (credits.state === "not_loaded" || credits.state === "unreadable") return { status: "unavailable", text: TXT.unavailable, reason: credits.reason || credits.state };
+      var nm = names(supplierList), bd = F.finance.businessDate, dec = F.finance.decimal;
+      var present = credits.state === "present";
+      var recs = present ? credits.records : [];
+      var logical = {}, reviews = {};
+      (present ? credits.logical : []).forEach(function (l) { logical[l.logicalId] = l; });
+      (present ? credits.reviews : []).forEach(function (rv) { reviews[rv.operationId] = rv; });
+      var inMonth = recs.filter(function (r) { return bd.monthOf(r.issueDate) === month; });
+      inMonth.sort(function (a, b) { return a.issueDate < b.issueDate ? 1 : a.issueDate > b.issueDate ? -1 : a.creditId < b.creditId ? -1 : 1; });
+      var total = null, count = 0;
+      var effective = {};
+      (present ? credits.credits : []).forEach(function (c) { effective[c.creditId] = true; });
+      var rows = inMonth.map(function (r) {
+        var l = logical[r.logicalId] || null;
+        var counted = !!effective[r.creditId];
+        if (counted) { total = total === null ? dec.decFromPlainString(r.amount) : dec.decAdd(total, dec.decFromPlainString(r.amount)); count++; }
+        var isHead = !!l && l.head.creditId === r.creditId;
+        var op = r.unresolved ? reviews[r.unresolved.operationId] : null;
+        return {
+          creditId: r.creditId, logicalId: r.logicalId, headSeq: l ? l.head.seq : null, supplierId: r.supplierId,
+          supplierName: nm[r.supplierId] || ("ספק " + r.supplierId), issueDate: r.issueDate,
+          amount: r.amount, amountText: F.presenters.money.formatShekel(r.amount), documentNumber: r.documentNumber, documentKey: r.documentKey, note: r.note,
+          status: r.status, review: r.review, counted: counted, statusText: statusTextOf(r),
+          replacesCreditId: r.replacesCreditId, replacedByCreditId: r.replacedByCreditId, identityCorrection: r.identityCorrection,
+          // a change (edit / void) is allowed only on the CURRENT record of an ACTIVE logical credit with no unresolved operation
+          editable: counted && isHead && !!l && l.status === "active" && !l.unresolved,
+          pendingOp: op ? { operationId: op.operationId, kind: op.kind, state: op.state, intentDigest: op.intentDigest } : null,
+        };
+      });
+      var issues = present ? credits.issues.filter(function (i) { return i.code !== "review_pending" && i.code !== "review_flagged" && (i.dates.length === 0 || i.dates.some(function (d) { return bd.monthOf(d) === month; })); }) : [];
+      var unresolvedRows = rows.filter(function (r) { return r.pendingOp; }).length;
+      return {
+        status: "ready", rows: rows, empty: rows.length === 0, emptyText: TXT.empty,
+        activeCount: count, total: total === null ? null : dec.serializeDec(total),
+        totalText: F.presenters.money.formatShekel(total === null ? null : dec.serializeDec(total)),
+        invalidCount: issues.length, invalidText: issues.length ? TXT.invalid : null,
+        unresolvedCount: unresolvedRows, reviewText: unresolvedRows ? TXT.reviewSummary : null,
+        hasPending: present && credits.unresolved.pending.length > 0,
+      };
+    }
+
+    /** Disclosure lines for a report whose purchases are affected by credits (net-negative / incomplete / under review). */
+    function purchasesDisclosure(report) {
+      var p = report && report.actual && report.actual.purchases;
+      if (!p || !p.credits) return { incomplete: null, negative: null };
+      var neg = (report.flags || []).some(function (f) { return f.code === "negative_net_purchases"; });
+      var c = p.credits, reviewOnly = c.state === "invalid" && c.invalidDates.length === c.reviewPendingDates.length + c.reviewFlaggedDates.length;
+      return { incomplete: c.state === "invalid" ? (reviewOnly ? TXT.purchasesReview : TXT.purchasesIncomplete) : null, negative: neg ? TXT.negativeNet : null };
+    }
+
+    window.MarjinP1 = Object.freeze({
+      P1_VERSION: P1_VERSION, CREDITS_CONTRACT: CREDITS_CONTRACT, CREDITS_DEADLINE_MS: CREDITS_DEADLINE_MS, TXT: TXT, ERRORS: ERRORS, DEFINITE: DEFINITE,
+      errorText: errorText, refusalText: refusalText, classify: classify, createCreditsSession: createCreditsSession, sourceFor: sourceFor, validateForm: validateForm,
+      newId: newId, createBody: createBody, voidBody: voidBody, replaceBody: replaceBody, decideBody: decideBody, reconcileBody: reconcileBody,
+      monthView: monthView, purchasesDisclosure: purchasesDisclosure,
+    });
+  })();
+  </script>
+  <!-- ═══ C1: browser financial view models (MARJIN_C1/1) ═══
+       PURE presenters over the shared Financial Core (window.MarjinFinance, generated
+       fincore/v1). Every money value, ratio, allocation, coverage state, closure state and
+       forecast below is a field returned by the core. This block only selects fields,
+       formats them with the core presenters and adds exact sums of core amounts where a
+       screen shows a total the report does not carry. There is no fallback formula: when
+       the core module is not ready, failed, or refuses its inputs, a view model is
+       {status:"loading"|"unavailable"} and the screens render no numbers.
+       Every function takes the core `F` explicitly (no globals), so the block is
+       vm-testable on its own (test/finance/c1-browser-surfaces.test.mjs). -->
+  <script>
+  // ── C1 browser financial view models ─────────────────────────────────────────
+  (function () {
+    "use strict";
+    var C1_VERSION = "MARJIN_C1/1";
+    // The approved browser contract (B1 AMEND-01, closed-days amendment): a bundle with
+    // other identifiers is refused (stale or wrong file), never used.
+    var EXPECT = Object.freeze({ product: "MARJIN_PRODUCT/3", forecast: "REV_FORECAST/v2" });
+    // list-entry-exceptions accepts ranges of at most MAX_LIST_RANGE_DAYS = 400 days.
+    var LEDGER_CHUNK_DAYS = 366;
+    // One deadline for the WHOLE sequential closure-history read, not one per chunk. Existing
+    // analytics fetches use 4–8 s per upstream call; 30 s leaves room for the normal 2–3 local
+    // history chunks while ensuring an unresponsive list API becomes explicitly retryable.
+    var LEDGER_ATTEMPT_DEADLINE_MS = 30000;
+    // Approved disclosure wording (identical to the accepted B2 e-mail presenter).
+    var TXT = Object.freeze({
+      partial: "חלקי",
+      missingRevenue: "חסרות הכנסות בימים: ",
+      invalidRevenue: "ערך הכנסה לא תקין בימים: ",
+      partialRevenue: "הכנסה חלקית (תא לא תקין) בימים: ",
+      closedWithRevenue: "סומנו כסגורים אך נרשמו בהם הכנסות: ",
+      revenueSuffix: " — סכום ההכנסות אינו מלא; רווח ואחוזים שתלויים בו אינם מוצגים",
+      closedDays: " (הכנסה 0, לא חסר): ",
+      forecastPartial: "תחזית חלקית — חסרות או לא תקינות הכנסות בימים: ",
+      forecastInsufficient: "אין מספיק היסטוריה לתחזית",
+      creditsIncomplete: "זיכויי הספקים לא נטענו או אינם תקינים — הקניות ועלות המזון אינן סופיות.",
+      creditsReview: "יש זיכויים הממתינים לאימות הרשאה או לבדיקת הבעלים — הקניות ועלות המזון אינן סופיות.",
+      negativeNetPurchases: "הקניות נטו לאחר זיכויים שליליות בתקופה — מומלץ לבדוק את הזיכויים.",
+    });
+
+    // ── module readiness ─────────────────────────────────────────────────────
+    /** Validate a loaded bundle against the approved identifiers. */
+    function checkBundle(api) {
+      if (!api || typeof api !== "object" || !api.versions || !api.product || !api.presenters) return { ok: false, reason: "fincore_shape" };
+      if (api.versions.product !== EXPECT.product) return { ok: false, reason: "fincore_version_mismatch" };
+      if (api.versions.forecast !== EXPECT.forecast) return { ok: false, reason: "fincore_version_mismatch" };
+      if (api.versions.costHistory !== "MARJIN_COSTH/6" || !api.costHistory || !api.costHistory.codec || typeof api.costHistory.codec.decodeHistory !== "function") return { ok: false, reason: "fincore_cost_history_incompatible" };
+      return { ok: true };
+    }
+
+    // ── small exact helpers over core values (no binary arithmetic on money) ──
+    function D(F) { return F.finance.decimal; }
+    function amt(F, a) { return a === null || a === undefined ? null : D(F).parseAmountString(a); }
+    function decStr(F, dec) { return dec === null || dec === undefined ? null : D(F).serializeDec(dec); }
+    /** Exact sum of amount strings; null when any operand is null. */
+    function sumAmounts(F, list) {
+      var acc = D(F).ratFromInt(0);
+      for (var i = 0; i < list.length; i++) { if (list[i] === null || list[i] === undefined) return null; acc = D(F).ratAdd(acc, amt(F, list[i])); }
+      return D(F).serializeRat(acc);
+    }
+    function subAmounts(F, a, b) { return a === null || b === null ? null : D(F).serializeRat(D(F).ratSub(amt(F, a), amt(F, b))); }
+    function money(F, a) { return F.presenters.money.formatShekel(a === undefined ? null : a); }
+    function typedMoney(F, t) { return F.presenters.money.formatTypedAmount(t); }
+    function pctText(F, r) { return F.presenters.percent.formatPercent(r); }
+    function ratio(F, num, den) { return F.metrics.report.ratioOfTotals(amt(F, num), amt(F, den)); }
+    /** Presentation-only conversion (bar widths, chart points) through the core's single conversion site. */
+    function toNum(F, a) { return a === null || a === undefined ? null : F.metrics.adapters.legacyNumber.amountToNumber(a); }
+    function typedValue(t) { return t && t.state === "complete" ? t.value : null; }
+    function ratioValue(r) { return r && r.state === "value" ? r.value : null; }
+    function shortDate(d) { var p = String(d).split("-"); return p[2] + "." + p[1]; }
+    function dateList(list) { return list.map(shortDate).join(", "); }
+
+    // ── settings nodes and the structured exception ledger ───────────────────
+    /** Raw RTDB node → the core envelope state (present / absent / unreadable), never a default. */
+    function nodeState(F, raw, expect) { return F.product.decodeEnvelope(raw, expect); }
+    /** A failed read is never "absent": the core treats it as an unreadable input (unavailable). */
+    var READ_FAILED = Object.freeze({ state: "unreadable", reason: "read_failed" });
+    /**
+     * M1 R1 — THE shared target-scoped business-registry rule (server: lib/businessRegistry.js classifyRegistryTarget,
+     * used by the Core cost-history writer and the P1 supplier-credit routes), over the parsed app-businesses list. The
+     * requested business is registered iff exactly ONE record's id is the string bizId and no other element's identity
+     * collides with it (a RECORD whose non-string / null / missing id has String() === bizId, a bare string / number /
+     * boolean whose String() is bizId, or a trimmed variant). A bare null (or array) element carries no identity — it is an
+     * unrelated defect for every id, "null" included (M1 R2). A defect confined to an unrelated element never makes the
+     * requested business unavailable.
+     */
+    function registryTargetRegistered(list, bizId) {
+      if (!Array.isArray(list) || typeof bizId !== "string" || !bizId || bizId.length > 128 || /[.#$\[\]\/:\u0000-\u001f\u007f]/.test(bizId)) return false;   // D-CTRL: = isRegistryBizId
+      var canonical = 0, collisions = 0;
+      for (var i = 0; i < list.length; i++) {
+        var e = list[i], rec = e !== null && typeof e === "object" && !Array.isArray(e);
+        var id = rec ? e.id : (typeof e === "string" || typeof e === "number" || typeof e === "boolean") ? e : undefined;
+        if (rec && typeof id === "string" && id === bizId) { canonical++; continue; }
+        if ((rec || id !== undefined) && String(id).trim() === bizId.trim()) collisions++;
+      }
+      return canonical === 1 && collisions === 0;
+    }
+    /**
+     * M1 R2 — the page's business-list view of the stored registry, shared by every load / selection path. No element that
+     * cannot carry an identity is ever dereferenced (a bare null in the list used to throw on `b.id` and stall the page).
+     *   selectableBusinesses(list)  each RECORD with a non-empty string id, once, in registry order. A duplicated id stays
+     *                               selectable once: historyBinding then refuses it (ambiguous) — every financial view is
+     *                               unavailable, never a first-match figure.
+     *   businessRegistryView(value) the window.storage "app-businesses" value →
+     *     { state:"ready", list, selectable }  list = the stored array without its bare null elements — removing them is
+     *                                          identity-neutral (a bare null denotes no business for ANY id under the
+     *                                          shared rule); every other element (duplicates, colliding or malformed
+     *                                          records) is kept, so registryTargetRegistered and every write-back see
+     *                                          the registry as stored
+     *     { state:"unreadable", reason }       not JSON / not an array: the business list cannot be established
+     *   pickBusiness(selectable, preferred) the first preferred id that is selectable, else the first selectable, else null.
+     */
+    function selectableBusinesses(list) {
+      var out = [], seen = {};
+      if (!Array.isArray(list)) return out;
+      for (var i = 0; i < list.length; i++) {
+        var e = list[i];
+        if (e === null || typeof e !== "object" || Array.isArray(e) || typeof e.id !== "string" || !e.id) continue;
+        if (Object.prototype.hasOwnProperty.call(seen, e.id)) continue;
+        seen[e.id] = true;
+        out.push(e);
+      }
+      return out;
+    }
+    function businessRegistryView(value) {
+      var parsed;
+      try { parsed = JSON.parse(value); } catch (_) { return { state: "unreadable", reason: "registry_json" }; }
+      if (!Array.isArray(parsed)) return { state: "unreadable", reason: "registry_not_array" };
+      var list = parsed.filter(function (e) { return e !== null; });
+      return { state: "ready", list: list, selectable: selectableBusinesses(list) };
+    }
+    /**
+     * M1 R3 — the page's view of the STORED registry node, by the server rule (lib/businessRegistry.js decodeRegistryNode):
+     * only the runtime `{ _v: "<JSON array>" }` node is a business list. Never inferred from a filtered list:
+     *   { state:"absent" }                         confirmed absent node: authorized first-business setup is eligible
+     *   { state:"empty", list:[], selectable:[] }  the runtime node holding an EMPTY array: setup is eligible
+     *   { state:"ready", list, selectable }        a runtime list with at least one selectable record (businessRegistryView)
+     *   { state:"unreadable", reason }             registry_shape (a raw array, a bare string, an object map, a non-string
+     *                                              _v), registry_json, registry_not_array, or registry_no_business (a
+     *                                              NON-EMPTY list in which no element names a business: only bare nulls /
+     *                                              id-less records) — explicit unavailable; never setup, never figures
+     */
+    function businessRegistryNodeView(node) {
+      if (node === null || node === undefined) return { state: "absent", list: [], selectable: [] };
+      if (typeof node !== "object" || Array.isArray(node) || typeof node._v !== "string") return { state: "unreadable", reason: "registry_shape" };
+      var view = businessRegistryView(node._v);
+      if (view.state !== "ready") return view;
+      if (JSON.parse(node._v).length === 0) return { state: "empty", list: [], selectable: [] };
+      if (view.selectable.length === 0) return { state: "unreadable", reason: "registry_no_business" };
+      return view;
+    }
+    /** First-business setup is offered only over a confirmed absent / empty registry (or an unknown tenant: a new account). */
+    function firstSetupEligible(registryState, list) {
+      if (registryState === "unknown" || registryState === "absent" || registryState === "empty") return true;
+      return registryState === "ready" && Array.isArray(list) && list.length === 0;
+    }
+    /**
+     * M1 R3 — the setup writer's compare-and-swap over the CURRENT stored node (the pure body of the registry transaction).
+     * The new record is added only when the stored registry is still exactly what the page decided on: absent / empty when
+     * the page held no business, else the runtime list whose null-free elements equal the page's list. Any other current
+     * node — malformed, a raw array, a registry that changed since it was read — is refused and NEVER replaced.
+     *   → { ok:true, value:{ _v } } | { ok:false, reason }
+     */
+    function registrySetupWrite(current, expected, record) {
+      if (!Array.isArray(expected) || !record || typeof record.id !== "string" || !record.id) return { ok: false, reason: "setup_input" };
+      var view = businessRegistryNodeView(current);
+      if (view.state === "unreadable") return { ok: false, reason: view.reason };
+      if (JSON.stringify(view.list) !== JSON.stringify(expected)) return { ok: false, reason: "registry_changed" };
+      // M1 R4 (review S1): ADD-ONLY. Creating a business never replaces or removes a stored element: an id that any stored
+      // element already denotes — exactly, or after the trim / String() coercion the server rule treats as a collision
+      // (lib/businessRegistry.js classifyRegistryTarget) — is refused. Editing an existing business is a different operation.
+      if (registryIdTaken(view.list, record.id)) return { ok: false, reason: "registry_id_collision" };
+      return { ok: true, value: { _v: JSON.stringify(view.list.concat([record])) } };
+    }
+    /** M1 R4 — does any stored element denote `id` (exact, or colliding after trim / String() coercion, as the server rule)? */
+    function registryIdTaken(list, id) {
+      var want = String(id).trim();
+      for (var i = 0; i < (Array.isArray(list) ? list.length : 0); i++) {
+        var e = list[i], rec = e !== null && typeof e === "object" && !Array.isArray(e);
+        var eid = rec ? e.id : (typeof e === "string" || typeof e === "number" || typeof e === "boolean") ? e : undefined;
+        if ((rec || eid !== undefined) && String(eid).trim() === want) return true;
+      }
+      return false;
+    }
+    /** M1 R4 — a generated business id that no element of `list` denotes: biz_<ms>, else biz_<ms>_<n>. null if none found. */
+    function freshBusinessId(list, nowMs) {
+      var base = "biz_" + String(Math.floor(Number(nowMs) || 0));
+      if (!registryIdTaken(list, base)) return base;
+      for (var n = 1; n <= 1000; n++) if (!registryIdTaken(list, base + "_" + n)) return base + "_" + n;
+      return null;
+    }
+    /**
+     * M1 R4 — after an UNKNOWN registry write outcome (the transaction threw, e.g. a lost acknowledgement), the stored node
+     * re-read from the server decides: "committed" only when it is exactly the expected list plus this ONE new record;
+     * "not_committed" when the stored node is still exactly the expected registry (nothing written); anything else is
+     * "changed" — never treated as our commit, never overwritten.
+     */
+    function registrySetupReread(node, expected, record) {
+      var view = businessRegistryNodeView(node);
+      if (view.state === "unreadable") return "changed";
+      if (JSON.stringify(view.list) === JSON.stringify((Array.isArray(expected) ? expected : []).concat([record]))) return "committed";
+      if (JSON.stringify(view.list) === JSON.stringify(Array.isArray(expected) ? expected : [])) return "not_committed";
+      return "changed";
+    }
+    /**
+     * M1 R4 (review S2) — may first-business setup go on to the registry write after the bootstrap-self answer? Only when the
+     * server made this user the tenant's owner (2xx ok — a NEW, empty tenant, or this user's own earlier claim resumed), or
+     * answered that the tenant already has roles (409 tenant_already_initialized: an existing tenant, whose Rules then decide
+     * the write). Any other answer — a tenant holding data with no roles (tenant_has_data), a failed / unknown bootstrap —
+     * stops setup BEFORE any registry / config / user write, so a refused or failed setup never leaves an owner-less tenant
+     * behind and never claims anything; the setup can simply be retried (the server resumes this user's own claim).
+     */
+    function setupBootstrapProceed(status, body) {
+      var ok = typeof status === "number" && status >= 200 && status < 300 && !!body && body.ok === true;
+      if (ok) return { proceed: true, owner: true };
+      if (status === 409 && body && body.error === "tenant_already_initialized") return { proceed: true, owner: false };
+      if (status === 409 && body && body.error === "tenant_has_data") return { proceed: false, reason: "setup_tenant_has_data" };
+      return { proceed: false, reason: "setup_bootstrap_failed" };
+    }
+    function pickBusiness(selectable, preferred) {
+      var ids = (Array.isArray(selectable) ? selectable : []).map(function (b) { return b.id; });
+      var want = Array.isArray(preferred) ? preferred : [];
+      for (var i = 0; i < want.length; i++) if (typeof want[i] === "string" && ids.indexOf(want[i]) >= 0) return want[i];
+      return ids.length ? ids[0] : null;
+    }
+    /**
+     * Core/F1 R4 — the ONLY way the page binds a cost-history decode. The raw node is held with the verified
+     * selection context it was subscribed for (tenant, business, generation); it may be decoded only when that
+     * context is the LIVE selection and the business is registered in the tenant's business list.
+     *   { ok:true, bind }                              decode bound to exactly this tenant / business
+     *   { ok:false, reason:"context_switching" }       a valid live selection whose node is being (re)subscribed
+     *   { ok:false, reason:"context_unbound" }         no verified tenant / business (never decode, never fall back)
+     *   { ok:false, reason:"business_unregistered" }   the selected business is not in the tenant's registry
+     */
+    function historyBinding(raw, sel, currentBizId, businesses) {
+      var bound = !!(sel && typeof sel.tenantId === "string" && sel.tenantId && typeof currentBizId === "string" && currentBizId && sel.bizId === currentBizId);
+      if (!bound) return { ok: false, reason: "context_unbound" };
+      var registered = registryTargetRegistered(businesses, currentBizId);
+      if (!registered) return { ok: false, reason: "business_unregistered" };
+      if (!raw || raw.tenantId !== sel.tenantId || raw.bizId !== currentBizId || raw.gen !== sel.gen) return { ok: false, reason: "context_switching" };
+      return { ok: true, bind: { tenantId: sel.tenantId, bizId: currentBizId } };
+    }
+
+    /** Inclusive [from,to] → consecutive ranges of at most LEDGER_CHUNK_DAYS days. */
+    function ledgerChunks(F, from, to) {
+      var bd = F.finance.businessDate, out = [], cur = from;
+      while (cur <= to) {
+        var end = bd.addDays(cur, LEDGER_CHUNK_DAYS - 1);
+        if (end > to) end = to;
+        out.push({ from: cur, to: end });
+        cur = bd.addDays(end, 1);
+      }
+      return out;
+    }
+    /**
+     * list-entry-exceptions effective records → the STRUCTURED states the core expects
+     * (same meaning as decodeExceptionLedger on the server: structured cleared wins, the
+     * reason is kept only while active). Legacy / ambiguous records are dropped: the core
+     * derives the narrow legacy closure fallback from the rows itself.
+     */
+    function structuredStates(records) {
+      var out = {};
+      Object.keys(records || {}).sort().forEach(function (d) {
+        var r = records[d];
+        if (!r || r.source !== "structured") return;
+        var active = r.status === "active";
+        out[d] = { status: active ? "active" : "cleared", reasonCode: active && typeof r.reasonCode === "string" && r.reasonCode ? r.reasonCode : null };
+      });
+      return out;
+    }
+    /** Earliest canonical row date ≤ asOf (the projection's history start); null when none. Rows
+     *  are read through the core's own field read-back and normalization (same as the server). */
+    function earliestRowDate(F, rows, asOf) {
+      var n;
+      try { n = F.finance.normalize.normalizeRows(F.product.mapFieldReadback(rows || []), { asOfBusinessDate: asOf }); }
+      catch (e) { return null; }
+      var first = null;
+      n.rows.forEach(function (r) { if (first === null || r.date < first) first = r.date; });
+      return first;
+    }
+    /** The ledger window the screens need: earliest row (or the month) → end of the current month. */
+    function ledgerWindow(F, rows, asOf, extraFrom) {
+      var bd = F.finance.businessDate;
+      var monthFirst = asOf.slice(0, 7) + "-01";
+      var first = earliestRowDate(F, rows, asOf);
+      var from = first !== null && first < monthFirst ? first : monthFirst;
+      if (extraFrom && extraFrom < from) from = extraFrom;
+      return { from: from, to: bd.monthBounds(asOf.slice(0, 7)).last };
+    }
+    /**
+     * Read-only, bounded load of the structured exception ledger over [from,to] through the
+     * existing list-entry-exceptions API (io.fetchChunk(from,to) → the API JSON body). Every
+     * chunk must succeed: one failed / malformed / stale chunk ⇒ the whole window is
+     * "unreadable" (never a partial calendar, never "no closures").
+     */
+    function loadLedger(F, io, from, to) {
+      var chunks = ledgerChunks(F, from, to), states = {}, i = 0;
+      function next() {
+        if (io.isLive && !io.isLive()) return { state: "stale" };
+        if (i >= chunks.length) {
+          return { state: Object.keys(states).length ? "present" : "absent", states: states, from: from, to: to, chunks: chunks.length };
+        }
+        var c = chunks[i++];
+        return Promise.resolve(io.fetchChunk(c.from, c.to, io.signal)).then(function (body) {
+          if (io.isLive && !io.isLive()) return { state: "stale" };
+          if (!body || body.ok !== true || !body.exceptions || typeof body.exceptions !== "object" || Array.isArray(body.exceptions)) return { state: "unreadable", reason: "ledger_shape", from: from, to: to };
+          // C1 R1: the response must answer THIS chunk's range, and every record must be well formed
+          if (body.fromDate !== c.from || body.toDate !== c.to) return { state: "unreadable", reason: "ledger_range_mismatch", from: from, to: to };
+          if (io.scope && (body.tenantId !== io.scope.tenantId || body.bizId !== io.scope.bizId)) return { state: "unreadable", reason: "ledger_scope_mismatch", from: from, to: to };
+          var badRecord = Object.keys(body.exceptions).some(function (d) {
+            var r = body.exceptions[d];
+            return !F.finance.businessDate.isBusinessDate(d) || d < c.from || d > c.to || !r || typeof r !== "object" || typeof r.source !== "string" || typeof r.status !== "string";
+          });
+          if (badRecord) return { state: "unreadable", reason: "ledger_record_shape", from: from, to: to };
+          var got = structuredStates(body.exceptions);
+          Object.keys(got).forEach(function (d) { if (d >= c.from && d <= c.to) states[d] = got[d]; });
+          return next();
+        });
+      }
+      return Promise.resolve().then(next).catch(function () { return { state: "unreadable", reason: "read_failed", from: from, to: to }; });
+    }
+    /**
+     * C1 R1 (finding 6): a loaded ledger is valid ONLY for the exact input state it was requested
+     * for. The key binds the selection (tenant, business, generation), the date window, the
+     * revision of the effective exception list the page holds (every reload — e.g. after a CD-M2
+     * closure or reopen — is a new revision) and the retry attempt. `ledgerFor` is evaluated at
+     * render time: a stored result with another key is never used ("loading" instead).
+     */
+    var revisionIds = typeof WeakMap === "function" ? new WeakMap() : null, revisionSeq = 0;
+    function revisionOf(obj) {
+      if (!obj || typeof obj !== "object" || !revisionIds) return 0;
+      var r = revisionIds.get(obj);
+      if (!r) { r = ++revisionSeq; revisionIds.set(obj, r); }
+      return r;
+    }
+    function ledgerKey(sel, win, revision, attempt) {
+      if (!sel || !sel.tenantId || !sel.bizId || !win) return null;
+      return [sel.tenantId, sel.bizId, sel.gen, win.from, win.to, revision, attempt].join("|");
+    }
+    function ledgerFor(stored, key) {
+      return key !== null && stored && stored.key === key ? stored : { state: "loading", key: key };
+    }
+    /**
+     * Ordered request session: only the LATEST requested key may resolve. An older request that
+     * completes later (out of order, or after the business / window changed) resolves `stale`
+     * and is never applied; a failed refresh after a success resolves `unreadable` for the NEW key.
+     */
+    function createLedgerSession(F, timing) {
+      timing = timing || {};
+      var latest = null, active = null;
+      function finish(attempt, result, abort) {
+        if (attempt.done) return;
+        attempt.done = true;
+        if (attempt.timer !== null) { attempt.clearTimer(attempt.timer); attempt.timer = null; }
+        if (active === attempt) active = null;
+        if (abort && attempt.controller) attempt.controller.abort();
+        attempt.resolve(result);
+      }
+      function invalidate() {
+        if (active) finish(active, { state: "stale", key: active.key }, true);
+      }
+      return {
+        latest: function () { return latest; },
+        cancel: function () { invalidate(); latest = null; },
+        request: function (key, from, to, fetchChunk, isLive, scope) {
+          invalidate();
+          latest = key;
+          // A test may supply deterministic timers; production always uses the fixed 30 s policy.
+          var setTimer = timing.setTimeout || setTimeout, clearTimer = timing.clearTimeout || function (id) { clearTimeout(id); };
+          var deadline = timing.deadlineMs === undefined ? LEDGER_ATTEMPT_DEADLINE_MS : timing.deadlineMs;
+          var controller = typeof AbortController === "function" ? new AbortController() : null;
+          var attempt = { key: key, done: false, timer: null, clearTimer: clearTimer, controller: controller, resolve: null };
+          var outcome = new Promise(function (resolve) { attempt.resolve = resolve; });
+          active = attempt;
+          var current = function () { return active === attempt && !attempt.done && latest === key && (!isLive || isLive()); };
+          attempt.timer = setTimer(function () {
+            finish(attempt, current()
+              ? { state: "unreadable", reason: "deadline_exceeded", from: from, to: to, key: key }
+              : { state: "stale", key: key }, true);
+          }, deadline);
+          Promise.resolve().then(function () {
+            return loadLedger(F, { isLive: current, fetchChunk: fetchChunk, scope: scope, signal: controller && controller.signal }, from, to);
+          }).then(function (res) {
+            if (!current() || res.state === "stale") { finish(attempt, { state: "stale", key: key }, false); return; }
+            var out = {}; Object.keys(res).forEach(function (k) { out[k] = res[k]; }); out.key = key;
+            finish(attempt, out, false);
+          }, function () {
+            finish(attempt, current() ? { state: "unreadable", reason: "read_failed", from: from, to: to, key: key } : { state: "stale", key: key }, false);
+          });
+          return outcome;
+        },
+      };
+    }
+    function ledgerCovers(ledger, from, to) {
+      return !!ledger && (ledger.state === "present" || ledger.state === "absent") && ledger.from <= from && ledger.to >= to;
+    }
+
+    // ── inputs ────────────────────────────────────────────────────────────────
+    /**
+     * src = { rows, config, fixed, asOf, ledger:{state, states, from, to}, rowsReady, credits }
+     * Returns the ProductInputs, or a non-ready status. A ledger that does not cover
+     * `need` is NOT LOADED for that calculation (the core refuses it; never "no closures").
+     * P1: `credits` is the core-decoded supplier-credit node (window.MarjinP1.sourceFor): while
+     * it loads nothing is shown; a failed read is passed as `not_loaded` (purchases incomplete,
+     * never "no credits"). The page always supplies it.
+     */
+    function inputsFor(F, src, need) {
+      if (!src || !src.rowsReady) return { status: "loading", reason: "entries" };
+      if (!src.config || src.config.state === "loading" || !src.fixed || src.fixed.state === "loading") return { status: "loading", reason: "settings" };
+      if (src.costHistory && src.costHistory.state === "loading") return { status: "loading", reason: "cost_history" };
+      if (src.costHistory && src.costHistory.state === "unreadable") return { status: "unavailable", reason: /^authorization_review_/.test(String(src.costHistory.reason)) ? "cost_history_" + src.costHistory.reason : "cost_history_unreadable" };
+      var L = src.ledger;
+      if (!L || L.state === "loading") return { status: "loading", reason: "ledger" };
+      if (L.state === "unreadable") return { status: "unavailable", reason: "closure_calendar_unknown" };
+      if (need && !ledgerCovers(L, need.from, need.to)) return { status: "loading", reason: "ledger_range" };
+      var states = L.states || {};
+      var C = src.credits;
+      if (C && C.state === "loading") return { status: "loading", reason: "supplier_credits" };
+      var inputs = {
+        rows: src.rows, config: src.config, fixed: src.fixed, costHistory: src.costHistory || { state: "absent" }, asOfBusinessDate: src.asOf,
+        exceptionStates: states, exceptionsByDate: F.product.exceptionsByDateOf(states),
+        exceptionLedgerState: L.state,
+      };
+      if (C) inputs.supplierCredits = C;
+      return { status: "ready", inputs: inputs };
+    }
+    function guarded(fn) {
+      try { return fn(); }
+      catch (e) { return { status: "unavailable", reason: (e && (e.code || e.name)) || "error", message: String((e && e.message) || e) }; }
+    }
+
+    // ── shared typed pieces ───────────────────────────────────────────────────
+    function totalView(F, total, coverage) {
+      var partial = !total.complete;
+      return {
+        amount: total.value, complete: total.complete, partial: partial,
+        text: money(F, total.value) + (partial && total.value !== null ? " · " + TXT.partial : ""),
+        missingDays: coverage ? coverage.missingDays.slice() : [], invalidDays: coverage ? coverage.invalidDays.slice() : [],
+        partialDays: coverage ? coverage.partialDays.slice() : [], closedDays: coverage ? coverage.closedDays.slice() : [],
+      };
+    }
+    function contradictions(report) {
+      return report.flags.filter(function (f) { return f.code === "closed_day_has_recorded_values"; }).map(function (f) { return f.date; }).sort();
+    }
+    /** CDA-18: the text directly below MTD revenue (exact dates, never colour only). Same wording as B2. */
+    function revenueDisclosure(report) {
+      var c = report.coverage.revenue, contra = contradictions(report), parts = [];
+      if (c.missingDays.length) parts.push(TXT.missingRevenue + dateList(c.missingDays));
+      var invalid = c.invalidDays.filter(function (d) { return contra.indexOf(d) === -1; });
+      if (invalid.length) parts.push(TXT.invalidRevenue + dateList(invalid));
+      if (c.partialDays.length) parts.push(TXT.partialRevenue + dateList(c.partialDays));
+      if (contra.length) parts.push(TXT.closedWithRevenue + dateList(contra));
+      return {
+        warning: parts.length ? "⚠ " + parts.join(" · ") + TXT.revenueSuffix : "",
+        closures: c.closedDays.length ? "יום סגור" + TXT.closedDays + dateList(c.closedDays) : "",
+        missingDays: c.missingDays.slice(), contradictions: contra,
+      };
+    }
+    /** D-owned compatibility bands (±3 points over the goal), applied to a complete ratio only. */
+    function band(F, ratioResult, goalValue) {
+      var v = ratioValue(ratioResult);
+      if (v === null || goalValue === null || goalValue === undefined) return "none";
+      var r = amt(F, v), g = amt(F, goalValue);
+      if (D(F).ratCmp(r, D(F).ratAdd(g, D(F).ratFromInt(3))) > 0) return "bad";
+      if (D(F).ratCmp(r, g) > 0) return "warn";
+      return "ok";
+    }
+    function policyOf(F, src) {
+      var cfg = src.config && src.config.state === "present" ? src.config.value : null;
+      return F.policy.registry.resolvePolicy(cfg);
+    }
+
+    // ── month report ──────────────────────────────────────────────────────────
+    function monthKind(asOf, month) { return month === asOf.slice(0, 7) ? "open_month" : "closed_month"; }
+    function monthReport(F, src, month) {
+      var b = F.finance.businessDate.monthBounds(month);
+      var got = inputsFor(F, src, { from: b.first, to: b.last });
+      if (got.status !== "ready") return got;
+      return guarded(function () {
+        return { status: "ready", inputs: got.inputs, report: F.product.productMonthReport(got.inputs, { kind: monthKind(src.asOf, month), month: month }) };
+      });
+    }
+
+    // ── dashboard (D-01…D-21, U-01…U-03, U-09 removal, VD-33/35/36/39/40) ─────
+    /**
+     * opts = { nowMs, lastYearSales (number|null, legacy manual import), dow, suppliers }
+     */
+    function dashboard(F, src, opts) {
+      var asOf = src.asOf, month = asOf.slice(0, 7), bd = F.finance.businessDate;
+      var mb = bd.monthBounds(month);
+      var first = earliestRowDate(F, src.rows, asOf);
+      var histFrom = first !== null && first < mb.first ? first : mb.first;
+      var got = inputsFor(F, src, { from: histFrom, to: mb.last });
+      if (got.status !== "ready") return got;
+      return guarded(function () {
+        var inputs = got.inputs, P = F.product;
+        var R = P.productMonthReport(inputs, { kind: "open_month", month: month });
+        var A = R.actual;
+        var proj = P.productMonthProjection(inputs, R, { nowMs: opts.nowMs });
+        var pol = policyOf(F, src);
+        var goals = { food: pol.values["goal.foodCostPct"], labor: pol.values["goal.laborCostPct"], growth: pol.values["goal.salesGrowthPct"] };
+        // D-16 sales target: (last-year month sales || 650 000) × (1 + growth %). The 650 000
+        // fallback and the formula are D-owned and retained unchanged; growth comes from the policy.
+        var lySales = typeof opts.lastYearSales === "number" && isFinite(opts.lastYearSales) && opts.lastYearSales > 0
+          ? D(F).serializeDec(D(F).decFromNumber(opts.lastYearSales)) : "650000";
+        var growthFactor = D(F).ratAdd(D(F).ratFromInt(1), D(F).ratDiv(amt(F, goals.growth.value), D(F).ratFromInt(100)));
+        var target = D(F).serializeRat(D(F).ratMul(amt(F, lySales), growthFactor));
+        var revenue = totalView(F, A.revenue, R.coverage.revenue);
+        var salesPct = ratioValue(ratio(F, revenue.complete ? A.revenue.value : null, target));
+        var fx = A.fixedAccrual;
+        var fixedRent = fx.state === "complete" ? sumAmounts(F, [fx.regular, fx.rentFixed, fx.rentPct]) : null;
+        var royalty = fx.state === "complete" ? fx.royaltyPct : null;
+        var pp = proj.projection;
+        var fRev = proj.forecast.projectedRevenue;
+        var projectedLabor = pp ? sumAmounts(F, [pp.hourlyLabor, pp.globalEmployerCost]) : null;
+        var forecastNotes = [];
+        var fdates = proj.forecast.missingRevenueDates.concat(proj.forecast.invalidRevenueDates).sort();
+        if (fdates.length) forecastNotes.push(TXT.forecastPartial + dateList(fdates));
+        if (fRev === null) forecastNotes.push(TXT.forecastInsufficient);
+        // D-13 breakdown: one row per canonical component, rent counted once (VD-35); shares
+        // only when every component is complete, as exact ratios over their exact total.
+        // C1 R1 (finding 2): an absent optional other expense is the core's complete zero ONLY when
+        // the core reports it complete; an invalid / partial one is unavailable ("—"), never 0.
+        // Shares exist only when the core's operating result is complete (every component complete).
+        var cv = configView(F, inputs, asOf);
+        var otherAmt = A.otherExpense.complete ? (A.otherExpense.value === null ? "0" : A.otherExpense.value) : null;
+        var comps = [
+          { key: "purchases", lbl: "רכש ספקים", amount: A.purchases.complete ? A.purchases.value : null, color: "#3B82F6", configured: true },
+          { key: "labor", lbl: "עלות עובדים (עלות מעסיק)", amount: typedValue(A.labor.employerCost), color: "#818CF8", configured: true },
+          { key: "royalty", lbl: "תמלוגים", amount: fx.state === "complete" ? fx.royaltyPct : null, color: "#A5B4FC", configured: cv.royaltyConfigured },
+          { key: "rentPct", lbl: "שכ״ד (אחוזים)", amount: fx.state === "complete" ? fx.rentPct : null, color: "#BAC8F3", configured: cv.rentMode === "pct" },
+          { key: "rentFixed", lbl: "שכ״ד קבוע", amount: fx.state === "complete" ? fx.rentFixed : null, color: "#CBD5E1", configured: cv.rentMode === "fixed" },
+          { key: "fixed", lbl: "קבועות", amount: fx.state === "complete" ? fx.regular : null, color: "#D1D5DB", configured: cv.fixedItemsConfigured },
+          { key: "other", lbl: "שונות", amount: otherAmt, color: "#E5E7EB", configured: otherAmt === null },
+        ];
+        var sharesAvailable = A.operatingProfit.state === "complete";
+        var compTotal = sharesAvailable ? sumAmounts(F, comps.map(function (c) { return c.amount; })) : null;
+        // presence follows configuration / applicability; a known complete zero stays hidden
+        var breakdown = comps.filter(function (c) { return c.configured || (c.amount !== null && toNum(F, c.amount) !== 0); }).map(function (c) {
+          var share = compTotal === null || c.amount === null ? null : ratioValue(ratio(F, c.amount, compTotal));
+          return { key: c.key, lbl: c.lbl, text: money(F, c.amount), shareText: share === null ? "—" : pctText(F, share), width: share === null ? 0 : Math.min(toNum(F, share), 100), color: c.color };
+        });
+        // D-20 chart: completed days of the month; a missing or partial day is a gap, never 0.
+        var dm = P.productDailyMetrics(inputs, { from: mb.first, to: asOf });
+        var byDate = {};
+        dm.forEach(function (m) { byDate[m.date] = m; });
+        var chartDays = asOf > mb.first ? bd.datesInRange(mb.first, bd.addDays(asOf, -1)) : [];
+        var chart = chartDays.map(function (d) {
+          var m = byDate[d];
+          var ok = m && m.presence.revenue === "present" && !m.partial.revenue;
+          return { day: d.slice(8), "הכנסות": ok ? m.revenue : null };
+        });
+        // D-15 today strip: the current day's canonical record as CONTEXT (never Actual).
+        var today = todayContext(F, inputs);
+        var e = F.policy.evaluate.evaluatePolicy(R, pol);
+        var day = Number(asOf.slice(8)), dim = mb.days;
+        return {
+          status: "ready", report: R, projection: proj, asOf: asOf, month: month,
+          formulaIds: { forecast: proj.forecast.formulaId, report: R.versions.fin },
+          configurationBasis: R.configurationBasis.slice(), timelineSource: R.timelineSource,
+          revenue: revenue, disclosure: revenueDisclosure(R),
+          purchases: totalView(F, A.purchases, R.coverage.purchases),
+          purchasesPct: { text: pctText(F, A.purchasesPct), band: band(F, A.purchasesPct, goals.food.value), goal: goals.food, num: toNum(F, ratioValue(A.purchasesPct)),
+            belowGoalText: ratioValue(A.purchasesPct) === null ? null : pctText(F, D(F).serializeRat(D(F).ratSub(amt(F, goals.food.value), amt(F, ratioValue(A.purchasesPct))))),
+            aboveGoalText: ratioValue(A.purchasesPct) === null ? null : pctText(F, D(F).serializeRat(D(F).ratSub(amt(F, ratioValue(A.purchasesPct)), amt(F, goals.food.value)))),
+            empty: R.window.state !== "actual" || A.purchases.value === null },
+          labor: { text: typedMoney(F, A.labor.employerCost), state: A.labor.employerCost.state, meaning: F.presenters.labels.LABELS.labor.meaning },
+          laborPct: { text: pctText(F, A.labor.employerCostPct), band: band(F, A.labor.employerCostPct, goals.labor.value), goal: goals.labor },
+          fixedRent: { text: money(F, fixedRent), rentText: fx.state === "complete" ? money(F, sumAmounts(F, [fx.rentFixed, fx.rentPct])) : "—", hasRent: cv.rentMode !== "none" || (fx.state === "complete" && toNum(F, sumAmounts(F, [fx.rentFixed, fx.rentPct])) !== 0), pctText: pctText(F, revenue.complete ? ratio(F, fixedRent, A.revenue.value) : null), state: fx.state },
+          // C1 R1 (finding 5): the tile follows the configuration — a configured royalty with an
+          // invalid rate shows "—"; only a known complete zero (or no royalty) hides it.
+          royalty: { text: money(F, royalty), show: cv.royaltyConfigured || (royalty !== null && toNum(F, royalty) !== 0), pctText: pctText(F, revenue.complete ? ratio(F, royalty, A.revenue.value) : null) },
+          forecast: { text: money(F, fRev), amount: fRev, state: proj.forecast.state, notes: forecastNotes, formulaId: proj.forecast.formulaId },
+          projectedPurchases: money(F, pp ? pp.purchases : null),
+          projectedLabor: money(F, projectedLabor),
+          projectedProfit: { text: money(F, pp ? pp.operatingProfit : null), amount: pp ? pp.operatingProfit : null, negative: pp && pp.operatingProfit !== null && toNum(F, pp.operatingProfit) < 0,
+            marginText: pp && pp.operatingProfit !== null && pp.revenue !== null ? pctText(F, ratio(F, pp.operatingProfit, pp.revenue)) + " מהמחזור" : "—" },
+          target: { text: money(F, target), amount: target },
+          salesPct: { text: salesPct === null ? "—" : pctText(F, salesPct), width: salesPct === null ? 0 : Math.max(0, Math.min(toNum(F, salesPct), 100)), value: salesPct },
+          gap: fRev === null ? { text: "—" } : (function () { var g = subAmounts(F, fRev, target); var neg = toNum(F, g) < 0; return { text: neg ? money(F, D(F).serializeRat(D(F).ratSub(D(F).ratFromInt(0), amt(F, g)))) + " מתחת ליעד" : "+" + money(F, g) + " מעל יעד", negative: neg }; })(),
+          calendar: { day: day, daysInMonth: dim, daysLeft: dim - day, dayPctWidth: Math.round(day / dim * 100) },
+          policy: e, breakdown: breakdown, chart: chart, today: today,
+          quarantine: { futureRows: R.quarantine.futureRows.length, invalidDateRows: R.quarantine.invalidDateRows.length },
+        };
+      });
+    }
+
+    /** The current business day as context (D-15): recorded revenue of today, outside Actual. */
+    function todayContext(F, inputs) {
+      var N = F.finance.normalize, asOf = inputs.asOfBusinessDate;
+      var n = N.normalizeRows(F.product.mapFieldReadback(inputs.rows), { asOfBusinessDate: asOf });
+      var day = N.groupByDate(n.rows, { from: asOf, to: asOf, exceptionsByDate: inputs.exceptionsByDate })[0];
+      var closed = F.product.productClosureCalendar(inputs, n).closedDates.indexOf(asOf) !== -1;
+      var rev = day.revenue;
+      return {
+        date: asOf, present: day.presence.day === "present", closed: closed,
+        revenuePresence: rev.presence, revenueText: rev.presence === "present" && !rev.partial ? money(F, decStr(F, rev.value)) : "—",
+        label: F.presenters.labels.LABELS.presence.currentDay,
+      };
+    }
+
+    // ── P&L (P-01…P-10, U-4…U-11) ───────────────────────────────────────────────
+    function pnlColumn(F, R) {
+      var A = R.actual, fx = A.fixedAccrual;
+      return {
+        revenue: A.revenue.complete ? A.revenue.value : null, revenuePartial: !A.revenue.complete, revenueRecorded: A.revenue.value,
+        purchases: A.purchases.complete ? A.purchases.value : null,
+        labor: typedValue(A.labor.employerCost),
+        gross: typedValue(A.grossProfitBeforeFixed),
+        other: A.otherExpense.complete ? (A.otherExpense.value === null ? "0" : A.otherExpense.value) : null,
+        otherRecorded: A.otherExpense.value,
+        fixedRent: fx.state === "complete" ? sumAmounts(F, [fx.regular, fx.rentFixed, fx.rentPct]) : null,
+        royalty: fx.state === "complete" ? fx.royaltyPct : null,
+        net: typedValue(A.operatingProfit), netState: A.operatingProfit.state,
+        purchasesPct: A.purchasesPct, laborPct: A.labor.employerCostPct,
+        avgPerDay: ratioValue(A.averages.revenuePerPresentDay),
+        window: R.window, coverage: R.coverage,
+      };
+    }
+    /**
+     * Month deliveries (P-04): exact sum of the canonical delivery parts of the completed days.
+     * C1 R1 (finding 5): `applicable` whenever any day recorded a delivery cell (present OR
+     * invalid / partial); an invalid or partial part makes the amount unavailable — the row
+     * then shows "—" instead of disappearing.
+     */
+    function deliveriesOf(F, inputs, month) {
+      var b = F.finance.businessDate.monthBounds(month);
+      var days = F.product.productDays(inputs, { from: b.first, to: b.last }).days;
+      var list = [], applicable = false, unavailable = false;
+      for (var i = 0; i < days.length; i++) {
+        var p = days[i].revenue.parts.deliveries;
+        if (p.presence !== "absent" || p.partial) applicable = true;
+        if (p.presence === "invalid" || p.partial) unavailable = true;
+        else if (p.presence === "present") list.push(decStr(F, p.value));
+      }
+      return { applicable: applicable, amount: unavailable ? null : (list.length ? sumAmounts(F, list) : null) };
+    }
+    /** VD-50: the core owns the classified gross-profit amount and its availability. */
+    function pnlGrossLineVD50(F, actual) {
+      var typed = actual.grossProfitBeforeFixed;
+      var value = typedValue(typed);
+      return Object.freeze({ status: typed.state, value: value, text: money(F, value) });
+    }
+    function pnl(F, src, month, priorMonth) {
+      var cur = monthReport(F, src, month);
+      if (cur.status !== "ready") return cur;
+      return guarded(function () {
+        var c = pnlColumn(F, cur.report);
+        var prev = null;
+        if (priorMonth) {
+          var pr = monthReport(F, src, priorMonth);
+          if (pr.status === "ready") {
+            var hasData = pr.report.window.state === "actual" && (pr.report.coverage.day.presentDays > 0 || pr.report.coverage.day.closedDays.length > 0);
+            prev = hasData ? pnlColumn(F, pr.report) : null;
+          } else if (pr.status === "loading") prev = { loading: true };
+        }
+        var rev = c.revenue;
+        var share = function (a) { return rev === null || a === null ? "—" : pctText(F, ratio(F, a, rev)); };
+        var delta = function (a, p) { return a === null || p === null || p === undefined ? null : subAmounts(F, a, p); };
+        var rows = {};
+        ["revenue", "purchases", "labor", "other", "fixedRent", "royalty", "net"].forEach(function (k) {
+          var p = prev && !prev.loading ? prev[k] : null;
+          var d = delta(c[k], p);
+          rows[k] = { text: money(F, c[k]), amount: c[k], shareText: share(c[k]), deltaText: d === null ? "—" : (toNum(F, d) > 0 ? "+" : "") + money(F, d), delta: d, negative: c[k] !== null && toNum(F, c[k]) < 0 };
+        });
+        rows.revenue.text = c.revenueRecorded === null ? "—" : money(F, c.revenueRecorded) + (c.revenuePartial ? " · " + TXT.partial : "");
+        var deliveries = deliveriesOf(F, cur.inputs, month);
+        var cvm = configView(F, cur.inputs, src.asOf.slice(0, 7) === month ? src.asOf : F.finance.businessDate.monthBounds(month).last);
+        var w = cur.report.window;
+        return {
+          status: "ready", report: cur.report, rows: rows, gross: pnlGrossLineVD50(F, cur.report.actual),
+          deliveries: { text: money(F, deliveries.amount), show: deliveries.applicable && (deliveries.amount === null || toNum(F, deliveries.amount) !== 0) },
+          // an incomplete (invalid / partial) other expense is shown as "—", never hidden
+          showOther: !cur.report.actual.otherExpense.complete || (c.otherRecorded !== null && toNum(F, c.otherRecorded) !== 0),
+          showRoyalty: cvm.royaltyConfigured || (c.royalty !== null && toNum(F, c.royalty) !== 0),
+          hasPrev: !!(prev && !prev.loading), prevLoading: !!(prev && prev.loading),
+          netPct: c.net === null || rev === null ? { text: "—", negative: false } : { text: pctText(F, ratio(F, c.net, rev)), negative: toNum(F, c.net) < 0 },
+          purchasesPct: { text: pctText(F, c.purchasesPct), num: toNum(F, ratioValue(c.purchasesPct)) },
+          laborPct: { text: pctText(F, c.laborPct), num: toNum(F, ratioValue(c.laborPct)) },
+          avgPerDay: money(F, c.avgPerDay),
+          days: { recognized: w.recognizedDays, inMonth: F.finance.businessDate.monthBounds(month).days, present: cur.report.coverage.day.presentDays, closed: cur.report.coverage.day.closedDays.length, state: w.state },
+          configurationBasis: cur.report.configurationBasis.slice(),
+          disclosure: revenueDisclosure(cur.report),
+          empty: w.state !== "actual" || (cur.report.coverage.day.presentDays === 0 && cur.report.coverage.day.closedDays.length === 0 && cur.report.coverage.day.missingDays.length === 0),
+        };
+      });
+    }
+
+    // ── placement of the monthly employer cost on one date (E-02/E-03, M-03/M-04) ─
+    function placement(F, inputs, date) {
+      var P = F.product, ct = F.metrics.costTimeline;
+      var tl = P.productTimeline(inputs);
+      var cal = P.productClosureCalendar(inputs);
+      var pl = ct.dayPlacement(tl, date, { asOfBusinessDate: inputs.asOfBusinessDate, closedDates: cal.closedDates });
+      var globalBad = (tl.flags || []).some(function (f) { return f.code === "invalid_global_amount" || f.code === "missing_global_amount"; });
+      if (pl.state !== "placed" || globalBad) return { state: pl.state === "placed" ? "invalid_configuration" : pl.state, global: null, text: "—" };
+      var g = D(F).serializeRat(pl.global);
+      return { state: "placed", global: g, text: money(F, g), completedClosure: pl.completedClosure };
+    }
+    /** Version in force on a date (configured monthly amounts; a configuration view, not Actual). */
+    function versionOn(F, inputs, date) {
+      var ct = F.metrics.costTimeline;
+      return ct.versionForDay(ct.resolveTimeline(F.product.productTimeline(inputs)), date);
+    }
+    var FIXED_FLAG_CODES = ["invalid_fixed_amount", "missing_fixed_amount"];
+    /**
+     * C1 R1 (findings 3 + 5): what the in-force cost configuration CONTAINS — so a configured
+     * component stays visible (as "—" when unavailable) instead of disappearing — and the
+     * CONFIGURED monthly fixed-items + fixed-rent total of the version in force (D-21). Read from
+     * the shared cost timeline (productTimeline / versionForDay) and its typed flags only; an
+     * invalid or missing configured amount makes the total unavailable, never zero.
+     */
+    function configView(F, inputs, date) {
+      var tl = F.product.productTimeline(inputs);
+      var flags = tl.flags || [];
+      var ct = F.metrics.costTimeline;
+      var v = ct.versionForDay(ct.resolveTimeline(tl), date);
+      var flagged = function (pred) { return flags.some(pred); };
+      var royaltyBad = flagged(function (f) { return (f.code === "invalid_rate" || f.code === "missing_rate") && f.field === "royaltyPct"; });
+      var rentPctBad = flagged(function (f) { return (f.code === "invalid_rate" || f.code === "missing_rate") && f.field === "rentPct"; });
+      var rentFixedBad = flagged(function (f) { return f.code === "invalid_rate" && f.field === "rentFixed"; });
+      var fixedBad = flagged(function (f) { return FIXED_FLAG_CODES.indexOf(f.code) !== -1; });
+      var rentMode = rentPctBad ? "pct" : rentFixedBad ? "fixed" : (v ? v.rent.mode : "none");
+      var items = v ? v.fixedItems.map(function (i) { return i.monthlyAmount; }) : [];
+      var rentFixedAmt = v && v.rent.mode === "fixed" ? v.rent.monthlyAmount : (rentMode === "fixed" ? null : "0");
+      var monthly = fixedBad || rentFixedBad ? null : sumAmounts(F, items.concat([rentFixedAmt]));
+      return {
+        royaltyConfigured: royaltyBad || !!(v && v.royalty.mode === "pct"),
+        royaltyRate: v && v.royalty.mode === "pct" && !royaltyBad ? v.royalty.ratePct : null,
+        rentMode: rentMode,
+        rentRate: v && v.rent.mode === "pct" && !rentPctBad ? v.rent.ratePct : null,
+        rentFixedAmount: v && v.rent.mode === "fixed" ? v.rent.monthlyAmount : null,
+        fixedItemsConfigured: fixedBad || items.length > 0,
+        monthlyFixedAndRent: monthly,
+        timelineSource: tl.timelineSource,
+      };
+    }
+    /** D-21: the fixed-cost editor header — configured monthly total of the version in force on `date`. */
+    function configuredMonthly(F, src, date) {
+      if (!src || !src.config || src.config.state === "loading" || !src.fixed || src.fixed.state === "loading") return { status: "loading" };
+      return guarded(function () {
+        var inputs = { rows: [], config: src.config, fixed: src.fixed, asOfBusinessDate: date, exceptionLedgerState: "absent" };
+        var cv = configView(F, inputs, date);
+        var L = F.presenters.labels.LABELS;
+        return {
+          status: "ready", date: date,
+          // explicit unavailable state: an invalid / missing fixed amount is never shown as a total
+          available: cv.monthlyFixedAndRent !== null,
+          text: cv.monthlyFixedAndRent === null ? "לא זמין — סכום קבוע חסר או לא תקין" : money(F, cv.monthlyFixedAndRent), amount: cv.monthlyFixedAndRent,
+          rentPctText: cv.rentMode === "pct" ? (cv.rentRate === null ? "—" : pctText(F, cv.rentRate)) : null,
+          rentFixedText: cv.rentMode === "fixed" ? money(F, cv.rentFixedAmount) : null,
+          royaltyText: cv.royaltyConfigured ? (cv.royaltyRate === null ? "—" : pctText(F, cv.royaltyRate)) : null,
+          basisLabel: cv.timelineSource === "compat_current_config" ? L.configurationBasis.current_applied_retrospectively : "",
+        };
+      });
+    }
+
+    // ── entry form preview (E-02/E-03) ─────────────────────────────────────────
+    function entryLabor(F, src, date, payrollInput) {
+      var got = inputsFor(F, src, { from: date, to: date });
+      if (got.status !== "ready") return got;
+      return guarded(function () {
+        var pl = placement(F, got.inputs, date);
+        var v = versionOn(F, got.inputs, date);
+        var emps = v ? v.globalEmployees : [];
+        var cell = F.finance.cells.parseAmount(payrollInput, { allowSkip: false });
+        // C1 R1 (finding 4): payroll not entered (absent) is MISSING, not ₪0 — no day total until entered
+        var payroll = cell.state === "present" ? D(F).serializeDec(cell.value) : null;
+        var total = pl.global === null ? null : sumAmounts(F, [pl.global, payroll]);
+        return { status: "ready", globalCount: emps.length, global: pl, totalText: money(F, total), show: emps.length > 0 || (payroll !== null && toNum(F, payroll) !== 0) };
+      });
+    }
+
+    /**
+     * E-01: the revenue the save will store (the page's VAT normalisation of the form, applied
+     * by the caller), folded by the core's own row normalisation — same presence/invalid rules.
+     */
+    function entryRevenuePreview(F, netFields, date) {
+      return guarded(function () {
+        var N = F.finance.normalize;
+        var row = { id: "c1-preview", date: date, sales: netFields.sales, deliveries: netFields.deliveries, other_income: netFields.other_income };
+        var n = N.normalizeRows([row], { asOfBusinessDate: date });
+        var day = N.groupByDate(n.rows, { from: date, to: date })[0];
+        var r = day.revenue;
+        return { status: "ready", presence: r.presence, partial: r.partial, text: r.presence === "present" && !r.partial ? money(F, decStr(F, r.value)) : (r.presence === "invalid" ? F.presenters.labels.LABELS.presence.invalid : null) };
+      });
+    }
+
+    /** H-05: per-ROW diagnostic of a preserved duplicate (labelled "שורה"; never a day total). */
+    function rowDiagnostic(F, row) {
+      return guarded(function () {
+        var rev = entryRevenuePreview(F, row, row.date);
+        var c = F.finance.cells.parseAmount(row.payroll, { allowSkip: false });
+        return { status: "ready", revenueText: rev.status === "ready" && rev.text !== null ? rev.text : "—",
+          payrollText: c.state === "present" ? money(F, decStr(F, c.value)) : (c.state === "absent" ? "—" : F.presenters.labels.LABELS.presence.invalid) };
+      });
+    }
+
+    // ── employees screen (M-01…M-07) ───────────────────────────────────────────
+    function employees(F, src, month) {
+      var cur = monthReport(F, src, month);
+      if (cur.status !== "ready") return cur;
+      return guarded(function () {
+        var inputs = cur.inputs, A = cur.report.actual, bd = F.finance.businessDate, b = bd.monthBounds(month);
+        var asOf = src.asOf;
+        var cdays = F.product.productDays(inputs, { from: b.first, to: b.last }).days;
+        var byDate = {};
+        cdays.forEach(function (c) { byDate[c.date] = c; });
+        var hourlyClosed = cur.report.coverage.hourlyLabor.closedDays;
+        var days = bd.datesInRange(b.first, b.last).map(function (d) {
+          var pl = placement(F, inputs, d);
+          var c = byDate[d];
+          var completed = d < asOf;
+          // C1 R1 (finding 4): hourly employer cost is a value only when entered and valid; an absent
+          // cell on a completed OPERATING day is missing ("—"). The only core-known zero is a
+          // completed declared closure without an entered hourly cost (coverage.closedDays).
+          var closedDay = completed && hourlyClosed.indexOf(d) !== -1;
+          var hourly = c && c.hourlyLabor.presence === "present" && !c.hourlyLabor.partial ? decStr(F, c.hourlyLabor.value)
+            : (closedDay && (!c || c.hourlyLabor.presence === "absent") ? "0" : null);
+          // Completed day: hourly employer cost entered on the day + the core's placement of the
+          // monthly employer cost (MARJIN_LABOR/3 daily labor) — withheld while either is unknown.
+          // Current day and later: only the placement is known, shown as expected ("צפוי").
+          var totalAmt = completed ? (hourly !== null && pl.global !== null ? sumAmounts(F, [hourly, pl.global]) : null) : pl.global;
+          var rev = c && c.revenue.presence === "present" && !c.revenue.partial ? decStr(F, c.revenue.value) : null;
+          var pctR = completed && totalAmt !== null && rev !== null ? ratio(F, totalAmt, rev) : null;
+          return { date: d, completed: completed, placement: pl, totalText: money(F, totalAmt), expected: !completed, pctText: pctR === null || ratioValue(pctR) === null ? null : pctText(F, pctR), hourlyText: money(F, hourly) };
+        });
+        var v = versionOn(F, inputs, asOf.slice(0, 7) === month ? asOf : b.last);
+        return {
+          status: "ready", report: cur.report,
+          monthTotal: { text: typedMoney(F, A.labor.employerCost), state: A.labor.employerCost.state },
+          monthPct: pctText(F, A.labor.employerCostPct),
+          globalPerDay: placement(F, inputs, asOf.slice(0, 7) === month ? asOf : b.first),
+          globalEmployees: v ? v.globalEmployees.map(function (g) { return { key: g.employeeKey, monthlyText: money(F, g.monthlyAmount) }; }) : [],
+          days: days, meaning: F.presenters.labels.LABELS.labor.meaning,
+          configurationBasis: cur.report.configurationBasis.slice(),
+        };
+      });
+    }
+
+    // ── history (H-01…H-06, U-1, U-19, U-20, U-23) ─────────────────────────────
+    function history(F, src, month) {
+      var cur = monthReport(F, src, month);
+      if (cur.status !== "ready") return cur;
+      return guarded(function () {
+        var inputs = cur.inputs, R = cur.report, bd = F.finance.businessDate, P = F.product;
+        var b = bd.monthBounds(month), asOf = src.asOf, L = F.presenters.labels.LABELS;
+        var to = asOf < b.last ? (asOf < b.first ? null : asOf) : b.last;
+        if (to === null) return { status: "ready", report: R, days: [], counts: { complete: 0, incomplete: 0, closed: 0 } };
+        var completed = P.productDays(inputs, { from: b.first, to: to }).days;
+        var closed = R.operatingCalendar.closedDates;
+        var byDate = {};
+        completed.forEach(function (d) { byDate[d.date] = d; });
+        var N = F.finance.normalize;
+        var n = N.normalizeRows(P.mapFieldReadback(inputs.rows), { asOfBusinessDate: asOf });
+        var todayDay = to === asOf ? N.groupByDate(n.rows, { from: asOf, to: asOf, exceptionsByDate: inputs.exceptionsByDate })[0] : null;
+        var dates = bd.datesInRange(b.first, to);
+        var out = dates.map(function (d) {
+          var day = d === asOf ? todayDay : byDate[d];
+          var isClosed = closed.indexOf(d) !== -1 || (d === asOf && P.productClosureCalendar(inputs, n).closedDates.indexOf(d) !== -1);
+          var contradiction = isClosed && day && P.closedDayRevenueConflict(day);
+          var p = day ? day.presence : null;
+          var status;
+          if (contradiction) status = "contradiction";
+          else if (isClosed) status = "closed";
+          else if (!day || p.day === "missing") status = "missing";
+          else if (p.revenue === "invalid" || p.purchases === "invalid" || p.hourlyLabor === "invalid" || day.revenue.partial || day.purchases.partial || day.hourlyLabor.partial) status = "invalid";
+          else if (p.revenue === "present" && p.purchases === "present" && p.hourlyLabor === "present") status = "complete";
+          else status = "partial";
+          var rev = day && day.revenue.presence === "present" && !day.revenue.partial ? decStr(F, day.revenue.value) : null;
+          var pur = day && day.purchases.presence === "present" && !day.purchases.partial ? decStr(F, day.purchases.value) : null;
+          var hl = day && day.hourlyLabor.presence === "present" && !day.hourlyLabor.partial ? decStr(F, day.hourlyLabor.value) : null;
+          var oe = day ? (day.otherExpense.presence === "absent" ? "0" : (day.otherExpense.presence === "present" && !day.otherExpense.partial ? decStr(F, day.otherExpense.value) : null)) : null;
+          var exp = sumAmounts(F, [pur, hl, oe]);
+          var contribution = rev === null || exp === null || contradiction ? null
+            : D(F).serializeRat(F.metrics.report.contributionOf(amt(F, rev), amt(F, pur), amt(F, hl), amt(F, oe)));
+          return {
+            date: d, isToday: d === asOf, status: status, rowCount: day ? day.rowCount : 0,
+            revenueText: isClosed && !contradiction ? money(F, "0") : money(F, rev),
+            expensesText: money(F, exp), netText: money(F, contribution), netNegative: contribution !== null && toNum(F, contribution) < 0,
+            label: status === "closed" ? L.presence.closedDay : status === "contradiction" ? "סגור — נרשמו הכנסות" : status === "missing" ? L.presence.missingDay : status === "invalid" ? L.presence.invalid : status === "complete" ? "הוזן מלא" : "חסר נתונים",
+          };
+        }).reverse();
+        var counts = { complete: 0, incomplete: 0, closed: 0 };
+        out.forEach(function (x) { if (x.isToday) return; if (x.status === "complete") counts.complete++; else if (x.status === "closed") counts.closed++; else counts.incomplete++; });
+        return { status: "ready", report: R, days: out, counts: counts, presentDays: R.coverage.day.presentDays, disclosure: revenueDisclosure(R) };
+      });
+    }
+
+    // ── suppliers / food cost (S-01…S-05, S-08, U-05) ─────────────────────────────
+    /** P1: purchases incomplete because of the credit source (invalid / unreadable / under review), or a net-negative period (kept, flagged — never hidden). */
+    function creditsDisclosure(report) {
+      var p = report.actual.purchases, neg = report.flags.some(function (f) { return f.code === "negative_net_purchases"; });
+      var c = p.credits, reviewOnly = !!c && c.state === "invalid" && c.invalidDates.length === c.reviewPendingDates.length + c.reviewFlaggedDates.length;
+      return {
+        incomplete: c && c.state === "invalid" ? (reviewOnly ? TXT.creditsReview : TXT.creditsIncomplete) : null,
+        negative: neg ? TXT.negativeNetPurchases : null,
+      };
+    }
+    function suppliers(F, src, month, supplierList) {
+      var cur = monthReport(F, src, month);
+      if (cur.status !== "ready") return cur;
+      return guarded(function () {
+        var A = cur.report.actual, pol = policyOf(F, src);
+        var rev = A.revenue.complete ? A.revenue.value : null;
+        // P1: bySource is NET of the month's supplier credits (issue-date attribution, MARJIN_FIN/4);
+        // gross and credits come from the same report so a row reconciles: gross − credits = net.
+        var bySource = A.purchases.bySource || {};
+        var grossBy = A.purchases.grossBySource || bySource;
+        var creditBy = (A.purchases.credits && A.purchases.credits.bySupplier) || {};
+        var names = {};
+        (supplierList || []).forEach(function (s) { if (s && s.id !== undefined) names["supplier:" + s.id] = s.name; });
+        var keys = Object.keys(bySource).sort();
+        var rows = keys.map(function (k) {
+          var label = names[k] || (k === "legacy_food_cost" ? "עלות מזון (רשומה ישנה)" : "ספק " + k.replace(/^supplier:/, ""));
+          var g = grossBy[k] === undefined ? null : grossBy[k], c = creditBy[k] === undefined ? null : creditBy[k];
+          return { key: k, name: label, amount: bySource[k], text: money(F, bySource[k]), pctText: rev === null ? "—" : pctText(F, ratio(F, bySource[k], rev)),
+            gross: g, grossText: money(F, g === null ? "0" : g), credits: c, creditsText: c === null ? null : money(F, c), negative: D(F).ratIsNegative(amt(F, bySource[k])) };
+        });
+        var top = rows.slice().sort(function (a, b) { return D(F).ratCmp(amt(F, b.amount), amt(F, a.amount)); })[0] || null;
+        var bySupplierId = {};
+        rows.forEach(function (r) { if (r.key.indexOf("supplier:") === 0) bySupplierId[r.key.slice(9)] = r; });
+        return {
+          status: "ready", report: cur.report,
+          total: totalView(F, A.purchases, cur.report.coverage.purchases),
+          revenue: totalView(F, A.revenue, cur.report.coverage.revenue),
+          purchasesPct: { text: pctText(F, A.purchasesPct), band: band(F, A.purchasesPct, pol.values["goal.foodCostPct"].value), num: toNum(F, ratioValue(A.purchasesPct)), goal: pol.values["goal.foodCostPct"] },
+          rows: rows, bySupplierId: bySupplierId, top: top,
+          gross: totalView(F, A.purchases.gross || A.purchases, cur.report.coverage.purchases),
+          credits: A.purchases.credits ? { state: A.purchases.credits.state, amount: A.purchases.credits.value, text: money(F, A.purchases.credits.value), count: A.purchases.credits.count } : null,
+          disclosure: creditsDisclosure(cur.report),
+        };
+      });
+    }
+    /** S-08: mean revenue of completed present days with vs without an external-impact tag (statistic over canonical facts). */
+    function impactStats(F, src, rowsAll) {
+      var got = inputsFor(F, src, null);
+      if (got.status !== "ready") return got;
+      return guarded(function () {
+        var inputs = got.inputs, first = earliestRowDate(F, src.rows, src.asOf);
+        if (first === null || first >= src.asOf) return { status: "ready", show: false };
+        var days = F.product.productDays(inputs, { from: first, to: src.asOf }).days;
+        var closed = F.product.productClosureCalendar(inputs).closedDates;
+        var tagged = {};
+        (rowsAll || []).forEach(function (r) { if (r && (r.weather_impact || r.security_event)) tagged[r.date] = true; });
+        var impact = [], normal = [];
+        days.forEach(function (c) {
+          // operating days with complete recorded revenue only: closures and missing days are not "0 revenue" days
+          if (closed.indexOf(c.date) !== -1 || c.revenue.presence !== "present" || c.revenue.partial) return;
+          (tagged[c.date] ? impact : normal).push(decStr(F, c.revenue.value));
+        });
+        if (!impact.length) return { status: "ready", show: false };
+        var mean = function (l) { return l.length ? D(F).serializeRat(D(F).ratDiv(amt(F, sumAmounts(F, l)), D(F).ratFromInt(l.length))) : null; };
+        var im = mean(impact), nm = mean(normal);
+        var diff = im !== null && nm !== null ? ratioValue(F.metrics.report.ratioOfTotals(D(F).ratSub(amt(F, im), amt(F, nm)), amt(F, nm))) : null;
+        return { status: "ready", show: true, impactText: money(F, im), impactDays: impact.length, normalText: money(F, nm), normalDays: normal.length,
+          diffText: diff === null ? null : pctText(F, diff.replace(/^-/, "")), diffNegative: diff !== null && toNum(F, diff) < 0 };
+      });
+    }
+
+    // ── daily insights (I-01…I-03) — B1 analytics documents ─────────────────────
+    function insightsKeys(F, asOf, days) {
+      var bd = F.finance.businessDate, keys = [];
+      for (var i = 1; i <= days; i++) keys.push(bd.addDays(asOf, -i));
+      return keys;
+    }
+    function insightTotal(doc) {
+      var t = doc && doc.revenue ? doc.revenue.total : undefined;
+      return typeof t === "number" && isFinite(t) ? t : null;
+    }
+    /** I-01: mean of the documents' recorded revenue totals (server B1 values), exact; absent totals excluded. */
+    function insightsStats(F, docs) {
+      return guarded(function () {
+        var list = [];
+        (docs || []).forEach(function (d) { var t = insightTotal(d); if (t !== null) list.push(D(F).serializeDec(D(F).decFromNumber(t))); });
+        var avg = list.length ? D(F).serializeRat(D(F).ratDiv(amt(F, sumAmounts(F, list)), D(F).ratFromInt(list.length))) : null;
+        return { status: "ready", revenueDays: list.length, avgText: money(F, avg) };
+      });
+    }
+    function insightMoney(F, doc) { var t = insightTotal(doc); return t === null ? "—" : money(F, D(F).serializeDec(D(F).decFromNumber(t))); }
+
+    // ── supplier reminders (D-17 / S-09; VD-39): a recorded 0 / "skip" is entered ─
+    function supplierCellEntered(F, value) {
+      var c = F.finance.cells.parseAmount(value, { allowSkip: true });
+      return c.state === "present" || c.state === "skip";
+    }
+
+    window.MarjinC1 = Object.freeze({
+      C1_VERSION: C1_VERSION, EXPECT: EXPECT, LEDGER_CHUNK_DAYS: LEDGER_CHUNK_DAYS, LEDGER_ATTEMPT_DEADLINE_MS: LEDGER_ATTEMPT_DEADLINE_MS, TXT: TXT, READ_FAILED: READ_FAILED,
+      checkBundle: checkBundle, nodeState: nodeState, historyBinding: historyBinding, ledgerChunks: ledgerChunks, structuredStates: structuredStates,
+      selectableBusinesses: selectableBusinesses, businessRegistryView: businessRegistryView, pickBusiness: pickBusiness,
+      businessRegistryNodeView: businessRegistryNodeView, firstSetupEligible: firstSetupEligible, registrySetupWrite: registrySetupWrite,
+      registryIdTaken: registryIdTaken, freshBusinessId: freshBusinessId, registrySetupReread: registrySetupReread, setupBootstrapProceed: setupBootstrapProceed,
+      earliestRowDate: earliestRowDate, ledgerWindow: ledgerWindow, ledgerCovers: ledgerCovers, loadLedger: loadLedger,
+      revisionOf: revisionOf, ledgerKey: ledgerKey, ledgerFor: ledgerFor, createLedgerSession: createLedgerSession, inputsFor: inputsFor,
+      monthReport: monthReport, dashboard: dashboard, configView: configView, configuredMonthly: configuredMonthly, todayContext: todayContext, pnl: pnl, pnlGrossLineVD50: pnlGrossLineVD50,
+      placement: placement, versionOn: versionOn, entryLabor: entryLabor, entryRevenuePreview: entryRevenuePreview, rowDiagnostic: rowDiagnostic, employees: employees, history: history,
+      suppliers: suppliers, impactStats: impactStats, insightsKeys: insightsKeys, insightTotal: insightTotal, insightsStats: insightsStats, insightMoney: insightMoney,
+      supplierCellEntered: supplierCellEntered, revenueDisclosure: revenueDisclosure, band: band,
+      money: money, pctText: pctText,
+    });
+  })();
+  </script>
+  <!-- ═══ C2: canonical financial fingerprint (rebuild trigger, VD-46; frozen as FZ-11) ═══
+       "Did this save change a financial fact, so server analytics must be rebuilt?" is answered
+       ONLY by the core normalizer (MarjinFinance.finance.normalize.normalizeRows) — there is no
+       page formula. A financial fact is: each revenue part (presence + exact canonical amount),
+       the selected purchase source with its exact contributions and total ("skip" and "0" are
+       both an explicit present zero), payroll (hourly labor), other_expense, and is_exception.
+       hourly_payroll (never counted, C-06) and notes / annotations are not facts. Every
+       function takes the core `F` explicitly (no globals) so the block is vm-testable
+       (test/finance/c2-fingerprint.test.mjs). -->
+  <script>
+  // ── C2 canonical financial fingerprint ──────────────────────────────────────
+  (function () {
+    "use strict";
+    var FINGERPRINT_VERSION = "MARJIN_FFP/1";
+    // Reason codes, in this fixed order. The first three are decisions taken WITHOUT comparing
+    // facts (the rebuild is requested); the rest name the fact groups that differ.
+    var REASONS = Object.freeze(["new_entry", "fincore_unavailable", "row_unreadable", "revenue", "purchases", "hourly_labor", "other_expense", "is_exception"]);
+    var GROUPS = Object.freeze([["revenue", "revenue"], ["purchases", "purchases"], ["hourlyLabor", "hourly_labor"], ["otherExpense", "other_expense"], ["isException", "is_exception"]]);
+    // normalizeRows quarantines rows dated after asOf; a fingerprint describes the row itself,
+    // whatever its date, so asOf is the last valid business date.
+    var AS_OF = "9999-12-31";
+    function exact(F, m) {
+      return { presence: m.presence, partial: m.partial === true, value: m.value === null ? null : F.finance.decimal.serializeDec(m.value) };
+    }
+    /** The canonical financial facts of ONE stored or proposed entry row, or null if the core
+     *  does not admit it as a dated row (no plain object / no valid business date). */
+    function financialFacts(F, row) {
+      var n;
+      try {
+        var res = F.finance.normalize.normalizeRows([row], { asOfBusinessDate: AS_OF });
+        if (!res || res.rows.length !== 1) return null;
+        n = res.rows[0];
+      } catch (e) { return null; }
+      return {
+        revenue: { sales: exact(F, n.revenueParts.sales), deliveries: exact(F, n.revenueParts.deliveries), otherIncome: exact(F, n.revenueParts.otherIncome) },
+        purchases: {
+          source: n.purchaseSource,
+          total: exact(F, n.metrics.purchases),
+          contributions: n.purchaseContributions.map(function (c) { return { source: c.source, value: F.finance.decimal.serializeDec(c.value) }; })
+            .sort(function (a, b) { return a.source < b.source ? -1 : a.source > b.source ? 1 : 0; }),
+        },
+        hourlyLabor: exact(F, n.metrics.hourlyLabor),
+        otherExpense: exact(F, n.metrics.otherExpense),
+        isException: n.isException === true,
+      };
+    }
+    /** Deterministic fingerprint string of a row (version + normalizer version + facts). */
+    function financialFingerprint(F, row) {
+      var facts = financialFacts(F, row);
+      var head = FINGERPRINT_VERSION + "|" + F.versions.norm + "|";
+      if (!facts) return head + "unreadable";
+      return head + JSON.stringify(GROUPS.map(function (g) { return facts[g[0]]; }));
+    }
+    /** { changed, reasons } for a save from `prev` (stored row, or null for a new entry) to `next`. */
+    function financialChanged(F, prev, next) {
+      if (!prev) return { changed: true, reasons: ["new_entry"] };
+      if (!F) return { changed: true, reasons: ["fincore_unavailable"] };
+      var a = financialFacts(F, prev), b = financialFacts(F, next);
+      if (!a || !b) return { changed: true, reasons: ["row_unreadable"] };
+      var reasons = [];
+      GROUPS.forEach(function (g) { if (JSON.stringify(a[g[0]]) !== JSON.stringify(b[g[0]])) reasons.push(g[1]); });
+      return { changed: reasons.length > 0, reasons: reasons };
+    }
+    window.MarjinC2 = Object.freeze({
+      FINGERPRINT_VERSION: FINGERPRINT_VERSION, REASONS: REASONS,
+      financialFacts: financialFacts, financialFingerprint: financialFingerprint, financialChanged: financialChanged,
+    });
+  })();
+  </script>
+
+  <script>
+  // ── Owner notice: the Daily e-mail cannot be prepared (owner decision D-G4, 2026-10-09) ───────────────────────────────
+  // The page never reads the notice store (email_delivery/… is server-only under the Rules). It asks the owner-authorized
+  // route — POST /api/daily-snapshot/run with action: "notice" (delivery R7 contract: status, deliverable, code, notice,
+  // noticeState, clearState) — and decides from the BUSINESS state the server confirmed, never from a stored or synthesized
+  // record. Three outcomes, kept distinct:
+  //   "active"   the server confirmed the business has no usable name: the Daily is blocked → the alert is shown
+  //   "clear"    the server confirmed the name is present (and any stored notice is cleared or was never there) → hidden
+  //   "unknown"  anything else — a failed / refused / unreachable read, a 503 (registry or notice store unavailable, a failed
+  //              clear), a reply of another shape, another business state — changes NOTHING: a visible alert stays visible,
+  //              nothing new appears, and the page is unaffected. A failed read is never "resolved".
+  (function () {
+    "use strict";
+    var MESSAGE_HE = "לא ניתן להכין את הסיכום היומי כי חסר שם העסק. נדרש תיקון פרטי העסק.";
+    var NOTICE_ENDPOINT = "/api/daily-snapshot/run";
+    var OWNER_ROLES = Object.freeze(["owner", "super_owner"]);
+    function isRecord(x) { return x !== null && typeof x === "object" && !Array.isArray(x); }
+    /** The request body of the authorized read. `action` is mandatory: without it the same route is a manual Daily send. */
+    function noticeRequest(tenantId, bizId) { return { tenantId: tenantId, bizId: bizId, action: "notice" }; }
+    /** Whether this page may ask at all: an owner / super_owner with a live (tenantId, bizId) selection, not in demo mode. */
+    function shouldAsk(role, tenantId, bizId, demo) {
+      return OWNER_ROLES.indexOf(role) >= 0 && typeof tenantId === "string" && tenantId !== "" && typeof bizId === "string" && bizId !== "" && demo !== true;
+    }
+    /**
+     * Decide from one reply. `status` is the HTTP status (null = no reply), `body` the parsed JSON (or null).
+     *   { kind: "active", businessDate, runs }  200 ok, deliverable === false, code === "business_name_unavailable", for THIS business
+     *   { kind: "clear" }                        200 ok, deliverable === true, for THIS business
+     *   { kind: "unknown", reason }              everything else
+     * A stored record (body.notice) may only decorate an active decision (its date / count); it never decides.
+     */
+    function decide(status, body, tenantId, bizId) {
+      if (status !== 200 || !isRecord(body)) return { kind: "unknown", reason: status === null ? "no_reply" : "http_" + status };
+      if (body.status !== "ok" || body.tenantId !== tenantId || body.bizId !== bizId) return { kind: "unknown", reason: "shape_or_identity" };
+      if (typeof body.noticeState !== "string" || typeof body.clearState !== "string") return { kind: "unknown", reason: "shape" };  // not the R7 contract
+      if (body.deliverable === true) return { kind: "clear" };
+      if (body.deliverable === false && body.code === "business_name_unavailable") {
+        var rec = isRecord(body.notice) && body.notice.code === "business_name_unavailable" ? body.notice : null;
+        return { kind: "active", businessDate: rec && typeof rec.businessDate === "string" ? rec.businessDate : null, runs: rec && Number.isInteger(rec.runs) && rec.runs > 0 ? rec.runs : null };
+      }
+      return { kind: "unknown", reason: "other_business_state" };
+    }
+    /** The displayed states are kept PER BUSINESS (a switch away and back never loses what was confirmed for a business). */
+    function key(tenantId, bizId) { return String(tenantId) + "\u0000" + String(bizId); }
+    function stateFor(states, tenantId, bizId) { var s = isRecord(states) ? states[key(tenantId, bizId)] : null; return isRecord(s) ? s : { kind: "idle" }; }
+    /** The next map of displayed states after one decision for (tenantId, bizId): "unknown" leaves that business's state as it is. */
+    function next(states, decision, tenantId, bizId) {
+      var map = isRecord(states) ? states : {};
+      var cur = stateFor(map, tenantId, bizId), out = Object.assign({}, map);
+      if (!isRecord(decision) || decision.kind === "unknown") { if (cur.kind !== "idle") out[key(tenantId, bizId)] = Object.assign({}, cur, { lastReadFailed: true }); return out; }
+      if (decision.kind === "clear") { out[key(tenantId, bizId)] = { kind: "clear" }; return out; }
+      if (decision.kind === "active") { out[key(tenantId, bizId)] = { kind: "active", businessDate: decision.businessDate, runs: decision.runs }; return out; }
+      return out;
+    }
+    /** Whether the alert is shown for the selected business. */
+    function visible(states, tenantId, bizId) { return stateFor(states, tenantId, bizId).kind === "active"; }
+    window.MarjinDailyNotice = Object.freeze({ MESSAGE_HE: MESSAGE_HE, NOTICE_ENDPOINT: NOTICE_ENDPOINT, OWNER_ROLES: OWNER_ROLES, noticeRequest: noticeRequest, shouldAsk: shouldAsk, decide: decide, next: next, stateFor: stateFor, visible: visible });
+  })();
+  </script>
+
+  <script>
+  // ── Daily e-mail subscription (owner requirement 2026-10-22): «קבלת דוח יומי במייל» ─────────────────────────────────────
+  // A per-business switch for the owner / super_owner of the selected business. The page never reads or writes the stored
+  // preference (the preference store is server-only under the Rules): it asks the owner-authorized route of the Daily notice
+  // (the SAME endpoint, MarjinDailyNotice.NOTICE_ENDPOINT, defined once above) with action "subscription" (read) or
+  // "subscription_set" (change) — and shows only what the
+  // server CONFIRMED for THIS business. Default OFF. Anything else — a refused / failed / unreachable request, a reply of
+  // another shape — confirms nothing: the switch keeps the last confirmed state (or none) and the page is unaffected. The
+  // switch never shows or edits an address; the recipient stays the server configuration.
+  // Ordering (correction C1): every confirmed reply carries the server record's version (absent = 0). A reply never replaces
+  // a confirmed state of a HIGHER version, whatever order the replies arrive in, so a delayed read or write never undoes a
+  // newer confirmed change. Changes in flight are counted per business (the switch is locked until all are settled); a
+  // failure is shown only when no LATER request of that business has already been confirmed.
+  (function () {
+    "use strict";
+    var LABEL_HE = "קבלת דוח יומי במייל";
+    var ERROR_HE = "לא ניתן לעדכן כעת. נסו שוב מאוחר יותר.";
+    // one endpoint definition for the page: without the notice seam nothing is requested (the switch stays unconfirmed)
+    var ENDPOINT = window.MarjinDailyNotice && typeof window.MarjinDailyNotice.NOTICE_ENDPOINT === "string" ? window.MarjinDailyNotice.NOTICE_ENDPOINT : null;
+    var OWNER_ROLES = Object.freeze(["owner", "super_owner"]);
+    function isRecord(x) { return x !== null && typeof x === "object" && !Array.isArray(x); }
+    /** `action` is mandatory: without it the same route is a manual Daily send. */
+    function readRequest(tenantId, bizId) { return { tenantId: tenantId, bizId: bizId, action: "subscription" }; }
+    function setRequest(tenantId, bizId, enabled) { return { tenantId: tenantId, bizId: bizId, action: "subscription_set", enabled: enabled === true }; }
+    function shouldAsk(role, tenantId, bizId, demo) {
+      return typeof ENDPOINT === "string" && OWNER_ROLES.indexOf(role) >= 0 && typeof tenantId === "string" && tenantId !== "" && typeof bizId === "string" && bizId !== "" && demo !== true;
+    }
+    /** { kind: "known", enabled, version } only for a 200 "ok" reply with a boolean `enabled` and a record version (null = no
+     *  record = 0, else a positive safe integer) for THIS business; else { kind: "unknown" }. */
+    function decide(status, body, tenantId, bizId) {
+      if (status !== 200 || !isRecord(body) || body.status !== "ok" || body.tenantId !== tenantId || body.bizId !== bizId || typeof body.enabled !== "boolean" ||
+          !(body.version === null || (Number.isSafeInteger(body.version) && body.version >= 1)))
+        return { kind: "unknown", reason: status === null ? "no_reply" : status !== 200 ? "http_" + status : "shape_or_identity" };
+      return { kind: "known", enabled: body.enabled, version: body.version === null ? 0 : body.version };
+    }
+    function key(tenantId, bizId) { return String(tenantId) + "\u0000" + String(bizId); }
+    var EMPTY = Object.freeze({ kind: "idle", enabled: false, version: -1, pending: 0, busy: false, failed: false, okSeq: 0, failSeq: 0 });
+    /** The state of one business: { kind: "idle" | "known", enabled, version, pending (changes in flight), busy, failed, okSeq, failSeq }. */
+    function stateFor(states, tenantId, bizId) { var s = isRecord(states) ? states[key(tenantId, bizId)] : null; return isRecord(s) ? s : EMPTY; }
+    function withState(states, tenantId, bizId, patch) {
+      var out = Object.assign({}, isRecord(states) ? states : {});
+      out[key(tenantId, bizId)] = Object.assign({}, stateFor(states, tenantId, bizId), patch);
+      return out;
+    }
+    /** A request was sent (seq: a page-wide increasing number). A change locks the switch until it is settled. */
+    function begin(states, tenantId, bizId, isChange) {
+      var s = stateFor(states, tenantId, bizId), pending = s.pending + (isChange === true ? 1 : 0);
+      return withState(states, tenantId, bizId, { pending: pending, busy: pending > 0 });
+    }
+    /** A reply arrived for request `seq`. A confirmed reply is applied only when its version is not older than the confirmed
+     *  state; a failure is marked only when no later request of this business was already confirmed. */
+    function settle(states, decision, tenantId, bizId, seq, isChange) {
+      var s = stateFor(states, tenantId, bizId), n = Number.isSafeInteger(seq) ? seq : 0;
+      var pending = isChange === true ? Math.max(0, s.pending - 1) : s.pending;
+      var patch = { pending: pending, busy: pending > 0 };
+      if (isRecord(decision) && decision.kind === "known" && Number.isSafeInteger(decision.version)) {
+        if (s.kind !== "known" || decision.version >= s.version) {
+          patch.kind = "known"; patch.enabled = decision.enabled === true; patch.version = decision.version;
+          patch.okSeq = Math.max(s.okSeq, n);
+          if (s.failed && n > s.failSeq) patch.failed = false;
+        }
+      } else if (n > s.okSeq) {
+        patch.failed = true; patch.failSeq = Math.max(s.failSeq, n);
+      }
+      return withState(states, tenantId, bizId, patch);
+    }
+    /** The switch is ON only when the server confirmed enabled for this business. */
+    function checked(states, tenantId, bizId) { var s = stateFor(states, tenantId, bizId); return s.kind === "known" && s.enabled === true; }
+    window.MarjinDailySubscription = Object.freeze({ LABEL_HE: LABEL_HE, ERROR_HE: ERROR_HE, ENDPOINT: ENDPOINT, OWNER_ROLES: OWNER_ROLES, readRequest: readRequest,
+      setRequest: setRequest, shouldAsk: shouldAsk, decide: decide, stateFor: stateFor, begin: begin, settle: settle, checked: checked });
+  })();
+  </script>
+
+  <!-- app.html and app.js are GENERATED from index.html by tools/app-precompile/precompile.mjs — do not edit.
+       source index.html sha256 8c0a0c33d3abaafec7ef0d1e43b827f3aaa837c9bb2f641f06d672e60e576ea3; app.js sha256 2a20a654d83d697b88a828b7c26c02da9d8cc8f234e48e9f5e91ce2009402b60; @babel/standalone 7.23.6, presets ["react"]. -->
+  <script defer src="/app.js?v=2a20a654d83d"></script>
+</body>
+</html>

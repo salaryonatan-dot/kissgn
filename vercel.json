@@ -1,9 +1,9 @@
 {
   "rewrites": [
     { "source": "/", "destination": "/landing.html" },
-    { "source": "/app", "destination": "/index.html" },
+    { "source": "/app", "destination": "/app.html" },
     { "source": "/api/:path*", "destination": "/api/:path*" },
-    { "source": "/((?!api|_next|landing|index|favicon).*)", "destination": "/index.html" }
+    { "source": "/((?!api|_next|landing|index|favicon).*)", "destination": "/app.html" }
   ],
   "headers": [
     {

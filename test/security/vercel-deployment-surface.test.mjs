@@ -49,10 +49,10 @@ test("2 every top-level entry of the repository is classified (a new entry fails
 });
 
 test("3 browser runtime and deployment inputs are uploaded; the browser entry points are served statically", () => {
-  for (const f of ["index.html", "landing.html", "vercel.json", "package.json", "package-lock.json", "tsconfig.json"]) {
+  for (const f of ["index.html", "landing.html", "app.html", "app.js", "vercel.json", "package.json", "package-lock.json", "tsconfig.json"]) {
     assert.ok(keep(f), `${f} must be uploaded`);
   }
-  assert.ok(isStatic("index.html") && isStatic("landing.html"), "`/app` and `/` targets must be static");
+  assert.ok(isStatic("index.html") && isStatic("landing.html") && isStatic("app.html") && isStatic("app.js"), "`/app` and `/` targets must be static");
   const rewrites = JSON.parse(readFileSync(join(ROOT, "vercel.json"), "utf8")).rewrites;
   for (const r of rewrites) {
     if (r.destination.startsWith("/api/")) continue;
@@ -169,9 +169,9 @@ test("9 secrets, environment, credential, key, log, editor and Git files are exc
 test("10 served-static set after hardening is limited to: the HTML entry points, fincore, deployment JSON config and server source under src/ and lib/ (documented residual)", () => {
   const s = surface(FILES, TEXT);
   const servedTop = [...new Set(s.served.map(topOf))].sort();
-  const ALLOWED_SERVED = new Set(["index.html", "landing.html", "fincore", "lib", "src", "tsconfig.json", "vercel.json"]);
+  const ALLOWED_SERVED = new Set(["index.html", "landing.html", "app.html", "app.js", "fincore", "lib", "src", "tsconfig.json", "vercel.json"]); // app.html/app.js: precompiled page (tools/app-precompile)
   assert.deepEqual(servedTop.filter((t) => !ALLOWED_SERVED.has(t)), [], "only browser entry points, fincore, deployment JSON and server source may be static");
-  for (const t of ["index.html", "landing.html"]) assert.ok(servedTop.includes(t), `${t} must be served`);
+  for (const t of ["index.html", "landing.html", "app.html", "app.js"]) assert.ok(servedTop.includes(t), `${t} must be served`);
   // Before hardening (no .vercelignore) the same model serves every non-api file.
   const before = surface(FILES.filter((f) => f !== ".vercelignore"), null);
   for (const f of ["docs", "test", "artifacts", "tools", "scripts", "database.rules.json", "SECURITY.md", "admin.js"]) {

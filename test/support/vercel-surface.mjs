@@ -47,7 +47,7 @@ export const VERCEL_PLATFORM_FILES = Object.freeze([
  * input, allowed in .vercelignore) before it can ship.
  */
 export const TOP_LEVEL = Object.freeze({
-  PUBLIC_RUNTIME_REQUIRED: ["index.html", "landing.html", "fincore"],
+  PUBLIC_RUNTIME_REQUIRED: ["index.html", "landing.html", "app.html", "app.js", "fincore"], // app.html + app.js: generated from index.html by tools/app-precompile
   SERVER_BUNDLE_REQUIRED: ["api", "src", "lib"],
   DEPLOYMENT_METADATA_REQUIRED: ["vercel.json", "package.json", "package-lock.json", "tsconfig.json"],
   NOT_RUNTIME_REQUIRED: [

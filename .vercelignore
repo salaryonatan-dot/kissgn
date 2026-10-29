@@ -13,9 +13,13 @@
 /*
 
 # 2. … then re-allow the runtime inputs.
-# Browser runtime (served statically; `/` → landing.html, `/app` → index.html)
+# Browser runtime (served statically; `/` → landing.html, `/app` → app.html)
 !/index.html
 !/landing.html
+# Precompiled app page + code, GENERATED from index.html by tools/app-precompile (perf task #1);
+# `/app` and the catch-all rewrite serve app.html, which loads /app.js instead of compiling JSX in the browser.
+!/app.html
+!/app.js
 # Financial Core browser bundle (slice C1 loads /fincore/v1/**; absent until B1)
 !/fincore
 # Serverless functions and the modules they import (traced by @vercel/nft)
