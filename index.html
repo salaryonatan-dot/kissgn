@@ -1824,6 +1824,7 @@
       return {
         amount: total.value, complete: total.complete, partial: partial,
         text: money(F, total.value) + (partial && total.value !== null ? " · " + TXT.partial : ""),
+        amountText: money(F, total.value),   // FC-LABEL: the amount alone ("—" when unavailable) — the Food Cost display shows no completeness suffix
         missingDays: coverage ? coverage.missingDays.slice() : [], invalidDays: coverage ? coverage.invalidDays.slice() : [],
         partialDays: coverage ? coverage.partialDays.slice() : [], closedDays: coverage ? coverage.closedDays.slice() : [],
       };
@@ -8942,7 +8943,7 @@ function PilotDashboard() {
                   {/* קניות — פוד קוסט % */}
                   <div className="kpi-card kpi-card-link" onClick={()=>setScreen("foodcost")} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" ")setScreen("foodcost");}}>
                     <div className="kpi-label">קניות</div>
-                    <div data-c1="mtd-purchases" className={`kpi-val${foodBad?" s-bad":foodWarn?" s-warn":""}`}>{dv.purchases.text}</div>
+                    <div data-c1="mtd-purchases" className={`kpi-val${foodBad?" s-bad":foodWarn?" s-warn":""}`}>{dv.purchases.amountText}</div>
                     <div className="kpi-pct-badge" style={{color:foodBad?"#EF4444":foodWarn?"#F59E0B":"#64748B"}}>
                       פוד קוסט: <span data-c1="purchases-pct">{dv.purchasesPct.text}</span>
                       <span style={{color:"#CBD5E1",marginRight:4}}>יעד {dv.purchasesPct.goal.value}%</span>
@@ -9199,7 +9200,7 @@ function PilotDashboard() {
             return <>
             <div className="kpi-grid">
               <KPI label="קניות — פוד קוסט" value={fp.text} sub={`יעד ${goal}%`} status={fp.band==="bad"?"danger":fp.band==="warn"?"warn":null}/>
-              <KPI label="סה״כ רכש" value={finDash.purchases.text} sub={fp.text!=="—"?fp.text:null}/>
+              <KPI label="סה״כ רכש" value={finDash.purchases.amountText} sub={fp.text!=="—"?fp.text:null}/>
             </div>
             <div className="card card-p">
               <div className="flex jbet icenter" style={{marginBottom:12}}>

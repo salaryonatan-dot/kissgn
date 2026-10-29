@@ -1823,6 +1823,7 @@
       return {
         amount: total.value, complete: total.complete, partial: partial,
         text: money(F, total.value) + (partial && total.value !== null ? " · " + TXT.partial : ""),
+        amountText: money(F, total.value),   // FC-LABEL: the amount alone ("—" when unavailable) — the Food Cost display shows no completeness suffix
         missingDays: coverage ? coverage.missingDays.slice() : [], invalidDays: coverage ? coverage.invalidDays.slice() : [],
         partialDays: coverage ? coverage.partialDays.slice() : [], closedDays: coverage ? coverage.closedDays.slice() : [],
       };
@@ -2612,7 +2613,7 @@
   </script>
 
   <!-- app.html and app.js are GENERATED from index.html by tools/app-precompile/precompile.mjs — do not edit.
-       source index.html sha256 992a9b67cb18eaa65a30a15eaa00c568ceb8516d3d188e34b6db62b29e4260aa; app.js sha256 b1a4e7394950910f081a13b915195c9a34ea694f3b7a08154055fa71039c1c41; @babel/standalone 7.23.6, presets ["react"]. -->
-  <script defer src="/app.js?v=b1a4e7394950"></script>
+       source index.html sha256 edb0221e0d32118c0e3750691dc936a5a35329bd798cdd3f2b6c3bf2b772900d; app.js sha256 a5ae21e0b6c818dd4994a29888150d0ffdb857ab726f843b8e4e0acdfea60ccd; @babel/standalone 7.23.6, presets ["react"]. -->
+  <script defer src="/app.js?v=a5ae21e0b6c8"></script>
 </body>
 </html>
