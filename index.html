@@ -1880,7 +1880,24 @@
         var revenue = totalView(F, A.revenue, R.coverage.revenue);
         var salesPct = ratioValue(ratio(F, revenue.complete ? A.revenue.value : null, target));
         var fx = A.fixedAccrual;
-        var fixedRent = fx.state === "complete" ? sumAmounts(F, [fx.regular, fx.rentFixed, fx.rentPct]) : null;
+        // DASH-05 (keep the Dashboard useful with missing inputs): the core withholds the WHOLE fixed
+        // accrual when any revenue-linked charge (rent % / royalty %) cannot be computed, which hid the
+        // revenue-independent parts — regular fixed items and fixed rent — as soon as one revenue day
+        // was missing. When the core's only fixed-accrual issues are revenue issues (no configuration /
+        // allocation / calendar issue), those parts are re-read from the SAME core accrual function over
+        // the SAME timeline, window and closure calendar the report used (revenue only feeds rent % /
+        // royalty %, which stay "—"). Any other issue keeps the tile at "—" exactly as before.
+        var fxKnown = null;     // { regular, rentFixed } serialized amounts, or null
+        if (fx.state !== "complete" && Array.isArray(fx.issues) && fx.issues.length >= 1 && R.window.state === "actual"
+            && fx.issues.every(function (i) { return i && i.component === "revenue"; })) {
+          var acc = F.metrics.costTimeline.accrueWindow(P.productTimeline(inputs), bd.datesInRange(R.window.from, R.window.to), new Map(),
+            { asOfBusinessDate: inputs.asOfBusinessDate, closedDates: P.productClosureCalendar(inputs).closedDates });
+          if (acc.uncoveredDates.length === 0 && acc.allocation.aggregateDeterminable) fxKnown = { regular: D(F).serializeRat(acc.fixedRegular), rentFixed: D(F).serializeRat(acc.rentFixed) };
+        }
+        var cv = configView(F, inputs, asOf);
+        var fixedRentLinked = cv.rentMode === "pct";   // rent % is revenue-linked: the tile is then partial
+        var fixedRent = fx.state === "complete" ? sumAmounts(F, [fx.regular, fx.rentFixed, fx.rentPct]) : (fxKnown ? sumAmounts(F, [fxKnown.regular, fxKnown.rentFixed]) : null);
+        var fixedRentPartial = fx.state !== "complete" && fxKnown !== null && fixedRentLinked;
         var royalty = fx.state === "complete" ? fx.royaltyPct : null;
         var pp = proj.projection;
         var fRev = proj.forecast.projectedRevenue;
@@ -1894,15 +1911,14 @@
         // C1 R1 (finding 2): an absent optional other expense is the core's complete zero ONLY when
         // the core reports it complete; an invalid / partial one is unavailable ("—"), never 0.
         // Shares exist only when the core's operating result is complete (every component complete).
-        var cv = configView(F, inputs, asOf);
         var otherAmt = A.otherExpense.complete ? (A.otherExpense.value === null ? "0" : A.otherExpense.value) : null;
         var comps = [
           { key: "purchases", lbl: "רכש ספקים", amount: A.purchases.complete ? A.purchases.value : null, color: "#3B82F6", configured: true },
           { key: "labor", lbl: "עלות עובדים (עלות מעסיק)", amount: typedValue(A.labor.employerCost), color: "#818CF8", configured: true },
           { key: "royalty", lbl: "תמלוגים", amount: fx.state === "complete" ? fx.royaltyPct : null, color: "#A5B4FC", configured: cv.royaltyConfigured },
           { key: "rentPct", lbl: "שכ״ד (אחוזים)", amount: fx.state === "complete" ? fx.rentPct : null, color: "#BAC8F3", configured: cv.rentMode === "pct" },
-          { key: "rentFixed", lbl: "שכ״ד קבוע", amount: fx.state === "complete" ? fx.rentFixed : null, color: "#CBD5E1", configured: cv.rentMode === "fixed" },
-          { key: "fixed", lbl: "קבועות", amount: fx.state === "complete" ? fx.regular : null, color: "#D1D5DB", configured: cv.fixedItemsConfigured },
+          { key: "rentFixed", lbl: "שכ״ד קבוע", amount: fx.state === "complete" ? fx.rentFixed : (fxKnown ? fxKnown.rentFixed : null), color: "#CBD5E1", configured: cv.rentMode === "fixed" },
+          { key: "fixed", lbl: "קבועות", amount: fx.state === "complete" ? fx.regular : (fxKnown ? fxKnown.regular : null), color: "#D1D5DB", configured: cv.fixedItemsConfigured },
           { key: "other", lbl: "שונות", amount: otherAmt, color: "#E5E7EB", configured: otherAmt === null },
         ];
         var sharesAvailable = A.operatingProfit.state === "complete";
@@ -1938,7 +1954,11 @@
             empty: R.window.state !== "actual" || A.purchases.value === null },
           labor: { text: typedMoney(F, A.labor.employerCost), state: A.labor.employerCost.state, meaning: F.presenters.labels.LABELS.labor.meaning },
           laborPct: { text: pctText(F, A.labor.employerCostPct), band: band(F, A.labor.employerCostPct, goals.labor.value), goal: goals.labor },
-          fixedRent: { text: money(F, fixedRent), rentText: fx.state === "complete" ? money(F, sumAmounts(F, [fx.rentFixed, fx.rentPct])) : "—", hasRent: cv.rentMode !== "none" || (fx.state === "complete" && toNum(F, sumAmounts(F, [fx.rentFixed, fx.rentPct])) !== 0), pctText: pctText(F, revenue.complete ? ratio(F, fixedRent, A.revenue.value) : null), state: fx.state },
+          // DASH-05: a partial (fixed-rent-only, rent % pending revenue) tile carries the partial marker; the % of revenue needs complete revenue AND a complete accrual.
+          fixedRent: { text: money(F, fixedRent) + (fixedRentPartial && fixedRent !== null ? " · " + TXT.partial : ""), partial: fixedRentPartial,
+            rentText: fx.state === "complete" ? money(F, sumAmounts(F, [fx.rentFixed, fx.rentPct])) : (fxKnown && !fixedRentLinked ? money(F, fxKnown.rentFixed) : "—"),
+            hasRent: cv.rentMode !== "none" || (fx.state === "complete" && toNum(F, sumAmounts(F, [fx.rentFixed, fx.rentPct])) !== 0),
+            pctText: pctText(F, revenue.complete && fx.state === "complete" ? ratio(F, fixedRent, A.revenue.value) : null), state: fx.state },
           // C1 R1 (finding 5): the tile follows the configuration — a configured royalty with an
           // invalid rate shows "—"; only a known complete zero (or no royalty) hides it.
           royalty: { text: money(F, royalty), show: cv.royaltyConfigured || (royalty !== null && toNum(F, royalty) !== 0), pctText: pctText(F, revenue.complete ? ratio(F, royalty, A.revenue.value) : null) },
