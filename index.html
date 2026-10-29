@@ -6660,19 +6660,25 @@ function PilotDashboard() {
   const supplierResultOwnershipRef = useRef(null);
   if (!supplierResultOwnershipRef.current) supplierResultOwnershipRef.current = window.MarjinSaveLifecycle.createSupplierResultOwnership();
   // SUP-DRAFT (supplier amount entry fix): typing in a supplier cell edits a LOCAL draft keyed by
-  // business|supplier|date; the complete amount is committed ONCE, on blur or Enter, through the
-  // unchanged setSupPayDate lane. Before this, every keystroke was submitted as its own write and
+  // tenant|business|supplier|date; the complete amount is committed ONCE, on blur or Enter, through
+  // the unchanged setSupPayDate lane. Before this, every keystroke was submitted as its own write and
   // the controlled input showed the PERSISTED value, so on a date without a row "566" produced
   // three created rows ("5", "6", "6") and edits of an existing amount lost keystrokes. A draft
   // survives a failed commit (the typed value stays visible for a retry) and is dropped when the
-  // selection it was bound to is gone. `supCreateRef` remembers the id of a row this grid just
-  // CREATED for a date until the listener echo delivers it, so a second cell of the same date
-  // (another supplier) edits that row instead of creating a duplicate.
+  // selection it was bound to is gone. `supCreateRef` remembers (per tenant|business|date) the id of
+  // a row this grid just CREATED until the listener echo delivers it, so a second cell of the same
+  // date (another supplier) edits that row instead of creating a duplicate. SUP-DRAFT R2: every key
+  // is derived from the selection CAPTURED when the commit started, so a completion that lands after
+  // a tenant/business switch can only touch its own tenant's keys; a commit requested while the same
+  // cell's commit is in flight is QUEUED (supPendingRef) and run after settlement — with the latest
+  // render's closure and the rows the settled write produced as its base — never discarded.
   const [supDrafts, setSupDrafts] = useState({});
   const supDraftsRef = useRef({});
   const supCommittingRef = useRef({});
+  const supPendingRef = useRef({});
   const supCreateRef = useRef({});
-  const supDraftKey = (bizId, supId, date) => `${bizId}|${supId}|${window.MarjinEntries.entryDateKey(date)}`;
+  const supGridRef = useRef({ commitSupDraft: null });
+  const supDraftKey = (sel, supId, date) => `${sel ? sel.tenantId : null}|${sel ? sel.bizId : null}|${supId}|${window.MarjinEntries.entryDateKey(date)}`;
   const setSupDraft = (key, val) => { const next = { ...supDraftsRef.current, [key]: val }; supDraftsRef.current = next; setSupDrafts(next); };
   const clearSupDraft = (key) => { if (!(key in supDraftsRef.current)) return; const next = { ...supDraftsRef.current }; delete next[key]; supDraftsRef.current = next; setSupDrafts(next); };
   // R6: role port updated EVERY render — the once-created insight loader reads current
@@ -9173,25 +9179,31 @@ function PilotDashboard() {
               const e = entries.find(x=>x.date===date);
               return e?.supplier_payments?.[supId] || "";
             };
+            const supSel = captureSelectionCtx();   // SUP-DRAFT R2: draft keys shown by this render are the current selection's
             // R3: the supplier grid executes the PRODUCTION seam — canonical-
             // optimistic state only (never a raw map/append), revert on
             // persistence failure, selection-bound, and the exact persisted
             // canonical array is what React state receives.
-            const setSupPayDate = async (supId, date, val) => {
+            const setSupPayDate = async (supId, date, val, rowsHint) => {
               // R6: entries-ONLY through the ONE destination lane. The result mutates the
               // visible supplier error ONLY through the ownership wrapper, which requires
               // the component mounted, the captured selection still live, AND this
               // submission's token still current — so an OLD-selection or superseded
               // result can never set/clear the CURRENT selection's error surface.
-              const token = supplierResultOwnershipRef.current.begin(captureSelectionCtx());
+              const __sel = captureSelectionCtx();
+              const token = supplierResultOwnershipRef.current.begin(__sel);
               // R10: carry the row's stable id (when present) and the exact BASE value
               // the user edited from, so the remote transaction can detect a conflict.
+              // SUP-DRAFT R2: a queued re-commit passes the rows the settled write produced
+              // (rowsHint) so its identity and base are current even before React re-rendered.
               const __dateKey = window.MarjinEntries.entryDateKey(date);
-              const __row = entries.find(e => window.MarjinEntries.entryDateKey(e && e.date) === __dateKey) || null;
+              const __rows = Array.isArray(rowsHint) ? rowsHint : entries;
+              const __row = __rows.find(e => window.MarjinEntries.entryDateKey(e && e.date) === __dateKey) || null;
               const __base = __row && __row.supplier_payments ? __row.supplier_payments[supId] : undefined;
               // SUP-DRAFT: stable identity across quick successive cells of ONE date. A row this
               // grid created moments ago (echo not yet applied) is edited by its id, never recreated.
-              const __createKey = `${currentBizId}|${__dateKey}`;
+              // Keyed by the CAPTURED tenant|business|date, never by the current selection.
+              const __createKey = `${__sel ? __sel.tenantId : null}|${__sel ? __sel.bizId : null}|${__dateKey}`;
               let __targetId = __row && __row.id != null ? __row.id : undefined, __newId;
               if (__row) delete supCreateRef.current[__createKey];
               else if (supCreateRef.current[__createKey]) __targetId = supCreateRef.current[__createKey];
@@ -9212,21 +9224,33 @@ function PilotDashboard() {
             // SUP-DRAFT: commit a cell's draft exactly once (Enter and the blur that follows it
             // share one in-flight commit). An unchanged draft writes nothing. A failed commit keeps
             // the draft (typed value stays visible, error surface set by settle()) for a retry; a
-            // result for a superseded selection drops it.
-            const commitSupDraft = async (supId, date) => {
-              const key = supDraftKey(currentBizId, supId, date);
-              if (!(key in supDraftsRef.current) || supCommittingRef.current[key]) return;
+            // result for a superseded selection drops it. SUP-DRAFT R2: a commit requested while the
+            // cell's commit is in flight is queued and run once after settlement (latest closure,
+            // rows of the settled write as base), so an edit made during the flight is saved too.
+            const commitSupDraft = async (supId, date, rowsHint) => {
+              const sel = captureSelectionCtx();                       // every key below is bound to THIS selection
+              const key = supDraftKey(sel, supId, date);
+              if (!(key in supDraftsRef.current)) return;
+              if (supCommittingRef.current[key]) { supPendingRef.current[key] = true; return; }   // queued, never dropped
               const draft = supDraftsRef.current[key];
-              const persisted = getSupPay(supId, date);
+              const persistedRow = Array.isArray(rowsHint) ? rowsHint.find(x => x && x.date === date) : null;
+              const persisted = persistedRow ? ((persistedRow.supplier_payments || {})[supId] || "") : getSupPay(supId, date);
               if (String(draft) === String(persisted === 0 ? "0" : (persisted || ""))) { clearSupDraft(key); return; }
               supCommittingRef.current[key] = true;
               let res = null;
-              try { res = await setSupPayDate(supId, date, draft); } finally { delete supCommittingRef.current[key]; }
+              try { res = await setSupPayDate(supId, date, draft, rowsHint); } finally { delete supCommittingRef.current[key]; }
               const st = res && res.status;
               if (st === "committed" || st === "committed_idempotent" || st === "stale" || st === "cancelled_selection_changed") {
                 if (supDraftsRef.current[key] === draft) clearSupDraft(key);   // keep anything typed during the flight
               }
+              if (supPendingRef.current[key]) {
+                delete supPendingRef.current[key];
+                const hint = st === "committed" || st === "committed_idempotent" ? (Array.isArray(res.rows) ? res.rows : undefined) : undefined;
+                // after React has applied the settled rows: the LATEST render's commit (fresh entries/closure)
+                setTimeout(() => { const run = supGridRef.current.commitSupDraft; if (run && isSelectionLive(sel)) run(supId, date, hint); }, 0);
+              }
             };
+            supGridRef.current.commitSupDraft = commitSupDraft;
             // C1 (S-03/S-04/S-05/U-05): month totals, shares and the top supplier are fields of the
             // selected month's report (purchases.bySource — includes deleted suppliers and legacy
             // food_cost rows). The grid below stays the operational first-row editor (S-06).
@@ -9380,7 +9404,7 @@ function PilotDashboard() {
                           {renderDays.map(({day,date,dow,unplanned})=>{
                             const val=getSupPay(sup.id,date);
                             const paid=Number(val)>0;
-                            const dkey=supDraftKey(currentBizId,sup.id,date);
+                            const dkey=supDraftKey(supSel,sup.id,date);
                             const shown=(dkey in supDrafts)?supDrafts[dkey]:(val==="0"||val===0?"":val||"");   // SUP-DRAFT: local draft while typing
                             return (
                               <div key={date} style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
