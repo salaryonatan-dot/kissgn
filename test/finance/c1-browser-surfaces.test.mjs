@@ -186,13 +186,14 @@ test("C1-L03 the boolean merged exception map is never the core input: a legacy-
 });
 
 // ═══ closed / missing / zero / contradiction ═══════════════════════════════════════════════
-test("C1-D01 a structured closure is a known zero (not missing); a missing day is named in the red disclosure; an operating ₪0 day is present", () => {
+test("C1-D01 a structured closure is a known zero (not missing); a missing day is exposed on the model but is NOT a red warning (MRW-8); an operating ₪0 day is present", () => {
   const rows = SEP_COMPLETED.filter((d) => d !== "2026-09-04" && d !== "2026-09-07").map((d) => fullDay(d));
   rows[0] = fullDay("2026-09-01", { sales: "0", deliveries: "0", other_income: "0" });               // operating zero-revenue day
   const src = browserSrc({ rows, exceptions: { "2026-09-07": closure() } });
   const dv = C.dashboard(F, src, { nowMs: INV_NOW_MS, lastYearSales: null });
-  assert.ok(dv.disclosure.warning.includes("חסרות הכנסות בימים: 04.09"));
-  assert.ok(!dv.disclosure.warning.includes("07.09"), "the closure is not missing");
+  assert.deepEqual(dv.disclosure.missingDays, ["2026-09-04"], "the missing day is still known to the model");
+  assert.equal(dv.disclosure.warning, "", "MRW-8: a missing revenue day alone is a normal incomplete-data state, not a warning");
+  assert.ok(!dv.disclosure.missingDays.includes("2026-09-07"), "the closure is not missing");
   assert.equal(dv.disclosure.closures, "יום סגור (הכנסה 0, לא חסר): 07.09");
   assert.ok(dv.revenue.text.endsWith("· חלקי"), "partial marker");
   const h = C.history(F, src, month);

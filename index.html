@@ -1835,7 +1835,9 @@
     /** CDA-18: the text directly below MTD revenue (exact dates, never colour only). Same wording as B2. */
     function revenueDisclosure(report) {
       var c = report.coverage.revenue, contra = contradictions(report), parts = [];
-      if (c.missingDays.length) parts.push(TXT.missingRevenue + dateList(c.missingDays));
+      // MRW-8: days with no revenue entry are a normal incomplete-data state; they are already reflected by
+      // "—" / "חלקי" on the values and are NOT a warning. The red disclosure is kept for invalid / partial
+      // cells and closed-day contradictions only. missingDays stays exposed on the model for callers.
       var invalid = c.invalidDays.filter(function (d) { return contra.indexOf(d) === -1; });
       if (invalid.length) parts.push(TXT.invalidRevenue + dateList(invalid));
       if (c.partialDays.length) parts.push(TXT.partialRevenue + dateList(c.partialDays));
@@ -1921,7 +1923,7 @@
         var fRev = proj.forecast.projectedRevenue;
         var projectedLabor = pp ? sumAmounts(F, [pp.hourlyLabor, pp.globalEmployerCost]) : null;
         var forecastNotes = [];
-        var fdates = proj.forecast.missingRevenueDates.concat(proj.forecast.invalidRevenueDates).sort();
+        var fdates = proj.forecast.invalidRevenueDates.slice().sort();   // MRW-8: missing days are not a warning
         if (fdates.length) forecastNotes.push(TXT.forecastPartial + dateList(fdates));
         if (fRev === null) forecastNotes.push(TXT.forecastInsufficient);
         // D-13 breakdown: one row per canonical component, rent counted once (VD-35); shares
@@ -9360,7 +9362,7 @@ function PilotDashboard() {
                     )}
                     {sv.disclosure.incomplete&&<div data-c1="sup-credits-incomplete" style={{fontSize:11,color:"#DC2626",marginTop:6}}>{sv.disclosure.incomplete}</div>}
                     {sv.disclosure.negative&&<div data-c1="sup-net-negative" style={{fontSize:11,color:"#B45309",marginTop:6}}>{sv.disclosure.negative}</div>}
-                    {sv.revenue.partial&&<div style={{fontSize:11,color:"#DC2626",marginTop:6}}>{window.MarjinC1.revenueDisclosure(sv.report).warning}</div>}
+                    {sv.revenue.partial&&window.MarjinC1.revenueDisclosure(sv.report).warning&&<div data-c1="revenue-warning" style={{fontSize:11,color:"#DC2626",marginTop:6}}>{window.MarjinC1.revenueDisclosure(sv.report).warning}</div>}
                   </div>
                 )}
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,background:"#FFFFFF",borderRadius:8,padding:"10px 16px",border:"1px solid #E5E7EB"}}>
