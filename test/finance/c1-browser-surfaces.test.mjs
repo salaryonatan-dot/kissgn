@@ -175,6 +175,27 @@ test("C1-L02 loadLedger: structured records only (legacy / ambiguous dropped), r
   assert.equal(none.state, "absent");
 });
 
+test("PUR-1 loadLedger requests every chunk before any answer arrives; out-of-order answers merge; one bad / failed chunk or a stale selection still wins", async () => {
+  const rec = { "2025-10-05": { source: "structured", status: "active", reasonCode: "closure" }, "2026-09-07": { source: "structured", status: "active", reasonCode: "closure" } };
+  const body = (f, t) => ({ ok: true, fromDate: f, toDate: t, exceptions: Object.fromEntries(Object.entries(rec).filter(([d]) => d >= f && d <= t)) });
+  const ch = C.ledgerChunks(F, "2025-09-01", "2026-09-30"); assert.equal(ch.length, 2);
+  const pend = []; const io = { fetchChunk: (f, t) => new Promise((res, rej) => pend.push({ f, t, res, rej })) };
+  const p = C.loadLedger(F, io, "2025-09-01", "2026-09-30");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(pend.map((x) => [x.f, x.t]), JSON.parse(JSON.stringify(ch.map((c) => [c.from, c.to]))), "both chunks requested together, in range order");
+  pend[1].res(body(pend[1].f, pend[1].t)); pend[0].res(body(pend[0].f, pend[0].t));   // second answers first
+  const ok = await p;
+  assert.equal(ok.state, "present"); assert.equal(ok.chunks, 2);
+  assert.deepEqual(Object.keys(ok.states).sort(), ["2025-10-05", "2026-09-07"]);
+  const swapped = await C.loadLedger(F, { fetchChunk: async (f, t) => body(f === ch[0].from ? ch[1].from : ch[0].from, f === ch[0].from ? ch[1].to : ch[0].to) }, "2025-09-01", "2026-09-30");
+  assert.equal(swapped.state, "unreadable"); assert.equal(swapped.reason, "ledger_range_mismatch", "each answer is still checked against ITS chunk");
+  const failed = await C.loadLedger(F, { fetchChunk: async (f, t) => { if (f === ch[1].from) throw new Error("http_500"); return body(f, t); } }, "2025-09-01", "2026-09-30");
+  assert.equal(failed.state, "unreadable"); assert.equal(failed.reason, "read_failed");
+  let live = true; const late = []; const pl = C.loadLedger(F, { isLive: () => live, fetchChunk: (f, t) => new Promise((res) => late.push(() => res(body(f, t)))) }, "2025-09-01", "2026-09-30");
+  await new Promise((r) => setTimeout(r, 0)); live = false; late.forEach((go) => go());
+  assert.equal((await pl).state, "stale", "a selection change while chunks are in flight is never applied");
+});
+
 test("C1-L03 the boolean merged exception map is never the core input: a legacy-only active exception is not a closure unless the core's own legacy rule applies", () => {
   const rows = [fullDay("2026-09-01"), fullDay("2026-09-02", { sales: "0", deliveries: "0", other_income: "0", is_exception: true, exception_reason: "closure" })];
   const src = browserSrc({ rows });

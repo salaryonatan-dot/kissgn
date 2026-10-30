@@ -1683,15 +1683,19 @@
      * "unreadable" (never a partial calendar, never "no closures").
      */
     function loadLedger(F, io, from, to) {
-      var chunks = ledgerChunks(F, from, to), states = {}, i = 0;
-      function next() {
+      var chunks = ledgerChunks(F, from, to), states = {};
+      if (io.isLive && !io.isLive()) return Promise.resolve({ state: "stale" });
+      // PUR-1: the chunks are independent reads of disjoint ranges, so they are requested together
+      // (one round trip instead of one per chunk). Nothing else changes: every chunk must succeed,
+      // each response is checked against ITS OWN range / scope / record shape before anything is
+      // merged, and a stale selection still wins over a late answer.
+      var fetches = chunks.map(function (c) {
+        return Promise.resolve().then(function () { return io.fetchChunk(c.from, c.to, io.signal); });
+      });
+      return Promise.all(fetches).then(function (bodies) {
         if (io.isLive && !io.isLive()) return { state: "stale" };
-        if (i >= chunks.length) {
-          return { state: Object.keys(states).length ? "present" : "absent", states: states, from: from, to: to, chunks: chunks.length };
-        }
-        var c = chunks[i++];
-        return Promise.resolve(io.fetchChunk(c.from, c.to, io.signal)).then(function (body) {
-          if (io.isLive && !io.isLive()) return { state: "stale" };
+        for (var k = 0; k < chunks.length; k++) {
+          var c = chunks[k], body = bodies[k];
           if (!body || body.ok !== true || !body.exceptions || typeof body.exceptions !== "object" || Array.isArray(body.exceptions)) return { state: "unreadable", reason: "ledger_shape", from: from, to: to };
           // C1 R1: the response must answer THIS chunk's range, and every record must be well formed
           if (body.fromDate !== c.from || body.toDate !== c.to) return { state: "unreadable", reason: "ledger_range_mismatch", from: from, to: to };
@@ -1703,10 +1707,9 @@
           if (badRecord) return { state: "unreadable", reason: "ledger_record_shape", from: from, to: to };
           var got = structuredStates(body.exceptions);
           Object.keys(got).forEach(function (d) { if (d >= c.from && d <= c.to) states[d] = got[d]; });
-          return next();
-        });
-      }
-      return Promise.resolve().then(next).catch(function () { return { state: "unreadable", reason: "read_failed", from: from, to: to }; });
+        }
+        return { state: Object.keys(states).length ? "present" : "absent", states: states, from: from, to: to, chunks: chunks.length };
+      }).catch(function () { return { state: "unreadable", reason: "read_failed", from: from, to: to }; });
     }
     /**
      * C1 R1 (finding 6): a loaded ledger is valid ONLY for the exact input state it was requested
