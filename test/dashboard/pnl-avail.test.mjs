@@ -62,7 +62,7 @@ test("PNL-AVAIL-02 partial revenue (Arkafe shape): recorded revenue, net purchas
   assert.equal(p.rows.purchases.shareText, "35.2%");
   assert.deepEqual([...p.available.missing], []);
   assert.match(p.available.basisText, /23\/28 ימי הכנסה, 27\/28 ימי קניות, 27\/28 ימי עלות עובדים שעתית/);
-  assert.match(p.available.basisText, /יתרה לפי הנתונים שהוזנו, לא רווח נקי סופי/);
+  assert.match(p.available.basisText, /יתרה לפי הנתונים שהוזנו ואינה רווח נקי\./); assert.doesNotMatch(p.available.basisText, /אינה כוללת/, "nothing excluded");
   assert.equal(p.gross.text, "—", "VD-50 gross profit stays complete-only");
   assert.equal(p.rows.net.deltaText, "—", "no comparison of a partial month");
   assert.equal(p.disclosure.warning, "", "missing days are not a warning");
@@ -73,7 +73,7 @@ test("PNL-AVAIL-03 partial expenses: no hourly labor recorded ⇒ labor '—' (s
   assert.equal(p.rows.labor.text, "—"); assert.equal(p.rows.labor.amount, null); assert.equal(p.laborPct.text, "—");
   assert.equal(p.rows.purchases.amount, "8400"); assert.equal(p.rows.revenue.text, "₪28,000");
   assert.deepEqual([...p.available.missing], ["labor"]);
-  assert.match(p.available.basisText, /לא נכללו \(לא הוזנו\): עלות עובדים/);
+  assert.match(p.available.basisText, /ואינה רווח נקי\. היתרה אינה כוללת: עלות עובדים \(לא הוזנו נתונים\)\./);
   assert.ok(p.rows.net.amount !== null); assert.equal(p.netLabel, "יתרה לפי הנתונים שהוזנו");
   // some hourly days recorded: labor = recorded hourly + salaried accrual
   const q = pnl(src(DAYS.map((d, i) => day(d, i < 10 ? {} : { payroll: "" }))));
@@ -102,6 +102,7 @@ test("PNL-AVAIL-06 no revenue recorded: costs shown, ratios and balance '—'", 
   const p = pnl(src(DAYS.slice(0, 20).map((d) => day(d, noRev))));
   assert.equal(p.rows.revenue.text, "—"); assert.equal(p.rows.purchases.amount, "6000");
   assert.equal(p.rows.net.text, "—"); assert.equal(p.netPct.text, "—"); assert.equal(p.purchasesPct.text, "—");
+  assert.equal(p.rows.royalty.text, "—", "a royalty on no recorded revenue is not a known ₪0");
 });
 
 test("PNL-AVAIL-07 malformed data stays distinct from missing: invalid cell / invalid or unreviewed credits / contradiction ⇒ that line '—', no balance, basis says why", () => {

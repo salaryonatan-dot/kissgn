@@ -1936,9 +1936,15 @@
         }
         var cv = configView(F, inputs, asOf);
         var fixedRentLinked = cv.rentMode === "pct";   // rent % is revenue-linked: the tile is then partial
-        var fixedRent = fx.state === "complete" ? sumAmounts(F, [fx.regular, fx.rentFixed, fx.rentPct]) : (fxKnown ? sumAmounts(F, [fxKnown.regular, fxKnown.rentFixed]) : null);
-        var fixedRentPartial = fx.state !== "complete" && fxKnown !== null && fixedRentLinked;
-        var royalty = fx.state === "complete" ? fx.royaltyPct : null;
+        // AVAIL-ACCRUAL (aligned with the P&L): with only missing revenue days, rent % and royalty % are the
+        // core's accrual on the RECORDED revenue — the same helper, rates, window and basis as the P&L.
+        // The DASH-05 fallback (regular + fixed rent, rent % pending) remains for the cases it cannot cover.
+        var fxRec = fx.state === "complete" ? null : recordedAccrual(F, inputs, R);
+        var fixedRent = fx.state === "complete" ? sumAmounts(F, [fx.regular, fx.rentFixed, fx.rentPct]) : fxRec ? fxRec.fixedRent : (fxKnown ? sumAmounts(F, [fxKnown.regular, fxKnown.rentFixed]) : null);
+        var fixedRentPartial = fx.state !== "complete" && fxRec === null && fxKnown !== null && fixedRentLinked;
+        var royalty = fx.state === "complete" ? fx.royaltyPct : fxRec ? fxRec.royaltyPct : null;
+        var recRev = fxRec ? A.revenue.value : null;
+        var accrualBasisText = fxRec ? TXT.fcRecordedBasis + "שכ״ד ותמלוגים באחוזים לפי ההכנסות שהוזנו (" + R.coverage.revenue.presentDays + "/" + R.coverage.revenue.expectedDays + " ימי הכנסה)" : null;
         var pp = proj.projection;
         var fRev = proj.forecast.projectedRevenue;
         var projectedLabor = pp ? sumAmounts(F, [pp.hourlyLabor, pp.globalEmployerCost]) : null;
@@ -1955,10 +1961,10 @@
         var comps = [
           { key: "purchases", lbl: "רכש ספקים", amount: A.purchases.complete ? A.purchases.value : null, color: "#3B82F6", configured: true },
           { key: "labor", lbl: "עלות עובדים (עלות מעסיק)", amount: typedValue(A.labor.employerCost), color: "#818CF8", configured: true },
-          { key: "royalty", lbl: "תמלוגים", amount: fx.state === "complete" ? fx.royaltyPct : null, color: "#A5B4FC", configured: cv.royaltyConfigured },
-          { key: "rentPct", lbl: "שכ״ד (אחוזים)", amount: fx.state === "complete" ? fx.rentPct : null, color: "#BAC8F3", configured: cv.rentMode === "pct" },
-          { key: "rentFixed", lbl: "שכ״ד קבוע", amount: fx.state === "complete" ? fx.rentFixed : (fxKnown ? fxKnown.rentFixed : null), color: "#CBD5E1", configured: cv.rentMode === "fixed" },
-          { key: "fixed", lbl: "קבועות", amount: fx.state === "complete" ? fx.regular : (fxKnown ? fxKnown.regular : null), color: "#D1D5DB", configured: cv.fixedItemsConfigured },
+          { key: "royalty", lbl: "תמלוגים", amount: fx.state === "complete" ? fx.royaltyPct : (fxRec ? fxRec.royaltyPct : null), color: "#A5B4FC", configured: cv.royaltyConfigured },
+          { key: "rentPct", lbl: "שכ״ד (אחוזים)", amount: fx.state === "complete" ? fx.rentPct : (fxRec ? fxRec.rentPct : null), color: "#BAC8F3", configured: cv.rentMode === "pct" },
+          { key: "rentFixed", lbl: "שכ״ד קבוע", amount: fx.state === "complete" ? fx.rentFixed : (fxRec ? fxRec.rentFixed : (fxKnown ? fxKnown.rentFixed : null)), color: "#CBD5E1", configured: cv.rentMode === "fixed" },
+          { key: "fixed", lbl: "קבועות", amount: fx.state === "complete" ? fx.regular : (fxRec ? fxRec.regular : (fxKnown ? fxKnown.regular : null)), color: "#D1D5DB", configured: cv.fixedItemsConfigured },
           { key: "other", lbl: "שונות", amount: otherAmt, color: "#E5E7EB", configured: otherAmt === null },
         ];
         var sharesAvailable = A.operatingProfit.state === "complete";
@@ -2000,12 +2006,14 @@
           laborPct: { text: pctText(F, A.labor.employerCostPct), band: band(F, A.labor.employerCostPct, goals.labor.value), goal: goals.labor },
           // DASH-05: a partial (fixed-rent-only, rent % pending revenue) tile carries the partial marker; the % of revenue needs complete revenue AND a complete accrual.
           fixedRent: { text: money(F, fixedRent) + (fixedRentPartial && fixedRent !== null ? " · " + TXT.partial : ""), partial: fixedRentPartial,
-            rentText: fx.state === "complete" ? money(F, sumAmounts(F, [fx.rentFixed, fx.rentPct])) : (fxKnown && !fixedRentLinked ? money(F, fxKnown.rentFixed) : "—"),
+            rentText: fx.state === "complete" ? money(F, sumAmounts(F, [fx.rentFixed, fx.rentPct])) : fxRec ? money(F, sumAmounts(F, [fxRec.rentFixed, fxRec.rentPct])) : (fxKnown && !fixedRentLinked ? money(F, fxKnown.rentFixed) : "—"),
             hasRent: cv.rentMode !== "none" || (fx.state === "complete" && toNum(F, sumAmounts(F, [fx.rentFixed, fx.rentPct])) !== 0),
-            pctText: pctText(F, revenue.complete && fx.state === "complete" ? ratio(F, fixedRent, A.revenue.value) : null), state: fx.state },
+            pctText: pctText(F, revenue.complete && fx.state === "complete" ? ratio(F, fixedRent, A.revenue.value) : fxRec ? ratio(F, fixedRent, recRev) : null), state: fx.state,
+            basisText: accrualBasisText },
           // C1 R1 (finding 5): the tile follows the configuration — a configured royalty with an
           // invalid rate shows "—"; only a known complete zero (or no royalty) hides it.
-          royalty: { text: money(F, royalty), show: cv.royaltyConfigured || (royalty !== null && toNum(F, royalty) !== 0), pctText: pctText(F, revenue.complete ? ratio(F, royalty, A.revenue.value) : null) },
+          royalty: { text: money(F, royalty), show: cv.royaltyConfigured || (royalty !== null && toNum(F, royalty) !== 0), pctText: pctText(F, revenue.complete ? ratio(F, royalty, A.revenue.value) : fxRec ? ratio(F, royalty, recRev) : null),
+            basisText: fxRec && cv.royaltyConfigured ? accrualBasisText : null },
           forecast: { text: money(F, fRev), amount: fRev, state: proj.forecast.state, notes: forecastNotes, formulaId: proj.forecast.formulaId },
           projectedPurchases: money(F, pp ? pp.purchases : null),
           projectedLabor: money(F, projectedLabor),
@@ -2054,6 +2062,32 @@
       };
     }
     /**
+     * AVAIL-ACCRUAL (shared by the P&L and the Dashboard): the fixed-cost / rent / royalty accrual of an
+     * incomplete Actual window whose ONLY fixed-accrual issue is missing revenue days. It is the core's
+     * own accrual function (costTimeline.accrueWindow) over the same timeline, window dates and closure
+     * calendar the report used, with the recorded revenue of each date — exactly the computation the
+     * core performs and withholds because revenue days are missing. Configured rates come from the
+     * cost timeline; nothing is hardcoded. null when revenue is invalid / partial / contradicted, when
+     * no revenue is recorded at all (a charge on nothing recorded is not a known zero), or when any
+     * non-revenue accrual issue exists.
+     */
+    function recordedAccrual(F, inputs, R) {
+      var fx = R.actual.fixedAccrual, P = F.product, cov = R.coverage.revenue;
+      if (fx.state === "complete" || R.window.state !== "actual" || R.actual.revenue.value === null) return null;
+      if (cov.invalidDays.length > 0 || cov.partialDays.length > 0 || contradictions(R).length > 0) return null;
+      if (!Array.isArray(fx.issues) || fx.issues.length < 1 || !fx.issues.every(function (i) { return i && i.component === "revenue"; })) return null;
+      var rm = new Map();
+      P.productDays(inputs, { from: R.window.from, to: R.window.to }).days.forEach(function (d) {
+        if (d.revenue.presence === "present" && d.revenue.value !== null) rm.set(d.date, D(F).ratFromDec(d.revenue.value));
+      });
+      var a = F.metrics.costTimeline.accrueWindow(P.productTimeline(inputs), F.finance.businessDate.datesInRange(R.window.from, R.window.to), rm,
+        { asOfBusinessDate: R.window.asOfBusinessDate, closedDates: P.productClosureCalendar(inputs).closedDates });
+      if (a.uncoveredDates.length !== 0 || !a.allocation.aggregateDeterminable) return null;
+      var ser = function (r) { return D(F).serializeRat(r); };
+      return { regular: ser(a.fixedRegular), rentFixed: ser(a.rentFixed), rentPct: ser(a.rentPct), royaltyPct: ser(a.royaltyPct),
+        fixedRent: ser(D(F).ratAdd(D(F).ratAdd(a.fixedRegular, a.rentFixed), a.rentPct)) };
+    }
+    /**
      * PNL-AVAIL (available-data P&L): when the month's operating profit is not complete, the P&L keeps
      * every VALID recorded amount instead of hiding it. Per component: "known" (a recorded amount),
      * "missing" (nothing recorded — never shown as 0, named in the basis) or "invalid" (malformed /
@@ -2086,14 +2120,7 @@
       // fixed + rent, royalty
       var acc = null;
       if (fx.state === "complete") acc = { fixedRent: sumAmounts(F, [fx.regular, fx.rentFixed, fx.rentPct]), royalty: fx.royaltyPct };
-      else if (revValid && Array.isArray(fx.issues) && fx.issues.length >= 1 && fx.issues.every(function (i) { return i && i.component === "revenue"; }) && R.window.state === "actual") {
-        var days = P.productDays(inputs, { from: R.window.from, to: R.window.to }).days, rm = new Map();
-        days.forEach(function (d) { if (d.revenue.presence === "present" && d.revenue.value !== null) rm.set(d.date, D(F).ratFromDec(d.revenue.value)); });
-        var a = F.metrics.costTimeline.accrueWindow(P.productTimeline(inputs), F.finance.businessDate.datesInRange(R.window.from, R.window.to), rm,
-          { asOfBusinessDate: R.window.asOfBusinessDate, closedDates: P.productClosureCalendar(inputs).closedDates });
-        if (a.uncoveredDates.length === 0 && a.allocation.aggregateDeterminable)
-          acc = { fixedRent: D(F).serializeRat(D(F).ratAdd(D(F).ratAdd(a.fixedRegular, a.rentFixed), a.rentPct)), royalty: D(F).serializeRat(a.royaltyPct) };
-      }
+      else { var ra = revValid ? recordedAccrual(F, inputs, R) : null; if (ra) acc = { fixedRent: ra.fixedRent, royalty: ra.royaltyPct }; }
       var fxInvalid = fx.state === "invalid_components";
       comp.fixedRent = acc ? { state: "known", amount: acc.fixedRent } : { state: fxInvalid ? "invalid" : "missing" };
       comp.royalty = acc ? { state: "known", amount: acc.royalty } : { state: fxInvalid ? "invalid" : "missing" };
@@ -2108,7 +2135,7 @@
       var LBL = { purchases: "קניות", labor: "עלות עובדים", other: "הוצאות אחרות", fixedRent: "קבועות + שכ״ד", royalty: "תמלוגים" };
       var cnt = function (c) { return c.presentDays + "/" + c.expectedDays; };
       var basis = TXT.fcRecordedBasis + cnt(cov.revenue) + " ימי הכנסה, " + cnt(cov.purchases) + " ימי קניות, " + cnt(cov.hourlyLabor) + " ימי עלות עובדים שעתית."
-        + (balance !== null ? " השורה התחתונה היא יתרה לפי הנתונים שהוזנו, לא רווח נקי סופי" + (missing.length ? " — לא נכללו (לא הוזנו): " + missing.map(function (k) { return LBL[k]; }).join(", ") : "") + "." : "")
+        + (balance !== null ? " השורה התחתונה היא יתרה לפי הנתונים שהוזנו ואינה רווח נקי." + (missing.length ? " היתרה אינה כוללת: " + missing.map(function (k) { return LBL[k]; }).join(", ") + " (לא הוזנו נתונים)." : "") : "")
         + (acc && fx.state !== "complete" ? " אחוזי שכ״ד ותמלוגים לפי ההכנסות שהוזנו." : "")
         + (anyInvalid ? " " + TXT.pnlInvalidNoBalance : "");
       return { revenue: rev, comp: comp, balance: balance, missing: missing, anyInvalid: anyInvalid, basisText: basis };
@@ -2718,7 +2745,7 @@
   </script>
 
   <!-- app.html and app.js are GENERATED from index.html by tools/app-precompile/precompile.mjs — do not edit.
-       source index.html sha256 5822b930573504511ddf0eb21a291bb51343ae9d90f073e22d05626deacb01f2; app.js sha256 e37fe626744799886e8168a4482e87fc4bf088bbf91ba479ed5b71d3934527df; @babel/standalone 7.23.6, presets ["react"]. -->
-  <script defer src="/app.js?v=e37fe6267447"></script>
+       source index.html sha256 8795751cf83e58c76060d23aec1cdd9656cb4d4d3dae0f3239ffb3e7dc1400f5; app.js sha256 093d09daa8b557d0396bbaf7f22d3d6a2760052c5bfecb9d475bde4fdf9f220e; @babel/standalone 7.23.6, presets ["react"]. -->
+  <script defer src="/app.js?v=093d09daa8b5"></script>
 </body>
 </html>
