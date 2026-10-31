@@ -1975,7 +1975,12 @@
         // Shares exist only when the core's operating result is complete (every component complete).
         var otherAmt = A.otherExpense.complete ? (A.otherExpense.value === null ? "0" : A.otherExpense.value) : null;
         var comps = [
-          { key: "purchases", lbl: "רכש ספקים", amount: A.purchases.complete ? A.purchases.value : null, color: "#3B82F6", configured: true },
+          // BD-PURCHASES: like the P&L purchases line (PNL-AVAIL), the breakdown shows the recorded NET purchases
+          // (credits applied by the core) when only missing days stand in the way; invalid / partial cells or an
+          // invalid / unreviewed credit source keep "—". A complete month is unchanged; shares stay complete-only.
+          { key: "purchases", lbl: "רכש ספקים", amount: A.purchases.complete ? A.purchases.value
+              : (R.coverage.purchases.invalidDays.length < 1 && R.coverage.purchases.partialDays.length < 1 && !(A.purchases.credits && A.purchases.credits.state === "invalid") ? A.purchases.value : null),
+            color: "#3B82F6", configured: true },
           { key: "labor", lbl: "עלות עובדים (עלות מעסיק)", amount: typedValue(A.labor.employerCost), color: "#818CF8", configured: true },
           { key: "royalty", lbl: "תמלוגים", amount: fx.state === "complete" ? fx.royaltyPct : (fxRec ? fxRec.royaltyPct : null), color: "#A5B4FC", configured: cv.royaltyConfigured },
           { key: "rentPct", lbl: "שכ״ד (אחוזים)", amount: fx.state === "complete" ? fx.rentPct : (fxRec ? fxRec.rentPct : null), color: "#BAC8F3", configured: cv.rentMode === "pct" },

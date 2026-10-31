@@ -1974,7 +1974,12 @@
         // Shares exist only when the core's operating result is complete (every component complete).
         var otherAmt = A.otherExpense.complete ? (A.otherExpense.value === null ? "0" : A.otherExpense.value) : null;
         var comps = [
-          { key: "purchases", lbl: "רכש ספקים", amount: A.purchases.complete ? A.purchases.value : null, color: "#3B82F6", configured: true },
+          // BD-PURCHASES: like the P&L purchases line (PNL-AVAIL), the breakdown shows the recorded NET purchases
+          // (credits applied by the core) when only missing days stand in the way; invalid / partial cells or an
+          // invalid / unreviewed credit source keep "—". A complete month is unchanged; shares stay complete-only.
+          { key: "purchases", lbl: "רכש ספקים", amount: A.purchases.complete ? A.purchases.value
+              : (R.coverage.purchases.invalidDays.length < 1 && R.coverage.purchases.partialDays.length < 1 && !(A.purchases.credits && A.purchases.credits.state === "invalid") ? A.purchases.value : null),
+            color: "#3B82F6", configured: true },
           { key: "labor", lbl: "עלות עובדים (עלות מעסיק)", amount: typedValue(A.labor.employerCost), color: "#818CF8", configured: true },
           { key: "royalty", lbl: "תמלוגים", amount: fx.state === "complete" ? fx.royaltyPct : (fxRec ? fxRec.royaltyPct : null), color: "#A5B4FC", configured: cv.royaltyConfigured },
           { key: "rentPct", lbl: "שכ״ד (אחוזים)", amount: fx.state === "complete" ? fx.rentPct : (fxRec ? fxRec.rentPct : null), color: "#BAC8F3", configured: cv.rentMode === "pct" },
@@ -2760,7 +2765,7 @@
   </script>
 
   <!-- app.html and app.js are GENERATED from index.html by tools/app-precompile/precompile.mjs — do not edit.
-       source index.html sha256 c0eccaf63e8f632e78b75d500e5351c99300d78ee476b0303fc18fe03fff5825; app.js sha256 074c289f8a901560403957d48d44d670b418a8920c63adc9c4646664bf26623a; @babel/standalone 7.23.6, presets ["react"]. -->
+       source index.html sha256 568dd79c5791fb4ffe39c8b5aaadb1136e459877f62e9c52634c24f75bc42df9; app.js sha256 074c289f8a901560403957d48d44d670b418a8920c63adc9c4646664bf26623a; @babel/standalone 7.23.6, presets ["react"]. -->
   <script defer src="/app.js?v=074c289f8a90"></script>
 </body>
 </html>
