@@ -3497,6 +3497,10 @@ function describeSaveOutcome(outcome, partialException) {
   if (detail === "id_collision" || reason === "id_collision") {
     return "מזהה הרשומה כבר קיים עם תוכן שונה. רענן את המסך ונסה שוב — לא בוצע שינוי ומידע קיים לא נדרס.";
   }
+  // DAILY-1: the daily form refused to add a second record for a date that already has one.
+  if (reason === "date_exists" || detail === "date_exists") {
+    return "לתאריך זה כבר קיימת רשומה. פתח את היום מחדש (הנתונים הקיימים ייטענו לטופס) ושמור שוב — השינוי שלך לא נשמר.";
+  }
   // R10-GATE-014: duplicate business date. The call site refuses rather than guessing
   // which of the rows the operator meant; say so precisely instead of falling through
   // to the catch-all `blocked` text. Same wording as the delete call site already uses.
@@ -3698,7 +3702,19 @@ async function executeEntrySave(io) {
   // snapshot of the whole history. Only fields the user actually changed are patched,
   // so a concurrent food-cost edit on the same row survives.
   const __nextRow = __applyExc(netForm, __stripException, __prevEntry);
+  // DAILY-1: a save that was not opened on an existing record must not add a second record
+  // for a date that already has one (it would double the day's revenue). Refuse locally; the
+  // create also carries requireDateAbsent so the transaction refuses a record written meanwhile.
+  if (!__prevEntry) {
+    const __dk = window.MarjinEntries.entryDateKey(netForm.date);
+    if (__dk && io.rows.some(r => r && window.MarjinEntries.entryDateKey(r.date) === __dk)) {
+      io.setSaved(false);
+      io.setError(window.MarjinSaveLifecycle.describeSaveOutcome({ status: "conflict", reason: "date_exists" }, false));
+      return { status: "error", outcome: "date_exists" };
+    }
+  }
   const __intent = window.MarjinSaveLifecycle.buildEntryUpsertIntent(__prevEntry, __nextRow, { newId: io.newRowId ? io.newRowId() : undefined });
+  if (!__prevEntry && __intent && __intent.createIfMissing === true) __intent.requireDateAbsent = true;
   // R10-GATE-012: the builder returns a TYPED REFUSAL rather than an intent when the
   // save cannot be addressed at all — an invalid date, or a row that still has no
   // immutable id. A refusal is not a mutation intent and must never be handed to the
@@ -4018,6 +4034,14 @@ function applyEntryIntent(currentRows, intent) {
         return stableStringify(existing[0]) === stableStringify(nr)
           ? { ok: true, noop: true, status: "already_created" }
           : { ok: false, status: "invalid_identity", reason: "id_collision", id: nr.id };
+      }
+      // DAILY-1: the daily entry form edits a day's existing record; its create carries
+      // requireDateAbsent, so a record for the same date written meanwhile (another device,
+      // the supplier grid) aborts the create with zero remote change instead of adding a
+      // second record. Every other create keeps the R10 rule below.
+      if (intent.requireDateAbsent === true) {
+        const dk = entryDateKey(nr.date);
+        if (rows.some(r => isPlainRow(r) && entryDateKey(r.date) === dk)) return { ok: false, status: "conflict", reason: "date_exists", date: dk };
       }
       // A duplicate business DATE is legal — rows are distinguished by id, and the
       // existing row is preserved untouched.
@@ -7999,6 +8023,19 @@ function PilotDashboard() {
       },
     }, ctx);
   };
+  // DAILY-1: opening the daily form on a date that already has a record edits THAT record
+  // (same as opening the day from the history list), so saving updates it instead of adding a
+  // second record for the date.
+  const loadExistingDayIntoForm = (date) => {
+    const key = window.MarjinEntries.entryDateKey(date);
+    const existing = key ? entries.find(e => e && window.MarjinEntries.entryDateKey(e.date) === key) : null;
+    if (!existing) return false;
+    const { _idx, __missing, __key, ...cleanEntry } = existing;
+    setForm(formWithException(cleanEntry, key));
+    setEditingId(entries.indexOf(existing));
+    editingDateRef.current = key; // R2 stable edit identity
+    return true;
+  };
   const formWithException = (base, date) => {
     const st = exceptionOwnershipRef.current.getState(date);
     const active = st && st.status === "active";
@@ -8825,7 +8862,7 @@ function PilotDashboard() {
         {/* Row 2: CTA + secondary action */}
         {!currentUser && (
           <div className="mhd-row2">
-            <button className="mhd-cta" onClick={()=>{setForm({...EMPTY_ENTRY,date:YESTERDAY_STR,security_event:false});setEditingId(null);editingDateRef.current=null;setEntryStep('revenue');setScreen("entry");}}>
+            <button className="mhd-cta" onClick={()=>{if(!loadExistingDayIntoForm(YESTERDAY_STR)){setForm({...EMPTY_ENTRY,date:YESTERDAY_STR,security_event:false});setEditingId(null);editingDateRef.current=null;}setEntryStep('revenue');setScreen("entry");}}>
               + הזנת יום
             </button>
             {businesses.length>1 && (
@@ -9742,7 +9779,7 @@ function PilotDashboard() {
             </div>
 
             <label className="label">תאריך</label>
-            <input className="input" type="date" value={form.date} onChange={e=>{ const __d=e.target.value; setClosureDialog(null); setClosureNotice(""); setForm(f=>{ if (window.MarjinClosureLifecycle.isActiveClosureState(exceptionOwnershipRef.current.getState(__d))) return formWithException({...f,date:__d}, __d); if (f.exception_reason===window.MarjinClosureLifecycle.CLOSURE_REASON_CODE) return {...f,date:__d,is_exception:false,exception_reason:"",exception_note:""}; return {...f,date:__d}; }); }}/>
+            <input className="input" type="date" value={form.date} onChange={e=>{ const __d=e.target.value; setClosureDialog(null); setClosureNotice(""); if (window.MarjinEntries.entryDateKey(__d) && window.MarjinEntries.entryDateKey(__d) !== editingDateRef.current && loadExistingDayIntoForm(__d)) return; setForm(f=>{ if (window.MarjinClosureLifecycle.isActiveClosureState(exceptionOwnershipRef.current.getState(__d))) return formWithException({...f,date:__d}, __d); if (f.exception_reason===window.MarjinClosureLifecycle.CLOSURE_REASON_CODE) return {...f,date:__d,is_exception:false,exception_reason:"",exception_note:""}; return {...f,date:__d}; }); }}/>
 
             <div className="form-sec">מכירות</div>
 
