@@ -1304,6 +1304,21 @@
     }
 
     /**
+     * CREDIT-AGOROT: a credit amount (canonical decimal string, at most two decimals — the writer's rule) and
+     * the month's exact credit total are shown to the agora ("₪88.81", "₪300.00") so the user can check them
+     * against the credit document. Pure string formatting of the exact stored value — no number conversion,
+     * no rounding. Other money displays (whole shekels) are unchanged.
+     */
+    function agorotText(F, a) {
+      if (a === null || a === undefined) return F.presenters.money.formatShekel(null);
+      var s = String(a), neg = s.charAt(0) === "-";
+      if (neg) s = s.slice(1);
+      if (!/^(0|[1-9][0-9]*)(\.[0-9]{1,2})?$/.test(s)) return F.presenters.money.formatShekel(a);   // never a credit form; whole-shekel fallback
+      var parts = s.split("."), frac = ((parts[1] || "") + "00").slice(0, 2);
+      return "₪" + (neg ? "-" : "") + parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",") + "." + frac;
+    }
+
+    /**
      * The Supplier Credits tab of one month: every record ISSUED in the month (counted, voided,
      * replaced, under review or rejected), newest issue date first, and the month's counted total
      * (EFFECTIVE credits only — a pending / flagged / rejected credit is never in it). Loading /
@@ -1332,7 +1347,7 @@
         return {
           creditId: r.creditId, logicalId: r.logicalId, headSeq: l ? l.head.seq : null, supplierId: r.supplierId,
           supplierName: nm[r.supplierId] || ("ספק " + r.supplierId), issueDate: r.issueDate,
-          amount: r.amount, amountText: F.presenters.money.formatShekel(r.amount), documentNumber: r.documentNumber, documentKey: r.documentKey, note: r.note,
+          amount: r.amount, amountText: agorotText(F, r.amount), documentNumber: r.documentNumber, documentKey: r.documentKey, note: r.note,
           status: r.status, review: r.review, counted: counted, statusText: statusTextOf(r),
           replacesCreditId: r.replacesCreditId, replacedByCreditId: r.replacedByCreditId, identityCorrection: r.identityCorrection,
           // a change (edit / void) is allowed only on the CURRENT record of an ACTIVE logical credit with no unresolved operation
@@ -1345,7 +1360,7 @@
       return {
         status: "ready", rows: rows, empty: rows.length === 0, emptyText: TXT.empty,
         activeCount: count, total: total === null ? null : dec.serializeDec(total),
-        totalText: F.presenters.money.formatShekel(total === null ? null : dec.serializeDec(total)),
+        totalText: agorotText(F, total === null ? null : dec.serializeDec(total)),
         invalidCount: issues.length, invalidText: issues.length ? TXT.invalid : null,
         unresolvedCount: unresolvedRows, reviewText: unresolvedRows ? TXT.reviewSummary : null,
         hasPending: present && credits.unresolved.pending.length > 0,
@@ -1365,7 +1380,7 @@
       P1_VERSION: P1_VERSION, CREDITS_CONTRACT: CREDITS_CONTRACT, CREDITS_DEADLINE_MS: CREDITS_DEADLINE_MS, TXT: TXT, ERRORS: ERRORS, DEFINITE: DEFINITE,
       errorText: errorText, refusalText: refusalText, classify: classify, createCreditsSession: createCreditsSession, sourceFor: sourceFor, validateForm: validateForm,
       newId: newId, createBody: createBody, voidBody: voidBody, replaceBody: replaceBody, decideBody: decideBody, reconcileBody: reconcileBody,
-      monthView: monthView, purchasesDisclosure: purchasesDisclosure,
+      monthView: monthView, purchasesDisclosure: purchasesDisclosure, agorotText: agorotText,
     });
   })();
   </script>
@@ -2745,7 +2760,7 @@
   </script>
 
   <!-- app.html and app.js are GENERATED from index.html by tools/app-precompile/precompile.mjs — do not edit.
-       source index.html sha256 0a49a62c7e26096c1fa23255c4e9aff63eb7e3c47fd7804d275edc829dbfb5ec; app.js sha256 074c289f8a901560403957d48d44d670b418a8920c63adc9c4646664bf26623a; @babel/standalone 7.23.6, presets ["react"]. -->
+       source index.html sha256 c0eccaf63e8f632e78b75d500e5351c99300d78ee476b0303fc18fe03fff5825; app.js sha256 074c289f8a901560403957d48d44d670b418a8920c63adc9c4646664bf26623a; @babel/standalone 7.23.6, presets ["react"]. -->
   <script defer src="/app.js?v=074c289f8a90"></script>
 </body>
 </html>
