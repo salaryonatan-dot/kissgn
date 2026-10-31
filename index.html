@@ -8434,8 +8434,21 @@ function PilotDashboard() {
   })();
   // Live business-date context for operational (non-financial) surfaces.
   const finTodayStr = finAsOf || israelDateKey(0);
-  const monthPrefix = `${finTodayStr.slice(0, 7)}-`; // live business month (W-03 / H-06)
-  const finHist = React.useMemo(() => finView((F, S) => window.MarjinC1.history(F, S, S.asOf.slice(0, 7))), [finSrc, finCoreState]);
+  // HIST-MONTH: the daily-revenue list (פדיון יומי) can show a previous month so missing days can be
+  // added and existing days edited after a month rollover. The live business month stays the default
+  // and the upper bound; the selected month is a VIEW selection only — every save keeps its own date,
+  // its row identity and the existing save safeguards (DAILY-1, R10 lane, closure ownership).
+  const liveMonth = finTodayStr.slice(0, 7);
+  const [histMonthSel, setHistMonthSel] = useState(null);
+  // Lower bound: the earliest month FULLY inside the window whose closure / exception states the save path
+  // loads (loadExceptionsBound: today−95 … today+1), so every listed day saves with its known closure state.
+  const histFloorKey = israelDateKey(-95);
+  const histMinMonth = (() => { if (histFloorKey.slice(8) === "01") return histFloorKey.slice(0, 7); const y = Number(histFloorKey.slice(0, 4)), m = Number(histFloorKey.slice(5, 7)); return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`; })();
+  const histMonth = histMonthSel && /^\d{4}-\d{2}$/.test(histMonthSel) && histMonthSel < liveMonth && histMonthSel >= histMinMonth ? histMonthSel : liveMonth;
+  const shiftHistMonth = (dir) => { const y = Number(histMonth.slice(0, 4)), m = Number(histMonth.slice(5, 7)) - 1 + dir; const d = new Date(Date.UTC(y, m, 1)); const k = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`; if (k < histMinMonth) return; setHistMonthSel(k >= liveMonth ? null : k); };
+  const monthPrefix = `${histMonth}-`; // the month shown in the daily-revenue list (live month by default; W-03 / H-06)
+  const finHist = React.useMemo(() => finView((F, S) => window.MarjinC1.history(F, S, histMonth)), [finSrc, finCoreState, histMonth]);
+  useEffect(() => { if (finHist && finHist.status === "loading" && finHist.reason === "ledger_range" && typeof requestFinanceFrom === "function") requestFinanceFrom(histMonth + "-01"); }, [finHist, histMonth]);
   const finTodayDow = (finF ? finF.finance.businessDate.dowOf(finTodayStr) : new Date(finTodayStr + "T12:00:00Z").getUTCDay());
 
   const sendAI = React.useCallback(async (query) => {
@@ -10134,7 +10147,14 @@ function PilotDashboard() {
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
             <div>
               <div style={{fontSize:15,fontWeight:700,color:"#0F172A",letterSpacing:"-.3px"}}>פדיון יומי יומית</div>
-	              <div data-c1="hist-count" style={{fontSize:12,color:"#94A3B8",marginTop:3}}>{finHist.status==="ready" ? `${finHist.presentDays} ימים מוזנים (עד אתמול)` : "—"} · {MONTH_NAMES[Number(finTodayStr.slice(5,7))-1]}</div>
+	              <div data-c1="hist-count" style={{fontSize:12,color:"#94A3B8",marginTop:3}}>{finHist.status==="ready" ? `${finHist.presentDays} ימים מוזנים${histMonth===liveMonth?" (עד אתמול)":""}` : "—"} · {MONTH_NAMES[Number(histMonth.slice(5,7))-1]}{histMonth.slice(0,4)!==liveMonth.slice(0,4)?` ${histMonth.slice(0,4)}`:""}</div>
+              {/* HIST-MONTH: month navigation (previous months; not beyond the live month) */}
+              <div data-c1="hist-month-nav" style={{display:"flex",alignItems:"center",gap:8,marginTop:6}}>
+                <button data-c1="hist-month-prev" onClick={()=>shiftHistMonth(-1)} disabled={histMonth<=histMinMonth} aria-label="חודש קודם" style={{background:"#F1F5F9",border:"none",borderRadius:8,width:30,height:28,cursor:histMonth<=histMinMonth?"default":"pointer",fontSize:14,color:histMonth<=histMinMonth?"#CBD5E1":"#64748B"}}>→</button>
+                <span data-c1="hist-month" style={{fontSize:12,fontWeight:600,color:"#334155",minWidth:90,textAlign:"center"}}>{MONTH_NAMES[Number(histMonth.slice(5,7))-1]} {histMonth.slice(0,4)}</span>
+                <button data-c1="hist-month-next" onClick={()=>shiftHistMonth(1)} disabled={histMonth>=liveMonth} aria-label="חודש הבא" style={{background:"#F1F5F9",border:"none",borderRadius:8,width:30,height:28,cursor:histMonth>=liveMonth?"default":"pointer",fontSize:14,color:histMonth>=liveMonth?"#CBD5E1":"#64748B"}}>←</button>
+                {histMonth!==liveMonth&&<button data-c1="hist-month-live" onClick={()=>setHistMonthSel(null)} style={{background:"none",border:"none",color:"#6366F1",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>לחודש הנוכחי</button>}
+              </div>
             </div>
             {entries.length>0&&(
               <button onClick={async ()=>{
@@ -10181,10 +10201,12 @@ function PilotDashboard() {
 	                  list.push({...e,_idx:i});
 	                  dupExtras.set(e.date, list);
 	                });
-	                // C1 (H-02/H-06): the live business month, day 1 → today (Israel business date).
+	                // C1 (H-02/H-06): the live business month, day 1 → today (Israel business date);
+	                // HIST-MONTH: a previous month lists every day of that month.
 	                const today = finTodayStr;
 	                const histDates = [];
-	                for (let d = 1; d <= Number(today.slice(8)); d++) histDates.push(`${today.slice(0, 8)}${String(d).padStart(2, "0")}`);
+	                const histLastDay = histMonth === liveMonth ? Number(today.slice(8)) : new Date(Date.UTC(Number(histMonth.slice(0, 4)), Number(histMonth.slice(5, 7)), 0)).getUTCDate();
+	                for (let d = 1; d <= histLastDay; d++) histDates.push(`${histMonth}-${String(d).padStart(2, "0")}`);
 	                const sorted = histDates.map(date => entriesByDate.get(date) || {...EMPTY_ENTRY,date,_idx:null,__missing:true,__key:`__missing__${date}`}).reverse();
 	                const sevenDaysAgo = finF ? finF.finance.businessDate.addDays(today, -7) : today;
 	                // C1 (H-03/H-04): status and amounts of a DAY (all rows folded, closures known) are the
