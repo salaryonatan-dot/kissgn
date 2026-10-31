@@ -1397,6 +1397,7 @@
     // Approved disclosure wording (identical to the accepted B2 e-mail presenter).
     var TXT = Object.freeze({
       partial: "חלקי",
+      fcRecordedBasis: "מחושב מהנתונים שהוזנו: ",
       missingRevenue: "חסרות הכנסות בימים: ",
       invalidRevenue: "ערך הכנסה לא תקין בימים: ",
       partialRevenue: "הכנסה חלקית (תא לא תקין) בימים: ",
@@ -1902,6 +1903,22 @@
         var target = D(F).serializeRat(D(F).ratMul(amt(F, lySales), growthFactor));
         var revenue = totalView(F, A.revenue, R.coverage.revenue);
         var salesPct = ratioValue(ratio(F, revenue.complete ? A.revenue.value : null, target));
+        // FC-AVAIL (available-data Food Cost): the core withholds the complete-month Food Cost % when
+        // any operating day is MISSING revenue or purchases ("incomplete_components"). Missing entries
+        // must not hide the useful actual figure, so the Dashboard then shows recorded NET purchases
+        // (supplier credits already applied by the core) ÷ recorded revenue of the same Actual window.
+        // Nothing is invented: no recorded revenue / purchases, or a zero denominator, stays "—".
+        // Every other non-value state — invalid / partial cells, unresolved or invalid credits,
+        // closed-day contradictions, unresolved purchase basis, empty window — is unchanged ("—").
+        var fcRatio = A.purchasesPct, fcAvailable = false;
+        if (A.purchasesPct.state === "incomplete_components" && R.window.state === "actual"
+            && R.coverage.revenue.invalidDays.length < 1 && R.coverage.revenue.partialDays.length < 1
+            && R.coverage.purchases.invalidDays.length < 1 && R.coverage.purchases.partialDays.length < 1
+            && !(A.purchases.credits && A.purchases.credits.state === "invalid") && contradictions(R).length < 1) {
+          fcRatio = ratio(F, A.purchases.value, A.revenue.value);
+          fcAvailable = fcRatio.state === "value";
+        }
+        var fcValue = ratioValue(fcRatio);
         var fx = A.fixedAccrual;
         // DASH-05 (keep the Dashboard useful with missing inputs): the core withholds the WHOLE fixed
         // accrual when any revenue-linked charge (rent % / royalty %) cannot be computed, which hid the
@@ -1971,10 +1988,14 @@
           configurationBasis: R.configurationBasis.slice(), timelineSource: R.timelineSource,
           revenue: revenue, disclosure: revenueDisclosure(R),
           purchases: totalView(F, A.purchases, R.coverage.purchases),
-          purchasesPct: { text: pctText(F, A.purchasesPct), band: band(F, A.purchasesPct, goals.food.value), goal: goals.food, num: toNum(F, ratioValue(A.purchasesPct)),
-            belowGoalText: ratioValue(A.purchasesPct) === null ? null : pctText(F, D(F).serializeRat(D(F).ratSub(amt(F, goals.food.value), amt(F, ratioValue(A.purchasesPct))))),
-            aboveGoalText: ratioValue(A.purchasesPct) === null ? null : pctText(F, D(F).serializeRat(D(F).ratSub(amt(F, ratioValue(A.purchasesPct)), amt(F, goals.food.value)))),
-            empty: R.window.state !== "actual" || A.purchases.value === null },
+          purchasesPct: { text: pctText(F, fcRatio), band: band(F, fcRatio, goals.food.value), goal: goals.food, num: toNum(F, fcValue),
+            belowGoalText: fcValue === null ? null : pctText(F, D(F).serializeRat(D(F).ratSub(amt(F, goals.food.value), amt(F, fcValue)))),
+            aboveGoalText: fcValue === null ? null : pctText(F, D(F).serializeRat(D(F).ratSub(amt(F, fcValue), amt(F, goals.food.value)))),
+            empty: R.window.state !== "actual" || A.purchases.value === null,
+            // FC-AVAIL: true when the value is over recorded data with missing days. No "חלקי" label on Food Cost (FC-LABEL);
+            // the basis (days with revenue / purchases) is a quiet secondary line, visible on mobile and desktop alike.
+            partial: fcAvailable,
+            basisText: fcAvailable ? TXT.fcRecordedBasis + R.coverage.revenue.presentDays + "/" + R.coverage.revenue.expectedDays + " ימי הכנסה, " + R.coverage.purchases.presentDays + "/" + R.coverage.purchases.expectedDays + " ימי קניות" : null },
           labor: { text: typedMoney(F, A.labor.employerCost), state: A.labor.employerCost.state, meaning: F.presenters.labels.LABELS.labor.meaning },
           laborPct: { text: pctText(F, A.labor.employerCostPct), band: band(F, A.labor.employerCostPct, goals.labor.value), goal: goals.labor },
           // DASH-05: a partial (fixed-rent-only, rent % pending revenue) tile carries the partial marker; the % of revenue needs complete revenue AND a complete accrual.
@@ -8990,6 +9011,7 @@ function PilotDashboard() {
                       פוד קוסט: <span data-c1="purchases-pct">{dv.purchasesPct.text}</span>
                       <span style={{color:"#CBD5E1",marginRight:4}}>יעד {dv.purchasesPct.goal.value}%</span>
                     </div>
+                    {dv.purchasesPct.basisText&&<div data-c1="purchases-pct-basis" style={{fontSize:10.5,color:"#94A3B8",lineHeight:1.4,marginTop:2}}>{dv.purchasesPct.basisText}</div>}
                     <div className="kpi-forecast">חזוי: {dv.projectedPurchases}</div>
                   </div>
 
@@ -9265,6 +9287,7 @@ function PilotDashboard() {
                   : fp.band==="warn" ? "סטייה קלה מהיעד"
                   : `${fp.belowGoalText} מתחת ליעד`}
               </p>
+              {fp.partial&&<p data-c1="fc-basis" style={{margin:"6px 0 0",fontSize:11,color:"#94A3B8"}}>{fp.basisText}</p>}
               {finDash.disclosure.warning&&<p data-c1="revenue-warning" style={{margin:"6px 0 0",fontSize:11,color:"#DC2626"}}>{finDash.disclosure.warning}</p>}
             </div>
           </>; })())}

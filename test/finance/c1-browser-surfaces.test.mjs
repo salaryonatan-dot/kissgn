@@ -235,12 +235,13 @@ test("C1-D02 a closure that carries recorded revenue is a contradiction: disclos
   assert.equal(dv.projectedProfit.text, "—", "no projection from an incomplete Actual");
 });
 
-test("C1-D03 typed partial states: a missing day makes labor, profit, percentages and projection '—' (never a partial subtotal)", () => {
+test("C1-D03 typed partial states: a missing day makes labor, profit, labor % and projection '—' (never a partial subtotal); Food Cost uses the recorded data (FC-AVAIL)", () => {
   const rows = SEP_COMPLETED.filter((d) => d !== "2026-09-04").map((d) => fullDay(d));
   const dv = C.dashboard(F, browserSrc({ rows }), { nowMs: INV_NOW_MS, lastYearSales: null });
-  assert.equal(dv.labor.text, "—"); assert.equal(dv.laborPct.text, "—"); assert.equal(dv.purchasesPct.text, "—");
+  assert.equal(dv.labor.text, "—"); assert.equal(dv.laborPct.text, "—");
+  assert.equal(dv.report.actual.purchasesPct.state, "incomplete_components", "the core value is unchanged");
+  assert.equal(dv.purchasesPct.text, "30.0%"); assert.equal(dv.purchasesPct.partial, true);   // FC-AVAIL: 8100 / 27000 recorded
   assert.equal(dv.projectedProfit.text, "—"); assert.equal(dv.projectedLabor, "—");
-  assert.equal(dv.purchasesPct.band, "none", "no colour on a non-value");
   const p = C.pnl(F, browserSrc({ rows }), month, null);
   assert.equal(p.rows.net.text, "—"); assert.equal(p.netPct.text, "—");
 });
