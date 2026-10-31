@@ -243,7 +243,9 @@ test("C1-D03 typed partial states: a missing day makes labor, profit, labor % an
   assert.equal(dv.purchasesPct.text, "30.0%"); assert.equal(dv.purchasesPct.partial, true);   // FC-AVAIL: 8100 / 27000 recorded
   assert.equal(dv.projectedProfit.text, "—"); assert.equal(dv.projectedLabor, "—");
   const p = C.pnl(F, browserSrc({ rows }), month, null);
-  assert.equal(p.rows.net.text, "—"); assert.equal(p.netPct.text, "—");
+  // PNL-AVAIL: the P&L bottom line of an incomplete month is a recorded-data balance, labelled as such — never net profit
+  assert.equal(p.report.actual.operatingProfit.state, "incomplete_components"); assert.equal(p.netLabel, "יתרה לפי הנתונים שהוזנו");
+  assert.equal(p.gross.text, "—", "the VD-50 gross profit stays a complete-only figure");
 });
 
 test("C1-D04 complete month: every displayed figure is a formatted core field (labor = full employer cost incl. the global placement; fixed accrual; v2 forecast; projected profit)", () => {

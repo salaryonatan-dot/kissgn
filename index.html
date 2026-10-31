@@ -1398,6 +1398,7 @@
     var TXT = Object.freeze({
       partial: "חלקי",
       fcRecordedBasis: "מחושב מהנתונים שהוזנו: ",
+      pnlInvalidNoBalance: "בחודש יש נתונים לא תקינים — הסעיפים שלהם מוצגים כ־\"—\" והיתרה לא מחושבת.",
       missingRevenue: "חסרות הכנסות בימים: ",
       invalidRevenue: "ערך הכנסה לא תקין בימים: ",
       partialRevenue: "הכנסה חלקית (תא לא תקין) בימים: ",
@@ -2054,6 +2055,66 @@
       };
     }
     /**
+     * PNL-AVAIL (available-data P&L): when the month's operating profit is not complete, the P&L keeps
+     * every VALID recorded amount instead of hiding it. Per component: "known" (a recorded amount),
+     * "missing" (nothing recorded — never shown as 0, named in the basis) or "invalid" (malformed /
+     * partial cells, invalid or unreviewed credits, contradictions, invalid configuration — stays "—"
+     * and blocks the balance). Formulas are the core's: purchases are the core's NET purchases
+     * (credits applied), labor = recorded hourly employer cost + the core's salaried accrual, fixed
+     * costs / rent / royalty = the core's accrual function over the same timeline, window and closure
+     * calendar, with percentage charges on the recorded revenue (exactly what the core computes, which
+     * it withholds only because revenue days are missing). The bottom line is a recorded-data BALANCE,
+     * labelled as such — never "net profit". A complete month never reaches this function.
+     */
+    function pnlAvailable(F, inputs, R) {
+      var A = R.actual, cov = R.coverage, fx = A.fixedAccrual, P = F.product;
+      var bad = function (c) { return c.invalidDays.length > 0 || c.partialDays.length > 0; };
+      var contra = contradictions(R).length > 0;
+      var revValid = !bad(cov.revenue) && !contra;
+      var rev = revValid ? A.revenue.value : null;
+      var comp = {};
+      // purchases (net of credits, issue-date attribution — the core's value)
+      comp.purchases = bad(cov.purchases) || (A.purchases.credits && A.purchases.credits.state === "invalid") ? { state: "invalid" }
+        : A.purchases.value === null ? { state: "missing" } : { state: "known", amount: A.purchases.value };
+      // labor = recorded hourly employer cost + salaried (global) accrual
+      var g = A.labor.globalEmployerCost;
+      comp.labor = A.labor.employerCost.state === "complete" ? { state: "known", amount: A.labor.employerCost.value }
+        : bad(cov.hourlyLabor) || g.state === "invalid_components" || contra ? { state: "invalid" }
+        : A.hourlyLabor.value === null || g.state !== "complete" ? { state: "missing" }
+        : { state: "known", amount: sumAmounts(F, [A.hourlyLabor.value, g.value]) };
+      // other expense: optional; nothing recorded = none (the core's own rule for profit)
+      comp.other = bad(cov.otherExpense) ? { state: "invalid" } : { state: "known", amount: A.otherExpense.value === null ? null : A.otherExpense.value };
+      // fixed + rent, royalty
+      var acc = null;
+      if (fx.state === "complete") acc = { fixedRent: sumAmounts(F, [fx.regular, fx.rentFixed, fx.rentPct]), royalty: fx.royaltyPct };
+      else if (revValid && Array.isArray(fx.issues) && fx.issues.length >= 1 && fx.issues.every(function (i) { return i && i.component === "revenue"; }) && R.window.state === "actual") {
+        var days = P.productDays(inputs, { from: R.window.from, to: R.window.to }).days, rm = new Map();
+        days.forEach(function (d) { if (d.revenue.presence === "present" && d.revenue.value !== null) rm.set(d.date, D(F).ratFromDec(d.revenue.value)); });
+        var a = F.metrics.costTimeline.accrueWindow(P.productTimeline(inputs), F.finance.businessDate.datesInRange(R.window.from, R.window.to), rm,
+          { asOfBusinessDate: R.window.asOfBusinessDate, closedDates: P.productClosureCalendar(inputs).closedDates });
+        if (a.uncoveredDates.length === 0 && a.allocation.aggregateDeterminable)
+          acc = { fixedRent: D(F).serializeRat(D(F).ratAdd(D(F).ratAdd(a.fixedRegular, a.rentFixed), a.rentPct)), royalty: D(F).serializeRat(a.royaltyPct) };
+      }
+      var fxInvalid = fx.state === "invalid_components";
+      comp.fixedRent = acc ? { state: "known", amount: acc.fixedRent } : { state: fxInvalid ? "invalid" : "missing" };
+      comp.royalty = acc ? { state: "known", amount: acc.royalty } : { state: fxInvalid ? "invalid" : "missing" };
+      var keys = ["purchases", "labor", "other", "fixedRent", "royalty"];
+      var anyInvalid = !revValid || keys.some(function (k) { return comp[k].state === "invalid"; });
+      var missing = keys.filter(function (k) { return comp[k].state === "missing"; });
+      var balance = null;
+      if (!anyInvalid && rev !== null) {
+        var known = keys.filter(function (k) { return comp[k].state === "known" && comp[k].amount !== null; }).map(function (k) { return comp[k].amount; });
+        balance = subAmounts(F, rev, known.length ? sumAmounts(F, known) : "0");
+      }
+      var LBL = { purchases: "קניות", labor: "עלות עובדים", other: "הוצאות אחרות", fixedRent: "קבועות + שכ״ד", royalty: "תמלוגים" };
+      var cnt = function (c) { return c.presentDays + "/" + c.expectedDays; };
+      var basis = TXT.fcRecordedBasis + cnt(cov.revenue) + " ימי הכנסה, " + cnt(cov.purchases) + " ימי קניות, " + cnt(cov.hourlyLabor) + " ימי עלות עובדים שעתית."
+        + (balance !== null ? " השורה התחתונה היא יתרה לפי הנתונים שהוזנו, לא רווח נקי סופי" + (missing.length ? " — לא נכללו (לא הוזנו): " + missing.map(function (k) { return LBL[k]; }).join(", ") : "") + "." : "")
+        + (acc && fx.state !== "complete" ? " אחוזי שכ״ד ותמלוגים לפי ההכנסות שהוזנו." : "")
+        + (anyInvalid ? " " + TXT.pnlInvalidNoBalance : "");
+      return { revenue: rev, comp: comp, balance: balance, missing: missing, anyInvalid: anyInvalid, basisText: basis };
+    }
+    /**
      * Month deliveries (P-04): exact sum of the canonical delivery parts of the completed days.
      * C1 R1 (finding 5): `applicable` whenever any day recorded a delivery cell (present OR
      * invalid / partial); an invalid or partial part makes the amount unavailable — the row
@@ -2100,6 +2161,16 @@
           rows[k] = { text: money(F, c[k]), amount: c[k], shareText: share(c[k]), deltaText: d === null ? "—" : (toNum(F, d) > 0 ? "+" : "") + money(F, d), delta: d, negative: c[k] !== null && toNum(F, c[k]) < 0 };
         });
         rows.revenue.text = c.revenueRecorded === null ? "—" : money(F, c.revenueRecorded) + (c.revenuePartial ? " · " + TXT.partial : "");
+        // PNL-AVAIL: an incomplete month keeps its valid recorded amounts (deltas stay complete-only).
+        var av = cur.report.window.state === "actual" && cur.report.actual.operatingProfit.state !== "complete" ? pnlAvailable(F, cur.inputs, cur.report) : null;
+        var avShare = function (a) { return av === null || av.revenue === null || a === null ? "—" : pctText(F, ratio(F, a, av.revenue)); };
+        if (av) {
+          ["purchases", "labor", "other", "fixedRent", "royalty"].forEach(function (k) {
+            var x = av.comp[k], a = x.state === "known" ? x.amount : null;
+            rows[k].text = money(F, a); rows[k].amount = a; rows[k].shareText = avShare(a); rows[k].negative = a !== null && toNum(F, a) < 0; rows[k].availability = x.state;
+          });
+          rows.net.text = money(F, av.balance); rows.net.amount = av.balance; rows.net.shareText = avShare(av.balance); rows.net.negative = av.balance !== null && toNum(F, av.balance) < 0;
+        }
         var deliveries = deliveriesOf(F, cur.inputs, month);
         var cvm = configView(F, cur.inputs, src.asOf.slice(0, 7) === month ? src.asOf : F.finance.businessDate.monthBounds(month).last);
         var w = cur.report.window;
@@ -2107,12 +2178,20 @@
           status: "ready", report: cur.report, rows: rows, gross: pnlGrossLineVD50(F, cur.report.actual),
           deliveries: { text: money(F, deliveries.amount), show: deliveries.applicable && (deliveries.amount === null || toNum(F, deliveries.amount) !== 0) },
           // an incomplete (invalid / partial) other expense is shown as "—", never hidden
-          showOther: !cur.report.actual.otherExpense.complete || (c.otherRecorded !== null && toNum(F, c.otherRecorded) !== 0),
+          showOther: av ? (av.comp.other.state === "invalid" || (av.comp.other.amount !== null && toNum(F, av.comp.other.amount) !== 0))
+            : (!cur.report.actual.otherExpense.complete || (c.otherRecorded !== null && toNum(F, c.otherRecorded) !== 0)),
           showRoyalty: cvm.royaltyConfigured || (c.royalty !== null && toNum(F, c.royalty) !== 0),
           hasPrev: !!(prev && !prev.loading), prevLoading: !!(prev && prev.loading),
-          netPct: c.net === null || rev === null ? { text: "—", negative: false } : { text: pctText(F, ratio(F, c.net, rev)), negative: toNum(F, c.net) < 0 },
-          purchasesPct: { text: pctText(F, c.purchasesPct), num: toNum(F, ratioValue(c.purchasesPct)) },
-          laborPct: { text: pctText(F, c.laborPct), num: toNum(F, ratioValue(c.laborPct)) },
+          netPct: av ? (av.balance === null || av.revenue === null ? { text: "—", negative: false } : { text: avShare(av.balance), negative: toNum(F, av.balance) < 0 })
+            : c.net === null || rev === null ? { text: "—", negative: false } : { text: pctText(F, ratio(F, c.net, rev)), negative: toNum(F, c.net) < 0 },
+          purchasesPct: av ? { text: avShare(rows.purchases.amount), num: av.revenue === null || rows.purchases.amount === null ? null : toNum(F, ratioValue(ratio(F, rows.purchases.amount, av.revenue))) }
+            : { text: pctText(F, c.purchasesPct), num: toNum(F, ratioValue(c.purchasesPct)) },
+          laborPct: av ? { text: avShare(rows.labor.amount), num: av.revenue === null || rows.labor.amount === null ? null : toNum(F, ratioValue(ratio(F, rows.labor.amount, av.revenue))) }
+            : { text: pctText(F, c.laborPct), num: toNum(F, ratioValue(c.laborPct)) },
+          // PNL-AVAIL: the bottom line is a recorded-data balance (not net profit) whenever the month is incomplete
+          available: av ? { balance: av.balance !== null, missing: av.missing.slice(), invalid: av.anyInvalid, basisText: av.basisText } : null,
+          netLabel: av && av.balance !== null ? "יתרה לפי הנתונים שהוזנו" : "רווח נקי",
+          netPctLabel: av && av.balance !== null ? "יתרה %" : "רווח נקי %",
           avgPerDay: money(F, c.avgPerDay),
           days: { recognized: w.recognizedDays, inMonth: F.finance.businessDate.monthBounds(month).days, present: cur.report.coverage.day.presentDays, closed: cur.report.coverage.day.closedDays.length, state: w.state },
           configurationBasis: cur.report.configurationBasis.slice(),
@@ -11964,7 +12043,7 @@ function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[], f
           {/* Net profit */}
           <div data-c1="pnl-net" style={{padding:"14px",background:"linear-gradient(135deg,#0F172A,#1E293B)",display:"grid",
             gridTemplateColumns: hasPrev ? "1fr auto auto auto" : "1fr auto auto", gap:8, alignItems:"center"}}>
-            <span style={{fontSize:14,fontWeight:700,color:"#F8FAFC"}}>רווח נקי</span>
+            <span style={{fontSize:14,fontWeight:700,color:"#F8FAFC"}}>{pv.netLabel}</span>
             <span style={{fontSize:16,fontWeight:700,color:netNum===null?"#94A3B8":netNum>=0?"#4ADE80":"#F87171",minWidth:75,textAlign:"left",fontVariantNumeric:"tabular-nums"}}>
               {net.text}
             </span>
@@ -11977,6 +12056,8 @@ function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[], f
               </span>
             )}
           </div>
+          {/* PNL-AVAIL: quiet basis line (visible on mobile and desktop; not a warning) */}
+          {pv.available && <div data-c1="pnl-basis" style={{padding:"8px 14px",fontSize:11,color:"#94A3B8",lineHeight:1.5,borderTop:"1px solid #F1F5F9"}}>{pv.available.basisText}</div>}
         </div>
       )}
 
@@ -11996,7 +12077,7 @@ function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[], f
             <div data-c1="pnl-kpi-avg" style={{fontSize:18,fontWeight:700,color:"#0F172A"}}>{pv.avgPerDay}</div>
           </div>
           <div style={{background:"#F8FAFC",borderRadius:10,padding:"12px 14px",border:"1px solid #E2E8F0"}}>
-            <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>רווח נקי %</div>
+            <div style={{fontSize:10,color:"#94A3B8",fontWeight:600,marginBottom:4}}>{pv.netPctLabel}</div>
             <div data-c1="pnl-kpi-net" style={{fontSize:18,fontWeight:700,color:pv.netPct.text==="—"?"#94A3B8":pv.netPct.negative?"#EF4444":"#22C55E"}}>{pv.netPct.text}</div>
           </div>
         </div>
