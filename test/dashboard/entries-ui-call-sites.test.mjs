@@ -171,9 +171,15 @@ test("[revenue] G5-R06 committed_idempotent(already_created): an identical repla
   const shared = makeRemoteService();
   const a = makeUiEnv({ remote: shared, form: { date: "2026-08-05", sales: 505 }, nextId: () => FIXED });
   a.at("T1", "A").seed(HIST()); a.attach(); a.hydrate(); a.reset();
-  await a.saveEntry(); await settleAll();
+  // The replay is a create whose view predates the first create (its echo never reached b):
+  // b hydrates BEFORE a commits and attaches after, so b's own rows have no 2026-08-05 record.
+  // (A view that already holds the record is refused locally as date_exists — DAILY-1 —
+  // which daily1-existing-day.test.mjs covers.) The transaction then meets the identical id.
   const b = makeUiEnv({ remote: shared, form: { date: "2026-08-05", sales: 505 }, nextId: () => FIXED });
-  b.attach(); b.hydrate(); b.reset();
+  b.hydrate();
+  await a.saveEntry(); await settleAll();
+  b.attach(); b.reset();
+  assert.ok(!b.state.entries.some(r => r.date === "2026-08-05"), "precondition: b's view does not hold the first create");
   await b.saveEntry(); await settleAll();
   assert.equal(b.state.saved, true, "the replay is accepted as a successful committed result");
   assert.equal(b.state.entrySaveError, "");
@@ -196,8 +202,10 @@ test("[revenue] G5-R07 conflict: exact conflictPaths surfaced, the user's values
 
 test("[revenue] G5-R08 id_collision: presented as its own distinct outcome, never as generic failure or success", async () => {
   const FIXED = mkId("g5-collide");
+  // The colliding record sits on ANOTHER date: an id collision is independent of the date, and a
+  // record on the form's own date is refused earlier as date_exists (DAILY-1, asserted below).
   const e = env({ form: { date: "2026-08-05", sales: 505 }, nextId: () => FIXED,
-                  seed: [...HIST(), { id: FIXED, date: "2026-08-05", sales: 1, deliveries: 0, other_income: 0 }] });
+                  seed: [...HIST(), { id: FIXED, date: "2026-08-06", sales: 1, deliveries: 0, other_income: 0 }] });
   await e.saveEntry();
   await settleAll();
   const expected = ML.describeSaveOutcome({ status: "blocked", reason: "invalid_identity", detail: "id_collision" }, false);
@@ -205,7 +213,14 @@ test("[revenue] G5-R08 id_collision: presented as its own distinct outcome, neve
   assert.notEqual(e.state.entrySaveError, ML.describeSaveOutcome("blocked", false), "not the catch-all blocked text");
   assert.notEqual(e.state.entrySaveError, ML.describeSaveOutcome("invalid_identity", false), "nor the generic identity text");
   assertNoSuccessEffects(e, "id_collision");
-  assert.deepEqual(rows(e), [...HIST(), { id: FIXED, date: "2026-08-05", sales: 1, deliveries: 0, other_income: 0 }], "zero mutation");
+  assert.deepEqual(rows(e), [...HIST(), { id: FIXED, date: "2026-08-06", sales: 1, deliveries: 0, other_income: 0 }], "zero mutation");
+  // Same id on the form's own date: the DAILY-1 refusal comes first — still never success, zero mutation.
+  const sameDay = { id: FIXED, date: "2026-08-05", sales: 1, deliveries: 0, other_income: 0 };
+  const d = env({ form: { date: "2026-08-05", sales: 505 }, nextId: () => FIXED, seed: [...HIST(), sameDay] });
+  await d.saveEntry(); await settleAll();
+  assert.equal(d.state.entrySaveError, ML.describeSaveOutcome({ status: "conflict", reason: "date_exists" }, false));
+  assertNoSuccessEffects(d, "date_exists");
+  assert.deepEqual(rows(d), [...HIST(), sameDay], "zero mutation");
 });
 
 test("[revenue] G5-R09 stale (selection changed mid-flight): silent, no success, form preserved, no cross-destination write", async () => {

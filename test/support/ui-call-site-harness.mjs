@@ -188,10 +188,13 @@ export const CALL_SITES = {
   },
   supplier: {
     name: "setSupPayDate",
-    anchor: "const setSupPayDate = async (supId, date, val) => {",
-    markers: ["supplierResultOwnershipRef.current.begin(captureSelectionCtx())",
+    anchor: "const setSupPayDate = async (supId, date, val, rowsHint) => {",
+    markers: ["const __sel = captureSelectionCtx();",
+              "supplierResultOwnershipRef.current.begin(__sel)",
+              "let __targetId = __row && __row.id != null ? __row.id : undefined",
+              "supCreateRef.current[__createKey] = __newId",
               "entriesWriteCoordRef.current.submitSupplierEdit({",
-              "targetId: __row && __row.id != null ? __row.id : undefined",
+              "targetId: __targetId,", "baseValue: __base, newId: __newId",
               "supplierResultOwnershipRef.current.settle(token, res, selectionCtrlRef.current"],
   },
   labor: {
@@ -367,6 +370,7 @@ export function makeUiEnv(opts = {}) {
     crypto: { randomUUID: () => mkId("crypto-" + (++idSeq)) },
   };
 
+  const supCreateRef = { current: {} };
   const deps = {
     window: win,
     console: { warn: (...a) => { state.consoleWarnings.push(a.join(" ")); rec("console.warn", a.join(" ")); },
@@ -381,6 +385,8 @@ export function makeUiEnv(opts = {}) {
     entriesMutatorRef: { current: mutator },
     selectionCtrlRef: { current: selection },
     supplierResultOwnershipRef: { current: supplierResultOwnership },
+    // SUP-DRAFT: the grid's per-(tenant|business|date) created-row id memo (a useRef in production)
+    supCreateRef,
     exceptionOwnershipRef: { current: exceptionOwnership },
     saveUiRunnerRef: { current: saveUiRunner },
     saveNavTimerRef: { current: null },
