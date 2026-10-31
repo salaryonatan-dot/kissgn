@@ -6943,6 +6943,12 @@ function PilotDashboard() {
     invalidateSelection(null, null);
   }, []);
   const [showBizSelect, setShowBizSelect] = useState(false);
+  // ENTRIES-ACCESS: a failed read of the selected business's entries (permission denied, read error or a
+  // malformed node) is a visible, typed state bound to the selection generation — never "loading" forever,
+  // never an empty history, never the previous selection's figures. A retry re-runs the selection load.
+  const [entriesReadFailure, setEntriesReadFailure] = useState(null);   // { gen, kind: "denied" | "failed" | "malformed" }
+  const [entriesReadRetry, setEntriesReadRetry] = useState(0);
+  const entriesFailureKind = (err) => /permission/i.test(String((err && (err.code || err.message)) || "")) ? "denied" : "failed";
   const [entryStep, setEntryStep] = useState('idle'); // 'idle' | 'revenue' | 'suppliers'
   // P1 R1: the legacy pending-credit card is retired (no state, no subscription, no write path).
   // ── Customer Compensation Log (MVP) — stored at biz:{bizId}:customer_compensations (map by id) ──
@@ -7121,6 +7127,7 @@ function PilotDashboard() {
       }
     }
     activeBizIdRef.current = currentBizId; // P0-DATA-01: reflects the live selection even when null
+    setEntriesReadFailure(null);
     if(!currentBizId) return;
     // R2: generation + tenant binding for every listener callback and self-heal
     // write created by THIS effect run — a queued callback from an old
@@ -7222,13 +7229,17 @@ function PilotDashboard() {
         entriesStorageModeRef.current = { mode: "malformed", reason: read.reason || read.status };
         __policyPublish();
         entriesWriteCoordRef.current.onListenerError(ctxAtSetup);
+        if (live && isSelectionLive(ctxAtSetup)) setEntriesReadFailure({ gen: ctxAtSetup.gen, kind: "malformed" });
         return;
       }
       entriesStorageModeRef.current = { mode: read.mode, generation: read.generation === undefined ? null : read.generation };
       __policyPublish();
       __entriesHydrate(read.rows);
-    }, () => {
+    }, (err) => {
       entriesWriteCoordRef.current.onListenerError(ctxAtSetup);
+      // ENTRIES-ACCESS: the listener was cancelled (permission) or failed — the figures can no longer be
+      // trusted, so the financial views show the typed failure instead of loading / stale data.
+      if (live && isSelectionLive(ctxAtSetup)) setEntriesReadFailure({ gen: ctxAtSetup.gen, kind: entriesFailureKind(err) });
     });
     // R9 invariant B (hydration bootstrap): Firebase `onValue` NEVER fires for a node
     // that does not exist, so a business with no entries yet would otherwise stay
@@ -7240,10 +7251,11 @@ function PilotDashboard() {
       // NOTE: `sg()` is deliberately NOT used here — it collapses every failure to null,
       // which would make a transient/permission read error indistinguishable from a
       // genuinely absent node and could hydrate an EMPTY history over real data.
-      let absent = false, failed = false;
+      let absent = false, failed = false, failErr = null;
       try { await window.storage.get(`biz:${currentBizId}:entries`, true); }   // exists → listener hydrates
       catch (err) {
         const msg = (err && err.message) || "";
+        failErr = err;                                     // ENTRIES-ACCESS: kept to classify a failure (denied / failed)
         if (msg === "not found") absent = true;            // ONLY this means "no entries node yet"
         else failed = true;                                // anything else stays fail-closed
       }
@@ -7256,7 +7268,10 @@ function PilotDashboard() {
         __policyPublish();
         entriesWriteCoordRef.current.markHydrated(ctxAtSetup, []);
       }
-      else if (failed) entriesWriteCoordRef.current.onListenerError(ctxAtSetup);
+      else if (failed) {
+        entriesWriteCoordRef.current.onListenerError(ctxAtSetup);
+        if (!entriesWriteCoordRef.current.isReady()) setEntriesReadFailure({ gen: ctxAtSetup.gen, kind: entriesFailureKind(failErr) });
+      }
     })();
     loadEntryExceptions(ctxAtSetup); // R3: bound to this effect run's selection context
     sub(`biz:${currentBizId}:fixed`,     setFixedList);
@@ -7308,7 +7323,7 @@ function PilotDashboard() {
     const orefInterval = setInterval(fetchOref, 30000); // poll every 30s
 
     return () => { live = false; unsubs.forEach(u => typeof u==="function" && u()); clearInterval(orefInterval); };
-  },[currentBizId]);
+  },[currentBizId, entriesReadRetry]);
 
   // ── C1: Financial Core inputs (READ-ONLY; no write path is touched) ─────────────
   // Module readiness: "loading" | "ready" | "failed" (window.__marjinFinance, set by the
@@ -7691,7 +7706,15 @@ function PilotDashboard() {
   const finCredits = React.useMemo(() => (finF && finSrc && window.MarjinP1) ? window.MarjinP1.monthView(finF, finSrc.credits, supMonth, suppliers) : { status: "loading", text: "טוען זיכויי ספקים…" }, [finF, finSrc, supMonth, suppliers]);
   const finStatus = finCoreState === "failed" ? "unavailable" : (finCoreState !== "ready" ? "loading" : null);
   /** Guarded view model: {status:"loading"|"unavailable"} unless the core and every input are ready. */
-  const finView = (fn) => finStatus ? { status: finStatus, reason: "fincore_" + finCoreState } : (!finSrc ? { status: "loading" } : fn(finF, finSrc));
+  // ENTRIES-ACCESS: a failed entries read of THIS selection makes every financial view unavailable with a typed reason.
+  const entriesFail = entriesReadFailure && entriesReadFailure.gen === finSel.gen ? entriesReadFailure.kind : null;
+  const finView = (fn) => finStatus ? { status: finStatus, reason: "fincore_" + finCoreState } : entriesFail ? { status: "unavailable", reason: "entries_" + entriesFail } : (!finSrc ? { status: "loading" } : fn(finF, finSrc));
+  const retryEntriesRead = () => {
+    // an explicit retry re-runs the selection load: new generation (fresh entries lane), same business
+    invalidateSelection(window._currentTenantId == null ? null : window._currentTenantId, currentBizId == null ? null : currentBizId);
+    setEntriesReadFailure(null);
+    setEntriesReadRetry((n) => n + 1);
+  };
   const israelDateKey = (offsetDays=0) => {
     const todayIL = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
     const [yy, mm, dd] = todayIL.split("-").map(Number);
@@ -9071,6 +9094,9 @@ function PilotDashboard() {
             // ±3-point / 60-80 % presentation rules applied to complete values only.
             const dv = finDash;
             const hasAlerts = todayMissing.length>0 || orefAlert || weather?.alert;
+            if (dv.status !== "ready" && isEntriesAccessFailure(dv)) {
+              return (<div className="dash-wrap"><div className="dash-section"><EntriesAccessNotice view={dv} onRetry={retryEntriesRead}/></div></div>);
+            }
             if (dv.status !== "ready") {
               return (
                 <div className="dash-wrap">
@@ -9387,7 +9413,8 @@ function PilotDashboard() {
             ))}
           </div>
 
-          {fcTab==="summary" && (finDash.status!=="ready" ? (
+          {isEntriesAccessFailure(finDash) && <EntriesAccessNotice view={finDash} onRetry={retryEntriesRead}/>}
+          {fcTab==="summary" && !isEntriesAccessFailure(finDash) && (finDash.status!=="ready" ? (
             <div className="card card-p" data-c1="fin-unavailable" style={{textAlign:"center",fontSize:13,color:finDash.status==="loading"?"#9CA3AF":"#92400E"}}>
               {finDash.status==="loading" ? "טוען נתונים כספיים…" : "הנתונים הכספיים אינם זמינים כעת — לא מוצגים סכומים ואחוזים."}
             </div>
@@ -9425,7 +9452,7 @@ function PilotDashboard() {
             </div>
           </>; })())}
 
-          {fcTab==="by_supplier" && (()=>{
+          {fcTab==="by_supplier" && !entriesFail && (()=>{
             if(suppliers.length===0) return <div className="empty"><p style={{color:"#9CA3AF"}}>אין ספקים מוגדרים</p></div>;
             const [smY, smM] = supMonth.split("-").map(Number);
             const smDays = new Date(smY, smM, 0).getDate();
@@ -10219,7 +10246,8 @@ function PilotDashboard() {
 	                const histDates = [];
 	                const histLastDay = histMonth === liveMonth ? Number(today.slice(8)) : new Date(Date.UTC(Number(histMonth.slice(0, 4)), Number(histMonth.slice(5, 7)), 0)).getUTCDate();
 	                for (let d = 1; d <= histLastDay; d++) histDates.push(`${histMonth}-${String(d).padStart(2, "0")}`);
-	                const sorted = histDates.map(date => entriesByDate.get(date) || {...EMPTY_ENTRY,date,_idx:null,__missing:true,__key:`__missing__${date}`}).reverse();
+	                // ENTRIES-ACCESS: no day list from an unreadable history (never "missing" days from a denied read)
+	                const sorted = entriesFail ? [] : histDates.map(date => entriesByDate.get(date) || {...EMPTY_ENTRY,date,_idx:null,__missing:true,__key:`__missing__${date}`}).reverse();
 	                const sevenDaysAgo = finF ? finF.finance.businessDate.addDays(today, -7) : today;
 	                // C1 (H-03/H-04): status and amounts of a DAY (all rows folded, closures known) are the
 	                // history view model's; the card keeps the first row only as its edit identity.
@@ -10388,7 +10416,8 @@ function PilotDashboard() {
 
                 return (
                   <>
-                    {hv.status!=="ready"&&(
+                    {isEntriesAccessFailure(hv)&&<EntriesAccessNotice view={hv} onRetry={retryEntriesRead}/>}
+                    {hv.status!=="ready"&&!isEntriesAccessFailure(hv)&&(
                       <div data-c1="fin-unavailable" style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:12,padding:"12px 16px",marginBottom:14,fontSize:12,color:hv.status==="loading"?"#9CA3AF":"#92400E"}}>
                         {hv.status==="loading" ? "טוען נתונים כספיים…" : "הנתונים הכספיים אינם זמינים כעת — הסכומים והסטטוסים אינם מוצגים. ניתן עדיין לפתוח ולערוך ימים."}
                       </div>
@@ -10451,7 +10480,7 @@ function PilotDashboard() {
       {/* ═══ P&L ═══ */}
       {screen==="pnl" && (
         <div className="screen">
-          <PnLScreen entries={entries} fixedList={fixedList} businessConfig={businessConfig} lastYear={lastYear} finView={finView} finSrc={finSrc} finCoreState={finCoreState} todayStr={finTodayStr} requestFinanceFrom={requestFinanceFrom} />
+          <PnLScreen entries={entries} fixedList={fixedList} businessConfig={businessConfig} lastYear={lastYear} finView={finView} finSrc={finSrc} finCoreState={finCoreState} todayStr={finTodayStr} requestFinanceFrom={requestFinanceFrom} onEntriesRetry={retryEntriesRead} />
         </div>
       )}
 
@@ -10667,7 +10696,7 @@ function PilotDashboard() {
 
       {screen==="employees" && !currentUser && (
         <div className="screen">
-          <EmployeesScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig} entries={entries} submitLaborEntry={submitLaborEntry} finView={finView} finSrc={finSrc} finCoreState={finCoreState} todayStr={finTodayStr} requestFinanceFrom={requestFinanceFrom} financeLocked={finRaw.bizId!==currentBizId || finRaw.costHistory.kind!=="absent"}/>
+          <EmployeesScreen businessConfig={businessConfig} saveBusinessConfig={saveBusinessConfig} entries={entries} submitLaborEntry={submitLaborEntry} finView={finView} finSrc={finSrc} finCoreState={finCoreState} todayStr={finTodayStr} requestFinanceFrom={requestFinanceFrom} onEntriesRetry={retryEntriesRead} financeLocked={finRaw.bizId!==currentBizId || finRaw.costHistory.kind!=="absent"}/>
         </div>
       )}
 
@@ -10907,8 +10936,31 @@ function PilotDashboard() {
 }
 
 
+// ─── ENTRIES-ACCESS notice ─────────────────────────────────────────────────────
+// A failed read of the selected business's entries (finView reason entries_denied / entries_failed /
+// entries_malformed): a clear Hebrew access / read error with a retry — never figures, zeros or "no entries".
+const ENTRIES_ACCESS_TEXT = Object.freeze({
+  entries_denied: "אין הרשאה לקרוא את נתוני העסק הזה — לא מוצגים סכומים ואחוזים. אם ההרשאה אמורה להיות קיימת, יש לפנות לבעלים של העסק.",
+  entries_failed: "קריאת נתוני העסק נכשלה — לא מוצגים סכומים ואחוזים.",
+  entries_malformed: "נתוני העסק שנשמרו אינם תקינים — לא מוצגים סכומים ואחוזים.",
+});
+function isEntriesAccessFailure(view) { return !!(view && view.status === "unavailable" && ENTRIES_ACCESS_TEXT[view.reason]); }
+function EntriesAccessNotice({ view, onRetry }) {
+  if (!isEntriesAccessFailure(view)) return null;
+  return (
+    <div data-c1="entries-access-error" role="alert" style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:12,padding:"14px 16px",textAlign:"center",fontSize:13,color:"#991B1B",fontWeight:600,lineHeight:1.5,marginBottom:12}}>
+      {ENTRIES_ACCESS_TEXT[view.reason]}
+      {typeof onRetry === "function" && (
+        <div style={{marginTop:10}}>
+          <button data-c1="entries-retry" onClick={onRetry} style={{padding:"6px 14px",background:"#FFFFFF",border:"1px solid #FECACA",borderRadius:8,fontSize:12,color:"#991B1B",cursor:"pointer",fontFamily:"inherit"}}>נסה שוב</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Employees Screen ─────────────────────────────────────────────────────────
-function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLaborEntry, finView, finSrc, finCoreState, todayStr, requestFinanceFrom, financeLocked=false }) {
+function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLaborEntry, finView, finSrc, finCoreState, todayStr, requestFinanceFrom, onEntriesRetry, financeLocked=false }) {
   const employees = businessConfig.employees || [];
   const ROLES_EMP = ["מנהל משמרת","טבח","עוזר טבח","מלצר","ברמן","קופאי","כלים","ניקיון","אחר"];
   // Management list (operational): every configured global employee, including ones whose
@@ -11010,7 +11062,10 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLa
       {/* R10-GATE-014 (L-GAP-1): operator-facing surface for a refused labor write. */}
       {laborSaveError && <div data-testid="labor-save-error" style={{background:"#FEF2F2",border:"1px solid #FECACA",borderRadius:6,padding:"10px 14px",textAlign:"center",fontWeight:600,color:"#B91C1C",fontSize:13,marginBottom:8}}>{laborSaveError}</div>}
 
+      {/* ENTRIES-ACCESS: a failed entries read shows the access error instead of an empty labor grid */}
+      <EntriesAccessNotice view={ev} onRetry={onEntriesRetry}/>
       {/* לוח הזנה יומית */}
+      {!isEntriesAccessFailure(ev) && (
       <div style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:8,overflow:"hidden",marginBottom:12}}>
         <div style={{padding:"12px 16px",borderBottom:"1px solid #F1F5F9",fontSize:13,fontWeight:700,color:"#6B7280"}}>
           עלות כ״א יומית (מתוכנת נוכחות) · סה״כ ליום = עלות שעתיים + חלק גלובלי
@@ -11042,7 +11097,7 @@ function EmployeesScreen({ businessConfig, saveBusinessConfig, entries, submitLa
             </div>
           );
         })}
-      </div>
+      </div>)}
 
       {/* ניהול עובדים גלובליים */}
       <div style={{background:"#FFFFFF",border:"1px solid #E5E7EB",borderRadius:8,overflow:"hidden"}}>
@@ -11958,7 +12013,7 @@ const MONTH_IDX = {
 };
 
 // ─── P&L Screen ──────────────────────────────────────────────────────────────
-function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[], finView, finSrc, finCoreState, todayStr, requestFinanceFrom }) {
+function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[], finView, finSrc, finCoreState, todayStr, requestFinanceFrom, onEntriesRetry }) {
   // C1 (P-01…P-10, U-4…U-11): every figure is a field of the selected month's report
   // (open month = Actual through D-1; a past month = closed month) and of the prior-year
   // same month's closed report. VD-50 gross profit is classified before fixed operating costs.
@@ -12058,7 +12113,9 @@ function PnLScreen({ entries=[], fixedList=[], businessConfig={}, lastYear=[], f
           disabled={atCurrent}>←</button>
       </div>
 
-      {!ready ? (
+      {isEntriesAccessFailure(pv) ? (
+        <EntriesAccessNotice view={pv} onRetry={onEntriesRetry}/>
+      ) : !ready ? (
         <div className="empty" data-c1="fin-unavailable" style={{padding:40}}>
           <p style={{fontSize:14,color:pv.status==="loading"?"#94A3B8":"#92400E",margin:0}}>{pv.status==="loading" ? "טוען נתונים כספיים…" : "הנתונים הכספיים אינם זמינים כעת — לא מוצגים סכומים ואחוזים."}</p>
         </div>

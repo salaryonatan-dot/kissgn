@@ -81,7 +81,8 @@ test("PBR1-02 reachability: currentBizId writes are preceded by a same-business 
   const calls = [...html.matchAll(/invalidateSelection\(([^;]*)\);/g)].map((m) => m[1]).filter((a) => !a.startsWith("tenantId, bizId"));
   const allowed = [/, null$/, /^null, null$/, /, id == null \? null : id$/, /, "demo_biz"$/, /, currentBizId == null \? null : currentBizId$/];
   for (const a of calls) assert.ok(allowed.some((re) => re.test(a.trim())), "invalidation business is null / same / committed: " + a);
-  assert.equal(calls.length, 8, "the recorded invalidation call sites");
+  // 9: ENTRIES-ACCESS adds the explicit entries-read retry (committed business — a fresh lane for the same selection)
+  assert.equal(calls.length, 9, "the recorded invalidation call sites");
 });
 
 test("PBR1-03 the credits tab per reachable state class: live selection ready; no key loading; a node of another key loading — never another business's rows", () => {
