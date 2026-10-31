@@ -6907,6 +6907,18 @@ function PilotDashboard() {
     if (saveUiRunnerRef.current && saveUiRunnerRef.current.isMounted()) setSupplierWriteError("");
   };
   const setCurrentBizId = id => {
+    // BIZ-RESELECT: choosing the business that is ALREADY the live selection (same tenant, same
+    // business, controller already bound to it) is not a switch. Invalidating here bumped the
+    // selection generation and reset the entries lane while currentBizId stayed equal, so the
+    // listeners effect never re-ran and every financial screen stayed at "loading" until a reload.
+    // The valid loaded state is kept as is; any real change (other business / tenant / null) still
+    // invalidates synchronously below.
+    {
+      const nid = id == null ? null : id;
+      const tid = window._currentTenantId == null ? null : window._currentTenantId;
+      const cur = selectionCtrlRef.current.current();
+      if (nid !== null && nid === currentBizId && cur.bizId === nid && cur.tenantId === tid) return;
+    }
     // R3: invalidate synchronously BEFORE any state update — a raw later effect
     // is not enough; anything captured for the old selection is stale right now.
     invalidateSelection(window._currentTenantId == null ? null : window._currentTenantId, id == null ? null : id);

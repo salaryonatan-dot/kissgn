@@ -859,7 +859,13 @@ if(exceptionOwnershipRef.current)exceptionOwnershipRef.current.invalidate();supp
 if(saveOwnershipCtrlRef.current)saveOwnershipCtrlRef.current.invalidate();if(entriesWriteCoordRef.current)entriesWriteCoordRef.current.invalidate();if(supplierResultOwnershipRef.current)supplierResultOwnershipRef.current.invalidate();if(saveNavTimerRef.current){clearTimeout(saveNavTimerRef.current);saveNavTimerRef.current=null;}// R6: clear the OBSERVABLE save/supplier UI state for the still-mounted UI on EVERY
 // invalidation path (business/tenant/logout). clearInFlight is a no-op after unmount
 // (runner.unmount() runs first), so no post-unmount React state update ever occurs.
-if(saveUiRunnerRef.current)saveUiRunnerRef.current.clearInFlight();if(saveUiRunnerRef.current&&saveUiRunnerRef.current.isMounted())setSupplierWriteError("");};const setCurrentBizId=id=>{// R3: invalidate synchronously BEFORE any state update — a raw later effect
+if(saveUiRunnerRef.current)saveUiRunnerRef.current.clearInFlight();if(saveUiRunnerRef.current&&saveUiRunnerRef.current.isMounted())setSupplierWriteError("");};const setCurrentBizId=id=>{// BIZ-RESELECT: choosing the business that is ALREADY the live selection (same tenant, same
+// business, controller already bound to it) is not a switch. Invalidating here bumped the
+// selection generation and reset the entries lane while currentBizId stayed equal, so the
+// listeners effect never re-ran and every financial screen stayed at "loading" until a reload.
+// The valid loaded state is kept as is; any real change (other business / tenant / null) still
+// invalidates synchronously below.
+{const nid=id==null?null:id;const tid=window._currentTenantId==null?null:window._currentTenantId;const cur=selectionCtrlRef.current.current();if(nid!==null&&nid===currentBizId&&cur.bizId===nid&&cur.tenantId===tid)return;}// R3: invalidate synchronously BEFORE any state update — a raw later effect
 // is not enough; anything captured for the old selection is stale right now.
 invalidateSelection(window._currentTenantId==null?null:window._currentTenantId,id==null?null:id);setEditingId(null);setEntryExceptions({});setEntrySaveInFlight(false);// R4: an orphaned old-selection save no longer owns the UI in-flight flag
 setSupplierWriteError("");// R5: selection-scoped supplier error cleared on business switch
