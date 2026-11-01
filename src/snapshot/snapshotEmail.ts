@@ -1,7 +1,8 @@
 import { sendEmail } from "../../lib/sendEmail.js";
 import type { SnapshotData } from "./snapshotBuilder.js";
 import type { AmountString } from "../finance/decimal.js";
-import { decIsNegative, decIsZero, parseAmountString, ratAdd, ratCmp, ratFromInt, ratMul, ratSub, serializeDec, serializeRat } from "../finance/decimal.js";
+import { decIsNegative, decIsZero, parseAmountString, ratAdd, ratCmp, ratFromDec, ratFromInt, ratMul, ratSub, serializeDec, serializeRat } from "../finance/decimal.js";
+import type { Rat } from "../finance/decimal.js";
 import { parseAmount } from "../finance/cells.js";
 import type { BusinessDate } from "../finance/types.js";
 import { datesInRange, monthBounds } from "../finance/businessDate.js";
@@ -13,8 +14,9 @@ import type { PolicyEvaluation } from "../policy/evaluate.js";
 import { evaluatePolicy } from "../policy/evaluate.js";
 import type { PolicyValue } from "../policy/registry.js";
 import { resolvePolicy } from "../policy/registry.js";
-import type { ProductProjection } from "../policy/productFinance.js";
-import { REV_FORECAST_FORMULA_ID } from "../policy/productFinance.js";
+import type { ProductInputs, ProductProjection } from "../policy/productFinance.js";
+import { REV_FORECAST_FORMULA_ID, productClosureCalendar, productDays, productTimeline } from "../policy/productFinance.js";
+import { accrueWindow } from "../metrics/costTimeline.js";
 import { NOT_AVAILABLE, formatShekel } from "../presenters/money.js";
 import { formatPercent } from "../presenters/percent.js";
 import { LABELS } from "../presenters/labels.js";
@@ -159,6 +161,96 @@ export function deliveryAdjustedProfit(report: FinancialReport, projection: Prod
   }
   return { operatingProfit: opAfter, projectedOperatingProfit: ppAfter };
 }
+
+// ── PNL-AVAIL (server): the page's available-data P&L (index.html pnlAvailable / availableLabor / recordedAccrual),
+// exact decimals, the core's formulas only. Used ONLY when the month's operating profit is not complete.
+type Avail = { readonly state: "known"; readonly amount: AmountString | null } | { readonly state: "missing" | "invalid" };
+const AVAIL_LABEL: Readonly<Record<string, string>> = Object.freeze({ purchases: "קניות", labor: "עלות עובדים", other: "הוצאות אחרות", fixedRent: "קבועות + שכ״ד", royalty: "תמלוגים" });
+const sumOf = (list: readonly AmountString[]): AmountString => serializeRat(list.reduce<Rat>((acc, x) => ratAdd(acc, parseAmountString(x)), ratFromInt(0)));
+const contradictedReport = (report: FinancialReport): boolean => report.flags.some((f) => f.code === "closed_day_has_recorded_values");
+type CoverageRow = FinancialReport["coverage"]["revenue"];
+const badCoverage = (c: CoverageRow): boolean => c.invalidDays.length > 0 || c.partialDays.length > 0;
+
+/** The month's labor from valid recorded data: recorded hourly employer cost + the core's salaried accrual (once). */
+function availableLaborOf(report: FinancialReport): { readonly state: "known" | "missing" | "invalid"; readonly amount: AmountString | null; readonly complete: boolean; readonly salaried: boolean } {
+  const A = report.actual, cov = report.coverage, g = A.labor.globalEmployerCost;
+  if (A.labor.employerCost.state === "complete") return { state: "known", amount: A.labor.employerCost.value, complete: true, salaried: false };
+  if (badCoverage(cov.hourlyLabor) || g.state === "invalid_components" || contradictedReport(report)) return { state: "invalid", amount: null, complete: false, salaried: false };
+  if (A.hourlyLabor.value === null || g.state !== "complete") return { state: "missing", amount: null, complete: false, salaried: false };
+  return { state: "known", amount: sumOf([A.hourlyLabor.value, g.value]), complete: false, salaried: ratCmp(parseAmountString(g.value), ratFromInt(0)) !== 0 };
+}
+
+/** The core's fixed / rent / royalty accrual over the report window with the RECORDED revenue of each date (what the core withholds only because revenue days are missing). */
+function recordedAccrualOf(inputs: ProductInputs, report: FinancialReport): { regular: AmountString; rentFixed: AmountString; rentPct: AmountString; royaltyPct: AmountString } | null {
+  const fx = report.actual.fixedAccrual, w = report.window, cov = report.coverage.revenue;
+  if (fx.state === "complete" || w.state !== "actual" || !w.from || !w.to || report.actual.revenue.value === null) return null;
+  if (badCoverage(cov) || contradictedReport(report)) return null;
+  if (!Array.isArray(fx.issues) || fx.issues.length < 1 || !fx.issues.every((i) => i && i.component === "revenue")) return null;
+  const rm = new Map<BusinessDate, Rat | null>();
+  for (const d of productDays(inputs, { from: w.from, to: w.to }).days) if (d.revenue.presence === "present" && d.revenue.value !== null) rm.set(d.date, ratFromDec(d.revenue.value));
+  const a = accrueWindow(productTimeline(inputs), datesInRange(w.from, w.to), rm, { asOfBusinessDate: w.asOfBusinessDate, closedDates: productClosureCalendar(inputs).closedDates });
+  if (a.uncoveredDates.length !== 0 || !a.allocation.aggregateDeterminable) return null;
+  return { regular: serializeRat(a.fixedRegular), rentFixed: serializeRat(a.rentFixed), rentPct: serializeRat(a.rentPct), royaltyPct: serializeRat(a.royaltyPct) };
+}
+
+/** The available-data view (null when the operating profit is complete or the window has no completed day). */
+export function availableDataOf(report: FinancialReport, inputs: ProductInputs | null, est: DeliveryEstimate | null): NonNullable<SnapshotFinancials["available"]> | null {
+  if (report.window.state !== "actual" || report.actual.operatingProfit.state === "complete") return null;
+  const A = report.actual, cov = report.coverage, fx = A.fixedAccrual;
+  const contra = contradictedReport(report);
+  const revValid = !badCoverage(cov.revenue) && !contra;
+  const rev = revValid ? A.revenue.value : null;
+  const purchases: Avail = badCoverage(cov.purchases) || (A.purchases.credits && A.purchases.credits.state === "invalid") ? { state: "invalid" }
+    : A.purchases.value === null ? { state: "missing" } : { state: "known", amount: A.purchases.value };
+  const lab = availableLaborOf(report);
+  const labor: Avail = lab.state === "known" ? { state: "known", amount: lab.amount } : { state: lab.state };
+  const other: Avail = badCoverage(cov.otherExpense) ? { state: "invalid" } : { state: "known", amount: A.otherExpense.value };
+  let acc: { regular: AmountString; rentFixed: AmountString; rentPct: AmountString; royaltyPct: AmountString } | null = null;
+  if (fx.state === "complete" && fx.regular !== null && fx.rentFixed !== null && fx.rentPct !== null && fx.royaltyPct !== null) acc = { regular: fx.regular, rentFixed: fx.rentFixed, rentPct: fx.rentPct, royaltyPct: fx.royaltyPct };
+  else if (revValid && inputs) acc = recordedAccrualOf(inputs, report);
+  const fxNot: "invalid" | "missing" = fx.state === "invalid_components" ? "invalid" : "missing";
+  const comp: Record<string, Avail> = {
+    purchases, labor, other,
+    fixedRent: acc ? { state: "known", amount: sumOf([acc.regular, acc.rentFixed, acc.rentPct]) } : { state: fxNot },
+    royalty: acc ? { state: "known", amount: acc.royaltyPct } : { state: fxNot },
+  };
+  const keys = ["purchases", "labor", "other", "fixedRent", "royalty"];
+  const anyInvalid = !revValid || keys.some((k) => comp[k].state === "invalid");
+  const missing = keys.filter((k) => comp[k].state === "missing");
+  let balance: AmountString | null = null;
+  if (!anyInvalid && rev !== null) {
+    const known: AmountString[] = [];
+    for (const k of keys) { const c = comp[k]; if (c.state === "known" && c.amount !== null) known.push(c.amount); }
+    balance = serializeRat(ratSub(parseAmountString(rev), parseAmountString(sumOf(known))));
+  }
+  // DELIVERY-PCT: the recorded-data balance includes the estimate once; an invalid setting withholds the balance
+  let deliveryText = "";
+  if (est !== null && balance !== null) {
+    if (est.state === "known" && est.amount !== null) balance = serializeRat(ratSub(parseAmountString(balance), parseAmountString(est.amount)));
+    else if (est.state === "invalid") { balance = null; deliveryText = " הגדרת עלות המשלוחים או נתוני ההכנסות אינם תקינים — היתרה לא מחושבת."; }
+  }
+  const cnt = (c: CoverageRow) => `${c.presentDays}/${c.expectedDays}`;
+  const note = `מחושב מהנתונים שהוזנו: ${cnt(cov.revenue)} ימי הכנסה, ${cnt(cov.purchases)} ימי קניות, ${cnt(cov.hourlyLabor)} ימי עלות עובדים שעתית.`
+    + (balance !== null ? " השורה התחתונה היא יתרה לפי הנתונים שהוזנו ואינה רווח נקי." + (missing.length ? ` היתרה אינה כוללת: ${missing.map((k) => AVAIL_LABEL[k]).join(", ")} (לא הוזנו נתונים).` : "") : "")
+    + (acc && fx.state !== "complete" ? " אחוזי שכ״ד ותמלוגים לפי ההכנסות שהוזנו." : "")
+    + (lab.state === "known" && !lab.complete ? ` עלות עובדים: עלות שעתית ב-${cnt(cov.hourlyLabor)} ימים שהוזנו${lab.salaried ? " + שכר גלובלי לפי ההגדרות" : ""}.` : "")
+    + (anyInvalid ? " בחודש יש נתונים לא תקינים — הסעיפים שלהם מוצגים כ־\"—\" והיתרה לא מחושבת." : "")
+    + deliveryText;
+  const shown = (c: Avail, partial: boolean): SnapshotAmount => c.state !== "known" ? unavailableAmount("available_" + c.state) : c.amount === null ? unavailableAmount("not_recorded") : valueAmount(c.amount, partial ? "partial" : "complete", partial ? "recorded_data" : null);
+  const fxPartial = fx.state !== "complete";
+  const part = (v: AmountString | undefined, partial: boolean): SnapshotAmount => acc && v !== undefined ? valueAmount(v, partial ? "partial" : "complete", partial ? "recorded_data" : null) : unavailableAmount("available_" + fxNot);
+  return Object.freeze({
+    balance: balance === null ? unavailableAmount(anyInvalid ? "available_invalid" : "available_unavailable") : valueAmount(balance, "partial", "recorded_data_balance"),
+    labor: shown(labor, lab.state === "known" && !lab.complete),
+    fixedRegular: part(acc ? acc.regular : undefined, false),
+    rentFixed: part(acc ? acc.rentFixed : undefined, false),
+    rentPct: part(acc ? acc.rentPct : undefined, fxPartial),
+    royalty: part(acc ? acc.royaltyPct : undefined, fxPartial),
+    missing: Object.freeze(missing.map((k) => AVAIL_LABEL[k])),
+    invalid: anyInvalid,
+    note,
+  });
+}
 /** The e-mail's sales target has no policy-registry key (D owns it): the legacy fallback is kept. */
 export const LEGACY_SALES_TARGET_FALLBACK: AmountString = "700000";
 
@@ -287,6 +379,22 @@ export interface SnapshotFinancials {
     readonly expectedRevenueDays: number;
     readonly note: string;
   };
+  /**
+   * PNL-AVAIL (the page's rule): present only for an actual month whose operating profit is NOT complete. The valid
+   * recorded amounts stay visible and the bottom line is a recorded-data BALANCE ("יתרה לפי הנתונים שהוזנו") —
+   * never net profit; a component with nothing recorded is "missing" (named, never ₪0), an invalid one blocks it.
+   */
+  readonly available?: {
+    readonly balance: SnapshotAmount;
+    readonly labor: SnapshotAmount;
+    readonly fixedRegular: SnapshotAmount;
+    readonly rentFixed: SnapshotAmount;
+    readonly rentPct: SnapshotAmount;
+    readonly royalty: SnapshotAmount;
+    readonly missing: readonly string[];
+    readonly invalid: boolean;
+    readonly note: string;
+  };
 }
 
 const unavailableAmount = (reason: string | null, issueReasons: readonly string[] = []): SnapshotAmount =>
@@ -380,12 +488,15 @@ export function buildSnapshotView(input: {
   readonly provenance: SnapshotProvenanceInput;
   readonly config: Record<string, unknown> | null;
   readonly delivery?: SnapshotDeliveryInput | null;
+  /** PNL-AVAIL: the canonical inputs (from the server API loader) for the recorded-data accrual of an incomplete month. */
+  readonly inputs?: ProductInputs | null;
 }): SnapshotFinancials {
   const { report, projection, provenance, config } = input;
   const est = input.delivery ? deliveryEstimateOf(report, config, input.delivery.days) : null;
   const dl = est === null ? null : { estimate: est, ...deliveryAdjustedProfit(report, projection, config, est) };
   const a = report.actual;
   const fa = a.fixedAccrual;
+  const av = availableDataOf(report, input.inputs || null, est);
   const amounts: SnapshotFinancials["amounts"] = Object.freeze({
     revenue: fromMetricTotal(a.revenue),
     purchases: fromMetricTotal(a.purchases),
@@ -465,11 +576,12 @@ export function buildSnapshotView(input: {
       legacyHourlyPayrollDates: Object.freeze([...a.labor.legacyHourlyPayroll.dates]),
     }),
     provenance: Object.freeze({ ...provenance, proj: PROJECTION_FORMULA_VERSION, forecast: fc ? fc.formulaId : REV_FORECAST_FORMULA_ID, policy: policy.policyVersion, snapshot: SNAPSHOT_VIEW_VERSION }),
-    ...(dl === null ? {} : { delivery: deliveryView(dl, amounts.revenue) }),
+    ...(dl === null ? {} : { delivery: deliveryView(dl, amounts.revenue, av !== null && av.balance.exact !== null) }),
+    ...(av === null ? {} : { available: av }),
   });
 }
 
-function deliveryView(dl: { readonly estimate: DeliveryEstimate }, revenue: SnapshotAmount): NonNullable<SnapshotFinancials["delivery"]> {
+function deliveryView(dl: { readonly estimate: DeliveryEstimate }, revenue: SnapshotAmount, balanceShown: boolean): NonNullable<SnapshotFinancials["delivery"]> {
   const e = dl.estimate;
   const amount = e.state === "known" && e.amount !== null ? valueAmount(e.amount, e.presentRevenueDays === e.expectedRevenueDays ? "complete" : "partial", e.presentRevenueDays === e.expectedRevenueDays ? null : "incomplete_coverage") : unavailableAmount("delivery_estimate_" + e.state);
   const share = shareOfRevenue(amount, revenue);   // complete values only, like every other e-mail share
@@ -477,7 +589,7 @@ function deliveryView(dl: { readonly estimate: DeliveryEstimate }, revenue: Snap
   const coverage = e.state === "known" && e.presentRevenueDays !== e.expectedRevenueDays ? ` שהוזן (${e.presentRevenueDays}/${e.expectedRevenueDays} ימי הכנסה)` : "";
   const note = e.state === "invalid" ? (e.reason === "delivery_setting_invalid" ? "הגדרת עלות המשלוחים אינה תקינה — הערכת המשלוחים והרווח אינם מוצגים" : "נתוני הכנסות לא תקינים — הערכת המשלוחים אינה מחושבת")
     : e.state === "missing" ? "לא הוזנו הכנסות — אין הערכת עלות משלוחים"
-    : `עלות משלוחים היא הערכה (${rateText}${coverage}; אין חיבור למערכת משלוחים או קופה). הרווח הנקי והרווח החזוי כוללים אותה פעם אחת`;
+    : `עלות משלוחים היא הערכה (${rateText}${coverage}; אין חיבור למערכת משלוחים או קופה). ${balanceShown ? "היתרה לפי הנתונים שהוזנו כוללת אותה פעם אחת" : "הרווח הנקי והרווח החזוי כוללים אותה פעם אחת"}`;
   return Object.freeze({ amount, share, rates: Object.freeze([...e.rates]), presentRevenueDays: e.presentRevenueDays, expectedRevenueDays: e.expectedRevenueDays, note });
 }
 
@@ -594,17 +706,21 @@ function getHebrewDateString(dateStr: string): string {
 }
 
 /** The text lines directly below MTD revenue (CDA-18): exact dates, never colour only. */
-export function revenueDisclosure(f: SnapshotFinancials): { warning: string; closures: string } {
+export function revenueDisclosure(f: SnapshotFinancials): { warning: string; coverage: string; closures: string } {
   const c = f.coverage.revenue;
   const parts: string[] = [];
-  if (c.missing.length > 0) parts.push(`חסרות הכנסות בימים: ${dateList(c.missing)}`);
+  // MRW-8 (as on the page): days with no revenue entry are a normal incomplete-data state — a quiet, dated coverage
+  // note, never an alert. The visible warning is kept for invalid / partial cells and closed-day contradictions.
+  const coverage = c.missing.length > 0
+    ? `חסרות הכנסות בימים: ${dateList(c.missing)} — ההכנסות לפי הימים שהוזנו; רווח נקי ואחוזים שתלויים בהן אינם מוצגים`
+    : "";
   const invalid = c.invalid.filter((d) => !f.coverage.closedWithRevenue.includes(d)); // a contradiction is named once, as such
   if (invalid.length > 0) parts.push(`ערך הכנסה לא תקין בימים: ${dateList(invalid)}`);
   if (c.partial.length > 0) parts.push(`הכנסה חלקית (תא לא תקין) בימים: ${dateList(c.partial)}`);
   if (f.coverage.closedWithRevenue.length > 0) parts.push(`סומנו כסגורים אך נרשמו בהם הכנסות: ${dateList(f.coverage.closedWithRevenue)}`);
   const warning = parts.length > 0 ? `⚠ ${parts.join(" · ")} — סכום ההכנסות אינו מלא; רווח ואחוזים שתלויים בו אינם מוצגים` : "";
   const closures = f.coverage.closedDays.length > 0 ? `${LABELS.presence.closedDay} (הכנסה 0, לא חסר): ${dateList(f.coverage.closedDays)}` : "";
-  return { warning, closures };
+  return { warning, coverage, closures };
 }
 
 export async function sendSnapshotEmail(
@@ -623,17 +739,23 @@ export async function sendSnapshotEmail(
 
   // KPI rows: exact canonical values; shares of revenue only from complete values (kpiShares)
   const goal = (g: { exact: string }) => formatPercent(g.exact);
-  const kpiRows: Array<{ label: string; amount: SnapshotAmount; share: SnapshotRatio; target: string | null }> = [
+  const av = f.available || null;
+  const kpiRows: Array<{ label: string; amount: SnapshotAmount; share: SnapshotRatio; target: string | null; bare?: boolean }> = [
     { label: "הכנסות", amount: f.amounts.revenue, share: f.ratios.revenueShare, target: null },
     { label: "קניות (מזון)", amount: f.amounts.purchases, share: f.ratios.purchasesPct, target: goal(f.goals.foodCostPct) },
-    { label: "עלות עובדים", amount: f.amounts.laborEmployerCost, share: f.ratios.laborPct, target: goal(f.goals.laborPct) },
-    { label: "הוצאות קבועות", amount: f.amounts.fixedRegular, share: f.ratios.fixedRegularShare, target: null },
-    { label: "שכר דירה קבוע", amount: f.amounts.rentFixed, share: f.ratios.rentFixedShare, target: null },
-    { label: "שכר דירה באחוזים", amount: f.amounts.rentPct, share: f.ratios.rentPctShare, target: null },
-    { label: "תמלוגים", amount: f.amounts.royalty, share: f.ratios.royaltyShare, target: null },
+    // PNL-AVAIL: an incomplete month keeps its valid recorded amounts (shares stay complete-only, "—")
+    { label: "עלות עובדים", amount: av ? av.labor : f.amounts.laborEmployerCost, share: f.ratios.laborPct, target: goal(f.goals.laborPct) },
+    { label: "הוצאות קבועות", amount: av ? av.fixedRegular : f.amounts.fixedRegular, share: f.ratios.fixedRegularShare, target: null },
+    { label: "שכר דירה קבוע", amount: av ? av.rentFixed : f.amounts.rentFixed, share: f.ratios.rentFixedShare, target: null },
+    { label: "שכר דירה באחוזים", amount: av ? av.rentPct : f.amounts.rentPct, share: f.ratios.rentPctShare, target: null },
+    { label: "תמלוגים", amount: av ? av.royalty : f.amounts.royalty, share: f.ratios.royaltyShare, target: null },
     ...(f.delivery ? [{ label: "עלות משלוחים (הערכה)", amount: f.delivery.amount, share: f.delivery.share, target: null }] : []),
-    { label: "רווח נקי", amount: f.amounts.operatingProfit, share: f.ratios.operatingProfitShare, target: null },
+    // the bottom line of an incomplete month is the recorded-data balance (never called net profit)
+    av && av.balance.exact !== null
+      ? { label: "יתרה לפי הנתונים שהוזנו", amount: av.balance, share: f.ratios.operatingProfitShare, target: null, bare: true }
+      : { label: "רווח נקי", amount: f.amounts.operatingProfit, share: f.ratios.operatingProfitShare, target: null },
   ];
+  const availableNote = av ? av.note : "";
   const deliveryNote = f.delivery ? f.delivery.note : "";
   const revenueNote = revenueDisclosure(f);
 
@@ -942,13 +1064,16 @@ export async function sendSnapshotEmail(
                 (row, i) => `
               <tr class="kpi-row">
                 <td class="kpi-cell kpi-label" style="width: 40%;">${row.label}</td>
-                <td class="kpi-cell kpi-value" style="width: 35%; text-align: left;">${money(row.amount)}${partialMark(row.amount)}</td>
+                <td class="kpi-cell kpi-value" style="width: 35%; text-align: left;">${money(row.amount)}${row.bare ? "" : partialMark(row.amount)}</td>
                 <td class="kpi-cell kpi-pct" style="width: 25%; text-align: left;">
                   ${pct(row.share)}${row.target !== null ? ` (יעד: ${row.target})` : ""}
                 </td>
               </tr>${i === 0 && revenueNote.warning ? `
               <tr class="kpi-note-row">
                 <td class="kpi-cell kpi-warning" colspan="3" role="alert">${revenueNote.warning}</td>
+              </tr>` : ""}${i === 0 && revenueNote.coverage ? `
+              <tr class="kpi-note-row">
+                <td class="kpi-cell kpi-note" colspan="3">${revenueNote.coverage}</td>
               </tr>` : ""}${i === 0 && revenueNote.closures ? `
               <tr class="kpi-note-row">
                 <td class="kpi-cell kpi-note" colspan="3">${revenueNote.closures}</td>
@@ -958,6 +1083,7 @@ export async function sendSnapshotEmail(
               .join("")}
           </tbody>
         </table>
+        ${availableNote ? `<div class="forecast-label">${availableNote}</div>` : ""}
         ${deliveryNote ? `<div class="forecast-label">${deliveryNote}</div>` : ""}
         ${completenessNote ? `<div class="forecast-label">${completenessNote}</div>` : ""}
         ${reasonNote ? `<div class="forecast-label">${reasonNote}</div>` : ""}

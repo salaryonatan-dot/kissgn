@@ -277,7 +277,7 @@ padding-top: 0;
 </td>
 </tr>
 <tr class="kpi-note-row">
-<td class="kpi-cell kpi-warning" colspan="3" role="alert">⚠ חסרות הכנסות בימים: 08.09, 15.09 — סכום ההכנסות אינו מלא; רווח ואחוזים שתלויים בו אינם מוצגים</td>
+<td class="kpi-cell kpi-note" colspan="3">חסרות הכנסות בימים: 08.09, 15.09 — ההכנסות לפי הימים שהוזנו; רווח נקי ואחוזים שתלויים בהן אינם מוצגים</td>
 </tr>
 <tr class="kpi-row">
 <td class="kpi-cell kpi-label" style="width: 40%;">קניות (מזון)</td>
@@ -322,14 +322,15 @@ padding-top: 0;
 </td>
 </tr>
 <tr class="kpi-row">
-<td class="kpi-cell kpi-label" style="width: 40%;">רווח נקי</td>
-<td class="kpi-cell kpi-value" style="width: 35%; text-align: left;">—</td>
+<td class="kpi-cell kpi-label" style="width: 40%;">יתרה לפי הנתונים שהוזנו</td>
+<td class="kpi-cell kpi-value" style="width: 35%; text-align: left;">₪9,107</td>
 <td class="kpi-cell kpi-pct" style="width: 25%; text-align: left;">
 —
 </td>
 </tr>
 </tbody>
 </table>
+<div class="forecast-label">מחושב מהנתונים שהוזנו: 26/28 ימי הכנסה, 28/28 ימי קניות, 28/28 ימי עלות עובדים שעתית. השורה התחתונה היא יתרה לפי הנתונים שהוזנו ואינה רווח נקי.</div>
 </div>
 <div class="pace-section">
 <div class="pace-title">📈 הכנסה חזויה לחודש</div>

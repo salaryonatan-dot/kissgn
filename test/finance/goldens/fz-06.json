@@ -280,6 +280,123 @@
       "state": "string"
      }
     },
+    "available?": {
+     "balance": {
+      "exact": "null",
+      "issueReasons": [],
+      "number": "null",
+      "reason": "string",
+      "state": "string"
+     },
+     "fixedRegular": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "invalid": "boolean",
+     "labor": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": "string",
+      "state": "string"
+     },
+     "missing": [],
+     "note": "string",
+     "rentFixed": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "rentPct": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     },
+     "royalty": {
+      "exact": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "issueReasons": [],
+      "number": {
+       "$oneOf": [
+        "null",
+        "number"
+       ]
+      },
+      "reason": {
+       "$oneOf": [
+        "null",
+        "string"
+       ]
+      },
+      "state": "string"
+     }
+    },
     "costAllocation": {
      "allocationEligibleDays": "number",
      "completedClosureDates": [

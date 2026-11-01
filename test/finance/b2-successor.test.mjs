@@ -80,11 +80,13 @@ test("B2S-05 missing revenue on two completed dates with other activity: exact d
   assert.deepEqual([f.amounts.revenue.state, f.coverage.revenue.missing], ["partial", ["2026-09-08", "2026-09-15"]]);
   assert.deepEqual([f.projection.state, f.projection.revenue.state, f.projection.missingRevenueDates], ["partial", "partial", ["2026-09-08", "2026-09-15"]]);
   assert.equal(f.amounts.purchases.state, "complete", "purchases stay present on those dates (never implied zero revenue)");
-  // the warning row is the table row immediately after the revenue row (not a footnote), red AND textual
+  // the dated coverage row is the table row immediately after the revenue row (not a footnote), textual;
+  // MRW-8: missing days only are a QUIET coverage note (kpi-note), never an alert (no ⚠, no role="alert")
   const rowsHtml = html.split('<tr class="kpi-');
   const revIdx = rowsHtml.findIndex((r) => r.includes(">הכנסות</td>"));
-  assert.ok(revIdx > 0 && rowsHtml[revIdx + 1].startsWith('note-row">') && rowsHtml[revIdx + 1].includes("kpi-warning"), "warning row directly below revenue");
-  assert.match(text, /הכנסות ₪26,000 \(חלקי\) — ⚠ חסרות הכנסות בימים: 08\.09, 15\.09 — סכום ההכנסות אינו מלא/);
+  assert.ok(revIdx > 0 && rowsHtml[revIdx + 1].startsWith('note-row">') && rowsHtml[revIdx + 1].includes("kpi-note") && !rowsHtml[revIdx + 1].includes("kpi-warning"), "quiet coverage row directly below revenue");
+  assert.doesNotMatch(html, /role="alert"/); assert.doesNotMatch(text, /⚠/);
+  assert.match(text, /הכנסות ₪26,000 \(חלקי\) — חסרות הכנסות בימים: 08\.09, 15\.09 — ההכנסות לפי הימים שהוזנו; רווח נקי ואחוזים שתלויים בהן אינם מוצגים/);
   assert.match(text, /₪[\d,]+ \(חלקי\) תחזית הכנסות \(REV_FORECAST\/v2\)/, "the forecast is labelled partial");
   assert.match(text, /תחזית חלקית — חסרות או לא תקינות הכנסות בימים: 08\.09, 15\.09/);
   assert.deepEqual([snapshot.totalSales, snapshot.netProfit, snapshot.paceRevenue, snapshot.forecast], [null, null, null, null], "legacy number fields carry complete values only");
@@ -264,10 +266,11 @@ test("B2S-17 one captured clock across the Israel midnight boundary: an advancin
 });
 
 // ── B2-AT05: missing payroll through the e-mail subject ───────────────────────
-test("B2S-18 missing completed payroll: labor / labor % / profit '—', the subject says 'רווח: —', no labor or profit insight", async () => {
+test("B2S-18 missing completed payroll: labor % / net profit '—' (PNL-AVAIL: labor shows its recorded amount, partial), the subject says 'רווח: —', no labor or profit insight", async () => {
   const { subject, text, snapshot } = await mail({ rows: INVARIANTS.find((i) => i.id === "INV-05").apply(completeSeptember()) });
   assert.match(subject, /\| רווח: —$/);
-  assert.match(text, /עלות עובדים — — \(יעד: 27\.0%\)/);
+  assert.match(text, /עלות עובדים ₪5,500 \(חלקי\) — \(יעד: 27\.0%\)/);
+  assert.doesNotMatch(text, /רווח נקי ₪/);
   assert.equal(snapshot.insights.some((i) => i.rule === "labor" || i.rule === "net_profit"), false);
 });
 

@@ -46,13 +46,16 @@ test("E-01 / B2-T01 complete month: exact values formatted once (₪ half away f
   assert.doesNotMatch(text, /NaN|undefined|Infinity|null/);
 });
 
-test("E-02 / B2-T03 / FC-01 a missing completed day: subject 'רווח: —', revenue marked partial, ratios and profit '—', no profit insight", async () => {
+test("E-02 / B2-T03 / FC-01 a missing completed day: subject 'רווח: —', revenue marked partial, ratios and net profit '—' (PNL-AVAIL: the recorded-data balance instead), no profit insight", async () => {
   const { subject, text } = await mail(INVARIANTS.find((i) => i.id === "INV-02").apply(completeSeptember()));
   assert.match(subject, /\| רווח: —$/);
   assert.match(row(text, "הכנסות"), /₪27,000 \(חלקי\) —/);
-  assert.match(row(text, "רווח נקי"), /— —/);
+  // PNL-AVAIL: no net-profit figure; the bottom line is the recorded-data balance, labelled as such (share "—")
+  assert.doesNotMatch(text, /רווח נקי ₪/);
+  assert.match(row(text, "יתרה לפי הנתונים שהוזנו"), /^יתרה לפי הנתונים שהוזנו ₪[0-9,]+ —/);
   // CDA-18 / B2-G21 (supersedes the generic day count for revenue): the exact missing date, in text, directly below MTD revenue
-  assert.match(text, /הכנסות ₪27,000 \(חלקי\) — ⚠ חסרות הכנסות בימים: 20\.09 — סכום ההכנסות אינו מלא/);
+  assert.match(text, /הכנסות ₪27,000 \(חלקי\) — חסרות הכנסות בימים: 20\.09 — ההכנסות לפי הימים שהוזנו/);
+  assert.doesNotMatch(text, /⚠ חסרות הכנסות/, "MRW-8: missing days only are a quiet note, not a warning");
   assert.doesNotMatch(text, /רווח נקי (שלילי|חזק)/);
 });
 

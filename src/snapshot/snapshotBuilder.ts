@@ -164,6 +164,7 @@ export async function buildSnapshotForBiz(
     projection,
     provenance,
     config,
+    inputs,
     delivery: deliveryDates === null ? null : { days: deliveryDates.map((date) => ({ date, revenue: toAnalyticsFinancials(canonicalDayRecord(inputs, date)).fin.revenue ?? null })) },
   });
   const f = financials;
