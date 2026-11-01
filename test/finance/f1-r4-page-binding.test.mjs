@@ -221,7 +221,12 @@ test("PB-06 a generation bump WITHOUT a business change (re-selecting the same b
 test("PB-07 page literals: the editor receives the node ONLY for the live selection, a null business when the selection is elsewhere, decodes bound, and the two capability checks name MARJIN_COSTH/6", () => {
   const prop = 'historyNode={finRaw.bizId===currentBizId&&finRaw.tenantId===finSel.tenantId&&finRaw.gen===finSel.gen?finRaw.costHistory:{kind:"loading"}}';
   assert.equal(html.split(prop).length - 1, 2, "both editor call sites bind the node to the live selection");
-  assert.equal(html.split("tenantId={finSel.tenantId} bizId={finSel.bizId===currentBizId?currentBizId:null}").length - 1, 2);
+  const bindProps = "tenantId={finSel.tenantId} bizId={finSel.bizId===currentBizId?currentBizId:null}";
+  const sites = (tag) => html.split("<" + tag + " ").slice(1).map((x) => x.slice(0, x.indexOf("/>")));
+  assert.equal(sites("CostHistoryEditor").length, 2); assert.ok(sites("CostHistoryEditor").every((x) => x.includes(bindProps)), "both editor call sites bind the business to the live selection");
+  // DELIVERY-PCT: the delivery-cost setting rendered beside each editor is bound to the same live selection
+  assert.equal(sites("DeliveryCostSetting").length, 2); assert.ok(sites("DeliveryCostSetting").every((x) => x.includes(bindProps)), "the delivery-cost setting binds the business to the live selection");
+  assert.equal(html.split(bindProps).length - 1, 4, "no other site uses the binding");
   assert.ok(html.includes('    : !bound ? {state:"unreadable",reason:"context_unbound"}'), "the editor is unavailable without a binding");
   assert.ok(html.includes("    : codec.decodeHistoryStructure({exists:node.kind === \"raw\",value:node.raw},{tenantId,bizId});"), "the editor decodes bound");
   assert.ok(html.includes('const histBind = window.MarjinC1.historyBinding(finRaw, finSel, currentBizId, businesses);'));

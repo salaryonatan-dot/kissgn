@@ -1412,6 +1412,10 @@
     var TXT = Object.freeze({
       partial: "חלקי",
       fcRecordedBasis: "מחושב מהנתונים שהוזנו: ",
+      deliveryEstimate: "הערכה: ",
+      deliveryInvalid: "הגדרת עלות המשלוחים אינה תקינה",
+      deliveryLabel: "עלות משלוחים (הערכה)",
+      deliveryNetNote: "כולל עלות משלוחים משוערת",
       pnlInvalidNoBalance: "בחודש יש נתונים לא תקינים — הסעיפים שלהם מוצגים כ־\"—\" והיתרה לא מחושבת.",
       missingRevenue: "חסרות הכנסות בימים: ",
       invalidRevenue: "ערך הכנסה לא תקין בימים: ",
@@ -1970,6 +1974,17 @@
         var accrualBasisText = fxRec ? TXT.fcRecordedBasis + "שכ״ד ותמלוגים באחוזים לפי ההכנסות שהוזנו (" + R.coverage.revenue.presentDays + "/" + R.coverage.revenue.expectedDays + " ימי הכנסה)" : null;
         var pp = proj.projection;
         var fRev = proj.forecast.projectedRevenue;
+        // DELIVERY-PCT: the estimate on the recorded revenue to date; the projection adds today's rate on the projected rest of the month
+        var dl = deliveryOf(F, inputs, R, src);
+        var dlAmt = dl && dl.state === "known" ? dl.amount : null;
+        var ppProfit = pp ? pp.operatingProfit : null;
+        if (dl && ppProfit !== null) {
+          var rToday = deliveryRateOn(deliveryVersions(src.config && src.config.state === "present" ? src.config.value : null).versions, asOf);
+          var rest = fRev !== null && A.revenue.value !== null ? subAmounts(F, fRev, A.revenue.value) : null;
+          var projDl = dlAmt === null || rest === null ? null
+            : sumAmounts(F, [dlAmt, rToday && toNum(F, rest) > 0 ? D(F).serializeRat(D(F).ratMul(amt(F, rest), D(F).ratDiv(amt(F, rToday.ratePct), D(F).ratFromInt(100)))) : "0"]);
+          ppProfit = projDl === null ? null : subAmounts(F, ppProfit, projDl);
+        }
         var projectedLabor = pp ? sumAmounts(F, [pp.hourlyLabor, pp.globalEmployerCost]) : null;
         var forecastNotes = [];
         var fdates = proj.forecast.invalidRevenueDates.slice().sort();   // MRW-8: missing days are not a warning
@@ -1995,7 +2010,9 @@
           { key: "fixed", lbl: "קבועות", amount: fx.state === "complete" ? fx.regular : (fxRec ? fxRec.regular : (fxKnown ? fxKnown.regular : null)), color: "#D1D5DB", configured: cv.fixedItemsConfigured },
           { key: "other", lbl: "שונות", amount: otherAmt, color: "#E5E7EB", configured: otherAmt === null },
         ];
-        var sharesAvailable = A.operatingProfit.state === "complete";
+        // DELIVERY-PCT: the estimate is a breakdown component only when a rate is configured for the window
+        if (dl) comps.push({ key: "delivery", lbl: "משלוחים (הערכה)", amount: dlAmt, color: "#FDE68A", configured: true });
+        var sharesAvailable = A.operatingProfit.state === "complete" && (!dl || dlAmt !== null);
         var compTotal = sharesAvailable ? sumAmounts(F, comps.map(function (c) { return c.amount; })) : null;
         // presence follows configuration / applicability; a known complete zero stays hidden
         var breakdown = comps.filter(function (c) { return c.configured || (c.amount !== null && toNum(F, c.amount) !== 0); }).map(function (c) {
@@ -2046,8 +2063,10 @@
           forecast: { text: money(F, fRev), amount: fRev, state: proj.forecast.state, notes: forecastNotes, formulaId: proj.forecast.formulaId },
           projectedPurchases: money(F, pp ? pp.purchases : null),
           projectedLabor: money(F, projectedLabor),
-          projectedProfit: { text: money(F, pp ? pp.operatingProfit : null), amount: pp ? pp.operatingProfit : null, negative: pp && pp.operatingProfit !== null && toNum(F, pp.operatingProfit) < 0,
-            marginText: pp && pp.operatingProfit !== null && pp.revenue !== null ? pctText(F, ratio(F, pp.operatingProfit, pp.revenue)) + " מהמחזור" : "—" },
+          projectedProfit: { text: money(F, ppProfit), amount: ppProfit, negative: pp && ppProfit !== null && toNum(F, ppProfit) < 0,
+            marginText: ppProfit !== null && pp && pp.revenue !== null ? pctText(F, ratio(F, ppProfit, pp.revenue)) + " מהמחזור" : "—",
+            deliveryNote: dl ? TXT.deliveryNetNote : null },
+          delivery: dl ? { text: money(F, dlAmt), state: dl.state, basisText: dl.basisText } : null,
           target: { text: money(F, target), amount: target },
           salesPct: { text: salesPct === null ? "—" : pctText(F, salesPct), width: salesPct === null ? 0 : Math.max(0, Math.min(toNum(F, salesPct), 100)), value: salesPct },
           gap: fRev === null ? { text: "—" } : (function () { var g = subAmounts(F, fRev, target); var neg = toNum(F, g) < 0; return { text: neg ? money(F, D(F).serializeRat(D(F).ratSub(D(F).ratFromInt(0), amt(F, g)))) + " מתחת ליעד" : "+" + money(F, g) + " מעל יעד", negative: neg }; })(),
@@ -2115,6 +2134,62 @@
       var ser = function (r) { return D(F).serializeRat(r); };
       return { regular: ser(a.fixedRegular), rentFixed: ser(a.rentFixed), rentPct: ser(a.rentPct), royaltyPct: ser(a.royaltyPct),
         fixedRent: ser(D(F).ratAdd(D(F).ratAdd(a.fixedRegular, a.rentFixed), a.rentPct)) };
+    }
+    /**
+     * DELIVERY-PCT: the business's estimated delivery cost = a configured percentage of its TOTAL recorded revenue
+     * (not delivery revenue), with effective dates (config.deliveryCost.versions: { versionId, effectiveFrom, ratePct,
+     * recordedAt, recordedBy }). There is no delivery / POS integration, so it is an ESTIMATE, shown as such. Each
+     * day's rate is the version in force that day (greatest effectiveFrom ≤ day, latest recording on ties), so a new
+     * rate never rewrites earlier days. Revenue is the core's day revenue (the same financial / VAT basis as every
+     * report line); a day without recorded revenue adds nothing; days before the first rate are not estimated. It is
+     * an operating expense: never subtracted from revenue, never part of purchases / Food Cost / gross profit.
+     */
+    var DEL_RATE_RE = /^(0|[1-9][0-9]?|100)(\.[0-9]*[1-9])?$/;
+    function deliveryVersions(cfg) {
+      var dc = cfg && typeof cfg === "object" && !Array.isArray(cfg) ? cfg.deliveryCost : undefined;
+      if (dc === undefined || dc === null) return { state: "absent", versions: [] };
+      if (typeof dc !== "object" || Array.isArray(dc) || !Array.isArray(dc.versions)) return { state: "invalid", versions: [] };
+      var out = [], bad = false;
+      dc.versions.forEach(function (v) {
+        var ok = v && typeof v === "object" && typeof v.effectiveFrom === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v.effectiveFrom)
+          && typeof v.ratePct === "string" && DEL_RATE_RE.test(v.ratePct) && Number(v.ratePct) <= 100 && typeof v.recordedAt === "number" && isFinite(v.recordedAt);
+        if (!ok) { bad = true; return; }
+        out.push({ versionId: typeof v.versionId === "string" ? v.versionId : "", effectiveFrom: v.effectiveFrom, ratePct: v.ratePct, recordedAt: v.recordedAt, recordedBy: typeof v.recordedBy === "string" ? v.recordedBy : null });
+      });
+      if (bad) return { state: "invalid", versions: out };
+      return out.length ? { state: "present", versions: out } : { state: "absent", versions: [] };
+    }
+    function deliveryRateOn(versions, date) {
+      var best = null;
+      (versions || []).forEach(function (v) {
+        if (v.effectiveFrom > date) return;
+        if (!best || v.effectiveFrom > best.effectiveFrom || (v.effectiveFrom === best.effectiveFrom && (v.recordedAt > best.recordedAt || (v.recordedAt === best.recordedAt && v.versionId > best.versionId)))) best = v;
+      });
+      return best;
+    }
+    /** null = no rate configured for this window (nothing shown); { state: known | missing | invalid, amount, basisText, rates[] } */
+    function deliveryOf(F, inputs, R, src) {
+      var dc = deliveryVersions(src && src.config && src.config.state === "present" ? src.config.value : null);
+      if (dc.state === "absent" || R.window.state !== "actual" || !R.window.from) return null;
+      if (!dc.versions.some(function (v) { return v.effectiveFrom <= R.window.to; }) && dc.state !== "invalid") return null;
+      if (dc.state === "invalid") return { state: "invalid", amount: null, basisText: TXT.deliveryInvalid, rates: [] };
+      var cov = R.coverage.revenue;
+      if (cov.invalidDays.length > 0 || cov.partialDays.length > 0 || contradictions(R).length > 0) return { state: "invalid", amount: null, basisText: null, rates: [] };
+      var days = F.product.productDays(inputs, { from: R.window.from, to: R.window.to }).days;
+      var acc = D(F).ratFromInt(0), anyRevenue = false, rates = {};
+      days.forEach(function (d) {
+        if (d.revenue.presence !== "present" || d.revenue.value === null) return;
+        anyRevenue = true;
+        var v = deliveryRateOn(dc.versions, d.date);
+        if (!v) return;
+        rates[v.ratePct] = true;
+        acc = D(F).ratAdd(acc, D(F).ratMul(D(F).ratFromDec(d.revenue.value), D(F).ratDiv(amt(F, v.ratePct), D(F).ratFromInt(100))));
+      });
+      if (!anyRevenue) return { state: "missing", amount: null, basisText: null, rates: [] };
+      var list = Object.keys(rates).sort(function (a, b) { return Number(a) - Number(b); });
+      var complete = cov.presentDays === cov.expectedDays;
+      var basis = TXT.deliveryEstimate + (list.length === 1 ? list[0] + "% מהפדיון" : "לפי האחוז שבתוקף בכל יום (" + list.join("%, ") + "%)") + (complete ? "" : " שהוזן (" + cov.presentDays + "/" + cov.expectedDays + " ימי הכנסה)");
+      return { state: "known", amount: D(F).serializeRat(acc), basisText: basis, rates: list };
     }
     /**
      * LABOR-AVAIL (shared by the P&L and the Dashboard): the month's labor cost from VALID recorded data.
@@ -2214,19 +2289,27 @@
       if (cur.status !== "ready") return cur;
       return guarded(function () {
         var c = pnlColumn(F, cur.report);
+        // DELIVERY-PCT: one estimated expense line; the bottom line includes it (labelled), revenue / purchases / gross do not
+        var withDelivery = function (col, d) {
+          col.delivery = d && d.state === "known" ? d.amount : null;
+          if (d) col.net = d.state === "known" && col.net !== null ? subAmounts(F, col.net, d.amount) : null;
+          return col;
+        };
+        var dl = deliveryOf(F, cur.inputs, cur.report, src);
+        withDelivery(c, dl);
         var prev = null;
         if (priorMonth) {
           var pr = monthReport(F, src, priorMonth);
           if (pr.status === "ready") {
             var hasData = pr.report.window.state === "actual" && (pr.report.coverage.day.presentDays > 0 || pr.report.coverage.day.closedDays.length > 0);
-            prev = hasData ? pnlColumn(F, pr.report) : null;
+            prev = hasData ? withDelivery(pnlColumn(F, pr.report), deliveryOf(F, pr.inputs, pr.report, src)) : null;
           } else if (pr.status === "loading") prev = { loading: true };
         }
         var rev = c.revenue;
         var share = function (a) { return rev === null || a === null ? "—" : pctText(F, ratio(F, a, rev)); };
         var delta = function (a, p) { return a === null || p === null || p === undefined ? null : subAmounts(F, a, p); };
         var rows = {};
-        ["revenue", "purchases", "labor", "other", "fixedRent", "royalty", "net"].forEach(function (k) {
+        ["revenue", "purchases", "labor", "other", "fixedRent", "royalty", "delivery", "net"].forEach(function (k) {
           var p = prev && !prev.loading ? prev[k] : null;
           var d = delta(c[k], p);
           rows[k] = { text: money(F, c[k]), amount: c[k], shareText: share(c[k]), deltaText: d === null ? "—" : (toNum(F, d) > 0 ? "+" : "") + money(F, d), delta: d, negative: c[k] !== null && toNum(F, c[k]) < 0 };
@@ -2240,7 +2323,17 @@
             var x = av.comp[k], a = x.state === "known" ? x.amount : null;
             rows[k].text = money(F, a); rows[k].amount = a; rows[k].shareText = avShare(a); rows[k].negative = a !== null && toNum(F, a) < 0; rows[k].availability = x.state;
           });
+          // DELIVERY-PCT: the recorded-data balance includes the estimate; an invalid setting withholds the balance
+          if (dl && av.balance !== null) {
+            if (dl.state === "known") av.balance = subAmounts(F, av.balance, dl.amount);
+            else if (dl.state === "invalid") { av.balance = null; av.basisText += " " + TXT.deliveryInvalid + " — היתרה לא מחושבת."; }
+          }
           rows.net.text = money(F, av.balance); rows.net.amount = av.balance; rows.net.shareText = avShare(av.balance); rows.net.negative = av.balance !== null && toNum(F, av.balance) < 0;
+        }
+        if (dl) {
+          var dAmt = dl.state === "known" ? dl.amount : null;
+          rows.delivery.text = money(F, dAmt); rows.delivery.amount = dAmt; rows.delivery.shareText = av ? avShare(dAmt) : share(dAmt);
+          rows.delivery.state = dl.state; rows.delivery.basisText = dl.basisText;
         }
         var deliveries = deliveriesOf(F, cur.inputs, month);
         var cvm = configView(F, cur.inputs, src.asOf.slice(0, 7) === month ? src.asOf : F.finance.businessDate.monthBounds(month).last);
@@ -2248,6 +2341,8 @@
         return {
           status: "ready", report: cur.report, rows: rows, gross: pnlGrossLineVD50(F, cur.report.actual),
           deliveries: { text: money(F, deliveries.amount), show: deliveries.applicable && (deliveries.amount === null || toNum(F, deliveries.amount) !== 0) },
+          // DELIVERY-PCT: shown whenever a rate is configured for the month (an invalid setting shows "—", never 0)
+          showDelivery: !!dl, deliveryLabel: TXT.deliveryLabel, deliveryNote: dl ? (dl.state === "invalid" ? TXT.deliveryInvalid : TXT.deliveryNetNote) : null,
           // an incomplete (invalid / partial) other expense is shown as "—", never hidden
           showOther: av ? (av.comp.other.state === "invalid" || (av.comp.other.amount !== null && toNum(F, av.comp.other.amount) !== 0))
             : (!cur.report.actual.otherExpense.complete || (c.otherRecorded !== null && toNum(F, c.otherRecorded) !== 0)),
@@ -2583,6 +2678,7 @@
       placement: placement, versionOn: versionOn, entryLabor: entryLabor, entryRevenuePreview: entryRevenuePreview, rowDiagnostic: rowDiagnostic, employees: employees, history: history,
       suppliers: suppliers, impactStats: impactStats, insightsKeys: insightsKeys, insightTotal: insightTotal, insightsStats: insightsStats, insightMoney: insightMoney,
       supplierCellEntered: supplierCellEntered, revenueDisclosure: revenueDisclosure, band: band,
+      deliveryVersions: deliveryVersions, deliveryRateOn: deliveryRateOn,
       money: money, pctText: pctText,
     });
   })();
@@ -2790,7 +2886,7 @@
   </script>
 
   <!-- app.html and app.js are GENERATED from index.html by tools/app-precompile/precompile.mjs — do not edit.
-       source index.html sha256 72db7e07257453655afa5586c06cf386c8440172f99ef5f92dcc8982a7d3845e; app.js sha256 b26319dbbb57e4f83b1b2b006b6ad9e5ca05dd53a169965c9adf1846f8af1730; @babel/standalone 7.23.6, presets ["react"]. -->
-  <script defer src="/app.js?v=b26319dbbb57"></script>
+       source index.html sha256 e261e07490b5a1700e981b060bcdff0e98b3d6a6cb3778bf46e8bdca79f5957a; app.js sha256 8aae34f3e9f81cf6ec14f803ebc7e61ad7d6c26875925e4b252bd11a1f7ca614; @babel/standalone 7.23.6, presets ["react"]. -->
+  <script defer src="/app.js?v=8aae34f3e9f8"></script>
 </body>
 </html>
