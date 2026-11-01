@@ -1,7 +1,7 @@
 // F2 trusted cost-history command boundary. No browser RTDB write grant is introduced.
 // Core/F1 R4: owner decisions are accept_flag (stored cleared + decision audit accepted) and reject_flag
 // (stored rejected + decision audit rejected); the operation id must be a string UUID (a numeric id is request_shape, 400).
-import { createProductionCostHistoryWriter } from '../lib/finance/costHistoryWriter.js';
+import { createProductionCostHistoryWriter, OWNER_LEVEL_ROLES } from '../lib/finance/costHistoryWriter.js';
 import { requireBizContext } from '../lib/securityContext.js';
 
 const ACTIONS = Object.freeze({
@@ -33,10 +33,10 @@ export default async function handler(req,res) {
       const action=source?.action;
       if(action==='reconcile') {
         const ctx=await requireBizContext(req,{tenantId,bizId,mode:'write'});
-        if(ctx.role!=='owner') return res.status(403).json({status:'role_not_allowed'});
+        if(!OWNER_LEVEL_ROLES.includes(ctx.role)) return res.status(403).json({status:'role_not_allowed'});
         const authorize=async()=>{
           const current=await requireBizContext(req,{tenantId,bizId,mode:'write'});
-          if(current.uid!==ctx.uid||current.role!=='owner') throw Object.assign(new Error('current owner required'),{status:403});
+          if(current.uid!==ctx.uid||!OWNER_LEVEL_ROLES.includes(current.role)) throw Object.assign(new Error('current owner required'),{status:403});
         };
         result=await writer.reconcilePendingReviews({tenantId,bizId,authorize});
       } else if(DECISIONS.has(action)) result=await writer[ACTIONS[action]](req,{tenantId,bizId,versionId:source.versionId,intentDigest:source.intentDigest,operationId:source.operationId});

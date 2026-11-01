@@ -226,7 +226,11 @@ test("MIC-05 owner decisions across both APIs: flagged credit + flagged cost ver
   // nobody but the current tenant owner decides — on EITHER API
   const creditDecision = (decision, opN) => ({ tenantId: T, bizId: B, operationId: oid(opN), targetOperationId: oid(1), intentDigest: db.read(CREDITS()).review[oid(1)].intentDigest, decision });
   const costDecision = (opN) => ({ tenantId: T, bizId: B, versionId: V("a2"), intentDigest: db.read(HISTORY()).review[V("a2")].intentDigest, operationId: V(opN) });
-  for (const actor of ["mgr", "super", "view"]) {
+  // FIXCAT: the cost-history decision is owner-level (owner | super_owner); the supplier-credit decision stays owner-only
+  { const before = db.value();
+    assert.equal((await h.call("decide-supplier-credit-review", creditDecision("accept", 89), "super")).code, 403, "super credit decision");
+    assert.deepEqual(db.value(), before, "super: nothing written by the credit API"); }
+  for (const actor of ["mgr", "view"]) {
     const before = db.value();
     assert.equal((await h.call("decide-supplier-credit-review", creditDecision("accept", 90), actor)).code, 403, actor + " credit decision");
     as(actor); assert.notEqual((await writer(db).acceptFlaggedVersion(req, costDecision("b0"))).status, "resolved", actor + " cost decision");

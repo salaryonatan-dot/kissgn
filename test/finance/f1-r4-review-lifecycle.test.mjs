@@ -352,7 +352,6 @@ test("RL4-B01 BEFORE the entry check: registry removal, role loss and membership
     ["registry unreadable (owner activation)", (db) => db.seed(REGISTRY, { _v: "nonsense" }), "owner", "authorization_unavailable", "activateCostHistory"],
     ["owner downgraded to manager (activation)", downgradeOwner, "owner", "role_not_allowed", "activateCostHistory"],
     ["owner downgraded to manager WITHOUT a business row (activation)", (db) => db.seed(`tenants/${T}/roles/owner`, "manager"), "owner", "unauthorized", "activateCostHistory"],
-    ["super_owner activation", () => {}, "super", "role_not_allowed", "activateCostHistory"],
     ["manager activation", () => {}, "manager", "role_not_allowed", "activateCostHistory"],
     ["membership removed (manager save)", (db) => db.seed(`tenants/${T}/members/manager`, false), "manager", "unauthorized", "saveCostVersion"],
     ["viewer save", () => {}, "viewer", "unauthorized", "saveCostVersion"],
@@ -609,7 +608,7 @@ test("RL4-O02 the HTTP route maps request_shape to 400, role_not_allowed / busin
   }
   assert.equal((await call({ action: "acknowledge_flag", ...base, operationId: OP })).body.status, "action_invalid");
   actor("manager"); assert.equal((await call({ action: "accept_flag", ...base, operationId: OP })).code, 403);
-  actor("super"); assert.equal((await call({ action: "reject_flag", ...base, operationId: OP })).code, 403);
+  actor("viewer"); assert.equal((await call({ action: "reject_flag", ...base, operationId: OP })).code, 403);
   actor("owner"); db.seed(REGISTRY, { _v: "[]" });
   const gone = await call({ action: "accept_flag", ...base, operationId: OP }); assert.equal(gone.code, 403); assert.equal(gone.body.status, "business_not_in_tenant");
   assert.deepEqual(db.read(NODE()), node, "the route changed nothing");
@@ -649,11 +648,11 @@ test("RL4-R02 a lost acknowledgement of the VERSION commit is recovered by paylo
 });
 
 // ── RL4-T tenant-wide owner / absent business ─────────────────────────────────────────────────────
-test("RL4-T01 the tenant-wide owner (no biz_access row) activates, accepts, rejects and re-activates; an owner with a row only for another business decides too; super_owner, manager, viewer, foreign owner and non-member never decide", async () => {
+test("RL4-T01 the tenant-wide owner (no biz_access row) activates, accepts, rejects and re-activates; an owner with a row only for another business decides too; manager, viewer, foreign owner and non-member never decide (FIXCAT: the super_owner decides like the owner)", async () => {
   const db = world();
   const { node } = await flaggedByManager(db);
   const dg = node.review[A].intentDigest;
-  for (const [uid, expect] of [["super", "role_not_allowed"], ["manager", "role_not_allowed"], ["viewer", "unauthorized"], ["foreign", "unauthorized"], ["nobody", "unauthorized"]]) {
+  for (const [uid, expect] of [["manager", "role_not_allowed"], ["viewer", "unauthorized"], ["foreign", "unauthorized"], ["nobody", "unauthorized"]]) {
     actor(uid);
     assert.equal((await writer(db).acceptFlaggedVersion(req, { ...scope, versionId: A, intentDigest: dg, operationId: OP })).status, expect, uid + " accept");
     assert.equal((await writer(db).rejectFlaggedVersion(req, { ...scope, versionId: A, intentDigest: dg, operationId: OP })).status, expect, uid + " reject");
@@ -670,6 +669,14 @@ test("RL4-T01 the tenant-wide owner (no biz_access row) activates, accepts, reje
   actor("owner");
   assert.equal((await writer(db2).rejectFlaggedVersion(req, { ...scope, versionId: A2, intentDigest: n2.review[A2].intentDigest, operationId: OP })).status, "resolved");
   assert.deepEqual(codec.decodeHistory({ exists: true, value: db2.read(NODE()) }, scope).versions.map((v) => v.versionId), [A]);
+  // FIXCAT: the super_owner activates (another world) and decides on a flagged version
+  const db3 = world(); actor("super");
+  const a3 = await writer(db3).activateCostHistory(req, { ...scope, body: body(A) });
+  assert.equal(a3.status, "committed_current"); assert.equal(a3.review, "cleared");
+  const { node: n3 } = await flaggedByManager(db3, A2, db3.read(NODE()).head);
+  actor("super");
+  assert.equal((await writer(db3).acceptFlaggedVersion(req, { ...scope, versionId: A2, intentDigest: n3.review[A2].intentDigest, operationId: OP })).status, "resolved");
+  assert.equal(db3.read(NODE()).review[A2].decisionAudit.decidedBy, "super");
 });
 
 test("RL4-T02 no operation succeeds for an ABSENT or FOREIGN-tenant business: activate, edit, read, recover, accept, reject and reconcile all refuse; a tenant's own list is the only authority", async () => {

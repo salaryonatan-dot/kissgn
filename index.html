@@ -6400,6 +6400,7 @@ function SetupWizard({ initial, initialSuppliers, initialFixed, onComplete, onCa
         {step===4 && (
           <>
             {financeLocked&&<p>הסכומים הקבועים מנוהלים בהיסטוריית העלויות. כאן הם לקריאה בלבד.</p>}
+            {!financeLocked&&!isFirstSetup&&<p data-fixcat="wizard-retro" style={{fontSize:12,color:"#92400E",background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:6,padding:"8px 10px",marginBottom:12}}>שינוי סכום כאן מעדכן את ההגדרות הנוכחיות, שחלות גם על חודשים קודמים. להוספה, שינוי או הסרה של קטגוריה מתאריך מסוים — "הוצאות קבועות" בדשבורד.</p>}
             <p style={{color:"#9CA3AF",fontSize:13,marginBottom:16,textAlign:"center"}}>הזן סכומים חודשיים קבועים -- אפס = לא רלוונטי</p>
             {fixedList.filter(f=>!f.rentPct&&!f.royaltyPct).map(f=>(
               <div key={f.id} className="card card-p-sm" style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
@@ -6542,6 +6543,93 @@ window.suppliersOnDay = suppliersOnDay;
 window.getDateDOW     = getDateDOW;
 window.fcColor        = fcColor;
 
+// FIXCAT-BEGIN — fixed-expense categories over the F2 cost history (pure helpers, no I/O, no JSX).
+// The legacy configuration applies today's fixed list to EVERY date ("current settings"). Activating the
+// cost history from today alone would leave every earlier date uncovered (missing costs). To keep earlier
+// periods exactly as they are, activation records the legacy settings twice: the owner's activation
+// version (today) and an attested BASELINE version from the compat start date ("0000-01-01", the same
+// coverage the legacy timeline has), both with the identical snapshot. Category changes are then an
+// ordinary effective-dated version on top. Amounts are monthly, net of VAT (unchanged contract).
+window.MarjinFixedCat = (function () {
+  var BASELINE_FROM = "0000-01-01";
+  var BASELINE_REASON = "בסיס היסטורי בהפעלת היסטוריית העלויות: ההגדרות שחלו עד ההפעלה (הגדרות נוכחיות) — ללא שינוי בתוצאות עבר";
+  var AMOUNT_RE = /^(0|[1-9][0-9]*)(\.[0-9]*[1-9])?$/;
+  /** a typed monthly amount → canonical decimal string ("1,500.50" → "1500.5"), or null when invalid / negative / > 2 decimals */
+  function normalizeAmount(x) {
+    var t = String(x === undefined || x === null ? "" : x).replace(/[\s,₪]/g, "");
+    var m = /^([0-9]+)(?:\.([0-9]{0,2}))?$/.exec(t);
+    if (!m) return null;
+    var i = m[1].replace(/^0+(?=[0-9])/, ""), f = (m[2] || "").replace(/0+$/, "");
+    var out = f ? i + "." + f : i;
+    return AMOUNT_RE.test(out) ? out : null;
+  }
+  /** the legacy (current-settings) snapshot in cost-history shape, fixed items carrying their legacy names; null when the legacy settings are not clean */
+  function legacySnapshot(F, config, fixed) {
+    if (!F || !config || config.state !== "present" || !fixed || fixed.state !== "present") return null;
+    var compat = F.metrics.adapters.configCompat.costTimelineFromCurrentConfig(config.value, fixed.value);
+    if (compat.versions.length !== 1 || compat.flags.some(function (f) { return /^(invalid_|missing_|rent_fixed_and)/.test(f.code); })) return null;
+    var v = compat.versions[0], names = {};
+    (Array.isArray(fixed.value) ? fixed.value : []).forEach(function (f) { if (f && f.id !== undefined && f.id !== null && typeof f.name === "string" && f.name.trim()) names[String(f.id)] = f.name.trim(); });
+    return {
+      globalEmployees: v.globalEmployees.map(function (e) { return { employeeKey: e.employeeKey, monthlyEmployerCost: e.monthlyAmount }; }),
+      fixedItems: v.fixedItems.map(function (f) { return names[f.itemKey] ? { itemKey: f.itemKey, name: names[f.itemKey], monthlyAmount: f.monthlyAmount } : { itemKey: f.itemKey, monthlyAmount: f.monthlyAmount }; }),
+      rent: Object.assign({}, v.rent), royalty: Object.assign({}, v.royalty),
+    };
+  }
+  /** the version in force on `date`: greatest effectiveFrom ≤ date, ties by the latest recording (the core's same-date rule) */
+  function inForce(versions, date) {
+    var best = null;
+    (versions || []).forEach(function (v) {
+      if (v.effectiveFrom > date) return;
+      if (!best || v.effectiveFrom > best.effectiveFrom || (v.effectiveFrom === best.effectiveFrom && (v.recordedAt > best.recordedAt || (v.recordedAt === best.recordedAt && v.versionId > best.versionId)))) best = v;
+    });
+    return best;
+  }
+  /** versions that take effect AFTER `date` (scheduled changes), in date order */
+  function scheduledAfter(versions, date) {
+    return (versions || []).filter(function (v) { return v.effectiveFrom > date; }).sort(function (a, b) { return a.effectiveFrom < b.effectiveFrom ? -1 : a.effectiveFrom > b.effectiveFrom ? 1 : 0; });
+  }
+  /** draft fixed items → { items (canonical), errors[] }: every category needs a name and a valid non-negative amount; names unique */
+  function validateItems(items) {
+    var errors = [], seen = {}, out = [];
+    (items || []).forEach(function (it, i) {
+      var name = String(it.name === undefined || it.name === null ? "" : it.name).trim();
+      var amt = normalizeAmount(it.monthlyAmount);
+      if (!name) errors.push({ index: i, code: "name_required" });
+      else if (seen[name]) errors.push({ index: i, code: "name_duplicate" });
+      if (amt === null) errors.push({ index: i, code: "amount_invalid" });
+      seen[name] = true;
+      out.push({ itemKey: it.itemKey, name: name, monthlyAmount: amt });
+    });
+    return { items: out, errors: errors };
+  }
+  /** category changes between two item lists (by itemKey) */
+  function diffItems(before, after) {
+    var b = {}, a = {}, out = { added: [], removed: [], renamed: [], amountChanged: [] };
+    (before || []).forEach(function (x) { b[x.itemKey] = x; });
+    (after || []).forEach(function (x) { a[x.itemKey] = x; });
+    (after || []).forEach(function (x) {
+      var p = b[x.itemKey];
+      if (!p) { out.added.push(x); return; }
+      if ((p.name || "") !== (x.name || "")) out.renamed.push({ itemKey: x.itemKey, from: p.name || "", to: x.name || "" });
+      if (normalizeAmount(p.monthlyAmount) !== normalizeAmount(x.monthlyAmount)) out.amountChanged.push({ itemKey: x.itemKey, name: x.name || p.name || "", from: p.monthlyAmount, to: x.monthlyAmount });
+    });
+    (before || []).forEach(function (x) { if (!a[x.itemKey]) out.removed.push(x); });
+    out.any = out.added.length + out.removed.length + out.renamed.length + out.amountChanged.length > 0;
+    return out;
+  }
+  /** a snapshot comparison independent of key order / list order of identical items */
+  function keyed(o) { return o && typeof o === "object" ? Object.keys(o).sort().map(function (k) { return [k, o[k]]; }) : o; }
+  function sameSnapshot(x, y) {
+    var norm = function (s) { return JSON.stringify({ g: (s.globalEmployees || []).map(function (e) { return [e.employeeKey, e.name || "", e.monthlyEmployerCost]; }).sort(),
+      f: (s.fixedItems || []).map(function (f) { return [f.itemKey, f.name || "", f.monthlyAmount]; }).sort(), r: keyed(s.rent), y: keyed(s.royalty) }); };
+    return norm(x) === norm(y);
+  }
+  return Object.freeze({ BASELINE_FROM: BASELINE_FROM, BASELINE_REASON: BASELINE_REASON, normalizeAmount: normalizeAmount, legacySnapshot: legacySnapshot,
+    inForce: inForce, scheduledAfter: scheduledAfter, validateItems: validateItems, diffItems: diffItems, sameSnapshot: sameSnapshot });
+})();
+// FIXCAT-END
+
 // F2 editor uses the shared history codec and shared compat adapter. It performs no financial
 // calculation and never writes cost_history with the browser SDK.
 const f2Stable = (value) => JSON.stringify(value, (_, v) => v && typeof v === "object" && !Array.isArray(v)
@@ -6556,6 +6644,52 @@ const f2Snapshot = (v) => ({
   fixedItems: v.fixedItems.map(f => ({itemKey:f.itemKey, ...(f.name?{name:f.name}:{}), monthlyAmount:f.monthlyAmount})),
   rent: {...v.rent}, royalty: {...v.royalty},
 });
+
+// FIXCAT: the fixed-expense category list of one cost version draft (name + monthly amount, net of VAT).
+// Removing a category drops it from the version that starts on the effective date; earlier versions keep it.
+const fcDate = (d) => d && d.length === 10 ? `${d.slice(8)}.${d.slice(5,7)}.${d.slice(0,4)}` : "";
+const fcShekel = (a) => { const n = Number(a); return isFinite(n) ? "₪" + n.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—"; };
+function FixedCategoriesSection({ draft, base, effectiveFrom, today, scheduled, activating, onItems }) {
+  const FC = window.MarjinFixedCat;
+  const items = draft.fixedItems;
+  const vi = FC.validateItems(items);
+  const diff = FC.diffItems(base ? base.fixedItems : [], vi.items);
+  const total = vi.items.reduce((a, it) => a + (it.monthlyAmount === null ? 0 : Number(it.monthlyAmount)), 0);
+  const allValid = vi.errors.length === 0;
+  const errOf = (i, code) => vi.errors.some(e => e.index === i && e.code === code);
+  const set = (i, field, value) => onItems(items.map((x, j) => j === i ? { ...x, [field]: value } : x));
+  const nameOf = (k) => { const b = base && base.fixedItems.find(x => x.itemKey === k); return (b && b.name) || "ללא שם"; };
+  return <div data-fixcat="section" style={{margin:"12px 0",padding:12,border:"1px solid #E5E7EB",borderRadius:8,background:"#FAFAFA"}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+      <h3 style={{margin:0,fontSize:14}}>קטגוריות הוצאות קבועות</h3>
+      <span data-fixcat="total" style={{fontSize:13,fontWeight:700}}>{allValid ? fcShekel(total) : "—"} לחודש</span>
+    </div>
+    <p style={{fontSize:11,color:"#6B7280",margin:"4px 0 10px"}}>סכום חודשי לכל קטגוריה, נטו מע״מ. השינויים חלים מתאריך התחולה; חודשים קודמים נשארים כפי שהם.</p>
+    {items.length === 0 && <p data-fixcat="empty" style={{fontSize:12,color:"#9CA3AF"}}>אין קטגוריות פעילות.</p>}
+    {items.map((f, i) => <div key={f.itemKey} data-fixcat="item" style={{display:"flex",gap:6,alignItems:"flex-start",marginBottom:6,flexWrap:"wrap"}}>
+      <div style={{flex:"2 1 140px",minWidth:0}}>
+        <input className="input" style={{marginBottom:0,width:"100%",boxSizing:"border-box",borderColor:errOf(i,"name_required")||errOf(i,"name_duplicate")?"#EF4444":undefined}} aria-label="שם קטגוריה" placeholder="שם הקטגוריה" value={f.name || ""} onChange={e => set(i, "name", e.target.value)}/>
+        {errOf(i,"name_required") && <div data-fixcat="item-error" style={{fontSize:10.5,color:"#EF4444"}}>נדרש שם</div>}
+        {errOf(i,"name_duplicate") && <div data-fixcat="item-error" style={{fontSize:10.5,color:"#EF4444"}}>שם כפול</div>}
+      </div>
+      <div style={{flex:"1 1 90px",minWidth:0}}>
+        <input className="input" style={{marginBottom:0,width:"100%",boxSizing:"border-box",borderColor:errOf(i,"amount_invalid")?"#EF4444":undefined}} aria-label="סכום חודשי" inputMode="decimal" placeholder="₪ לחודש" value={f.monthlyAmount} onChange={e => set(i, "monthlyAmount", e.target.value)}/>
+        {errOf(i,"amount_invalid") && <div data-fixcat="item-error" style={{fontSize:10.5,color:"#EF4444"}}>סכום לא תקין</div>}
+      </div>
+      <button data-fixcat="remove" className="btn btn-ghost" style={{padding:"6px 10px",fontSize:12}} onClick={() => onItems(items.filter((_, j) => j !== i))}>הסר</button>
+    </div>)}
+    <button data-fixcat="add" className="btn btn-ghost" style={{fontSize:12}} onClick={() => onItems([...items, { itemKey: crypto.randomUUID(), name: "", monthlyAmount: "" }])}>+ הוסף קטגוריה</button>
+    {diff.any && <div data-fixcat="summary" style={{marginTop:10,fontSize:12,color:"#374151",lineHeight:1.6}}>
+      <div style={{fontWeight:600}}>{effectiveFrom ? `שינויים החל מ-${fcDate(effectiveFrom)}` : "שינויים"}{activating ? " (לאחר ההפעלה)" : ""}:</div>
+      {diff.added.map(x => <div key={"a"+x.itemKey} data-fixcat="sum-added">נוספה: {x.name || "ללא שם"}{x.monthlyAmount !== null ? ` — ${fcShekel(x.monthlyAmount)}` : ""}</div>)}
+      {diff.renamed.map(x => <div key={"r"+x.itemKey} data-fixcat="sum-renamed">שם שונה: {x.from || "ללא שם"} ← {x.to || "ללא שם"}</div>)}
+      {diff.amountChanged.map(x => <div key={"c"+x.itemKey} data-fixcat="sum-amount">סכום שונה: {x.name || "ללא שם"} — {fcShekel(x.from)} ← {x.to === null ? "—" : fcShekel(x.to)}</div>)}
+      {diff.removed.map(x => <div key={"d"+x.itemKey} data-fixcat="sum-removed">הוסרה מהרשימה הפעילה: {x.name || nameOf(x.itemKey)}</div>)}
+      {effectiveFrom && <div data-fixcat="sum-history" style={{color:"#6B7280"}}>חודשים ותאריכים שלפני {fcDate(effectiveFrom)} נשארים לפי ההגדרות הקודמות.</div>}
+    </div>}
+    {scheduled && scheduled.length > 0 && <div data-fixcat="scheduled" style={{marginTop:8,fontSize:11.5,color:"#92400E"}}>קיימים שינויים מתוזמנים: {scheduled.map(v => fcDate(v.effectiveFrom)).join(", ")}. העריכה כאן מתבססת על ההגדרות שבתוקף היום.</div>}
+  </div>;
+}
 
 function CostHistoryEditor({finF, historyNode, config, fixed, tenantId, bizId, today, role, onClose}) {
   const [mode,setMode] = useState("normal");
@@ -6572,6 +6706,9 @@ function CostHistoryEditor({finF, historyNode, config, fixed, tenantId, bizId, t
   const acceptOpRef = useRef(null);
   const rejectOpRef = useRef(null);
   const scopeRef = useRef("");
+  // FIXCAT: activation and review decisions are owner-level — the tenant owner or the account's top-level owner (super_owner), as on the server
+  const ownerLevel = role === "owner" || role === "super_owner";
+  const planRef = useRef(null);   // FIXCAT: the activation sequence (activate → baseline → change), resumable with the same version ids
   const scope = `${tenantId||""}|${bizId||""}`;
   scopeRef.current = scope;
   const node = readback || historyNode;
@@ -6587,23 +6724,29 @@ function CostHistoryEditor({finF, historyNode, config, fixed, tenantId, bizId, t
   const review = head && node.raw.review[head.headVersionId];
   const unresolved = review && (review.state === "pending" || review.state === "flagged");
   // R3: a rejected version is never the basis of an edit; a history whose every version was rejected needs a new owner activation
-  const current = state.state === "present" && state.effectiveVersions.length ? state.effectiveVersions[state.effectiveVersions.length-1] : null;
+  // FIXCAT: the base of an edit is the version IN FORCE today (not merely the last recorded one, which may be dated earlier or later)
+  const FC = window.MarjinFixedCat;
+  const current = state.state === "present" && state.effectiveVersions.length ? (FC.inForce(state.effectiveVersions, today) || state.effectiveVersions[state.effectiveVersions.length-1]) : null;
+  const scheduled = state.state === "present" ? FC.scheduledAfter(state.effectiveVersions, today) : [];
   const needsActivation = state.state === "present" && !unresolved && state.effectiveVersions.length === 0;
   const activating = state.state === "absent" || needsActivation;
-  const compat = React.useMemo(() => {
-    if (!finF || !activating || config?.state !== "present" || fixed?.state !== "present") return null;
-    return finF.metrics.adapters.configCompat.costTimelineFromCurrentConfig(config.value,fixed.value);
-  },[finF,activating,config,fixed]);
-  const seed = current || (compat && compat.versions.length === 1 && !compat.flags.some(f => /^(invalid_|missing_|rent_fixed_and)/.test(f.code)) ? compat.versions[0] : null);
+  // FIXCAT: an activation must not move earlier periods — its seed and baseline are the legacy (current-settings) snapshot, with the legacy category names
+  // an activation whose baseline is missing (an interrupted activation, or one made before FIXCAT): dates before the
+  // activation date are uncovered. The legacy settings stay frozen once the history is active (the wizard and the
+  // employees screen are finance-locked), so they are still the settings those dates were reported with.
+  const baselineMissing = state.state === "present" && !unresolved && !!state.activationDate && !state.effectiveVersions.some(v => v.effectiveFrom < state.activationDate);
+  const legacy = React.useMemo(() => (activating || baselineMissing) ? FC.legacySnapshot(finF, config, fixed) : null, [finF,activating,baselineMissing,config,fixed]);
+  const baseSnap = current ? f2Snapshot(current) : (activating ? legacy : null);
+  const seedKey = current ? current.versionId : (activating && legacy ? "legacy" : "");
   useEffect(() => {
-    setReadback(null);setResult(null);intentRef.current=null;acceptOpRef.current=null;rejectOpRef.current=null;
+    setReadback(null);setResult(null);intentRef.current=null;acceptOpRef.current=null;rejectOpRef.current=null;planRef.current=null;
   },[tenantId,bizId]);
   useEffect(() => { setReadback(null); },[historyNode]);
   useEffect(() => {
-    if (seed) setDraft(f2Snapshot(seed)); else setDraft(null);
+    if (baseSnap) setDraft(JSON.parse(JSON.stringify(baseSnap))); else setDraft(null);
     setMode("normal");setEffectiveFrom(today || "");setTypedDate("");setReason("");setConfirmed(false);
     setActivationConfirmed(false);intentRef.current=null;
-  },[tenantId,bizId,head?.revision,today,seed?.versionId]);
+  },[tenantId,bizId,head?.revision,today,seedKey]);
   const update = (part,value) => {setDraft(prev=>({...prev,[part]:value}));intentRef.current=null;};
   const updateList = (part,i,field,value) => update(part,draft[part].map((x,j)=>j===i?{...x,[field]:value}:x));
   const reload = async (keepResult=false) => {
@@ -6620,20 +6763,85 @@ function CostHistoryEditor({finF, historyNode, config, fixed, tenantId, bizId, t
     const response=await window.apiFetch("/api/cost-history",{method:"POST",body:JSON.stringify({action,tenantId,bizId,body})});
     return await response.json();
   };
-  const save = async (retry=false) => {
-    if (!draft || busy || unresolved || !["absent","present"].includes(state.state)) return;
-    if (activating && (role!=="owner" || !activationConfirmed)) {setResult({status:"activation_confirmation_required"});return;}
-    if (mode==="historical" && (!reason.trim() || !typedDate || typedDate!==effectiveFrom || !confirmed)) {setResult({status:"attestation_missing"});return;}
-    if (mode==="historical" && effectiveFrom>=today) {setResult({status:"attestation_not_past"});return;}
-    if (mode!=="historical" && effectiveFrom<today) {setResult({status:"recorded_past_date"});return;}
+  // FIXCAT: the baseline version (attested, from the compat start date) carries the legacy snapshot unchanged
+  const baselineBody = async (snap, expectedHead) => {
+    const b={versionId:f2Uuid(),expectedHead,effectiveFrom:FC.BASELINE_FROM,basis:"attested_retroactive",...JSON.parse(JSON.stringify(snap)),attestationReason:FC.BASELINE_REASON};
+    const v={effectiveFrom:b.effectiveFrom,basis:b.basis,globalEmployees:b.globalEmployees,fixedItems:b.fixedItems,rent:b.rent,royalty:b.royalty,attestationReason:b.attestationReason};
+    b.attestation={confirmed:true,typedEffectiveFrom:FC.BASELINE_FROM,confirmedSnapshotDigest:await f2Digest(v)};
+    return b;
+  };
+  /** FIXCAT: run (or resume) the planned steps in order; each step keeps its version id, so a retry is idempotent */
+  const runPlan = async (requestedScope) => {
+    const plan=planRef.current;
+    while (plan.done < plan.steps.length) {
+      const st=plan.steps[plan.done];
+      // the body (identity + expected head) is built once per step: a resumed step re-sends the SAME version
+      if (!st.body) st.body=st.baseline?await baselineBody(plan.snap,plan.head):{...st.template,versionId:st.versionId,expectedHead:plan.head};
+      let out=await command(st.action,st.body);
+      // the server orders versions by its own clock: a step that lands within the predecessor's millisecond is retried as is
+      for (let k=0; k<3 && out && out.status==="clock_behind_predecessor" && out.retryable; k++) { await new Promise(r=>setTimeout(r,Math.min(Math.max(out.waitMs||1,1),2000))); out=await command(st.action,st.body); }
+      if(scopeRef.current!==requestedScope)return null;
+      if(out.status!=="committed_current"){
+        // a concurrent change invalidates the plan: reload and start again from the stored history
+        if(out.status==="head_conflict"||out.status==="already_activated")planRef.current=null;
+        setResult({...out,step:st.label});await reload(true);return out;
+      }
+      plan.head=out.head;plan.done++;
+    }
+    planRef.current=null;
+    setResult({status:plan.kind});await reload(true);
+    return {status:plan.kind};
+  };
+  const completeBaseline = async () => {
+    if (busy || !baselineMissing || !legacy || !ownerLevel) return;
     setBusy(true);
     const requestedScope=scope;
     try {
+      if(!planRef.current||planRef.current.kind!=="baseline_completed") planRef.current={kind:"baseline_completed",snap:legacy,head,done:0,steps:[{action:"attest",baseline:true,label:"baseline"}]};
+      await runPlan(requestedScope);
+    } catch {if(scopeRef.current===requestedScope)setResult({status:"outcome_unknown"});}
+    finally {setBusy(false);}
+  };
+  const resumePlan = async () => {
+    if (busy || !planRef.current) return;
+    setBusy(true);
+    const requestedScope=scope;
+    try { await runPlan(requestedScope); }
+    catch {if(scopeRef.current===requestedScope)setResult({status:"outcome_unknown"});}
+    finally {setBusy(false);}
+  };
+  const save = async (retry=false) => {
+    if (!draft || busy || unresolved || !["absent","present"].includes(state.state)) return;
+    if (activating && (!ownerLevel || !activationConfirmed)) {setResult({status:"activation_confirmation_required"});return;}
+    if (mode==="historical" && (!reason.trim() || !typedDate || typedDate!==effectiveFrom || !confirmed)) {setResult({status:"attestation_missing"});return;}
+    if (mode==="historical" && effectiveFrom>=today) {setResult({status:"attestation_not_past"});return;}
+    if (mode!=="historical" && effectiveFrom<today) {setResult({status:"recorded_past_date"});return;}
+    // FIXCAT: every category needs a name and a valid monthly amount (canonical decimal, net of VAT)
+    const vi=FC.validateItems(draft.fixedItems);
+    if (vi.errors.length) {setResult({status:"categories_invalid"});return;}
+    const canon={...draft,fixedItems:vi.items};
+    setBusy(true);
+    const requestedScope=scope;
+    try {
+      if (activating) {
+        // FIXCAT: activation keeps every earlier period as it is: activation (today) + attested baseline, both the legacy snapshot;
+        // the owner's category changes follow as an ordinary version from the chosen date.
+        if (!legacy) {setResult({status:"legacy_unavailable"});return;}
+        const signature=f2Stable({canon,effectiveFrom,expectedHead:head});
+        if (!planRef.current || planRef.current.signature!==signature) {
+          const steps=[{action:"activate",label:"activate",versionId:f2Uuid(),template:{effectiveFrom:today,basis:"recorded",...JSON.parse(JSON.stringify(legacy))}},
+            {action:"attest",baseline:true,label:"baseline"}];
+          if (!FC.sameSnapshot(legacy,canon)) steps.push({action:"edit",label:"change",versionId:f2Uuid(),template:{effectiveFrom,basis:"recorded",...canon}});
+          planRef.current={kind:"activated",signature,snap:legacy,head,done:0,steps};
+        }
+        await runPlan(requestedScope);
+        return;
+      }
       const basis=mode==="historical"?"attested_retroactive":"recorded";
-      const signature=f2Stable({draft,effectiveFrom,basis,reason:mode==="historical"?reason:null,expectedHead:head});
+      const signature=f2Stable({draft:canon,effectiveFrom,basis,reason:mode==="historical"?reason:null,expectedHead:head});
       let intent=retry?intentRef.current:null;
       if (!intent || intent.signature!==signature) {
-        const body={versionId:f2Uuid(),expectedHead:head,effectiveFrom,basis,...draft};
+        const body={versionId:f2Uuid(),expectedHead:head,effectiveFrom,basis,...canon};
         if (mode==="historical") {
           body.attestationReason=reason.trim();
           const v={effectiveFrom,basis,globalEmployees:body.globalEmployees,fixedItems:body.fixedItems,rent:body.rent,royalty:body.royalty,attestationReason:body.attestationReason};
@@ -6650,7 +6858,7 @@ function CostHistoryEditor({finF, historyNode, config, fixed, tenantId, bizId, t
     finally {setBusy(false);}
   };
   const reviewCommand=async(action) => {
-    if(busy || !review || role!=="owner") return;
+    if(busy || !review || !ownerLevel) return;
     setBusy(true);
     const requestedScope=scope;
     try {
@@ -6663,39 +6871,42 @@ function CostHistoryEditor({finF, historyNode, config, fixed, tenantId, bizId, t
     finally {setBusy(false);}
   };
   const label={loading:"טוען היסטוריית עלויות",absent:"הגדרות נוכחיות — טרם הופעלה היסטוריית עלויות",present:review?.state==="pending"?"ממתין לבדיקת הרשאה":review?.state==="flagged"?"מסומן לבדיקה — אינו משפיע על חישובים":needsActivation?"הגרסה האחרונה נדחתה — נדרשת הפעלה מחדש על ידי בעלים":review?.state==="rejected"?"היסטוריית עלויות פעילה — הגרסה האחרונה נדחתה ואינה נספרת":review?.decision==="accepted"?"היסטוריית עלויות פעילה — הגרסה האחרונה אושרה על ידי בעלים לאחר בדיקה":"היסטוריית עלויות פעילה",unreadable:state.reason==="context_unbound"?"היסטוריית העלויות אינה זמינה — לא נבחר חשבון ועסק מאומתים":"היסטוריית העלויות אינה זמינה"}[state.state];
-  const resultText={head_conflict:"התנגשות עריכה: יש לרענן ולהחיל מחדש את השינוי",review_unresolved:"בדיקת הרשאה פתוחה: לא ניתן לשמור גרסה חדשה",outcome_unknown:"תוצאת השמירה אינה ידועה: נסה לשחזר את אותה פעולה",committed_current:"נשמרה גרסה חדשה",resolved:"מצב הבדיקה עודכן",already_accepted:"האישור כבר נשמר",already_rejected:"הדחייה כבר נשמרה",request_shape:"הבקשה אינה תקינה",not_found:"הגרסה לא נמצאה",business_not_in_tenant:"העסק אינו שייך לחשבון זה",activation_required:"נדרשת הפעלה מחדש על ידי בעלים",already_activated:"ההיסטוריה כבר פעילה — יש לרענן",reloaded:"הנתונים רועננו",unreadable:"הקריאה נכשלה: הנתונים אינם זמינים",activation_confirmation_required:"יש לאשר את ההפעלה במפורש",attestation_missing:"יש להשלים סיבה, תאריך ואישור לתיקון ההיסטורי",attestation_not_past:"תיקון היסטורי מחייב תאריך עבר",recorded_past_date:"תאריך עבר מחייב תיקון היסטורי מאומת",role_not_allowed:"אין הרשאה לפעולה זו"};
+  const resultText={head_conflict:"התנגשות עריכה: יש לרענן ולהחיל מחדש את השינוי",review_unresolved:"בדיקת הרשאה פתוחה: לא ניתן לשמור גרסה חדשה",outcome_unknown:"תוצאת השמירה אינה ידועה: נסה לשחזר את אותה פעולה",committed_current:"נשמרה גרסה חדשה",resolved:"מצב הבדיקה עודכן",already_accepted:"האישור כבר נשמר",already_rejected:"הדחייה כבר נשמרה",request_shape:"הבקשה אינה תקינה",not_found:"הגרסה לא נמצאה",business_not_in_tenant:"העסק אינו שייך לחשבון זה",activation_required:"נדרשת הפעלה מחדש על ידי בעלים",already_activated:"ההיסטוריה כבר פעילה — יש לרענן",reloaded:"הנתונים רועננו",unreadable:"הקריאה נכשלה: הנתונים אינם זמינים",activation_confirmation_required:"יש לאשר את ההפעלה במפורש",attestation_missing:"יש להשלים סיבה, תאריך ואישור לתיקון ההיסטורי",attestation_not_past:"תיקון היסטורי מחייב תאריך עבר",recorded_past_date:"תאריך עבר מחייב תיקון היסטורי מאומת",role_not_allowed:"אין הרשאה לפעולה זו",
+    categories_invalid:"לכל קטגוריה נדרשים שם ייחודי וסכום חודשי תקין",legacy_unavailable:"ההגדרות הנוכחיות אינן תקינות — יש לתקן אותן לפני ההפעלה",
+    activated:"היסטוריית העלויות הופעלה; תקופות קודמות נשמרו לפי ההגדרות הקודמות",baseline_completed:"הבסיס ההיסטורי הושלם; תקופות קודמות לפי ההגדרות הקודמות"};
   return <div data-f2="cost-editor" style={{padding:18,direction:"rtl",maxHeight:"85vh",overflowY:"auto",background:"#fff"}}>
     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><h2 style={{margin:0}}>היסטוריית עלויות</h2><button onClick={onClose}>סגור</button></div>
     <p data-f2="state">{label}</p>
-    {state.state==="absent"&&<p>עד להפעלה, הדוחות משתמשים בהגדרות הנוכחיות גם לתאריכים קודמים. ההפעלה אינה משחזרת עלויות עבר; ימים לפני תאריך ההפעלה עלולים להופיע כחסרים.</p>}
+    {state.state==="absent"&&<p data-fixcat="absent-note">עד להפעלה, הדוחות משתמשים בהגדרות הנוכחיות גם לתאריכים קודמים, ולכן שינוי בהגדרות הנוכחיות משנה גם חודשים קודמים. בהפעלת היסטוריית העלויות ההגדרות הנוכחיות נשמרות כבסיס לכל התקופות הקודמות — תוצאות עבר אינן משתנות — ושינויים בקטגוריות חלים רק מתאריך התחולה.</p>}
+    {baselineMissing&&!planRef.current&&ownerLevel&&legacy&&<div data-fixcat="baseline-missing"><p>לתאריכים שלפני הפעלת היסטוריית העלויות ({fcDate(state.activationDate)}) אין הגדרות עלויות, ולכן הם מופיעים כחסרים. השלמת הבסיס ההיסטורי שומרת עבורם את ההגדרות הנוכחיות, כפי שהדוחות הציגו לפני ההפעלה.</p><button data-fixcat="complete-baseline" onClick={completeBaseline} disabled={busy}>השלם בסיס היסטורי</button></div>}
+    {planRef.current&&result&&result.step&&<button data-fixcat="resume" onClick={resumePlan} disabled={busy}>המשך את השמירה</button>}
     {state.state==="unreadable"&&<p data-f2="unreadable">אין להשתמש בסכומי עלויות עד לשחזור קריאה תקינה. {state.reason}</p>}
     {review?.state==="pending"&&<p data-f2="pending">גרסה זו אינה סמכותית עד סיום בדיקת ההרשאה.</p>}
     {review?.state==="flagged"&&<p data-f2="flagged">נדרש אישור או דחייה של בעלים לאחר בדיקת רשומת הביקורת. הגרסה אינה סמכותית.</p>}
     {review?.state==="rejected"&&<p data-f2="rejected">הגרסה האחרונה נדחתה על ידי בעלים: היא נשמרת לביקורת, אינה נספרת, ולא ניתן להפעילה מחדש. ניתן לשמור גרסה מתוקנת.</p>}
     {review?.state==="cleared"&&review?.decision==="accepted"&&<p data-f2="accepted">גרסה זו סומנה לבדיקה ואושרה במפורש על ידי בעלים; רשומת הביקורת נשמרת.</p>}
-    {activating&&role!=="owner"&&<p data-f2="activation-owner-only">הפעלת היסטוריית עלויות (או הפעלה מחדש לאחר דחייה) מחייבת בעלים של החשבון.</p>}
+    {activating&&!ownerLevel&&<p data-f2="activation-owner-only">הפעלת היסטוריית עלויות (או הפעלה מחדש לאחר דחייה) מחייבת בעלים של החשבון (בעלים או בעלים ראשי).</p>}
     {result&&<p data-f2="result">{resultText[result.status]||result.status}{result.reason?`: ${result.reason}`:""}</p>}
     <button onClick={()=>reload()} disabled={busy}>רענן מהשרת</button>
-    {unresolved&&role==="owner"&&<button onClick={()=>reviewCommand(review.state==="flagged"?"accept_flag":"reconcile")} disabled={busy}>{review.state==="flagged"?"אשר לאחר בדיקה":"נסה להשלים בדיקת הרשאה"}</button>}
-    {review?.state==="flagged"&&role==="owner"&&<button data-f2="reject-flag" onClick={()=>reviewCommand("reject_flag")} disabled={busy}>דחה גרסה זו</button>}
+    {unresolved&&ownerLevel&&<button onClick={()=>reviewCommand(review.state==="flagged"?"accept_flag":"reconcile")} disabled={busy}>{review.state==="flagged"?"אשר לאחר בדיקה":"נסה להשלים בדיקת הרשאה"}</button>}
+    {review?.state==="flagged"&&ownerLevel&&<button data-f2="reject-flag" onClick={()=>reviewCommand("reject_flag")} disabled={busy}>דחה גרסה זו</button>}
     {result?.status==="outcome_unknown"&&intentRef.current&&<button onClick={()=>save(true)} disabled={busy}>נסה שוב את אותה שמירה</button>}
-    {(activating?role==="owner":state.state==="present"&&!unresolved)&&draft&&<>
+    {(activating?ownerLevel:state.state==="present"&&!unresolved)&&draft&&<>
       <p>כל הסכומים הם חודשיים, נטו מע״מ. שכר עובדים גלובליים הוא עלות מעסיק מלאה.</p>
       {state.state==="present"&&!needsActivation&&<div><button onClick={()=>{setMode("normal");setEffectiveFrom(today);setTypedDate("");setConfirmed(false);}}>עריכה רגילה</button><button onClick={()=>{setMode("historical");setEffectiveFrom("");setTypedDate("");setConfirmed(false);}}>תיקון היסטורי מאומת</button></div>}
       <label>תאריך תחולה <input data-f2="effective-date" type="date" value={effectiveFrom} onChange={e=>{setEffectiveFrom(e.target.value);intentRef.current=null;}}/></label>
       <h3>עובדים גלובליים — עלות מעסיק מלאה</h3>
       {draft.globalEmployees.map((e,i)=><div key={e.employeeKey}><input aria-label="מזהה עובד" value={e.employeeKey} onChange={x=>updateList("globalEmployees",i,"employeeKey",x.target.value)}/><input aria-label="עלות מעסיק חודשית" value={e.monthlyEmployerCost} onChange={x=>updateList("globalEmployees",i,"monthlyEmployerCost",x.target.value)}/><button onClick={()=>update("globalEmployees",draft.globalEmployees.filter((_,j)=>j!==i))}>הסר</button></div>)}
       <button onClick={()=>update("globalEmployees",[...draft.globalEmployees,{employeeKey:f2Uuid(),monthlyEmployerCost:"0"}])}>הוסף עובד גלובלי</button>
-      <h3>הוצאות קבועות</h3>
-      {draft.fixedItems.map((f,i)=><div key={f.itemKey}><input aria-label="שם הוצאה" value={f.name||f.itemKey} onChange={x=>updateList("fixedItems",i,"name",x.target.value)}/><input aria-label="סכום חודשי" value={f.monthlyAmount} onChange={x=>updateList("fixedItems",i,"monthlyAmount",x.target.value)}/><button onClick={()=>update("fixedItems",draft.fixedItems.filter((_,j)=>j!==i))}>הסר</button></div>)}
-      <button onClick={()=>update("fixedItems",[...draft.fixedItems,{itemKey:f2Uuid(),name:"הוצאה חדשה",monthlyAmount:"0"}])}>הוסף הוצאה</button>
+      <FixedCategoriesSection draft={draft} base={baseSnap} effectiveFrom={effectiveFrom} today={today} scheduled={scheduled} activating={activating}
+        onItems={items=>update("fixedItems",items)}/>
       <h3>שכר דירה</h3><select value={draft.rent.mode} onChange={e=>update("rent",e.target.value==="none"?{mode:"none"}:e.target.value==="fixed"?{mode:"fixed",monthlyAmount:"0"}:{mode:"pct",ratePct:"0"})}><option value="none">ללא</option><option value="fixed">קבוע</option><option value="pct">אחוז</option></select>
       {draft.rent.mode!=="none"&&<input aria-label="שכר דירה" value={draft.rent.mode==="fixed"?draft.rent.monthlyAmount:draft.rent.ratePct} onChange={e=>update("rent",{...draft.rent,[draft.rent.mode==="fixed"?"monthlyAmount":"ratePct"]:e.target.value})}/>}
       <h3>תמלוגים</h3><select value={draft.royalty.mode} onChange={e=>update("royalty",e.target.value==="none"?{mode:"none"}:{mode:"pct",ratePct:"0"})}><option value="none">ללא</option><option value="pct">אחוז</option></select>
       {draft.royalty.mode==="pct"&&<input aria-label="אחוז תמלוגים" value={draft.royalty.ratePct} onChange={e=>update("royalty",{mode:"pct",ratePct:e.target.value})}/>}
       {mode==="historical"&&<div data-f2="attestation"><p>תיקון היסטורי משנה תוצאות עבר. הזן מחדש את תאריך התחולה ואת הסיבה ואשר את תמונת העלויות.</p><input aria-label="הקלד שוב תאריך תחולה" type="date" value={typedDate} onChange={e=>{setTypedDate(e.target.value);intentRef.current=null;}}/><textarea aria-label="סיבת תיקון היסטורי" value={reason} onChange={e=>{setReason(e.target.value);intentRef.current=null;}}/><label><input type="checkbox" checked={confirmed} onChange={e=>setConfirmed(e.target.checked)}/>אני מאשר/ת את התיקון ההיסטורי</label></div>}
-      {activating&&<label><input data-f2="activation-confirm" type="checkbox" checked={activationConfirmed} onChange={e=>setActivationConfirmed(e.target.checked)}/>אני מאשר/ת את העלויות הנוכחיות ואת השינוי בזמינות נתוני העבר</label>}
-      <button data-f2="save" onClick={()=>save(false)} disabled={busy||!effectiveFrom||(activating&&role!=="owner")}>{busy?"שומר…":activating?"הפעל היסטוריית עלויות":mode==="historical"?"שמור תיקון היסטורי":"שמור גרסת עלויות"}</button>
+      {activating&&<label><input data-f2="activation-confirm" type="checkbox" checked={activationConfirmed} onChange={e=>setActivationConfirmed(e.target.checked)}/>אני מאשר/ת שההגדרות הנוכחיות יישמרו כבסיס לתקופות קודמות (ללא שינוי בתוצאות עבר), ושהשינויים יחולו מתאריך התחולה</label>}
+      <button data-f2="save" onClick={()=>save(false)} disabled={busy||!effectiveFrom||(activating&&!ownerLevel)}>{busy?"שומר…":activating?"הפעל היסטוריית עלויות":mode==="historical"?"שמור תיקון היסטורי":"שמור גרסת עלויות"}</button>
     </>}
   </div>;
 }

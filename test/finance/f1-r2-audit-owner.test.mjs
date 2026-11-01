@@ -90,10 +90,10 @@ test('R2-04 strict readers reject missing, partial, wrong-version, mismatched an
   assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:pending},BIND).state,'unreadable');
 });
 
-test('R2-05 only a current TENANT owner accepts (super_owner / manager / removed owner denied); acceptance is stored cleared + accepted; duplicate operation is idempotent',async()=>{
+test('R2-05 only a current TENANT owner-level role accepts (manager / removed owner denied; FIXCAT: super_owner allowed); acceptance is stored cleared + accepted; duplicate operation is idempotent',async()=>{
   const db=world(), {writer,node}=await flagged(db), d=node.review[A].intentDigest;
   const before=clone(db.read(NODE));
-  for(const uid of ['super','manager']){
+  for(const uid of ['manager']){
     actor(uid);const r=await accept(writer,d);
     assert.notEqual(r.status,'resolved',uid);assert.deepEqual(db.read(NODE),before,uid);
   }

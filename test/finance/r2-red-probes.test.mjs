@@ -49,16 +49,19 @@ test('R2: failed atomic flag/audit transaction leaves pending', async () => {
   assert.equal(before.review[A].state, 'pending');
 });
 
-test('R2: super_owner cannot accept a flagged cost version', async () => {
+test('R2: FIXCAT — the super_owner (owner-level) accepts a flagged cost version; the revoked manager cannot', async () => {
   const db = setup();
   const writer = W.createCostHistoryWriter({ db, clock:()=>NOW });
   const result = await writer.saveCostVersion({headers:{}}, {tenantId:T,bizId:B,body});
   const before = db.read(NODE);
   assert.equal(before.review[A].state, 'flagged');
+  globalThis.__CLAIMS = { uid:'u_mgr', email:'m@x' };
+  const denied = await writer.acceptFlaggedVersion({headers:{}}, {tenantId:T,bizId:B,versionId:A,intentDigest:before.review[A].intentDigest,operationId:'00000000-0000-4000-8000-0000000000ab'});
+  assert.notEqual(denied.status, 'resolved'); assert.deepEqual(db.read(NODE), before, 'a manager changes nothing');
   globalThis.__CLAIMS = { uid:'u_super', email:'s@x' };
   const accept = await writer.acceptFlaggedVersion({headers:{}}, {tenantId:T,bizId:B,versionId:A,intentDigest:before.review[A].intentDigest,operationId:'00000000-0000-4000-8000-0000000000aa'});
   const after = db.read(NODE);
   console.log('SUPER_OWNER', JSON.stringify({result, before:before.review[A], accept, after:after.review[A]}));
-  assert.equal(accept.status, 'role_not_allowed');
-  assert.equal(after.review[A].state, 'flagged');
+  assert.equal(accept.status, 'resolved');
+  assert.equal(after.review[A].state, 'cleared'); assert.equal(after.review[A].decision, 'accepted'); assert.equal(after.review[A].decisionAudit.decidedBy, 'u_super');
 });

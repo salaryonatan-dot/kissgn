@@ -162,12 +162,11 @@ test("RL-O01 a CURRENT TENANT OWNER accepts or rejects for any business of the t
   }
 });
 
-test("RL-O02 denied for accept AND reject, node byte-identical: super_owner, manager, viewer, removed owner, stale owner (now manager), owner of another tenant, non-member", async () => {
+test("RL-O02 denied for accept AND reject, node byte-identical: manager, viewer, removed owner, stale owner (now manager), owner of another tenant, non-member", async () => {
   for (const decide of [accept, reject]) {
     const db = world(); const { writer, node } = await flagged(db); const d = node.review[A].intentDigest;
     const before = JSON.stringify(db.read(NODE()));
     const deny = async (label, uid, expected) => { actor(uid); const r = await decide(writer, d); assert.equal(r.status, expected, label); assert.equal(JSON.stringify(db.read(NODE())), before, label + " unchanged"); };
-    await deny("super_owner", "super", "role_not_allowed");
     await deny("manager", "manager", "role_not_allowed");
     await deny("viewer", "viewer", "unauthorized");
     await deny("owner of another tenant", "foreign", "unauthorized");
@@ -179,6 +178,15 @@ test("RL-O02 denied for accept AND reject, node byte-identical: super_owner, man
     const restore = refHook(db, (r) => ({ ...r, get: async () => { const s = await r.get(); db.seed(`tenants/${T}/members/owner`, false); return s; } }));
     const r = await decide(writer, d); restore(); db.seed(`tenants/${T}/members/owner`, true);
     assert.equal(r.status, "unauthorized", "revoked during priming"); assert.equal(JSON.stringify(db.read(NODE())), before);
+  }
+});
+
+test("RL-O02b FIXCAT: the tenant super_owner (top-level owner) decides like the owner — accept stores cleared + accepted, reject stores rejected, decidedBy the super_owner", async () => {
+  for (const [decide, dec, to] of [[accept, "accepted", "cleared"], [reject, "rejected", "rejected"]]) {
+    const db = world(); const { writer, node } = await flagged(db); const d = node.review[A].intentDigest;
+    actor("super"); const r = await decide(writer, d);
+    assert.equal(r.status, "resolved", dec); assert.equal(db.read(NODE()).review[A].state, to, dec);
+    assert.deepEqual([db.read(NODE()).review[A].decision, db.read(NODE()).review[A].decisionAudit.decidedBy], [dec, "super"]);
   }
 });
 

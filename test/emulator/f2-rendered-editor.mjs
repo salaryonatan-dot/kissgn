@@ -2,7 +2,7 @@
 // Core/F1 R4: the canonical lifecycle in the rendered editor — pending / flagged withhold edits; the owner REJECTS
 // (stored rejected + decision audit rejected) and ACCEPTS (stored cleared + decision audit accepted) through the real
 // route; a rejected activation withholds everything until the owner explicitly re-activates; corrupt history is
-// unavailable; super_owner decisions are refused; direct client writes are denied by the real Rules.
+// unavailable; manager decisions are refused (FIXCAT: the super_owner is owner-level and may decide); direct client writes are denied by the real Rules.
 import admin from 'firebase-admin';
 import {readFileSync,mkdtempSync,cpSync,mkdirSync,writeFileSync,symlinkSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -141,11 +141,11 @@ try{
   await seedDb.ref(`tenants/${T}/biz:${B}:cost_history`).set(flaggedNode);
   await page.until(()=>page.document.querySelector('[data-f2="reject-flag"]'),10000);
   check(!page.document.querySelector('[data-f2="save"]'),'flagged version must withhold edits');
-  // a super_owner cannot reject through the real route (fresh identity check), the manager-free tenant owner can
-  await seedDb.ref(`tenants/${T}/members/u_super`).set(true);await seedDb.ref(`tenants/${T}/roles/u_super`).set('super_owner');
+  // a manager cannot reject through the real route (fresh identity check), the tenant owner can (FIXCAT: owner-level = owner | super_owner)
+  await seedDb.ref(`tenants/${T}/members/u_super`).set(true);await seedDb.ref(`tenants/${T}/roles/u_super`).set('manager');await seedDb.ref(`tenants/${T}/biz_access/${B}/u_super`).set(true);
   globalThis.__F2_CLAIMS={uid:'u_super',email:'super@demo.example'};
   const superTry=await fetchImpl('/api/cost-history',{method:'POST',body:JSON.stringify({action:'reject_flag',tenantId:T,bizId:B,versionId:id,intentDigest:r.intentDigest,operationId:'11111111-1111-4111-8111-111111111111'})});
-  check(superTry.status===403&&(await node()).val().review[id].state==='flagged','super_owner rejection must be refused with 403 and no change');
+  check(superTry.status===403&&(await node()).val().review[id].state==='flagged','manager rejection must be refused with 403 and no change');
   globalThis.__F2_CLAIMS={uid:UID,email:USER.email};
   await idle();await page.until(()=>page.document.querySelector('[data-f2="reject-flag"]:not([disabled])'),10000);
   click(page.document.querySelector('[data-f2="reject-flag"]'));
@@ -156,7 +156,7 @@ try{
   check(!JSON.stringify(rejectedNode).includes('acknowledged'),'no fifth state anywhere in the stored node');
   check(stable(rejectedNode.review[id].flagAudit)===stable(flaggedNode.review[id].flagAudit)&&stable(rejectedNode.versions)===stable(flaggedNode.versions),'audit and versions immutable through rejection');
   check(F.costHistory.codec.decodeHistory({exists:true,value:rejectedNode},{tenantId:T,bizId:B}).versions.every(v=>v.versionId!==id),'rejected version excluded from the effective timeline');
-  results.push('owner rejection through rendered UI and real route; super_owner refused');
+  results.push('owner rejection through rendered UI and real route; manager refused');
   await idle();await page.until(()=>page.document.querySelector('[data-f2="save"]:not([disabled])'),10000);
   const commitsBefore=commits;
   click(page.document.querySelector('[data-f2="save"]'));

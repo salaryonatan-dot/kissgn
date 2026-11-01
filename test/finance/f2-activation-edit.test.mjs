@@ -41,8 +41,9 @@ test('F2-01 activation is explicit, owner-only, server-today, and exactly once',
   assert.equal((await act(writer,body(A,null))).status,'role_not_allowed');
   assert.equal(db.read(NODE),null);
   globalThis.__CLAIMS={uid:'owner',email:'owner@x'};
-  db.seed(`tenants/${T}/roles/owner`,'super_owner');
-  assert.equal((await act(writer,body(A,null))).status,'role_not_allowed');
+  // FIXCAT owner decision (2026-11-01): the account's top-level owner (super_owner) is owner-level and may activate (see F2-01b)
+  db.seed(`tenants/${T}/roles/owner`,'viewer');
+  assert.notEqual((await act(writer,body(A,null))).status,'committed_current','a viewer never activates');
   assert.equal(db.read(NODE),null);
   db.seed(`tenants/${T}/roles/owner`,'owner');
   db.seed(`tenants/${T}/members/owner`,false);
@@ -58,6 +59,18 @@ test('F2-01 activation is explicit, owner-only, server-today, and exactly once',
   assert.deepEqual(db.read(NODE),stored);
   assert.equal((await act(writer,body(C,null))).status,'already_activated');   // R3: activation over an effective history is refused by name
   assert.deepEqual(db.read(NODE),stored);
+});
+
+test('F2-01b FIXCAT: the tenant super_owner (top-level owner) activates exactly like the owner; a manager still cannot',async()=>{
+  const {db,writer}=world({role:'super_owner'});
+  globalThis.__CLAIMS={uid:'manager',email:'manager@x'};
+  assert.equal((await act(writer,body(A,null))).status,'role_not_allowed');
+  assert.equal(db.read(NODE),null);
+  globalThis.__CLAIMS={uid:'owner',email:'owner@x'};
+  const r=await act(writer,body(A,null));
+  assert.equal(r.status,'committed_current');assert.equal(r.review,'cleared');
+  assert.equal(F.costHistory.codec.decodeHistory({exists:true,value:clone(db.read(NODE))},BIND).state,'present');
+  assert.equal((await act(writer,body(C,null))).status,'already_activated');
 });
 
 test('F2-02 normal edit uses today/future, rejects past and cannot silently activate',async()=>{
