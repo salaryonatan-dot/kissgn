@@ -40,9 +40,125 @@ import { LABELS } from "../presenters/labels.js";
 //   • calendar progress / days left are calendar measures of the report window (CDA-20);
 //     allocation and forecast eligibility are shown only under their own names.
 // No new financial rule, no VAT conversion, no binary arithmetic.
+// DELIVERY-PCT (MARJIN_DELIVERY_EST/1): the business's ESTIMATED delivery cost, by the SAME rule as the page
+// (index.html `deliveryOf` / `deliveryRateOn`): config.deliveryCost.versions (no default); each day's rate is the
+// version in force that day; the base is each day's recorded revenue as the server API states it for the analytics
+// doc (fin.revenue — the same net-of-VAT basis as every revenue line); withheld for a malformed setting, invalid /
+// partial revenue or a closed day with revenue. It is an operating expense: subtracted ONCE from the operating profit
+// and the projected operating profit (the Dashboard's rule), never from revenue, purchases, Food Cost or gross profit.
+// The builder only passes the days' revenue (`delivery`), and only when a setting exists: without one the view is unchanged.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const SNAPSHOT_VIEW_VERSION = "MARJIN_SNAPSHOT/2";
+export const DELIVERY_ESTIMATE_VERSION = "MARJIN_DELIVERY_EST/1";
+/** One day's recorded revenue as the server API states it (canonicalMetrics `toAnalyticsFinancials(...).fin.revenue`). */
+export interface SnapshotDeliveryDay { readonly date: BusinessDate; readonly revenue: { readonly state: string; readonly value?: string } | null }
+/** Passed by the builder only when deliveryRevenueDates() asks for days (structural: this file cannot import src/finance-server/*). */
+export interface SnapshotDeliveryInput { readonly days: readonly SnapshotDeliveryDay[] }
+export interface DeliveryVersion { readonly versionId: string; readonly effectiveFrom: BusinessDate; readonly ratePct: AmountString; readonly recordedAt: number }
+export interface DeliveryEstimate {
+  readonly version: typeof DELIVERY_ESTIMATE_VERSION;
+  readonly state: "known" | "missing" | "invalid";
+  readonly amount: AmountString | null;
+  /** distinct rates applied in the window (ascending), for the explanation */
+  readonly rates: readonly AmountString[];
+  readonly presentRevenueDays: number;
+  readonly expectedRevenueDays: number;
+  readonly reason: string | null;
+}
+const DELIVERY_RATE_RE = /^(100|[1-9]?[0-9](\.[0-9]*[1-9])?)$/;
+const DELIVERY_DATE_RE = /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+const isPlainObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const finiteInstant = (x: unknown): x is number => typeof x === "number" && x === x && x !== Infinity && x !== -Infinity;
+
+/** The delivery setting of one business config value: absent (no setting / no version), present, or invalid. */
+export function decodeDeliveryVersions(config: unknown): { readonly state: "absent" | "present" | "invalid"; readonly versions: readonly DeliveryVersion[] } {
+  const dc = isPlainObj(config) ? config.deliveryCost : undefined;
+  if (dc === undefined || dc === null) return { state: "absent", versions: [] };
+  if (!isPlainObj(dc) || !Array.isArray(dc.versions)) return { state: "invalid", versions: [] };
+  const out: DeliveryVersion[] = [];
+  let bad = false;
+  for (const v of dc.versions as unknown[]) {
+    if (!isPlainObj(v) || typeof v.effectiveFrom !== "string" || !DELIVERY_DATE_RE.test(v.effectiveFrom) || typeof v.ratePct !== "string" || !DELIVERY_RATE_RE.test(v.ratePct) || !finiteInstant(v.recordedAt)) { bad = true; continue; }
+    out.push({ versionId: typeof v.versionId === "string" ? v.versionId : "", effectiveFrom: v.effectiveFrom as BusinessDate, ratePct: v.ratePct as AmountString, recordedAt: v.recordedAt });
+  }
+  if (bad) return { state: "invalid", versions: out };
+  return out.length ? { state: "present", versions: out } : { state: "absent", versions: [] };
+}
+
+/** The version in force on `date` (greatest effectiveFrom ≤ date; ties: latest recordedAt, then versionId). */
+export function deliveryRateOn(versions: readonly DeliveryVersion[], date: BusinessDate): DeliveryVersion | null {
+  let best: DeliveryVersion | null = null;
+  for (const v of versions) {
+    if (v.effectiveFrom > date) continue;
+    if (!best || v.effectiveFrom > best.effectiveFrom || (v.effectiveFrom === best.effectiveFrom && (v.recordedAt > best.recordedAt || (v.recordedAt === best.recordedAt && v.versionId > best.versionId)))) best = v;
+  }
+  return best;
+}
+
+/** The report-window dates whose revenue the estimate needs; null = no setting / no rate in the window (nothing to read, view unchanged). */
+export function deliveryRevenueDates(report: FinancialReport, config: Record<string, unknown> | null): BusinessDate[] | null {
+  const dc = decodeDeliveryVersions(config);
+  const w = report.window;
+  if (dc.state === "absent" || w.state !== "actual" || !w.from || !w.to) return null;
+  const to = w.to;
+  if (dc.state === "invalid") return [];
+  if (!dc.versions.some((v) => v.effectiveFrom <= to)) return null;
+  return datesInRange(w.from, to);
+}
+
+const PERCENT_UNIT = parseAmountString("0.01");
+const ofRate = (rate: AmountString) => ratMul(parseAmountString(rate), PERCENT_UNIT);
+
+/** null = no rate configured for this report window. */
+export function deliveryEstimateOf(report: FinancialReport, config: Record<string, unknown> | null, days: readonly SnapshotDeliveryDay[]): DeliveryEstimate | null {
+  if (deliveryRevenueDates(report, config) === null) return null;
+  const dc = decodeDeliveryVersions(config);
+  const cov = report.coverage.revenue;
+  const base = { version: DELIVERY_ESTIMATE_VERSION, presentRevenueDays: cov.presentDays, expectedRevenueDays: cov.expectedDays } as const;
+  if (dc.state === "invalid") return { ...base, state: "invalid", amount: null, rates: [], reason: "delivery_setting_invalid" };
+  const contradicted = report.flags.some((f) => f.code === "closed_day_has_recorded_values")
+    || days.some((d) => d.revenue !== null && (d.revenue.state === "partial_invalid" || d.revenue.state === "closed_day_has_recorded_values"));
+  if (cov.invalidDays.length > 0 || cov.partialDays.length > 0 || contradicted) return { ...base, state: "invalid", amount: null, rates: [], reason: "revenue_not_valid" };
+  let acc = ratFromInt(0), anyRevenue = false;
+  const rates = new Set<AmountString>();
+  for (const d of days) {
+    if (d.revenue === null || d.revenue.state !== "present" || typeof d.revenue.value !== "string") continue;
+    anyRevenue = true;
+    const v = deliveryRateOn(dc.versions, d.date);
+    if (!v) continue;
+    rates.add(v.ratePct);
+    acc = ratAdd(acc, ratMul(parseAmountString(d.revenue.value), ofRate(v.ratePct)));
+  }
+  if (!anyRevenue) return { ...base, state: "missing", amount: null, rates: [], reason: "no_recorded_revenue" };
+  const sorted = [...rates].sort((x, y) => ratCmp(parseAmountString(x), parseAmountString(y)));
+  return { ...base, state: "known", amount: serializeRat(acc), rates: sorted, reason: null };
+}
+
+/**
+ * The operating profit and the projected operating profit AFTER the estimate (exactly once).
+ * operating: the core's complete operating profit − the estimate. projected: the core projection − (the estimate to
+ * date + the rate in force on the as-of date × the projected rest of the month's revenue) — the Dashboard's rule.
+ * null when a part is unknown; with no estimate (null) both are the core values unchanged.
+ */
+export function deliveryAdjustedProfit(report: FinancialReport, projection: ProductProjection | null, config: Record<string, unknown> | null, est: DeliveryEstimate | null): { readonly operatingProfit: AmountString | null; readonly projectedOperatingProfit: AmountString | null } {
+  const op = report.actual.operatingProfit.state === "complete" ? report.actual.operatingProfit.value : null;
+  const pp = projection && projection.projection ? projection.projection.operatingProfit : null;
+  if (est === null) return { operatingProfit: op, projectedOperatingProfit: pp };
+  if (est.state !== "known" || est.amount === null) return { operatingProfit: null, projectedOperatingProfit: null };
+  const estRat = parseAmountString(est.amount);
+  const opAfter = op === null ? null : serializeRat(ratSub(parseAmountString(op), estRat));
+  let ppAfter: AmountString | null = null;
+  const fRev = projection ? projection.forecast.projectedRevenue : null;
+  const actual = report.actual.revenue.value;
+  if (pp !== null && fRev !== null && actual !== null) {
+    const today = deliveryRateOn(decodeDeliveryVersions(config).versions, report.window.asOfBusinessDate);
+    const rest = ratSub(parseAmountString(fRev), parseAmountString(actual));
+    const restCost = today && ratCmp(rest, ratFromInt(0)) >= 0 ? ratMul(rest, ofRate(today.ratePct)) : ratFromInt(0);
+    ppAfter = serializeRat(ratSub(parseAmountString(pp), ratAdd(estRat, restCost)));
+  }
+  return { operatingProfit: opAfter, projectedOperatingProfit: ppAfter };
+}
 /** The e-mail's sales target has no policy-registry key (D owns it): the legacy fallback is kept. */
 export const LEGACY_SALES_TARGET_FALLBACK: AmountString = "700000";
 
@@ -162,6 +278,15 @@ export interface SnapshotFinancials {
     readonly legacyHourlyPayrollDates: DateList;
   };
   readonly provenance: SnapshotProvenanceInput & { readonly proj: string; readonly forecast: string; readonly policy: string; readonly snapshot: string };
+  /** DELIVERY-PCT: present only when a delivery-cost rate is configured for the window (an ESTIMATE). */
+  readonly delivery?: {
+    readonly amount: SnapshotAmount;
+    readonly share: SnapshotRatio;
+    readonly rates: readonly AmountString[];
+    readonly presentRevenueDays: number;
+    readonly expectedRevenueDays: number;
+    readonly note: string;
+  };
 }
 
 const unavailableAmount = (reason: string | null, issueReasons: readonly string[] = []): SnapshotAmount =>
@@ -254,8 +379,11 @@ export function buildSnapshotView(input: {
   readonly projection: ProductProjection | null;
   readonly provenance: SnapshotProvenanceInput;
   readonly config: Record<string, unknown> | null;
+  readonly delivery?: SnapshotDeliveryInput | null;
 }): SnapshotFinancials {
   const { report, projection, provenance, config } = input;
+  const est = input.delivery ? deliveryEstimateOf(report, config, input.delivery.days) : null;
+  const dl = est === null ? null : { estimate: est, ...deliveryAdjustedProfit(report, projection, config, est) };
   const a = report.actual;
   const fa = a.fixedAccrual;
   const amounts: SnapshotFinancials["amounts"] = Object.freeze({
@@ -269,7 +397,10 @@ export function buildSnapshotView(input: {
     rentFixed: fixedPart(fa, fa.rentFixed),
     rentPct: fixedPart(fa, fa.rentPct),
     royalty: fixedPart(fa, fa.royaltyPct),
-    operatingProfit: fromTyped(a.operatingProfit),
+    // DELIVERY-PCT: with a configured rate, the operating profit is the core's complete value minus the estimate (once)
+    operatingProfit: dl === null ? fromTyped(a.operatingProfit)
+      : dl.operatingProfit !== null ? valueAmount(dl.operatingProfit, "complete", null)
+      : a.operatingProfit.state !== "complete" ? fromTyped(a.operatingProfit) : unavailableAmount("delivery_estimate_" + dl.estimate.state),
   });
   const ratios: SnapshotFinancials["ratios"] = Object.freeze({
     purchasesPct: fromRatio(a.purchasesPct),
@@ -283,7 +414,7 @@ export function buildSnapshotView(input: {
   const forecastState = fc ? fc.state : "no_completed_days";
   const warnings: string[] = fc ? [...fc.warnings, ...(projection && projection.projection ? projection.projection.warnings : [])] : ["no_completed_days"];
   const projRevenue = projected(fc ? fc.projectedRevenue : null, forecastState, fc ? (fc.warnings[0] || forecastState) : "no_completed_days");
-  const projProfit = projected(projection && projection.projection ? projection.projection.operatingProfit : null, forecastState, "projection_unavailable");
+  const projProfit = projected(dl === null ? (projection && projection.projection ? projection.projection.operatingProfit : null) : dl.projectedOperatingProfit, forecastState, "projection_unavailable");
 
   const { first, last, days: daysInMonth } = monthBounds(report.window.month);
   const asOf = report.window.asOfBusinessDate;
@@ -334,7 +465,20 @@ export function buildSnapshotView(input: {
       legacyHourlyPayrollDates: Object.freeze([...a.labor.legacyHourlyPayroll.dates]),
     }),
     provenance: Object.freeze({ ...provenance, proj: PROJECTION_FORMULA_VERSION, forecast: fc ? fc.formulaId : REV_FORECAST_FORMULA_ID, policy: policy.policyVersion, snapshot: SNAPSHOT_VIEW_VERSION }),
+    ...(dl === null ? {} : { delivery: deliveryView(dl, amounts.revenue) }),
   });
+}
+
+function deliveryView(dl: { readonly estimate: DeliveryEstimate }, revenue: SnapshotAmount): NonNullable<SnapshotFinancials["delivery"]> {
+  const e = dl.estimate;
+  const amount = e.state === "known" && e.amount !== null ? valueAmount(e.amount, e.presentRevenueDays === e.expectedRevenueDays ? "complete" : "partial", e.presentRevenueDays === e.expectedRevenueDays ? null : "incomplete_coverage") : unavailableAmount("delivery_estimate_" + e.state);
+  const share = shareOfRevenue(amount, revenue);   // complete values only, like every other e-mail share
+  const rateText = e.rates.length === 0 ? "" : e.rates.length === 1 ? `${e.rates[0]}% מהפדיון` : `לפי האחוז שבתוקף בכל יום (${e.rates.join("%, ")}%)`;
+  const coverage = e.state === "known" && e.presentRevenueDays !== e.expectedRevenueDays ? ` שהוזן (${e.presentRevenueDays}/${e.expectedRevenueDays} ימי הכנסה)` : "";
+  const note = e.state === "invalid" ? (e.reason === "delivery_setting_invalid" ? "הגדרת עלות המשלוחים אינה תקינה — הערכת המשלוחים והרווח אינם מוצגים" : "נתוני הכנסות לא תקינים — הערכת המשלוחים אינה מחושבת")
+    : e.state === "missing" ? "לא הוזנו הכנסות — אין הערכת עלות משלוחים"
+    : `עלות משלוחים היא הערכה (${rateText}${coverage}; אין חיבור למערכת משלוחים או קופה). הרווח הנקי והרווח החזוי כוללים אותה פעם אחת`;
+  return Object.freeze({ amount, share, rates: Object.freeze([...e.rates]), presentRevenueDays: e.presentRevenueDays, expectedRevenueDays: e.expectedRevenueDays, note });
 }
 
 // ── B2-22: the e-mail's inline insights — RETAINED rules and literals (D owns them), fed
@@ -487,8 +631,10 @@ export async function sendSnapshotEmail(
     { label: "שכר דירה קבוע", amount: f.amounts.rentFixed, share: f.ratios.rentFixedShare, target: null },
     { label: "שכר דירה באחוזים", amount: f.amounts.rentPct, share: f.ratios.rentPctShare, target: null },
     { label: "תמלוגים", amount: f.amounts.royalty, share: f.ratios.royaltyShare, target: null },
+    ...(f.delivery ? [{ label: "עלות משלוחים (הערכה)", amount: f.delivery.amount, share: f.delivery.share, target: null }] : []),
     { label: "רווח נקי", amount: f.amounts.operatingProfit, share: f.ratios.operatingProfitShare, target: null },
   ];
+  const deliveryNote = f.delivery ? f.delivery.note : "";
   const revenueNote = revenueDisclosure(f);
 
   // Completeness of the cost inputs (revenue has its own dated line above): days are counted, never valued
@@ -812,6 +958,7 @@ export async function sendSnapshotEmail(
               .join("")}
           </tbody>
         </table>
+        ${deliveryNote ? `<div class="forecast-label">${deliveryNote}</div>` : ""}
         ${completenessNote ? `<div class="forecast-label">${completenessNote}</div>` : ""}
         ${reasonNote ? `<div class="forecast-label">${reasonNote}</div>` : ""}
         ${allocationNote ? `<div class="forecast-label">${allocationNote}</div>` : ""}

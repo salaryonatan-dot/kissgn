@@ -1,8 +1,8 @@
 import { getDb } from "../firebase/admin.js";
 import { loadCanonicalInputs } from "../finance-server/canonicalInputs.js";
-import { canonicalMonthProjection, canonicalMonthReport } from "../finance-server/canonicalMetrics.js";
+import { canonicalDayRecord, canonicalMonthProjection, canonicalMonthReport, toAnalyticsFinancials } from "../finance-server/canonicalMetrics.js";
 import type { SnapshotFinancials, SnapshotInsight } from "./snapshotEmail.js";
-import { buildSnapshotView, snapshotInsights } from "./snapshotEmail.js";
+import { buildSnapshotView, deliveryRevenueDates, snapshotInsights } from "./snapshotEmail.js";
 import { classifyRegistryTarget, decodeRegistryNode, isRegistryBizId, resolveRegistryTarget } from "../../lib/businessRegistry.js";
 import { isValidId } from "../../lib/securityContext.js";
 
@@ -35,6 +35,8 @@ export interface SnapshotData {
   rentPctAmount: number | null;
   royaltyAmount: number | null;
   netProfit: number | null;
+  /** DELIVERY-PCT: the estimated delivery cost (only when a rate is configured; included once in netProfit / forecast). */
+  deliveryEstimate?: number | null;
 
   // Percentages (ratio of totals from the core)
   foodCostPct: number | null;
@@ -153,11 +155,16 @@ export async function buildSnapshotForBiz(
   const month = inputs.asOfBusinessDate.slice(0, 7);
   const { report, provenance } = canonicalMonthReport(inputs, { kind: "open_month", month });
   const projection = report.window.state === "actual" ? canonicalMonthProjection(inputs, report, { nowMs }) : null;
+  const config = inputs.config.state === "present" ? inputs.config.value : null;
+  // DELIVERY-PCT: only with a delivery-cost setting, each window day's recorded revenue from the server API (the
+  // analytics doc's fin.revenue); the e-mail module applies the page's rule. No setting ⇒ nothing read, view unchanged.
+  const deliveryDates = deliveryRevenueDates(report, config);
   const financials = buildSnapshotView({
     report,
     projection,
     provenance,
-    config: inputs.config.state === "present" ? inputs.config.value : null,
+    config,
+    delivery: deliveryDates === null ? null : { days: deliveryDates.map((date) => ({ date, revenue: toAnalyticsFinancials(canonicalDayRecord(inputs, date)).fin.revenue ?? null })) },
   });
   const f = financials;
   // A legacy `number` field carries a COMPLETE value only: it has no room for the "partial" label,
@@ -180,6 +187,7 @@ export async function buildSnapshotForBiz(
     rentPctAmount: complete(f.amounts.rentPct),
     royaltyAmount: complete(f.amounts.royalty),
     netProfit: complete(f.amounts.operatingProfit),
+    ...(f.delivery ? { deliveryEstimate: complete(f.delivery.amount) } : {}),
     foodCostPct: f.ratios.purchasesPct.number,
     laborPct: f.ratios.laborPct.number,
     daysPassed: f.window.recognizedDays,
