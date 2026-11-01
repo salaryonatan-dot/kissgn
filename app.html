@@ -1934,6 +1934,14 @@
           fcAvailable = fcRatio.state === "value";
         }
         var fcValue = ratioValue(fcRatio);
+        // LABOR-AVAIL: with missing payroll days the labor tile, labor % and breakdown row use the same
+        // available-data labor as the P&L (recorded hourly + salaried accrual, once). The % needs a valid,
+        // non-zero recorded revenue (invalid / partial revenue or a contradiction keeps it "—").
+        var lab = R.window.state === "actual" ? availableLabor(F, R) : null;
+        var labAvail = !!(lab && lab.state === "known" && !lab.complete);
+        var revForPct = R.coverage.revenue.invalidDays.length < 1 && R.coverage.revenue.partialDays.length < 1 && contradictions(R).length < 1 ? A.revenue.value : null;
+        var labRatio = labAvail ? (revForPct === null ? { state: "incomplete_components" } : ratio(F, lab.amount, revForPct)) : A.labor.employerCostPct;
+        var labBasis = labAvail ? lab.basisText + (ratioValue(labRatio) !== null && !revenue.complete ? "; לייבור לפי ההכנסות שהוזנו (" + R.coverage.revenue.presentDays + "/" + R.coverage.revenue.expectedDays + " ימי הכנסה)" : "") : null;
         var fx = A.fixedAccrual;
         // DASH-05 (keep the Dashboard useful with missing inputs): the core withholds the WHOLE fixed
         // accrual when any revenue-linked charge (rent % / royalty %) cannot be computed, which hid the
@@ -1980,7 +1988,7 @@
           { key: "purchases", lbl: "רכש ספקים", amount: A.purchases.complete ? A.purchases.value
               : (R.coverage.purchases.invalidDays.length < 1 && R.coverage.purchases.partialDays.length < 1 && !(A.purchases.credits && A.purchases.credits.state === "invalid") ? A.purchases.value : null),
             color: "#3B82F6", configured: true },
-          { key: "labor", lbl: "עלות עובדים (עלות מעסיק)", amount: typedValue(A.labor.employerCost), color: "#818CF8", configured: true },
+          { key: "labor", lbl: "עלות עובדים (עלות מעסיק)", amount: labAvail ? lab.amount : typedValue(A.labor.employerCost), color: "#818CF8", configured: true },
           { key: "royalty", lbl: "תמלוגים", amount: fx.state === "complete" ? fx.royaltyPct : (fxRec ? fxRec.royaltyPct : null), color: "#A5B4FC", configured: cv.royaltyConfigured },
           { key: "rentPct", lbl: "שכ״ד (אחוזים)", amount: fx.state === "complete" ? fx.rentPct : (fxRec ? fxRec.rentPct : null), color: "#BAC8F3", configured: cv.rentMode === "pct" },
           { key: "rentFixed", lbl: "שכ״ד קבוע", amount: fx.state === "complete" ? fx.rentFixed : (fxRec ? fxRec.rentFixed : (fxKnown ? fxKnown.rentFixed : null)), color: "#CBD5E1", configured: cv.rentMode === "fixed" },
@@ -2022,8 +2030,9 @@
             // the basis (days with revenue / purchases) is a quiet secondary line, visible on mobile and desktop alike.
             partial: fcAvailable,
             basisText: fcAvailable ? TXT.fcRecordedBasis + R.coverage.revenue.presentDays + "/" + R.coverage.revenue.expectedDays + " ימי הכנסה, " + R.coverage.purchases.presentDays + "/" + R.coverage.purchases.expectedDays + " ימי קניות" : null },
-          labor: { text: typedMoney(F, A.labor.employerCost), state: A.labor.employerCost.state, meaning: F.presenters.labels.LABELS.labor.meaning },
-          laborPct: { text: pctText(F, A.labor.employerCostPct), band: band(F, A.labor.employerCostPct, goals.labor.value), goal: goals.labor },
+          labor: { text: labAvail ? money(F, lab.amount) : typedMoney(F, A.labor.employerCost), state: A.labor.employerCost.state, meaning: F.presenters.labels.LABELS.labor.meaning,
+            partial: labAvail, basisText: labBasis },
+          laborPct: { text: pctText(F, labRatio), band: band(F, labRatio, goals.labor.value), goal: goals.labor, num: toNum(F, ratioValue(labRatio)) },
           // DASH-05: a partial (fixed-rent-only, rent % pending revenue) tile carries the partial marker; the % of revenue needs complete revenue AND a complete accrual.
           fixedRent: { text: money(F, fixedRent) + (fixedRentPartial && fixedRent !== null ? " · " + TXT.partial : ""), partial: fixedRentPartial,
             rentText: fx.state === "complete" ? money(F, sumAmounts(F, [fx.rentFixed, fx.rentPct])) : fxRec ? money(F, sumAmounts(F, [fxRec.rentFixed, fxRec.rentPct])) : (fxKnown && !fixedRentLinked ? money(F, fxKnown.rentFixed) : "—"),
@@ -2108,6 +2117,24 @@
         fixedRent: ser(D(F).ratAdd(D(F).ratAdd(a.fixedRegular, a.rentFixed), a.rentPct)) };
     }
     /**
+     * LABOR-AVAIL (shared by the P&L and the Dashboard): the month's labor cost from VALID recorded data.
+     * Complete → the core's employer cost. Otherwise the existing P&L rule: recorded hourly employer cost +
+     * the core's salaried (global) accrual, each counted once ("known"); no hourly cost recorded at all →
+     * "missing" (the salaried share alone is not the labor cost, and nothing recorded is never ₪0);
+     * invalid / partial hourly cells, an invalid salaried configuration or a closed-day contradiction →
+     * "invalid". basisText names the included components and the hourly coverage (incomplete case only).
+     */
+    function availableLabor(F, R) {
+      var A = R.actual, cov = R.coverage, g = A.labor.globalEmployerCost;
+      if (A.labor.employerCost.state === "complete") return { state: "known", amount: A.labor.employerCost.value, complete: true, basisText: null };
+      var bad = cov.hourlyLabor.invalidDays.length > 0 || cov.hourlyLabor.partialDays.length > 0;
+      if (bad || g.state === "invalid_components" || contradictions(R).length > 0) return { state: "invalid", amount: null, complete: false, basisText: null };
+      if (A.hourlyLabor.value === null || g.state !== "complete") return { state: "missing", amount: null, complete: false, basisText: null };
+      var salaried = toNum(F, g.value) !== 0;
+      return { state: "known", amount: sumAmounts(F, [A.hourlyLabor.value, g.value]), complete: false,
+        basisText: TXT.fcRecordedBasis + "עלות שעתית ב-" + cov.hourlyLabor.presentDays + "/" + cov.hourlyLabor.expectedDays + " ימים שהוזנו" + (salaried ? " + שכר גלובלי לפי ההגדרות" : "") };
+    }
+    /**
      * PNL-AVAIL (available-data P&L): when the month's operating profit is not complete, the P&L keeps
      * every VALID recorded amount instead of hiding it. Per component: "known" (a recorded amount),
      * "missing" (nothing recorded — never shown as 0, named in the basis) or "invalid" (malformed /
@@ -2130,11 +2157,8 @@
       comp.purchases = bad(cov.purchases) || (A.purchases.credits && A.purchases.credits.state === "invalid") ? { state: "invalid" }
         : A.purchases.value === null ? { state: "missing" } : { state: "known", amount: A.purchases.value };
       // labor = recorded hourly employer cost + salaried (global) accrual
-      var g = A.labor.globalEmployerCost;
-      comp.labor = A.labor.employerCost.state === "complete" ? { state: "known", amount: A.labor.employerCost.value }
-        : bad(cov.hourlyLabor) || g.state === "invalid_components" || contra ? { state: "invalid" }
-        : A.hourlyLabor.value === null || g.state !== "complete" ? { state: "missing" }
-        : { state: "known", amount: sumAmounts(F, [A.hourlyLabor.value, g.value]) };
+      var lab = availableLabor(F, R);
+      comp.labor = lab.state === "known" ? { state: "known", amount: lab.amount } : { state: lab.state };
       // other expense: optional; nothing recorded = none (the core's own rule for profit)
       comp.other = bad(cov.otherExpense) ? { state: "invalid" } : { state: "known", amount: A.otherExpense.value === null ? null : A.otherExpense.value };
       // fixed + rent, royalty
@@ -2157,6 +2181,7 @@
       var basis = TXT.fcRecordedBasis + cnt(cov.revenue) + " ימי הכנסה, " + cnt(cov.purchases) + " ימי קניות, " + cnt(cov.hourlyLabor) + " ימי עלות עובדים שעתית."
         + (balance !== null ? " השורה התחתונה היא יתרה לפי הנתונים שהוזנו ואינה רווח נקי." + (missing.length ? " היתרה אינה כוללת: " + missing.map(function (k) { return LBL[k]; }).join(", ") + " (לא הוזנו נתונים)." : "") : "")
         + (acc && fx.state !== "complete" ? " אחוזי שכ״ד ותמלוגים לפי ההכנסות שהוזנו." : "")
+        + (lab.state === "known" && !lab.complete ? " עלות עובדים: " + lab.basisText.slice(TXT.fcRecordedBasis.length) + "." : "")
         + (anyInvalid ? " " + TXT.pnlInvalidNoBalance : "");
       return { revenue: rev, comp: comp, balance: balance, missing: missing, anyInvalid: anyInvalid, basisText: basis };
     }
@@ -2765,7 +2790,7 @@
   </script>
 
   <!-- app.html and app.js are GENERATED from index.html by tools/app-precompile/precompile.mjs — do not edit.
-       source index.html sha256 568dd79c5791fb4ffe39c8b5aaadb1136e459877f62e9c52634c24f75bc42df9; app.js sha256 074c289f8a901560403957d48d44d670b418a8920c63adc9c4646664bf26623a; @babel/standalone 7.23.6, presets ["react"]. -->
-  <script defer src="/app.js?v=074c289f8a90"></script>
+       source index.html sha256 57c47bd7862677b29c296ca49c00a142b28bda227c2ae4881c7d61880ef2e393; app.js sha256 b3632a6341546af25e46bef75b319bf051acbce324efed8b244bd9a08d1533d9; @babel/standalone 7.23.6, presets ["react"]. -->
+  <script defer src="/app.js?v=b3632a634154"></script>
 </body>
 </html>

@@ -48,7 +48,8 @@ test("FC-AVAIL-02 missing days (Arkafe shape): recorded net purchases ÷ recorde
   assert.equal(dv.purchasesPct.basisText, "מחושב מהנתונים שהוזנו: 23/28 ימי הכנסה, 27/28 ימי קניות");
   assert.equal(dv.disclosure.warning, "", "missing days are not a warning");
   assert.equal(dv.revenue.text, "₪23,000 · חלקי"); assert.equal(dv.purchases.amountText, "₪8,100");
-  assert.equal(dv.laborPct.text, "—", "labor % is out of this fix's scope (salaried accrual basis)");
+  // LABOR-AVAIL (separate fix): labor % over the same recorded revenue — (27 × 100 hourly + 2800 salaried) / 23 000
+  assert.equal(dv.labor.text, "₪5,500"); assert.equal(dv.laborPct.text, "23.9%");
 });
 
 test("FC-AVAIL-03 supplier credits stay attributed by the core: Food Cost on NET purchases with missing days", () => {

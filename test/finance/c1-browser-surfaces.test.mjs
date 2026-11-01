@@ -235,10 +235,15 @@ test("C1-D02 a closure that carries recorded revenue is a contradiction: disclos
   assert.equal(dv.projectedProfit.text, "—", "no projection from an incomplete Actual");
 });
 
-test("C1-D03 typed partial states: a missing day makes labor, profit, labor % and projection '—' (never a partial subtotal); Food Cost uses the recorded data (FC-AVAIL)", () => {
+test("C1-D03 typed partial states: a missing day makes profit and projection '—' (never a partial subtotal); Food Cost (FC-AVAIL) and labor (LABOR-AVAIL) use the recorded data", () => {
   const rows = SEP_COMPLETED.filter((d) => d !== "2026-09-04").map((d) => fullDay(d));
   const dv = C.dashboard(F, browserSrc({ rows }), { nowMs: INV_NOW_MS, lastYearSales: null });
-  assert.equal(dv.labor.text, "—"); assert.equal(dv.laborPct.text, "—");
+  assert.equal(dv.report.actual.labor.employerCost.state, "incomplete_components", "the core value is unchanged");
+  // LABOR-AVAIL: recorded hourly employer cost + the core's salaried accrual, once; % over the recorded revenue
+  const A0 = dv.report.actual, L = F.finance.decimal;
+  assert.equal(dv.labor.text, F.presenters.money.formatShekel(L.serializeRat(L.ratAdd(L.parseAmountString(A0.hourlyLabor.value), L.parseAmountString(A0.labor.globalEmployerCost.value)))));
+  assert.equal(dv.labor.partial, true); assert.match(dv.labor.basisText, /^מחושב מהנתונים שהוזנו: עלות שעתית ב-\d+\/\d+ ימים שהוזנו/);
+  assert.notEqual(dv.laborPct.text, "—");
   assert.equal(dv.report.actual.purchasesPct.state, "incomplete_components", "the core value is unchanged");
   assert.equal(dv.purchasesPct.text, "30.0%"); assert.equal(dv.purchasesPct.partial, true);   // FC-AVAIL: 8100 / 27000 recorded
   assert.equal(dv.projectedProfit.text, "—"); assert.equal(dv.projectedLabor, "—");
